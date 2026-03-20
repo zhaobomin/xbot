@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 
 from nanobot.agent.tools.web import WebFetchTool
+from nanobot.config.schema import WebToolsConfig
 
 
 def _fake_resolve_private(hostname, port, family=0, type_=0):
@@ -67,3 +68,37 @@ async def test_web_fetch_result_contains_untrusted_flag():
     data = json.loads(result)
     assert data.get("untrusted") is True
     assert "[External content" in data.get("text", "")
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_can_disable_security_checks(tmp_path) -> None:
+    tool = WebFetchTool(
+        proxy=None,
+        web_config=WebToolsConfig(disable_security_checks=True),
+    )
+
+    fake_html = "<html><head><title>Unsafe</title></head><body><p>Hello</p></body></html>"
+
+    class FakeResponse:
+        status_code = 200
+        url = "https://github.com/trending"
+        text = fake_html
+        headers = {"content-type": "text/html"}
+
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {}
+
+    async def _fake_get(self, url, **kwargs):
+        return FakeResponse()
+
+    with patch("nanobot.security.network.socket.getaddrinfo", _fake_resolve_private), \
+         patch("httpx.AsyncClient.get", _fake_get):
+        result = await tool.execute(url="https://github.com/trending")
+
+    data = json.loads(result)
+    assert data.get("error") is None
+    assert data.get("status") == 200
+    assert data.get("finalUrl") == "https://github.com/trending"

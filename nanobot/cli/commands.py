@@ -33,6 +33,7 @@ from rich.table import Table
 from rich.text import Text
 
 from nanobot import __logo__, __version__
+from nanobot.agent.runtime import AgentRuntime
 from nanobot.config.paths import get_workspace_path
 from nanobot.config.schema import Config
 from nanobot.utils.helpers import sync_workspace_templates
@@ -423,6 +424,7 @@ def _make_provider(config: Config):
 def _load_runtime_config(config: str | None = None, workspace: str | None = None) -> Config:
     """Load config and optionally override the active workspace."""
     from nanobot.config.loader import load_config, set_config_path
+    from nanobot.config.validator import ConfigurationError, validate_config
 
     config_path = None
     if config:
@@ -436,7 +438,36 @@ def _load_runtime_config(config: str | None = None, workspace: str | None = None
     loaded = load_config(config_path)
     if workspace:
         loaded.agents.defaults.workspace = workspace
+    try:
+        validate_config(loaded)
+    except ConfigurationError as exc:
+        console.print(f"[red]Error: {exc}[/red]")
+        raise typer.Exit(1)
     return loaded
+
+
+def _make_agent_runtime(
+    *,
+    config: Config,
+    bus,
+    provider,
+    workspace: Path,
+    cron_service,
+    session_manager,
+):
+    """Create the unified router-backed runtime."""
+    return AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": bus,
+            "provider": provider,
+            "workspace": workspace,
+            "cron_service": cron_service,
+            "session_manager": session_manager,
+            "config": config,
+            "tools_config": config.tools,
+        },
+    )
 
 
 def _print_deprecated_memory_window_notice(config: Config) -> None:
@@ -462,7 +493,6 @@ def gateway(
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
 ):
     """Start the nanobot gateway."""
-    from nanobot.agent.loop import AgentLoop
     from nanobot.bus.queue import MessageBus
     from nanobot.channels.manager import ChannelManager
     from nanobot.config.paths import get_cron_dir
@@ -480,6 +510,7 @@ def gateway(
     port = port if port is not None else config.gateway.port
 
     console.print(f"{__logo__} Starting nanobot gateway version {__version__} on port {port}...")
+    console.print(f"[dim]Agent type: {config.agents.type}[/dim]")
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
     provider = _make_provider(config)
@@ -489,22 +520,14 @@ def gateway(
     cron_store_path = get_cron_dir() / "jobs.json"
     cron = CronService(cron_store_path)
 
-    # Create agent with cron service
-    agent = AgentLoop(
+    # Create agent based on config.agents.type
+    agent = _make_agent_runtime(
+        config=config,
         bus=bus,
         provider=provider,
         workspace=config.workspace_path,
-        model=config.agents.defaults.model,
-        max_iterations=config.agents.defaults.max_tool_iterations,
-        context_window_tokens=config.agents.defaults.context_window_tokens,
-        web_search_config=config.tools.web.search,
-        web_proxy=config.tools.web.proxy or None,
-        exec_config=config.tools.exec,
         cron_service=cron,
-        restrict_to_workspace=config.tools.restrict_to_workspace,
         session_manager=session_manager,
-        mcp_servers=config.tools.mcp_servers,
-        channels_config=config.channels,
     )
 
     # Set cron callback (needs agent)
@@ -620,6 +643,7 @@ def gateway(
 
     async def run():
         try:
+            await agent.initialize()
             await cron.start()
             await heartbeat.start()
             await asyncio.gather(
@@ -661,7 +685,6 @@ def agent(
     """Interact with the agent directly."""
     from loguru import logger
 
-    from nanobot.agent.loop import AgentLoop
     from nanobot.bus.queue import MessageBus
     from nanobot.config.paths import get_cron_dir
     from nanobot.cron.service import CronService
@@ -682,20 +705,13 @@ def agent(
     else:
         logger.disable("nanobot")
 
-    agent_loop = AgentLoop(
+    agent_loop = _make_agent_runtime(
+        config=config,
         bus=bus,
         provider=provider,
         workspace=config.workspace_path,
-        model=config.agents.defaults.model,
-        max_iterations=config.agents.defaults.max_tool_iterations,
-        context_window_tokens=config.agents.defaults.context_window_tokens,
-        web_search_config=config.tools.web.search,
-        web_proxy=config.tools.web.proxy or None,
-        exec_config=config.tools.exec,
         cron_service=cron,
-        restrict_to_workspace=config.tools.restrict_to_workspace,
-        mcp_servers=config.tools.mcp_servers,
-        channels_config=config.channels,
+        session_manager=None,
     )
 
     # Shared reference for progress callbacks
@@ -703,6 +719,8 @@ def agent(
 
     async def _cli_progress(content: str, *, tool_hint: bool = False) -> None:
         ch = agent_loop.channels_config
+        if ch is None:
+            ch = config.channels
         if ch and tool_hint and not ch.send_tool_hints:
             return
         if ch and not tool_hint and not ch.send_progress:
@@ -760,7 +778,7 @@ def agent(
                         msg = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
                         if msg.metadata.get("_progress"):
                             is_tool_hint = msg.metadata.get("_tool_hint", False)
-                            ch = agent_loop.channels_config
+                            ch = getattr(agent_loop, "channels_config", None) or config.channels
                             if ch and is_tool_hint and not ch.send_tool_hints:
                                 pass
                             elif ch and not is_tool_hint and not ch.send_progress:

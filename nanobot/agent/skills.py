@@ -21,6 +21,7 @@ class SkillsLoader:
     def __init__(self, workspace: Path, builtin_skills_dir: Path | None = None):
         self.workspace = workspace
         self.workspace_skills = workspace / "skills"
+        self.legacy_workspace_skills = workspace / ".nanobot" / "skills"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
 
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
@@ -42,6 +43,14 @@ class SkillsLoader:
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists():
                         skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "workspace"})
+
+        # Legacy workspace-local skills
+        if self.legacy_workspace_skills.exists():
+            for skill_dir in self.legacy_workspace_skills.iterdir():
+                if skill_dir.is_dir():
+                    skill_file = skill_dir / "SKILL.md"
+                    if skill_file.exists() and not any(s["name"] == skill_dir.name for s in skills):
+                        skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "legacy_workspace"})
 
         # Built-in skills
         if self.builtin_skills and self.builtin_skills.exists():
@@ -70,6 +79,10 @@ class SkillsLoader:
         workspace_skill = self.workspace_skills / name / "SKILL.md"
         if workspace_skill.exists():
             return workspace_skill.read_text(encoding="utf-8")
+
+        legacy_workspace_skill = self.legacy_workspace_skills / name / "SKILL.md"
+        if legacy_workspace_skill.exists():
+            return legacy_workspace_skill.read_text(encoding="utf-8")
 
         # Check built-in
         if self.builtin_skills:

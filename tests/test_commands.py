@@ -284,20 +284,20 @@ def mock_agent_runtime(tmp_path):
          patch("nanobot.cli.commands._print_agent_response") as mock_print_response, \
          patch("nanobot.bus.queue.MessageBus"), \
          patch("nanobot.cron.service.CronService"), \
-         patch("nanobot.agent.loop.AgentLoop") as mock_agent_loop_cls:
+         patch("nanobot.cli.commands.AgentRuntime") as mock_runtime_cls:
 
-        agent_loop = MagicMock()
-        agent_loop.channels_config = None
-        agent_loop.process_direct = AsyncMock(return_value="mock-response")
-        agent_loop.close_mcp = AsyncMock(return_value=None)
-        mock_agent_loop_cls.return_value = agent_loop
+        runtime = MagicMock()
+        runtime.channels_config = None
+        runtime.process_direct = AsyncMock(return_value="mock-response")
+        runtime.close_mcp = AsyncMock(return_value=None)
+        mock_runtime_cls.return_value = runtime
 
         yield {
             "config": config,
             "load_config": mock_load_config,
             "sync_templates": mock_sync_templates,
-            "agent_loop_cls": mock_agent_loop_cls,
-            "agent_loop": agent_loop,
+            "runtime_cls": mock_runtime_cls,
+            "runtime": runtime,
             "print_response": mock_print_response,
         }
 
@@ -321,10 +321,10 @@ def test_agent_uses_default_config_when_no_workspace_or_config_flags(mock_agent_
     assert mock_agent_runtime["sync_templates"].call_args.args == (
         mock_agent_runtime["config"].workspace_path,
     )
-    assert mock_agent_runtime["agent_loop_cls"].call_args.kwargs["workspace"] == (
+    assert mock_agent_runtime["runtime_cls"].call_args.kwargs["shared_resources"]["workspace"] == (
         mock_agent_runtime["config"].workspace_path
     )
-    mock_agent_runtime["agent_loop"].process_direct.assert_awaited_once()
+    mock_agent_runtime["runtime"].process_direct.assert_awaited_once()
     mock_agent_runtime["print_response"].assert_called_once_with("mock-response", render_markdown=True)
 
 
@@ -357,9 +357,9 @@ def test_agent_config_sets_active_path(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("nanobot.bus.queue.MessageBus", lambda: object())
     monkeypatch.setattr("nanobot.cron.service.CronService", lambda _store: object())
 
-    class _FakeAgentLoop:
+    class _FakeRuntime:
         def __init__(self, *args, **kwargs) -> None:
-            pass
+            self.channels_config = None
 
         async def process_direct(self, *_args, **_kwargs) -> str:
             return "ok"
@@ -367,7 +367,7 @@ def test_agent_config_sets_active_path(monkeypatch, tmp_path: Path) -> None:
         async def close_mcp(self) -> None:
             return None
 
-    monkeypatch.setattr("nanobot.agent.loop.AgentLoop", _FakeAgentLoop)
+    monkeypatch.setattr("nanobot.cli.commands.AgentRuntime", _FakeRuntime)
     monkeypatch.setattr("nanobot.cli.commands._print_agent_response", lambda *_args, **_kwargs: None)
 
     result = runner.invoke(app, ["agent", "-m", "hello", "-c", str(config_file)])
@@ -384,7 +384,7 @@ def test_agent_overrides_workspace_path(mock_agent_runtime):
     assert result.exit_code == 0
     assert mock_agent_runtime["config"].agents.defaults.workspace == str(workspace_path)
     assert mock_agent_runtime["sync_templates"].call_args.args == (workspace_path,)
-    assert mock_agent_runtime["agent_loop_cls"].call_args.kwargs["workspace"] == workspace_path
+    assert mock_agent_runtime["runtime_cls"].call_args.kwargs["shared_resources"]["workspace"] == workspace_path
 
 
 def test_agent_workspace_override_wins_over_config_workspace(mock_agent_runtime, tmp_path: Path):
@@ -401,7 +401,7 @@ def test_agent_workspace_override_wins_over_config_workspace(mock_agent_runtime,
     assert mock_agent_runtime["load_config"].call_args.args == (config_path.resolve(),)
     assert mock_agent_runtime["config"].agents.defaults.workspace == str(workspace_path)
     assert mock_agent_runtime["sync_templates"].call_args.args == (workspace_path,)
-    assert mock_agent_runtime["agent_loop_cls"].call_args.kwargs["workspace"] == workspace_path
+    assert mock_agent_runtime["runtime_cls"].call_args.kwargs["shared_resources"]["workspace"] == workspace_path
 
 
 def test_agent_warns_about_deprecated_memory_window(mock_agent_runtime):

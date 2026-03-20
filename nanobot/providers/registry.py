@@ -219,6 +219,45 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         model_overrides=(),
     ),
 
+    # Aliyun Coding Plan: Anthropic Messages API compatible gateway
+    # Supports models like glm-5, qwen-max, etc.
+    ProviderSpec(
+        name="aliyun_coding_plan",
+        keywords=(),  # No keywords - must be explicitly configured
+        env_key="ANTHROPIC_API_KEY",
+        display_name="Aliyun Coding Plan",
+        litellm_prefix="anthropic",  # Route through anthropic provider
+        skip_prefixes=(),
+        env_extras=(),
+        is_gateway=True,
+        is_local=False,
+        detect_by_key_prefix="",
+        detect_by_base_keyword="dashscope.aliyuncs.com",
+        default_api_base="https://coding.dashscope.aliyuncs.com/apps/anthropic",
+        strip_model_prefix=False,
+        model_overrides=(),
+        supports_prompt_caching=False,
+    ),
+
+    # Alrun: Anthropic Messages API compatible gateway
+    ProviderSpec(
+        name="alrun",
+        keywords=(),  # No keywords - must be explicitly configured
+        env_key="ANTHROPIC_API_KEY",
+        display_name="Alrun",
+        litellm_prefix="anthropic",  # Route through anthropic provider
+        skip_prefixes=(),
+        env_extras=(),
+        is_gateway=True,
+        is_local=False,
+        detect_by_key_prefix="",
+        detect_by_base_keyword="",
+        default_api_base="",
+        strip_model_prefix=True,  # Strip alrun-* prefix before API call
+        model_overrides=(),
+        supports_prompt_caching=False,
+    ),
+
 
     # === Standard providers (matched by model-name keywords) ===============
     # Anthropic: LiteLLM recognizes "claude-*" natively, no prefix needed.
@@ -234,7 +273,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         is_local=False,
         detect_by_key_prefix="",
         detect_by_base_keyword="",
-        default_api_base="",
+        default_api_base="https://api.anthropic.com",
         strip_model_prefix=False,
         model_overrides=(),
         supports_prompt_caching=True,

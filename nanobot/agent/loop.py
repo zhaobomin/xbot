@@ -57,6 +57,7 @@ class AgentLoop:
         max_iterations: int = 40,
         context_window_tokens: int = 65_536,
         web_search_config: WebSearchConfig | None = None,
+        web_tools_config: Any | None = None,
         web_proxy: str | None = None,
         exec_config: ExecToolConfig | None = None,
         cron_service: CronService | None = None,
@@ -75,6 +76,7 @@ class AgentLoop:
         self.max_iterations = max_iterations
         self.context_window_tokens = context_window_tokens
         self.web_search_config = web_search_config or WebSearchConfig()
+        self.web_tools_config = web_tools_config
         self.web_proxy = web_proxy
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
@@ -127,7 +129,7 @@ class AgentLoop:
             path_append=self.exec_config.path_append,
         ))
         self.tools.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
-        self.tools.register(WebFetchTool(proxy=self.web_proxy))
+        self.tools.register(WebFetchTool(proxy=self.web_proxy, web_config=self.web_tools_config))
         self.tools.register(MessageTool(send_callback=self.bus.publish_outbound))
         self.tools.register(SpawnTool(manager=self.subagents))
         if self.cron_service:

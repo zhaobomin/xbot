@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 from typing import Any
 
 from nanobot.agent.tools.base import Tool
@@ -406,3 +407,59 @@ async def test_exec_timeout_capped_at_max() -> None:
     # Should not raise — just clamp to 600
     result = await tool.execute(command="echo ok", timeout=9999)
     assert "Exit code: 0" in result
+
+
+def test_tool_adapter_applies_workspace_restriction_to_sdk_tools(tmp_path) -> None:
+    from nanobot.agent.tool_adapter import ToolAdapter
+
+    tools_config = SimpleNamespace(
+        web=SimpleNamespace(proxy=None, search=None),
+        exec=SimpleNamespace(timeout=60, path_append=""),
+        restrict_to_workspace=True,
+    )
+    adapter = ToolAdapter(
+        workspace=str(tmp_path),
+        tools_config=tools_config,
+        shared_resources={},
+    )
+
+    adapter._register_nanobot_tools()
+
+    assert adapter.get_tool("read_file")._allowed_dir == tmp_path
+    assert adapter.get_tool("write_file")._allowed_dir == tmp_path
+    assert adapter.get_tool("edit_file")._allowed_dir == tmp_path
+    assert adapter.get_tool("list_dir")._allowed_dir == tmp_path
+    assert adapter.get_tool("shell").restrict_to_workspace is True
+
+
+def test_tool_adapter_registers_spawn_tool_when_provider_is_available(tmp_path, monkeypatch) -> None:
+    from nanobot.agent.tool_adapter import ToolAdapter
+
+    created = {}
+
+    class _FakeSubagentManager:
+        def __init__(self, **kwargs) -> None:
+            created.update(kwargs)
+
+    monkeypatch.setattr("nanobot.agent.tool_adapter.SubagentManager", _FakeSubagentManager)
+
+    tools_config = SimpleNamespace(
+        web=SimpleNamespace(proxy=None, search=None),
+        exec=SimpleNamespace(timeout=60, path_append=""),
+        restrict_to_workspace=True,
+    )
+    provider = object()
+    bus = object()
+    adapter = ToolAdapter(
+        workspace=str(tmp_path),
+        tools_config=tools_config,
+        shared_resources={"provider": provider, "bus": bus, "model": "test-model"},
+    )
+
+    adapter._register_nanobot_tools()
+
+    assert adapter.get_tool("spawn") is not None
+    assert created["provider"] is provider
+    assert created["bus"] is bus
+    assert created["model"] == "test-model"
+    assert created["restrict_to_workspace"] is True

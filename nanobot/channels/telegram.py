@@ -11,7 +11,7 @@ from typing import Any, Literal
 from loguru import logger
 from pydantic import Field
 from telegram import BotCommand, ReplyParameters, Update
-from telegram.error import TimedOut
+from telegram.error import Conflict, TimedOut
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
@@ -826,6 +826,13 @@ class TelegramChannel(BaseChannel):
 
     async def _on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Log polling / handler errors instead of silently swallowing them."""
+        if isinstance(context.error, Conflict):
+            logger.error(
+                "Telegram polling conflict: another bot instance is already calling getUpdates. "
+                "Stopping this Telegram channel."
+            )
+            await self.stop()
+            return
         logger.error("Telegram error: {}", context.error)
 
     def _get_extension(

@@ -15,7 +15,7 @@ from nanobot.agent.tools.shell import ExecTool
 from nanobot.agent.tools.web import WebFetchTool, WebSearchTool
 from nanobot.bus.events import InboundMessage
 from nanobot.bus.queue import MessageBus
-from nanobot.config.schema import ExecToolConfig
+from nanobot.config.schema import ExecToolConfig, WebToolsConfig
 from nanobot.providers.base import LLMProvider
 from nanobot.utils.helpers import build_assistant_message
 
@@ -30,17 +30,19 @@ class SubagentManager:
         bus: MessageBus,
         model: str | None = None,
         web_search_config: "WebSearchConfig | None" = None,
+        web_tools_config: "WebToolsConfig | None" = None,
         web_proxy: str | None = None,
         exec_config: "ExecToolConfig | None" = None,
         restrict_to_workspace: bool = False,
     ):
-        from nanobot.config.schema import ExecToolConfig, WebSearchConfig
+        from nanobot.config.schema import ExecToolConfig, WebSearchConfig, WebToolsConfig
 
         self.provider = provider
         self.workspace = workspace
         self.bus = bus
         self.model = model or provider.get_default_model()
         self.web_search_config = web_search_config or WebSearchConfig()
+        self.web_tools_config = web_tools_config or WebToolsConfig()
         self.web_proxy = web_proxy
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
@@ -105,7 +107,7 @@ class SubagentManager:
                 path_append=self.exec_config.path_append,
             ))
             tools.register(WebSearchTool(config=self.web_search_config, proxy=self.web_proxy))
-            tools.register(WebFetchTool(proxy=self.web_proxy))
+            tools.register(WebFetchTool(proxy=self.web_proxy, web_config=self.web_tools_config))
             
             system_prompt = self._build_subagent_prompt()
             messages: list[dict[str, Any]] = [

@@ -48,10 +48,33 @@ class AgentDefaults(Base):
         return self.memory_window is not None and "context_window_tokens" not in self.model_fields_set
 
 
+class ClaudeSDKAgentConfig(Base):
+    """Claude SDK Agent 特有配置.
+
+    注意: 供应商凭证(api_key/api_base)从全局 providers 读取
+    """
+
+    max_turns: int = 40
+    permission_mode: Literal["default", "acceptEdits", "plan", "bypassPermissions"] = "acceptEdits"
+    agents: dict[str, "AgentDefinition"] | None = None
+    hooks: dict[str, list] | None = None
+
+
+class AgentDefinition(Base):
+    """Subagent 定义."""
+
+    description: str = ""
+    prompt: str = ""
+    tools: list[str] | None = None
+    model: Literal["sonnet", "opus", "haiku", "inherit"] = "inherit"
+
+
 class AgentsConfig(Base):
     """Agent configuration."""
 
+    type: Literal["litellm", "claude_sdk"] = "litellm"
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
+    claude_sdk: ClaudeSDKAgentConfig = Field(default_factory=ClaudeSDKAgentConfig)
 
 
 class ProviderConfig(Base):
@@ -88,6 +111,16 @@ class ProvidersConfig(Base):
     openai_codex: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenAI Codex (OAuth)
     github_copilot: ProviderConfig = Field(default_factory=ProviderConfig)  # Github Copilot (OAuth)
 
+    # Claude SDK 兼容供应商 (Anthropic Messages API 兼容)
+    aliyun_coding_plan: ProviderConfig = Field(
+        default_factory=ProviderConfig,
+        description="阿里云 Coding Plan (Anthropic 兼容, 仅 Claude SDK Agent)"
+    )
+    alrun: ProviderConfig = Field(
+        default_factory=ProviderConfig,
+        description="Alrun API 网关 (Anthropic 兼容, 仅 Claude SDK Agent)"
+    )
+
 
 class HeartbeatConfig(Base):
     """Heartbeat service configuration."""
@@ -119,6 +152,7 @@ class WebToolsConfig(Base):
     proxy: str | None = (
         None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
     )
+    disable_security_checks: bool = False  # When true, skip SSRF/private-network URL validation for web tools
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
 
 

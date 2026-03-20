@@ -26,9 +26,13 @@ class _FakeHTTPXRequest:
 class _FakeUpdater:
     def __init__(self, on_start_polling) -> None:
         self._on_start_polling = on_start_polling
+        self.stop_called = False
 
     async def start_polling(self, **kwargs) -> None:
         self._on_start_polling()
+
+    async def stop(self) -> None:
+        self.stop_called = True
 
 
 class _FakeBot:
@@ -86,6 +90,12 @@ class _FakeApp:
         pass
 
     async def start(self) -> None:
+        pass
+
+    async def stop(self) -> None:
+        pass
+
+    async def shutdown(self) -> None:
         pass
 
 
@@ -290,6 +300,44 @@ def test_get_extension_falls_back_to_original_filename() -> None:
 
 def test_telegram_group_policy_defaults_to_mention() -> None:
     assert TelegramConfig().group_policy == "mention"
+
+
+@pytest.mark.asyncio
+async def test_on_error_stops_channel_on_polling_conflict() -> None:
+    from telegram.error import Conflict
+
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    app = _FakeApp(lambda: None)
+    channel._app = app
+    channel._running = True
+
+    context = SimpleNamespace(error=Conflict("terminated by other getUpdates request"))
+
+    await channel._on_error(None, context)
+
+    assert channel._running is False
+    assert app.updater.stop_called is True
+
+
+@pytest.mark.asyncio
+async def test_on_error_keeps_channel_running_for_non_conflict_errors() -> None:
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    app = _FakeApp(lambda: None)
+    channel._app = app
+    channel._running = True
+
+    context = SimpleNamespace(error=RuntimeError("boom"))
+
+    await channel._on_error(None, context)
+
+    assert channel._running is True
+    assert app.updater.stop_called is False
 
 
 def test_is_allowed_accepts_legacy_telegram_id_username_formats() -> None:

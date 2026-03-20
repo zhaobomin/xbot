@@ -227,15 +227,18 @@ class WebFetchTool(Tool):
         "required": ["url"],
     }
 
-    def __init__(self, max_chars: int = 50000, proxy: str | None = None):
+    def __init__(self, max_chars: int = 50000, proxy: str | None = None, web_config: Any | None = None):
         self.max_chars = max_chars
         self.proxy = proxy
+        self.web_config = web_config
+        self.disable_security_checks = bool(getattr(web_config, "disable_security_checks", False))
 
     async def execute(self, url: str, extractMode: str = "markdown", maxChars: int | None = None, **kwargs: Any) -> str:
         max_chars = maxChars or self.max_chars
-        is_valid, error_msg = _validate_url_safe(url)
-        if not is_valid:
-            return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
+        if not self.disable_security_checks:
+            is_valid, error_msg = _validate_url_safe(url)
+            if not is_valid:
+                return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
 
         result = await self._fetch_jina(url, max_chars)
         if result is None:
@@ -292,10 +295,11 @@ class WebFetchTool(Tool):
                 r = await client.get(url, headers={"User-Agent": USER_AGENT})
                 r.raise_for_status()
 
-            from nanobot.security.network import validate_resolved_url
-            redir_ok, redir_err = validate_resolved_url(str(r.url))
-            if not redir_ok:
-                return json.dumps({"error": f"Redirect blocked: {redir_err}", "url": url}, ensure_ascii=False)
+            if not self.disable_security_checks:
+                from nanobot.security.network import validate_resolved_url
+                redir_ok, redir_err = validate_resolved_url(str(r.url))
+                if not redir_ok:
+                    return json.dumps({"error": f"Redirect blocked: {redir_err}", "url": url}, ensure_ascii=False)
 
             ctype = r.headers.get("content-type", "")
 

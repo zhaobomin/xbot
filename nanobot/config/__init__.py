@@ -13,6 +13,14 @@ from nanobot.config.paths import (
     get_workspace_path,
 )
 from nanobot.config.schema import Config
+from nanobot.config.validator import validate_config, ConfigurationError
+from nanobot.config.provider_registry import (
+    ProviderSpec,
+    PROVIDER_REGISTRY,
+    get_provider_spec,
+    get_sdk_compatible_providers,
+    is_provider_sdk_compatible,
+)
 
 __all__ = [
     "Config",
@@ -27,4 +35,12 @@ __all__ = [
     "get_cli_history_path",
     "get_bridge_install_dir",
     "get_legacy_sessions_dir",
+    # New exports for dual-agent architecture
+    "validate_config",
+    "ConfigurationError",
+    "ProviderSpec",
+    "PROVIDER_REGISTRY",
+    "get_provider_spec",
+    "get_sdk_compatible_providers",
+    "is_provider_sdk_compatible",
 ]
