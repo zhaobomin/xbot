@@ -70,7 +70,7 @@ class ToolAdapter:
 
         # Register xbot-specific tools
         if not self._tools:
-            self._register_nanobot_tools()
+            self._register_xbot_tools()
 
         # Convert to MCP tools
         mcp_tools = []
@@ -87,13 +87,13 @@ class ToolAdapter:
         logger.info(f"Created MCP server with {len(mcp_tools)} tools")
         return {
             "xbot": create_sdk_mcp_server(
-                name="nanobot_tools",
+                name="xbot_tools",
                 version="1.0.0",
                 tools=mcp_tools,
             )
         }
 
-    def _register_nanobot_tools(self) -> None:
+    def _register_xbot_tools(self) -> None:
         """Register xbot-specific tools."""
         allowed_dir = self.workspace if getattr(self.tools_config, "restrict_to_workspace", False) else None
 

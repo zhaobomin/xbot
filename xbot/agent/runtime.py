@@ -9,9 +9,10 @@ from typing import Any
 
 from loguru import logger
 
-from xbot.agent.capabilities import canonical_tool_name
+from xbot.agent.capabilities import CapabilityCatalog, canonical_tool_name
 from xbot.agent.protocol import AgentContext
 from xbot.agent.router import AgentRouter, register_default_backends
+from xbot.agent.trace import append_session_trace
 from xbot.bus.events import InboundMessage, OutboundMessage
 
 
@@ -24,8 +25,12 @@ class AgentRuntime:
         self.shared_resources = dict(shared_resources)
         self.bus = self.shared_resources.get("bus")
         self.router = AgentRouter(config.agents, self.shared_resources)
+        self.sessions = self.shared_resources.get("session_manager")
         self.model = config.agents.defaults.model
         self.channels_config = config.channels
+        self.capabilities = CapabilityCatalog(
+            self.shared_resources.get("workspace", config.agents.defaults.workspace)
+        )
         self._running = False
         self._active_tasks: dict[str, list[asyncio.Task]] = {}
 
@@ -50,6 +55,7 @@ class AgentRuntime:
         self._running = True
         await self.initialize()
         logger.info("Agent runtime started with backend {}", self.router.backend_type)
+        logger.info("Agent runtime summary: {}", self.describe_runtime())
 
         while self._running:
             try:
@@ -84,6 +90,12 @@ class AgentRuntime:
             raise
         except Exception:
             logger.exception("Error processing message for session {}", msg.session_key)
+            append_session_trace(
+                self.sessions,
+                msg.session_key,
+                "error",
+                {"backend": self.router.backend_type, "message": "processing_error"},
+            )
             if self.bus is not None:
                 await self.bus.publish_outbound(
                     OutboundMessage(
@@ -136,20 +148,66 @@ class AgentRuntime:
             metadata=msg.metadata or {},
         )
 
+        append_session_trace(
+            self.sessions,
+            msg.session_key,
+            "request_start",
+            {
+                "backend": self.router.backend_type,
+                "channel": msg.channel,
+                "chat_id": msg.chat_id,
+                "prompt_preview": msg.content[:120],
+            },
+        )
+
         final = ""
         async for response in self.router.process(context):
-            if on_progress and response.progress_texts:
+            if response.progress_texts:
                 for text in response.progress_texts:
                     if text:
-                        await on_progress(text)
+                        append_session_trace(
+                            self.sessions,
+                            msg.session_key,
+                            "progress",
+                            {"text": text[:240]},
+                        )
+                        if on_progress:
+                            await on_progress(text)
+            if response.tool_hint_text:
+                append_session_trace(
+                    self.sessions,
+                    msg.session_key,
+                    "tool_hint",
+                    {"text": response.tool_hint_text[:240]},
+                )
+                if on_progress:
+                    await on_progress(response.tool_hint_text, tool_hint=True)
             if on_progress and response.is_delta and response.delta_content:
                 await on_progress(response.delta_content)
-            if on_progress and response.tool_calls:
-                await on_progress(self._tool_hint(response.tool_calls), tool_hint=True)
+            if response.tool_calls:
+                tool_hint = self._tool_hint(response.tool_calls, self.capabilities)
+                append_session_trace(
+                    self.sessions,
+                    msg.session_key,
+                    "tool_hint",
+                    {"text": tool_hint[:240]},
+                )
+                if on_progress:
+                    await on_progress(tool_hint, tool_hint=True)
             if response.is_delta:
                 final += response.delta_content
             else:
                 final = response.content or final
+
+        append_session_trace(
+            self.sessions,
+            msg.session_key,
+            "response_complete",
+            {
+                "backend": self.router.backend_type,
+                "content_preview": final[:240],
+            },
+        )
 
         return OutboundMessage(
             channel=msg.channel,
@@ -202,6 +260,17 @@ class AgentRuntime:
     def stop(self) -> None:
         self._running = False
 
+    def describe_runtime(self) -> str:
+        backend = self.router._backend
+        backend_summary = ""
+        if backend is not None and hasattr(backend, "get_tools_summary"):
+            backend_summary = backend.get_tools_summary()
+        return (
+            f"backend={self.router.backend_type} | "
+            f"workspace={self.shared_resources.get('workspace', self.config.agents.defaults.workspace)}"
+            + (f" | {backend_summary}" if backend_summary else "")
+        )
+
     @staticmethod
     def _help_text() -> str:
         return "\n".join(
@@ -215,7 +284,10 @@ class AgentRuntime:
         )
 
     @staticmethod
-    def _tool_hint(tool_calls: list[dict[str, Any]]) -> str:
+    def _tool_hint(
+        tool_calls: list[dict[str, Any]],
+        capabilities: CapabilityCatalog | None = None,
+    ) -> str:
         def _kind_label(kind: str) -> str:
             return {
                 "tool": "Tool",
@@ -227,23 +299,13 @@ class AgentRuntime:
             if kind := tc.get("kind"):
                 return str(kind)
             name = canonical_tool_name(str(tc.get("name", "")))
-            builtin = {
-                "read_file",
-                "write_file",
-                "edit_file",
-                "list_dir",
-                "exec",
-                "web_search",
-                "web_fetch",
-                "message",
-                "spawn",
-                "cron",
-            }
+            if capabilities is not None:
+                return capabilities.classify_tool_name(name)
             if name.startswith("mcp_"):
                 return "mcp"
             if name.startswith("skill_"):
                 return "skill"
-            if name in builtin:
+            if name in CapabilityCatalog.builtin_tool_names():
                 return "tool"
             return "tool"
 

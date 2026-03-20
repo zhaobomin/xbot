@@ -25,7 +25,7 @@ async def test_tool_adapter_message_tool_uses_injected_context(tmp_path) -> None
         tools_config=None,
         shared_resources={"bus": _Bus()},
     )
-    tool_adapter._register_nanobot_tools()
+    tool_adapter._register_xbot_tools()
     tool_adapter.set_tool_context(channel="telegram", chat_id="chat-1", message_id="msg-1")
 
     message_tool = tool_adapter.get_tool("message")

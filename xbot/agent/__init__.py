@@ -2,6 +2,7 @@
 
 from xbot.agent.context import ContextBuilder
 from xbot.agent.capabilities import CapabilityCatalog
+from xbot.agent.capability_policy import CapabilityPolicy
 from xbot.agent.loop import AgentLoop
 from xbot.agent.memory import MemoryStore
 from xbot.agent.skills import SkillsLoader
@@ -12,6 +13,7 @@ from xbot.agent.runtime import AgentRuntime
 __all__ = [
     "AgentLoop",
     "CapabilityCatalog",
+    "CapabilityPolicy",
     "ContextBuilder",
     "MemoryStore",
     "SkillsLoader",

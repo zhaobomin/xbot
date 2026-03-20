@@ -4,11 +4,14 @@ This backend wraps the existing AgentLoop implementation,
 providing zero-modification compatibility with the current system.
 """
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any, AsyncIterator
 
 from xbot.agent.protocol import AgentBackend, AgentContext, AgentResponse
+from xbot.agent.capabilities import CapabilityCatalog
+from xbot.agent.capability_policy import CapabilityPolicy
 from xbot.agent.loop import AgentLoop
 from xbot.bus.events import InboundMessage
 from xbot.config.schema import AgentsConfig
@@ -77,6 +80,7 @@ class LiteLLMBackend(AgentBackend):
         await self.agent_loop._connect_mcp()
 
         logger.info(f"LiteLLM backend initialized with model: {config.defaults.model}")
+        logger.info("LiteLLM capabilities: {}", self.get_tools_summary())
 
     async def process(self, context: AgentContext) -> AsyncIterator[AgentResponse]:
         """Process a message by delegating to AgentLoop.
@@ -105,10 +109,44 @@ class LiteLLMBackend(AgentBackend):
         # We need to adapt it for streaming
 
         try:
-            # Process the message
-            response = await self.agent_loop._process_message(
-                msg, session_key=context.session_key
-            )
+            queue: asyncio.Queue[AgentResponse | None] = asyncio.Queue()
+
+            async def _on_progress(content: str, *, tool_hint: bool = False) -> None:
+                if tool_hint:
+                    await queue.put(
+                        AgentResponse(
+                            content="",
+                            tool_hint_text=content,
+                        )
+                    )
+                    return
+                await queue.put(
+                    AgentResponse(
+                        content="",
+                        progress_texts=[content],
+                    )
+                )
+
+            async def _run_loop():
+                return await self.agent_loop._process_message(
+                    msg,
+                    session_key=context.session_key,
+                    on_progress=_on_progress,
+                )
+
+            task = asyncio.create_task(_run_loop())
+
+            while True:
+                if task.done() and queue.empty():
+                    break
+                try:
+                    item = await asyncio.wait_for(queue.get(), timeout=0.05)
+                except asyncio.TimeoutError:
+                    continue
+                if item is not None:
+                    yield item
+
+            response = await task
 
             if response:
                 yield AgentResponse(
@@ -163,3 +201,30 @@ class LiteLLMBackend(AgentBackend):
         if not self.agent_loop:
             return 0
         return await self.agent_loop.subagents.cancel_by_session(session_key)
+
+    def get_tools_summary(self) -> str:
+        workspace = self._shared_resources.get("workspace")
+        full_config = self._shared_resources.get("config")
+        if not workspace:
+            return "capabilities=unavailable"
+        catalog = CapabilityCatalog(workspace)
+        policy = CapabilityPolicy(
+            catalog,
+            mcp_servers=getattr(getattr(full_config, "tools", None), "mcp_servers", None)
+            if full_config
+            else None,
+        )
+        configured = catalog.build_summary(
+            mcp_servers=getattr(getattr(full_config, "tools", None), "mcp_servers", None)
+            if full_config
+            else None
+        )
+        policy_summary = policy.build_backend_trace("litellm")
+        runtime = ""
+        if self.agent_loop is not None:
+            runtime = (
+                f"registered_tools={len(self.agent_loop.tools)} | "
+                f"mcp_connected={self.agent_loop._mcp_connected}"
+            )
+        result = f"{configured} | {policy_summary}"
+        return f"{result} | {runtime}" if runtime else result

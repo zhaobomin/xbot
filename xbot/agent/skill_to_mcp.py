@@ -53,6 +53,8 @@ class SkillToMCPConverter:
         tools = []
 
         for capability in self.catalog.list_skills(include_unavailable=True):
+            if not capability.tool_exposable:
+                continue
             skill_file = Path(capability.path)
             try:
                 skill_tools = self._convert_skill(skill_file)

@@ -65,6 +65,7 @@ class AgentDefinition(Base):
 
     description: str = ""
     prompt: str = ""
+    when: str = ""
     tools: list[str] | None = None
     model: Literal["sonnet", "opus", "haiku", "inherit"] = "inherit"
 

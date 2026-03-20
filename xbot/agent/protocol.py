@@ -16,6 +16,7 @@ class AgentResponse:
     content: str
     progress_texts: list[str] = field(default_factory=list)
     tool_calls: list[dict[str, Any]] | None = None
+    tool_hint_text: str = ""
     finish_reason: str = "stop"  # stop | tool_use | error | max_iterations
     usage: dict[str, Any] | None = None
     raw_message: Any = None

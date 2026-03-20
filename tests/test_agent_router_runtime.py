@@ -9,6 +9,7 @@ from xbot.agent.protocol import AgentContext, AgentResponse
 from xbot.agent.router import AgentRouter
 from xbot.bus.events import InboundMessage
 from xbot.config.schema import Config
+from xbot.session.manager import SessionManager
 
 
 class _FakeBackend:
@@ -262,9 +263,122 @@ async def test_router_runtime_run_publishes_progress_messages_to_bus(tmp_path) -
     assert tool_hint.metadata["_tool_hint"] is True
 
 
+@pytest.mark.asyncio
+async def test_router_runtime_process_direct_forwards_preformatted_tool_hint(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    class _ProgressBackend(_FakeBackend):
+        async def process(self, context: AgentContext):
+            yield AgentResponse(content="", tool_hint_text='Tool: read_file("README.md")')
+            yield AgentResponse(content="done", finish_reason="stop")
+
+    AgentRouter._backends = {"fake": _ProgressBackend}
+
+    config = Config()
+    config.agents.type = "fake"  # type: ignore[assignment]
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    seen: list[tuple[str, bool]] = []
+
+    async def _progress(content: str, *, tool_hint: bool = False) -> None:
+        seen.append((content, tool_hint))
+
+    response = await runtime.process_direct("hello", on_progress=_progress)
+
+    assert response == "done"
+    assert seen == [('Tool: read_file("README.md")', True)]
+
+
 def test_router_runtime_tool_hint_formats_kind_prefixes() -> None:
     from xbot.agent.runtime import AgentRuntime
 
     assert AgentRuntime._tool_hint([{"name": "read_file", "input": {"path": "README.md"}, "kind": "tool"}]) == 'Tool: read_file("README.md")'
     assert AgentRuntime._tool_hint([{"name": "skill_writer", "input": {"query": "x"}, "kind": "skill"}]) == 'Skill: skill_writer("x")'
     assert AgentRuntime._tool_hint([{"name": "github_search", "input": {"query": "x"}, "kind": "mcp"}]) == 'MCP: github_search("x")'
+
+
+def test_router_runtime_describe_runtime_includes_backend_and_summary(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+    backend.get_tools_summary = lambda: "builtin_tools=10 | skills=2"  # type: ignore[attr-defined]
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"fake": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.type = "fake"  # type: ignore[assignment]
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    runtime.router._backend = backend
+
+    summary = runtime.describe_runtime()
+
+    assert "backend=fake" in summary
+    assert "workspace=" in summary
+    assert "builtin_tools=10 | skills=2" in summary
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_writes_session_runtime_trace(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    class _ProgressBackend(_FakeBackend):
+        async def process(self, context: AgentContext):
+            yield AgentResponse(content="", progress_texts=["planning"])
+            yield AgentResponse(content="", tool_hint_text='Tool: read_file("README.md")')
+            yield AgentResponse(content="done", finish_reason="stop")
+
+    AgentRouter._backends = {"fake": _ProgressBackend}
+
+    config = Config()
+    config.agents.type = "fake"  # type: ignore[assignment]
+    config.agents.defaults.workspace = str(tmp_path)
+    sessions = SessionManager(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+            "session_manager": sessions,
+        },
+    )
+
+    response = await runtime.process_direct("hello", session_key="cli:direct")
+
+    assert response == "done"
+    trace = sessions.get_or_create("cli:direct").metadata["runtime_trace"]
+    assert [entry["event"] for entry in trace] == [
+        "request_start",
+        "progress",
+        "tool_hint",
+        "response_complete",
+    ]
+    assert trace[0]["backend"] == "fake"
+    assert trace[-1]["content_preview"] == "done"

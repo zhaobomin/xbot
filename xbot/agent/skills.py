@@ -179,7 +179,7 @@ class SkillsLoader:
                 return content[match.end():].strip()
         return content
 
-    def _parse_nanobot_metadata(self, raw: str) -> dict:
+    def _parse_xbot_metadata(self, raw: str) -> dict:
         """Parse skill metadata JSON from frontmatter (supports xbot and openclaw keys)."""
         try:
             data = json.loads(raw)
@@ -201,14 +201,14 @@ class SkillsLoader:
     def _get_skill_meta(self, name: str) -> dict:
         """Get xbot metadata for a skill (cached in frontmatter)."""
         meta = self.get_skill_metadata(name) or {}
-        return self._parse_nanobot_metadata(meta.get("metadata", ""))
+        return self._parse_xbot_metadata(meta.get("metadata", ""))
 
     def get_always_skills(self) -> list[str]:
         """Get skills marked as always=true that meet requirements."""
         result = []
         for s in self.list_skills(filter_unavailable=True):
             meta = self.get_skill_metadata(s["name"]) or {}
-            skill_meta = self._parse_nanobot_metadata(meta.get("metadata", ""))
+            skill_meta = self._parse_xbot_metadata(meta.get("metadata", ""))
             if skill_meta.get("always") or meta.get("always"):
                 result.append(s["name"])
         return result
@@ -239,3 +239,13 @@ class SkillsLoader:
                 return metadata
 
         return None
+
+    def is_tool_exposable(self, name: str) -> bool:
+        """Return True when a skill may be exposed as a tool/MCP capability."""
+        metadata = self.get_skill_metadata(name) or {}
+        value = metadata.get("tool_exposable")
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() in {"true", "1", "yes", "on"}
+        return False
