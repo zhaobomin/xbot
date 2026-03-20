@@ -5,10 +5,10 @@ from typing import Any
 
 import pytest
 
-from nanobot.agent.protocol import AgentContext, AgentResponse
-from nanobot.agent.router import AgentRouter
-from nanobot.bus.events import InboundMessage
-from nanobot.config.schema import Config
+from xbot.agent.protocol import AgentContext, AgentResponse
+from xbot.agent.router import AgentRouter
+from xbot.bus.events import InboundMessage
+from xbot.config.schema import Config
 
 
 class _FakeBackend:
@@ -37,8 +37,8 @@ class _FakeBackend:
 
 @pytest.mark.asyncio
 async def test_router_runtime_process_direct_routes_through_selected_backend(tmp_path) -> None:
-    from nanobot.agent.runtime import AgentRuntime
-    from nanobot.bus.queue import MessageBus
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
 
     AgentRouter._backends = {"fake": _FakeBackend}
 
@@ -67,8 +67,8 @@ async def test_router_runtime_process_direct_routes_through_selected_backend(tmp
 
 @pytest.mark.asyncio
 async def test_router_runtime_help_is_handled_before_backend_invocation(tmp_path) -> None:
-    from nanobot.agent.runtime import AgentRuntime
-    from nanobot.bus.queue import MessageBus
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
 
     backend = _FakeBackend()
 
@@ -99,8 +99,8 @@ async def test_router_runtime_help_is_handled_before_backend_invocation(tmp_path
 
 @pytest.mark.asyncio
 async def test_router_runtime_stop_delegates_backend_session_cancellation(tmp_path) -> None:
-    from nanobot.agent.runtime import AgentRuntime
-    from nanobot.bus.queue import MessageBus
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
 
     backend = _FakeBackend()
 
@@ -136,8 +136,8 @@ async def test_router_runtime_stop_delegates_backend_session_cancellation(tmp_pa
 
 @pytest.mark.asyncio
 async def test_router_runtime_process_direct_forwards_progress_deltas(tmp_path) -> None:
-    from nanobot.agent.runtime import AgentRuntime
-    from nanobot.bus.queue import MessageBus
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
 
     class _DeltaBackend(_FakeBackend):
         async def process(self, context: AgentContext):
@@ -172,8 +172,8 @@ async def test_router_runtime_process_direct_forwards_progress_deltas(tmp_path) 
 
 @pytest.mark.asyncio
 async def test_router_runtime_process_direct_forwards_progress_texts(tmp_path) -> None:
-    from nanobot.agent.runtime import AgentRuntime
-    from nanobot.bus.queue import MessageBus
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
 
     class _ProgressBackend(_FakeBackend):
         async def process(self, context: AgentContext):
@@ -208,8 +208,8 @@ async def test_router_runtime_process_direct_forwards_progress_texts(tmp_path) -
 
 @pytest.mark.asyncio
 async def test_router_runtime_run_publishes_progress_messages_to_bus(tmp_path) -> None:
-    from nanobot.agent.runtime import AgentRuntime
-    from nanobot.bus.queue import MessageBus
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
 
     class _ProgressBackend(_FakeBackend):
         async def process(self, context: AgentContext):
@@ -263,7 +263,7 @@ async def test_router_runtime_run_publishes_progress_messages_to_bus(tmp_path) -
 
 
 def test_router_runtime_tool_hint_formats_kind_prefixes() -> None:
-    from nanobot.agent.runtime import AgentRuntime
+    from xbot.agent.runtime import AgentRuntime
 
     assert AgentRuntime._tool_hint([{"name": "read_file", "input": {"path": "README.md"}, "kind": "tool"}]) == 'Tool: read_file("README.md")'
     assert AgentRuntime._tool_hint([{"name": "skill_writer", "input": {"query": "x"}, "kind": "skill"}]) == 'Skill: skill_writer("x")'

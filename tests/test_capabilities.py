@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from nanobot.agent.capabilities import CapabilityCatalog, canonical_tool_name
-from nanobot.agent.skills import SkillsLoader
+from xbot.agent.capabilities import CapabilityCatalog, canonical_tool_name
+from xbot.agent.skills import SkillsLoader
 
 
 def _write_skill(root: Path, name: str, body: str) -> None:
@@ -12,13 +12,13 @@ def _write_skill(root: Path, name: str, body: str) -> None:
     (skill_dir / "SKILL.md").write_text(body, encoding="utf-8")
 
 
-def test_skills_loader_uses_workspace_then_dot_nanobot_then_builtin(tmp_path) -> None:
+def test_skills_loader_uses_workspace_then_dot_xbot_then_builtin(tmp_path) -> None:
     workspace_skills = tmp_path / "skills"
-    dot_nanobot_skills = tmp_path / ".nanobot" / "skills"
+    dot_xbot_skills = tmp_path / ".xbot" / "skills"
     builtin_skills = tmp_path / "builtin"
 
     _write_skill(workspace_skills, "shared", "---\ndescription: workspace\n---\nworkspace")
-    _write_skill(dot_nanobot_skills, "legacy", "---\ndescription: legacy\n---\nlegacy")
+    _write_skill(dot_xbot_skills, "scoped", "---\ndescription: scoped\n---\nscoped")
     _write_skill(builtin_skills, "shared", "---\ndescription: builtin shared\n---\nbuiltin")
     _write_skill(builtin_skills, "builtin_only", "---\ndescription: builtin only\n---\nbuiltin only")
 
@@ -27,10 +27,10 @@ def test_skills_loader_uses_workspace_then_dot_nanobot_then_builtin(tmp_path) ->
     skills = loader.list_skills(filter_unavailable=False)
     names = [skill["name"] for skill in skills]
 
-    assert names == ["shared", "legacy", "builtin_only"]
+    assert names == ["shared", "scoped", "builtin_only"]
     assert loader.load_skill("shared") is not None
     assert "workspace" in loader.load_skill("shared")
-    assert "legacy" in loader.load_skill("legacy")
+    assert "scoped" in loader.load_skill("scoped")
     assert "builtin only" in loader.load_skill("builtin_only")
 
 

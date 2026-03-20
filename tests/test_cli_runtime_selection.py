@@ -4,8 +4,8 @@ from pathlib import Path
 
 
 def test_make_agent_runtime_uses_router_runtime(monkeypatch, tmp_path: Path) -> None:
-    from nanobot.cli import commands
-    from nanobot.config.schema import Config
+    from xbot.cli import commands
+    from xbot.config.schema import Config
 
     captured = {}
 

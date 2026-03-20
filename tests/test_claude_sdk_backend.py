@@ -5,10 +5,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from nanobot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-from nanobot.agent.protocol import AgentContext, AgentResponse
-from nanobot.config.schema import Config
-from nanobot.session.manager import SessionManager
+from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+from xbot.agent.protocol import AgentContext, AgentResponse
+from xbot.config.schema import Config
+from xbot.session.manager import SessionManager
 from claude_agent_sdk.types import AgentDefinition as SDKAgentDefinition
 from claude_agent_sdk.types import (
     AssistantMessage,
@@ -41,7 +41,7 @@ async def test_claude_sdk_backend_persists_session_history_and_reset_clears_it(
             self.maybe_consolidate_by_tokens = AsyncMock(return_value=None)
 
     monkeypatch.setattr(
-        "nanobot.agent.backends.claude_sdk_backend.MemoryConsolidator",
+        "xbot.agent.backends.claude_sdk_backend.MemoryConsolidator",
         _FakeMemoryConsolidator,
     )
 
@@ -78,7 +78,7 @@ async def test_claude_sdk_backend_persists_session_history_and_reset_clears_it(
             yield object()
 
     monkeypatch.setattr(
-        "nanobot.agent.backends.claude_sdk_backend.ClaudeSDKClient",
+        "xbot.agent.backends.claude_sdk_backend.ClaudeSDKClient",
         _FakeClient,
     )
     backend._convert_message = MagicMock(return_value=AgentResponse(content="world"))  # type: ignore[method-assign]
@@ -158,7 +158,7 @@ async def test_claude_sdk_backend_uses_receive_response_for_single_query(
             raise AssertionError("receive_messages() should not be used for single-query processing")
 
     monkeypatch.setattr(
-        "nanobot.agent.backends.claude_sdk_backend.ClaudeSDKClient",
+        "xbot.agent.backends.claude_sdk_backend.ClaudeSDKClient",
         _FakeClient,
     )
     backend._convert_message = MagicMock(return_value=AgentResponse(content="ok"))  # type: ignore[method-assign]
@@ -193,7 +193,7 @@ async def test_claude_sdk_backend_cancel_session_delegates_to_spawn_manager(tmp_
             self.maybe_consolidate_by_tokens = AsyncMock(return_value=None)
 
     monkeypatch.setattr(
-        "nanobot.agent.backends.claude_sdk_backend.MemoryConsolidator",
+        "xbot.agent.backends.claude_sdk_backend.MemoryConsolidator",
         _FakeMemoryConsolidator,
     )
 

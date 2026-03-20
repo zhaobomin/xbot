@@ -1,6 +1,6 @@
 import pytest
 
-from nanobot.agent.tools.message import MessageTool
+from xbot.agent.tools.message import MessageTool
 
 
 @pytest.mark.asyncio
@@ -12,7 +12,7 @@ async def test_message_tool_returns_error_when_no_target_context() -> None:
 
 @pytest.mark.asyncio
 async def test_tool_adapter_message_tool_uses_injected_context(tmp_path) -> None:
-    from nanobot.agent.tool_adapter import ToolAdapter
+    from xbot.agent.tool_adapter import ToolAdapter
 
     sent = []
 

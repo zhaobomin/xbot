@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from nanobot.providers.custom_provider import CustomProvider
+from xbot.providers.custom_provider import CustomProvider
 
 
 def test_custom_provider_parse_handles_empty_choices() -> None:

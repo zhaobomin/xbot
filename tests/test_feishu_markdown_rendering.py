@@ -1,4 +1,4 @@
-from nanobot.channels.feishu import FeishuChannel
+from xbot.channels.feishu import FeishuChannel
 
 
 def test_parse_md_table_strips_markdown_formatting_in_headers_and_cells() -> None:

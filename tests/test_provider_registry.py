@@ -6,16 +6,16 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from nanobot.agent.claude_sdk_loop import create_agent
-from nanobot.config.provider_registry import (
+from xbot.agent.claude_sdk_loop import create_agent
+from xbot.config.provider_registry import (
     PROVIDER_REGISTRY,
     get_all_provider_names,
     get_provider_spec,
     get_sdk_compatible_providers,
     is_provider_sdk_compatible,
 )
-from nanobot.config.schema import Config
-from nanobot.providers.registry import PROVIDERS
+from xbot.config.schema import Config
+from xbot.providers.registry import PROVIDERS
 
 
 def test_config_provider_registry_uses_core_provider_names_in_order() -> None:
@@ -54,7 +54,7 @@ def test_sdk_compatible_provider_list_is_derived_from_registry() -> None:
 def test_create_agent_emits_deprecation_warning_for_legacy_factory() -> None:
     config = Config()
     bus = MagicMock()
-    workspace = Path("/tmp/nanobot-test")
+    workspace = Path("/tmp/xbot-test")
     provider = MagicMock()
 
     with warnings.catch_warnings(record=True) as caught:
