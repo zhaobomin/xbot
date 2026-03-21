@@ -816,14 +816,17 @@ class ClaudeSDKBackend(AgentBackend):
                 if isinstance(message, ResultMessage) and session is not None and message.session_id:
                     session.metadata["sdk_session_id"] = message.session_id
                     self.sessions.save(session)
-                
+
                 if self._message_converter:
                     response = self._message_converter.convert(message)
                 else:
                     response = self._convert_message_legacy(message)
-                    
+
                 if response:
-                    if response.content:
+                    # Accumulate content: delta content or final content
+                    if response.is_delta and response.delta_content:
+                        final_content += response.delta_content
+                    elif response.content:
                         final_content = response.content
                     yield response
 
@@ -840,6 +843,12 @@ class ClaudeSDKBackend(AgentBackend):
                     await client.disconnect()
                 except Exception:
                     logger.debug(f"Ignoring error while disconnecting failed Claude SDK session {context.session_key}")
+
+            # Clear sdk_session_id to prevent resume with invalid session
+            if session is not None:
+                session.metadata.pop("sdk_session_id", None)
+                self.sessions.save(session)
+
             logger.exception("Error in Claude SDK backend")
 
             can_fallback = (
@@ -878,7 +887,10 @@ class ClaudeSDKBackend(AgentBackend):
                                 response = self._convert_message_legacy(message)
                                 
                             if response:
-                                if response.content:
+                                # Accumulate content: delta content or final content
+                                if response.is_delta and response.delta_content:
+                                    final_content += response.delta_content
+                                elif response.content:
                                     final_content = response.content
                                 yield response
                     finally:
@@ -892,6 +904,10 @@ class ClaudeSDKBackend(AgentBackend):
                     return
                 except Exception:
                     logger.exception("Claude SDK fallback to main agent failed")
+                    # Clear sdk_session_id on fallback failure too
+                    if session is not None:
+                        session.metadata.pop("sdk_session_id", None)
+                        self.sessions.save(session)
             yield AgentResponse(
                 content=f"Error: {str(e)}",
                 finish_reason="error",
