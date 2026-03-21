@@ -154,7 +154,7 @@ class DiscordChannel(BaseChannel):
                 return True
             except Exception as e:
                 if attempt == 2:
-                    logger.error("Error sending Discord message: {}", e)
+                    logger.exception("Error sending Discord message")
                 else:
                     await asyncio.sleep(1)
         return False

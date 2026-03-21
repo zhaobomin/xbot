@@ -141,7 +141,7 @@ class NanobotDingTalkHandler(CallbackHandler):
             return AckMessage.STATUS_OK, "OK"
 
         except Exception as e:
-            logger.error("Error processing DingTalk message: {}", e)
+            logger.exception("Error processing DingTalk message")
             # Return OK to avoid retry loop from DingTalk server
             return AckMessage.STATUS_OK, "Error"
 
@@ -269,7 +269,7 @@ class DingTalkChannel(BaseChannel):
             self._token_expiry = time.time() + int(res_data.get("expireIn", 7200)) - 60
             return self._access_token
         except Exception as e:
-            logger.error("Failed to get DingTalk access token: {}", e)
+            logger.exception("Failed to get DingTalk access token")
             return None
 
     @staticmethod
@@ -530,7 +530,7 @@ class DingTalkChannel(BaseChannel):
                 },
             )
         except Exception as e:
-            logger.error("Error publishing DingTalk message: {}", e)
+            logger.exception("Error publishing DingTalk message")
 
     async def _download_dingtalk_file(
         self,
@@ -576,5 +576,5 @@ class DingTalkChannel(BaseChannel):
             logger.info("DingTalk file saved: {}", file_path)
             return str(file_path)
         except Exception as e:
-            logger.error("DingTalk file download error: {}", e)
+            logger.exception("DingTalk file download error")
             return None

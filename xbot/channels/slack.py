@@ -144,7 +144,7 @@ class SlackChannel(BaseChannel):
                 await self._update_react_emoji(msg.chat_id, event.get("ts"))
 
         except Exception as e:
-            logger.error("Error sending Slack message: {}", e)
+            logger.exception("Error sending Slack message")
 
     async def _on_socket_request(
         self,

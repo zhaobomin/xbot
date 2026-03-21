@@ -465,7 +465,7 @@ class TelegramChannel(BaseChannel):
                     **(thread_kwargs or {}),
                 )
             except Exception as e2:
-                logger.error("Error sending Telegram message: {}", e2)
+                logger.exception("Error sending Telegram message")
 
     async def _send_with_streaming(
         self,

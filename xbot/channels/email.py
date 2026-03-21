@@ -131,7 +131,7 @@ class EmailChannel(BaseChannel):
                         metadata=item.get("metadata", {}),
                     )
             except Exception as e:
-                logger.error("Email polling error: {}", e)
+                logger.exception("Email polling error")
 
             await asyncio.sleep(poll_seconds)
 

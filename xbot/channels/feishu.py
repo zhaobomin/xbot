@@ -1027,7 +1027,7 @@ class FeishuChannel(BaseChannel):
                         )
 
         except Exception as e:
-            logger.error("Error sending Feishu message: {}", e)
+            logger.exception("Error sending Feishu message")
 
     def _on_message_sync(self, data: Any) -> None:
         """
@@ -1153,7 +1153,7 @@ class FeishuChannel(BaseChannel):
             )
 
         except Exception as e:
-            logger.error("Error processing Feishu message: {}", e)
+            logger.exception("Error processing Feishu message")
 
     def _on_reaction_created(self, data: Any) -> None:
         """Ignore reaction events so they do not generate SDK noise."""
