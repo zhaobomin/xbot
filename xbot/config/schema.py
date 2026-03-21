@@ -71,6 +71,9 @@ class ClaudeSDKAgentConfig(Base):
     agents: dict[str, "AgentDefinition"] | None = None
     hooks: dict[str, list] | None = None
     permission: PermissionConfig = Field(default_factory=PermissionConfig)
+    # 禁用 SDK 内置工具，避免与 xbot MCP 工具冲突
+    # 默认禁用 WebFetch/WebSearch，让 agent 使用带代理配置的 mcp__xbot__web_fetch/web_search
+    disallowed_tools: list[str] = Field(default_factory=lambda: ["WebFetch", "WebSearch"])
 
 
 class AgentDefinition(Base):

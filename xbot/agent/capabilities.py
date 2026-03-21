@@ -24,6 +24,7 @@ _BUILTIN_TOOL_SPECS = (
     ("message", ()),
     ("spawn", ()),
     ("cron", ()),
+    ("memory", ()),
 )
 
 

@@ -15,6 +15,7 @@ from xbot.agent.tools.web import WebSearchTool, WebFetchTool
 from xbot.agent.tools.message import MessageTool
 from xbot.agent.tools.cron import CronTool
 from xbot.agent.tools.spawn import SpawnTool
+from xbot.agent.tools.memory import MemoryTool
 from xbot.agent.subagent import SubagentManager
 
 logger = logging.getLogger(__name__)
@@ -168,6 +169,13 @@ class ToolAdapter:
             timeout=exec_config.timeout if exec_config else 60,
             restrict_to_workspace=bool(getattr(self.tools_config, "restrict_to_workspace", False)),
             path_append=exec_config.path_append if exec_config else "",
+        )
+
+        # Memory tool - for reading, searching, and writing long-term memory
+        memory_store = self.shared_resources.get("memory_store")
+        self._tools["memory"] = MemoryTool(
+            workspace=self.workspace,
+            memory_store=memory_store,
         )
 
     def _adapt_tool(self, tool_name: str, tool_instance: Any) -> Any:

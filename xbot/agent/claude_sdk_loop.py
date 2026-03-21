@@ -237,6 +237,7 @@ class ClaudeSDKAgentLoop:
             system_prompt=self._build_system_prompt(),
             env=env,
             include_partial_messages=True,
+            disallowed_tools=["WebFetch", "WebSearch"],
         )
 
     def _build_system_prompt(self) -> str:

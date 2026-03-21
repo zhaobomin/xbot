@@ -302,6 +302,9 @@ class OptionsBuilder:
         config = self._shared_resources.get("config")
         defaults = config.agents.defaults
 
+        # Get disallowed_tools from config (default: disable SDK WebFetch/WebSearch)
+        disallowed_tools = list(getattr(self._sdk_config, "disallowed_tools", ["WebFetch", "WebSearch"]))
+
         return ClaudeAgentOptions(
             cwd=self._shared_resources.get("workspace", defaults.workspace),
             model=model,
@@ -314,6 +317,7 @@ class OptionsBuilder:
             system_prompt=self._build_system_prompt(),
             env=env,
             can_use_tool=can_use_tool,
+            disallowed_tools=disallowed_tools,
         )
     
     def _build_env_config(self) -> dict[str, str]:
