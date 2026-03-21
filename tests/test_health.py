@@ -123,6 +123,12 @@ class TestHealthCheckService:
     @pytest.mark.asyncio
     async def test_start_stop(self, service: HealthCheckService) -> None:
         """Test starting and stopping the service."""
+        # Use a random high port to avoid conflicts with running services
+        service.port = 58080
+        service._app = None
+        service._runner = None
+        service._site = None
+
         await service.start()
         assert service._runner is not None
 
