@@ -20,6 +20,8 @@ __pycache__/
 poetry.lock
 .pytest_cache/
 botpy.log
+*.log
+logs/
 nano.*.save
 .DS_Store
 uv.lock
