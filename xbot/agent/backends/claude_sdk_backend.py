@@ -326,9 +326,14 @@ class OptionsBuilder:
         """Build MCP servers configuration."""
         config = self._shared_resources.get("config")
         mcp_servers: dict[str, Any] = {}
-        
+
         if config.tools.mcp_servers:
-            mcp_servers.update(config.tools.mcp_servers)
+            # Convert MCPServerConfig objects to dicts for JSON serialization
+            for name, server_config in config.tools.mcp_servers.items():
+                if hasattr(server_config, "model_dump"):
+                    mcp_servers[name] = server_config.model_dump(exclude_none=True)
+                else:
+                    mcp_servers[name] = server_config
         
         if self._skill_converter:
             skills_mcp = self._skill_converter.convert_all_skills()
