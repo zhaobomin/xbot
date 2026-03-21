@@ -491,8 +491,10 @@ def gateway(
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+    health_port: int | None = typer.Option(None, "--health-port", help="Health check HTTP port (default: gateway_port - 710)"),
 ):
     """Start the xbot gateway."""
+    from xbot.agent.health import HealthCheckService
     from xbot.bus.queue import MessageBus
     from xbot.channels.manager import ChannelManager
     from xbot.config.paths import get_cron_dir
@@ -508,6 +510,7 @@ def gateway(
     config = _load_runtime_config(config, workspace)
     _print_deprecated_memory_window_notice(config)
     port = port if port is not None else config.gateway.port
+    health_port = health_port if health_port is not None else (port - 710)
 
     console.print(f"{__logo__} Starting xbot gateway version {__version__} on port {port}...")
     console.print(f"[dim]Agent type: {config.agents.type}[/dim]")
@@ -515,6 +518,9 @@ def gateway(
     bus = MessageBus()
     provider = _make_provider(config)
     session_manager = SessionManager(config.workspace_path)
+
+    # Create health check service
+    health = HealthCheckService(port=health_port, host=config.gateway.host)
 
     # Create cron service first (callback set after agent creation)
     cron_store_path = get_cron_dir() / "jobs.json"
@@ -640,11 +646,31 @@ def gateway(
         console.print(f"[green]✓[/green] Cron: {cron_status['jobs']} scheduled jobs")
 
     console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
+    console.print(f"[green]✓[/green] Health check: http://{config.gateway.host}:{health_port}/health")
 
     async def run():
+        from xbot.agent.alerting import AlertConfig, init_alert_service
+
+        # Initialize alert service
+        alert_config = AlertConfig(
+            enabled=bool(channels.enabled_channels),
+            channel=channels.enabled_channels[0] if channels.enabled_channels else "telegram",
+            chat_id="",  # Will be determined from sessions
+        )
+        alert = init_alert_service(bus, alert_config)
+
         try:
+            # Start health check service
+            health.update_status("agent", "initializing")
+            health.update_status("channels", channels.enabled_channels)
+            await health.start()
+
             await agent.initialize()
+            health.update_status("agent", "running")
+
             await cron.start()
+            health.update_status("cron", cron.status())
+
             await heartbeat.start()
             await asyncio.gather(
                 agent.run(),
@@ -652,16 +678,19 @@ def gateway(
             )
         except KeyboardInterrupt:
             console.print("\nShutting down...")
-        except Exception:
+        except Exception as e:
             import traceback
             console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")
             console.print(traceback.format_exc())
+            # Send critical alert
+            await alert.alert_critical(e, "Gateway crashed unexpectedly")
         finally:
             await agent.close_mcp()
             heartbeat.stop()
             cron.stop()
             agent.stop()
             await channels.stop_all()
+            await health.stop()
 
     asyncio.run(run())
 
