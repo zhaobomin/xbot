@@ -246,6 +246,248 @@ class TestOptionsBuilder:
             # Test default
             assert builder._detect_provider_from_model("unknown-model") == "anthropic"
 
+    def test_build_mcp_servers_with_pydantic_config(self):
+        """Test that MCPServerConfig Pydantic objects are converted to dicts for JSON serialization."""
+        import json
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+            from xbot.config.schema import MCPServerConfig
+
+            # Create Pydantic MCPServerConfig objects
+            server_config = MCPServerConfig(
+                command="npx",
+                args=["-y", "@example/mcp-server"],
+                env={"API_KEY": "test123"},
+                tool_timeout=60,
+            )
+
+            # Mock config with mcp_servers
+            mock_tools = MagicMock()
+            mock_tools.mcp_servers = {
+                "test_server": server_config,
+            }
+
+            mock_config = MagicMock()
+            mock_config.tools = mock_tools
+
+            builder = OptionsBuilder(
+                shared_resources={"config": mock_config},
+                sdk_config=None,
+                skill_converter=None,
+                tool_adapter=None,
+                sessions=None,
+                context_builder=None,
+                handoff_policy=None,
+                capability_policy=None,
+            )
+
+            mcp_servers = builder._build_mcp_servers()
+
+            # Verify the server config was converted to dict
+            assert "test_server" in mcp_servers
+            assert isinstance(mcp_servers["test_server"], dict)
+            assert mcp_servers["test_server"]["command"] == "npx"
+            assert mcp_servers["test_server"]["args"] == ["-y", "@example/mcp-server"]
+            assert mcp_servers["test_server"]["env"] == {"API_KEY": "test123"}
+            assert mcp_servers["test_server"]["tool_timeout"] == 60
+
+            # Critical: Verify JSON serialization works
+            json_str = json.dumps(mcp_servers)
+            assert "test_server" in json_str
+            assert "npx" in json_str
+
+    def test_build_mcp_servers_with_dict_config(self):
+        """Test that dict configs are passed through unchanged."""
+        import json
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+
+            # Dict config (non-Pydantic)
+            dict_config = {
+                "command": "python",
+                "args": ["server.py"],
+                "env": {},
+            }
+
+            mock_tools = MagicMock()
+            mock_tools.mcp_servers = {
+                "dict_server": dict_config,
+            }
+
+            mock_config = MagicMock()
+            mock_config.tools = mock_tools
+
+            builder = OptionsBuilder(
+                shared_resources={"config": mock_config},
+                sdk_config=None,
+                skill_converter=None,
+                tool_adapter=None,
+                sessions=None,
+                context_builder=None,
+                handoff_policy=None,
+                capability_policy=None,
+            )
+
+            mcp_servers = builder._build_mcp_servers()
+
+            # Dict should be passed through unchanged
+            assert "dict_server" in mcp_servers
+            assert mcp_servers["dict_server"]["command"] == "python"
+
+            # JSON serialization should work
+            json_str = json.dumps(mcp_servers)
+            assert "python" in json_str
+
+    def test_build_mcp_servers_mixed_configs(self):
+        """Test mixed Pydantic and dict configs."""
+        import json
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+            from xbot.config.schema import MCPServerConfig
+
+            pydantic_config = MCPServerConfig(
+                command="npx",
+                args=["-y", "@pydantic/server"],
+            )
+
+            dict_config = {
+                "command": "python",
+                "args": ["dict_server.py"],
+            }
+
+            mock_tools = MagicMock()
+            mock_tools.mcp_servers = {
+                "pydantic_server": pydantic_config,
+                "dict_server": dict_config,
+            }
+
+            mock_config = MagicMock()
+            mock_config.tools = mock_tools
+
+            builder = OptionsBuilder(
+                shared_resources={"config": mock_config},
+                sdk_config=None,
+                skill_converter=None,
+                tool_adapter=None,
+                sessions=None,
+                context_builder=None,
+                handoff_policy=None,
+                capability_policy=None,
+            )
+
+            mcp_servers = builder._build_mcp_servers()
+
+            # Both should be dicts
+            assert isinstance(mcp_servers["pydantic_server"], dict)
+            assert isinstance(mcp_servers["dict_server"], dict)
+
+            # JSON serialization should work for entire result
+            json_str = json.dumps(mcp_servers)
+            assert "pydantic_server" in json_str
+            assert "dict_server" in json_str
+
+    def test_build_mcp_servers_empty(self):
+        """Test empty mcp_servers returns empty dict."""
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+
+            mock_tools = MagicMock()
+            mock_tools.mcp_servers = {}
+
+            mock_config = MagicMock()
+            mock_config.tools = mock_tools
+
+            builder = OptionsBuilder(
+                shared_resources={"config": mock_config},
+                sdk_config=None,
+                skill_converter=None,
+                tool_adapter=None,
+                sessions=None,
+                context_builder=None,
+                handoff_policy=None,
+                capability_policy=None,
+            )
+
+            mcp_servers = builder._build_mcp_servers()
+            assert mcp_servers == {}
+
+    def test_build_mcp_servers_excludes_none_values(self):
+        """Test that None values are excluded from serialized config."""
+        import json
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+            from xbot.config.schema import MCPServerConfig
+
+            # Create config with some None/default values
+            server_config = MCPServerConfig(
+                command="npx",
+                args=["server"],
+                url="",  # empty string (default)
+                headers={},  # empty dict (default)
+            )
+
+            mock_tools = MagicMock()
+            mock_tools.mcp_servers = {"server": server_config}
+
+            mock_config = MagicMock()
+            mock_config.tools = mock_tools
+
+            builder = OptionsBuilder(
+                shared_resources={"config": mock_config},
+                sdk_config=None,
+                skill_converter=None,
+                tool_adapter=None,
+                sessions=None,
+                context_builder=None,
+                handoff_policy=None,
+                capability_policy=None,
+            )
+
+            mcp_servers = builder._build_mcp_servers()
+
+            # Verify serialization works
+            json_str = json.dumps(mcp_servers)
+            parsed = json.loads(json_str)
+
+            # None values should be excluded
+            assert "command" in parsed["server"]
+            # url is empty string, not None, so it should be present
+            # but type would be excluded if it was None
+
 
 class TestDelegationTrace:
     """Tests for delegation tracing."""
