@@ -252,11 +252,11 @@ class MessageConverter:
 
 class OptionsBuilder:
     """Builds ClaudeAgentOptions from configuration.
-    
+
     This class encapsulates the options building logic,
     separating concerns and improving testability.
     """
-    
+
     def __init__(
         self,
         shared_resources: dict[str, Any],
@@ -267,6 +267,7 @@ class OptionsBuilder:
         context_builder: ContextBuilder | None,
         handoff_policy: HandoffPolicy | None,
         capability_policy: CapabilityPolicy | None,
+        permission_handler: Any = None,
     ):
         self._shared_resources = shared_resources
         self._sdk_config = sdk_config
@@ -276,7 +277,8 @@ class OptionsBuilder:
         self._context_builder = context_builder
         self._handoff_policy = handoff_policy
         self._capability_policy = capability_policy
-    
+        self._permission_handler = permission_handler
+
     def build(
         self,
         session_key: str | None = None,
@@ -285,16 +287,21 @@ class OptionsBuilder:
     ) -> "ClaudeAgentOptions":
         """Build ClaudeAgentOptions from configuration."""
         from claude_agent_sdk import ClaudeAgentOptions
-        
+
         env = self._build_env_config()
         model = self._get_model_name()
         mcp_servers = self._build_mcp_servers()
         sdk_agents = self._build_sdk_agents() if include_agents else None
         resume_session = self._get_resume_session(session_key)
-        
+
+        # Build can_use_tool callback if permission handler is available
+        can_use_tool = None
+        if self._permission_handler:
+            can_use_tool = self._permission_handler.build_can_use_tool_callback()
+
         config = self._shared_resources.get("config")
         defaults = config.agents.defaults
-        
+
         return ClaudeAgentOptions(
             cwd=self._shared_resources.get("workspace", defaults.workspace),
             model=model,
@@ -306,6 +313,7 @@ class OptionsBuilder:
             hooks=self._sdk_config.hooks,
             system_prompt=self._build_system_prompt(),
             env=env,
+            can_use_tool=can_use_tool,
         )
     
     def _build_env_config(self) -> dict[str, str]:
@@ -554,6 +562,7 @@ class ClaudeSDKBackend(AgentBackend):
         self._capability_policy: CapabilityPolicy | None = None
         self._options_builder: OptionsBuilder | None = None
         self._message_converter: MessageConverter | None = None
+        self._permission_handler: Any = None
 
     async def initialize(self, config: AgentsConfig, shared_resources: dict[str, Any]) -> None:
         """Initialize the backend.
@@ -625,6 +634,34 @@ class ClaudeSDKBackend(AgentBackend):
                 get_tool_definitions=self._get_tool_definitions,
             )
 
+        # Initialize permission handler
+        self._permission_handler = shared_resources.get("permission_handler")
+        if self._permission_handler is None:
+            # Create default permission handler based on mode
+            bus = shared_resources.get("bus")
+            permission_config = getattr(self.sdk_config, "permission", None) or {}
+            enabled = getattr(permission_config, "enabled", True)
+
+            if enabled:
+                from xbot.agent.permission_handler import create_permission_handler
+
+                if bus is not None:
+                    # Channel mode (gateway)
+                    self._permission_handler = create_permission_handler(
+                        mode="channel",
+                        bus=bus,
+                        timeout=getattr(permission_config, "timeout", 300.0),
+                        auto_approve_safe_tools=getattr(permission_config, "auto_approve_safe_tools", True),
+                    )
+                    logger.info("Permission handler initialized for channel mode")
+                else:
+                    # CLI mode
+                    self._permission_handler = create_permission_handler(
+                        mode="cli",
+                        auto_approve_safe_tools=getattr(permission_config, "auto_approve_safe_tools", True),
+                    )
+                    logger.info("Permission handler initialized for CLI mode")
+
         # Initialize helpers
         self._options_builder = OptionsBuilder(
             shared_resources=self._shared_resources,
@@ -635,6 +672,7 @@ class ClaudeSDKBackend(AgentBackend):
             context_builder=self._context_builder,
             handoff_policy=self._handoff_policy,
             capability_policy=self._capability_policy,
+            permission_handler=self._permission_handler,
         )
         
         self._message_converter = MessageConverter(
@@ -779,6 +817,16 @@ class ClaudeSDKBackend(AgentBackend):
                 message_id=context.metadata.get("message_id"),
             )
 
+        # Set permission handler session context
+        if self._permission_handler and hasattr(self._permission_handler, "set_session_context"):
+            self._permission_handler.set_session_context(
+                context.session_key,
+                context.channel,
+                context.chat_id,
+            )
+            if hasattr(self._permission_handler, "set_current_session"):
+                self._permission_handler.set_current_session(context.session_key)
+
         session = self.sessions.get_or_create(context.session_key) if self.sessions else None
         if session is not None:
             session.add_message("user", context.prompt)
@@ -912,6 +960,10 @@ class ClaudeSDKBackend(AgentBackend):
                 content=f"Error: {str(e)}",
                 finish_reason="error",
             )
+        finally:
+            # Clear permission handler session context
+            if self._permission_handler and hasattr(self._permission_handler, "clear_session_context"):
+                self._permission_handler.clear_session_context(context.session_key)
 
     def _convert_message_legacy(self, message: Any) -> AgentResponse | None:
         """Legacy message converter for backward compatibility."""

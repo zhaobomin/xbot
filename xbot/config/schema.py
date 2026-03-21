@@ -48,6 +48,18 @@ class AgentDefaults(Base):
         return self.memory_window is not None and "context_window_tokens" not in self.model_fields_set
 
 
+class PermissionConfig(Base):
+    """权限请求处理配置。"""
+
+    enabled: bool = True  # 是否启用权限请求处理
+    timeout: float = 300.0  # 等待用户响应的超时时间（秒）
+    auto_approve_safe_tools: bool = True  # 是否自动批准安全工具
+    safe_tools: list[str] = [  # 安全工具列表（自动批准）
+        "read_file", "list_dir", "web_search", "web_fetch",
+        "message", "cron", "spawn",
+    ]
+
+
 class ClaudeSDKAgentConfig(Base):
     """Claude SDK Agent 特有配置.
 
@@ -58,6 +70,7 @@ class ClaudeSDKAgentConfig(Base):
     permission_mode: Literal["default", "acceptEdits", "plan", "bypassPermissions"] = "acceptEdits"
     agents: dict[str, "AgentDefinition"] | None = None
     hooks: dict[str, list] | None = None
+    permission: PermissionConfig = Field(default_factory=PermissionConfig)
 
 
 class AgentDefinition(Base):

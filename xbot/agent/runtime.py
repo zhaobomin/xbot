@@ -66,6 +66,10 @@ class AgentRuntime:
                 logger.warning("Error consuming inbound message: {}", e)
                 continue
 
+            # Check if this is a permission response
+            if await self._handle_permission_response(msg):
+                continue
+
             if msg.content.strip().lower() in {"/help", "/restart", "/stop", "/new"}:
                 response = await self._handle_message(msg)
                 if response is not None:
@@ -80,6 +84,51 @@ class AgentRuntime:
                 if t in self._active_tasks.get(k, [])
                 else None
             )
+
+    async def _handle_permission_response(self, msg: InboundMessage) -> bool:
+        """Check if the message is a permission response and handle it.
+
+        Returns:
+            True if the message was handled as a permission response, False otherwise
+        """
+        if self.bus is None:
+            return False
+
+        # Check if there's a pending permission request for this session
+        request_id = self.bus.get_pending_request_for_session(msg.session_key)
+        if not request_id:
+            return False
+
+        # Parse the user's response
+        content = msg.content.strip().lower()
+        decision = None
+        reason = ""
+
+        # Allow variations: "允许", "allow", "yes", "y", "是", "ok"
+        allow_variations = {"允许", "allow", "yes", "y", "是", "ok", "同意", "确认"}
+        # Deny variations: "拒绝", "deny", "no", "n", "否"
+        deny_variations = {"拒绝", "deny", "no", "n", "否", "取消"}
+
+        if content in allow_variations:
+            decision = "allow"
+        elif content in deny_variations:
+            decision = "deny"
+            reason = "User denied"
+        else:
+            # Not a clear permission response, treat as normal message
+            return False
+
+        # Submit the response
+        from xbot.bus.queue import PermissionResponse
+        response = PermissionResponse(
+            request_id=request_id,
+            session_key=msg.session_key,
+            decision=decision,
+            reason=reason,
+        )
+        await self.bus.submit_permission_response(response)
+        logger.info(f"Permission response submitted: {decision} for request {request_id}")
+        return True
 
     async def _dispatch(self, msg: InboundMessage) -> None:
         try:

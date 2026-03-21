@@ -37,6 +37,7 @@ from xbot.agent.runtime import AgentRuntime
 from xbot.config.paths import get_workspace_path
 from xbot.config.schema import Config
 from xbot.utils.helpers import sync_workspace_templates
+from xbot.agent.permission_handler import CLIPermissionHandler, InteractivePermissionHandler
 
 app = typer.Typer(
     name="xbot",
@@ -454,19 +455,23 @@ def _make_agent_runtime(
     workspace: Path,
     cron_service,
     session_manager,
+    permission_handler=None,
 ):
     """Create the unified router-backed runtime."""
+    shared_resources = {
+        "bus": bus,
+        "provider": provider,
+        "workspace": workspace,
+        "cron_service": cron_service,
+        "session_manager": session_manager,
+        "config": config,
+        "tools_config": config.tools,
+    }
+    if permission_handler is not None:
+        shared_resources["permission_handler"] = permission_handler
     return AgentRuntime(
         config=config,
-        shared_resources={
-            "bus": bus,
-            "provider": provider,
-            "workspace": workspace,
-            "cron_service": cron_service,
-            "session_manager": session_manager,
-            "config": config,
-            "tools_config": config.tools,
-        },
+        shared_resources=shared_resources,
     )
 
 
@@ -495,6 +500,7 @@ def gateway(
 ):
     """Start the xbot gateway."""
     from xbot.agent.health import HealthCheckService
+    from xbot.agent.permission_handler import PermissionRequestHandler
     from xbot.bus.queue import MessageBus
     from xbot.channels.manager import ChannelManager
     from xbot.config.paths import get_cron_dir
@@ -526,6 +532,15 @@ def gateway(
     cron_store_path = get_cron_dir() / "jobs.json"
     cron = CronService(cron_store_path)
 
+    # Create permission handler for channel mode (gateway)
+    perm_config = config.agents.claude_sdk.permission
+    permission_handler = PermissionRequestHandler(
+        bus=bus,
+        timeout=perm_config.timeout,
+        auto_approve_safe_tools=perm_config.auto_approve_safe_tools,
+        safe_tools=set(perm_config.safe_tools),
+    )
+
     # Create agent based on config.agents.type
     agent = _make_agent_runtime(
         config=config,
@@ -534,6 +549,7 @@ def gateway(
         workspace=config.workspace_path,
         cron_service=cron,
         session_manager=session_manager,
+        permission_handler=permission_handler,
     )
 
     # Set cron callback (needs agent)
@@ -734,6 +750,26 @@ def agent(
     else:
         logger.disable("xbot")
 
+    # Shared reference for progress callbacks and permission handler
+    _thinking: _ThinkingSpinner | None = None
+
+    # Get permission config
+    perm_config = config.agents.claude_sdk.permission
+
+    if message:
+        # Single message mode — non-interactive CLI permission handler
+        _permission_handler = CLIPermissionHandler(
+            auto_approve_safe_tools=perm_config.auto_approve_safe_tools,
+            interactive=False,  # Non-interactive mode
+            safe_tools=set(perm_config.safe_tools),
+        )
+    else:
+        # Interactive mode — interactive permission handler with spinner support
+        _permission_handler = InteractivePermissionHandler(
+            auto_approve_safe_tools=perm_config.auto_approve_safe_tools,
+            safe_tools=set(perm_config.safe_tools),
+        )
+
     agent_loop = _make_agent_runtime(
         config=config,
         bus=bus,
@@ -741,10 +777,13 @@ def agent(
         workspace=config.workspace_path,
         cron_service=cron,
         session_manager=None,
+        permission_handler=_permission_handler,
     )
 
-    # Shared reference for progress callbacks
-    _thinking: _ThinkingSpinner | None = None
+    # For interactive mode, set spinner reference on permission handler
+    if not message and isinstance(_permission_handler, InteractivePermissionHandler):
+        # Spinner will be set when _thinking is created in run_interactive
+        pass
 
     async def _cli_progress(content: str, *, tool_hint: bool = False) -> None:
         ch = agent_loop.channels_config
@@ -796,6 +835,11 @@ def agent(
             signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
         async def run_interactive():
+            # Set spinner reference on permission handler for this session
+            if isinstance(_permission_handler, InteractivePermissionHandler):
+                _thinking_ref = _ThinkingSpinner(enabled=not logs)
+                _permission_handler.set_thinking_spinner(_thinking_ref)
+
             bus_task = asyncio.create_task(agent_loop.run())
             turn_done = asyncio.Event()
             turn_done.set()
@@ -855,6 +899,9 @@ def agent(
 
                         nonlocal _thinking
                         _thinking = _ThinkingSpinner(enabled=not logs)
+                        # Update spinner reference on permission handler
+                        if isinstance(_permission_handler, InteractivePermissionHandler):
+                            _permission_handler.set_thinking_spinner(_thinking)
                         with _thinking:
                             await turn_done.wait()
                         _thinking = None
