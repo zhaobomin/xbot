@@ -164,6 +164,15 @@ class ExecToolConfig(Base):
     path_append: str = ""
 
 
+class MemoryConfig(Base):
+    """Memory system configuration."""
+
+    provider: Literal["file", "reme"] = "reme"  # Memory backend
+    enable_vector_search: bool = False  # Enable vector search (requires more memory)
+    llm_model: str = "gpt-4.1-nano"  # LLM for summarization
+    embedding_model: str = "text-embedding-3-small"  # Embedding model for vector search
+
+
 class MCPServerConfig(Base):
     """MCP server connection configuration (stdio or HTTP)."""
 
@@ -181,6 +190,7 @@ class ToolsConfig(Base):
 
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
+    memory: MemoryConfig = Field(default_factory=MemoryConfig)
     restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
 

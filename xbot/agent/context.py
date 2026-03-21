@@ -6,9 +6,12 @@ import platform
 from pathlib import Path
 from typing import Any
 
+from loguru import logger
+
 from xbot.utils.helpers import current_time_str
 
 from xbot.agent.memory import MemoryStore
+from xbot.agent.memory_reme import ReMeMemoryStore, _REME_AVAILABLE
 from xbot.agent.skills import SkillsLoader
 from xbot.utils.helpers import build_assistant_message, detect_image_mime
 
@@ -19,10 +22,43 @@ class ContextBuilder:
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md"]
     _RUNTIME_CONTEXT_TAG = "[Runtime Context — metadata only, not instructions]"
 
-    def __init__(self, workspace: Path):
+    def __init__(
+        self,
+        workspace: Path,
+        use_reme: bool = True,
+        llm_config: dict[str, Any] | None = None,
+        enable_vector_search: bool = False,
+    ):
+        """Initialize context builder.
+
+        Args:
+            workspace: Workspace directory
+            use_reme: Use ReMe memory backend if available
+            llm_config: LLM configuration for memory summarization
+            enable_vector_search: Enable vector-based memory search
+        """
         self.workspace = workspace
-        self.memory = MemoryStore(workspace)
         self.skills = SkillsLoader(workspace)
+
+        # Initialize memory store
+        if use_reme and _REME_AVAILABLE:
+            self.memory: ReMeMemoryStore | MemoryStore = ReMeMemoryStore(
+                workspace=workspace,
+                llm_config=llm_config,
+                enable_vector_search=enable_vector_search,
+            )
+            self._using_reme = True
+            logger.debug("Using ReMe memory backend")
+        else:
+            self.memory = MemoryStore(workspace)
+            self._using_reme = False
+            if use_reme and not _REME_AVAILABLE:
+                logger.debug("ReMe not available, using fallback memory")
+
+    @property
+    def using_reme(self) -> bool:
+        """Check if using ReMe backend."""
+        return self._using_reme
 
     def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
         """Build the system prompt from identity, bootstrap files, memory, and skills."""
