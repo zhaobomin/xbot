@@ -19,6 +19,7 @@ from xbot.agent.event_formatter import format_usage_summary
 from xbot.agent.protocol import AgentContext
 from xbot.agent.router import AgentRouter, register_default_backends
 from xbot.agent.state_checker import StateConsistencyChecker
+from xbot.agent.state_coordinator import SessionStateCoordinator
 from xbot.agent.trace import append_session_trace
 from xbot.bus.events import InboundMessage, OutboundMessage
 
@@ -247,6 +248,12 @@ class AgentRuntime:
         # State consistency checker (for debugging and monitoring)
         self._state_checker = StateConsistencyChecker(self)
         self._state_check_enabled = True  # Feature flag for state checking
+
+        # Session state coordinator (unified state management)
+        self._state_coordinator = SessionStateCoordinator(self)
+        self._coordinator_shadow_mode = True  # Start in shadow mode for safe migration
+        if self._coordinator_shadow_mode:
+            self._state_coordinator.enable_shadow_mode()
 
         # Register backend state sync callbacks
         self.shared_resources["on_backend_client_cleanup"] = self._on_backend_client_cleanup
@@ -845,8 +852,25 @@ class AgentRuntime:
             self._session_locks.pop(session_key, None)
 
     def get_session_state(self, session_key: str) -> str:
-        """Return current runtime session phase for diagnostics."""
-        return self._state_machine.get_phase(session_key).value
+        """Return current runtime session phase for diagnostics.
+
+        Uses coordinator for unified state access.
+        """
+        # Coordinator provides unified access (currently in shadow mode)
+        return self._state_coordinator.get_phase(session_key).value
+
+    def get_session_phase(self, session_key: str) -> SessionPhase:
+        """Return current session phase as enum.
+
+        This is the recommended method for getting session phase.
+
+        Args:
+            session_key: Session identifier
+
+        Returns:
+            Current SessionPhase enum value
+        """
+        return self._state_coordinator.get_phase(session_key)
 
     def _session_diagnostics_text(self, session_key: str) -> str:
         phase = self.get_session_state(session_key)
