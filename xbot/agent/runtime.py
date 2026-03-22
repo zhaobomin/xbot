@@ -258,6 +258,9 @@ class AgentRuntime:
         # Feature flag for atomic dispatch (uses coordinator transactions)
         self._use_atomic_dispatch = False  # Off by default, enable after validation
 
+        # Feature flag for atomic terminate (uses coordinator transactions)
+        self._use_atomic_terminate = False  # Off by default, enable after validation
+
         # Register backend state sync callbacks
         self.shared_resources["on_backend_client_cleanup"] = self._on_backend_client_cleanup
 
@@ -293,6 +296,28 @@ class AgentRuntime:
     def is_atomic_dispatch_enabled(self) -> bool:
         """Check if atomic dispatch is enabled."""
         return self._use_atomic_dispatch
+
+    def enable_atomic_terminate(self) -> None:
+        """Enable atomic terminate mode.
+
+        When enabled, terminate_session uses coordinator transactions for state changes.
+        This provides atomicity guarantees for state cleanup.
+        """
+        self._use_atomic_terminate = True
+        logger.info("Atomic terminate enabled")
+
+    def disable_atomic_terminate(self) -> None:
+        """Disable atomic terminate mode.
+
+        Reverts to legacy terminate behavior.
+        """
+        self._use_atomic_terminate = False
+        logger.info("Atomic terminate disabled")
+
+    @property
+    def is_atomic_terminate_enabled(self) -> bool:
+        """Check if atomic terminate is enabled."""
+        return self._use_atomic_terminate
 
     async def initialize(self) -> None:
         await self.router.initialize()
@@ -640,7 +665,10 @@ class AgentRuntime:
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="Restarting...")
         if cmd in {"!stop", "/stop"}:
             await self.initialize()
-            state = await self._terminate_session(msg.session_key, hard_reset=False)
+            if self._use_atomic_terminate:
+                state = await self._atomic_terminate_session(msg.session_key, hard_reset=False)
+            else:
+                state = await self._terminate_session(msg.session_key, hard_reset=False)
 
             parts = []
             if state["cancelled"]:
@@ -677,7 +705,10 @@ class AgentRuntime:
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(content_parts))
         if cmd in {"!reset", "/reset"}:
             await self.initialize()
-            state = await self._terminate_session(msg.session_key, hard_reset=True)
+            if self._use_atomic_terminate:
+                state = await self._atomic_terminate_session(msg.session_key, hard_reset=True)
+            else:
+                state = await self._terminate_session(msg.session_key, hard_reset=True)
 
             parts = ["♻️ Session reset completed."]
             details = []
@@ -862,6 +893,80 @@ class AgentRuntime:
             self._state_machine.clear(session_key)
         else:
             self._set_session_phase(session_key, SessionPhase.IDLE, reason="terminate_session_completed")
+
+        return {
+            "cancelled": cancelled,
+            "backend_cancelled": backend_cancelled,
+            "backend_task_stopped": backend_task_stopped,
+            "interrupted": bool(interrupt_result.get("interrupted")),
+            "usage": interrupt_result.get("usage"),
+            "cleared_requests": cleared_requests,
+        }
+
+    async def _atomic_terminate_session(
+        self, session_key: str, *, hard_reset: bool
+    ) -> dict[str, Any]:
+        """Terminate session with transaction-based state management.
+
+        This is an alternative to _terminate_session that uses the coordinator's
+        atomic operations for state changes. Enabled via _use_atomic_terminate flag.
+
+        The key difference from _terminate_session:
+        - Uses coordinator transactions for atomic state updates
+        - Lock and task cleanup are part of the transaction
+        - Phase transitions are atomic with cleanup operations
+        """
+        # Start atomic terminate session
+        async with self._state_coordinator.transaction(
+            session_key, validate_on_commit=False
+        ) as tx:
+            tx.set_phase(
+                SessionPhase.RESETTING if hard_reset else SessionPhase.STOPPING,
+                reason="atomic_terminate_session",
+            )
+
+        # Cancel and wait for tasks (outside transaction as it's async I/O)
+        tasks = self._active_tasks.pop(session_key, [])
+        cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
+        for task in tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        # Backend cleanup (async I/O)
+        backend_cancelled = await self.router.backend.cancel_session(session_key)
+        backend_task_stopped = await self.router.backend.stop_active_task(session_key)
+        interrupt_result = await self.router.backend.interrupt_session(session_key)
+        if hard_reset:
+            await self.router.backend.reset_session(session_key)
+
+        # Clear pending requests
+        cleared_requests = {"permission": False, "interaction": False}
+        if self.bus is not None and hasattr(self.bus, "clear_session_requests"):
+            cleared_requests = self.bus.clear_session_requests(session_key)
+
+        # Atomic cleanup transaction
+        async with self._state_coordinator.transaction(
+            session_key, validate_on_commit=False
+        ) as tx:
+            # Release lock
+            tx.release_lock()
+
+            # Set final phase
+            if hard_reset:
+                # For hard reset, we need to clear the state entirely
+                # This is done after the transaction
+                pass
+            else:
+                tx.set_phase(SessionPhase.IDLE, reason="terminate_session_completed")
+
+        # Remove lock from dict (coordinator handles state)
+        self._session_locks.pop(session_key, None)
+
+        # Clear state machine state for hard reset
+        if hard_reset:
+            self._state_machine.clear(session_key)
 
         return {
             "cancelled": cancelled,
