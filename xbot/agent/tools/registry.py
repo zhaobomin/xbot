@@ -37,26 +37,46 @@ class ToolRegistry:
 
     async def execute(self, name: str, params: dict[str, Any]) -> str:
         """Execute a tool by name with given parameters."""
+        from xbot.exceptions import ToolExecutionError, ToolNotFoundError
+
         _HINT = "\n\n[Analyze the error above and try a different approach.]"
 
         tool = self._tools.get(name)
         if not tool:
-            return f"Error: Tool '{name}' not found. Available: {', '.join(self.tool_names)}"
+            raise ToolNotFoundError(
+                f"Tool '{name}' not found",
+                details={
+                    "requested_tool": name,
+                    "available_tools": self.tool_names,
+                },
+            )
 
         try:
             # Attempt to cast parameters to match schema types
             params = tool.cast_params(params)
-            
+
             # Validate parameters
             errors = tool.validate_params(params)
             if errors:
-                return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors) + _HINT
+                raise ToolExecutionError(
+                    f"Invalid parameters for tool '{name}'",
+                    details={
+                        "tool": name,
+                        "validation_errors": errors,
+                    },
+                )
             result = await tool.execute(**params)
             if isinstance(result, str) and result.startswith("Error"):
                 return result + _HINT
             return result
+        except ToolExecutionError:
+            raise
         except Exception as e:
-            return f"Error executing {name}: {str(e)}" + _HINT
+            raise ToolExecutionError(
+                f"Error executing tool '{name}': {str(e)}",
+                details={"tool": name, "params": params},
+                cause=e,
+            ) from e
 
     @property
     def tool_names(self) -> list[str]:

@@ -439,7 +439,10 @@ class OptionsBuilder:
                 session_contexts = self._shared_resources.get("_session_contexts", {})
                 context_info = session_contexts.get(session_key)
                 if context_info is None:
-                    logger.debug(f"No context info for session: {session_key}")
+                    logger.warning(
+                        f"No context info for compact notification session: {session_key}. "
+                        f"The notification will not be delivered to the user."
+                    )
                     return
 
                 channel, chat_id = context_info
@@ -457,14 +460,18 @@ class OptionsBuilder:
                         )
                         logger.debug(f"Sent compact notification to {channel}:{chat_id}")
                     except Exception as e:
-                        logger.warning(f"Failed to send compact notification: {e}")
+                        logger.warning(f"Failed to send compact notification to {channel}:{chat_id}: {e}")
 
                 # Schedule the send without blocking the hook
                 try:
                     loop = asyncio.get_running_loop()
                     loop.create_task(_send())
-                except RuntimeError:
-                    logger.debug("No event loop available for compact notification")
+                except RuntimeError as e:
+                    # No running event loop - this can happen if called from a sync context
+                    logger.warning(
+                        f"Cannot send compact notification for session {session_key}: "
+                        f"no running event loop. Error: {e}"
+                    )
 
             compact_handler = CompactHookHandler(
                 enabled=True,
@@ -490,6 +497,8 @@ class OptionsBuilder:
     
     def _build_mcp_servers(self) -> dict[str, Any]:
         """Build MCP servers configuration."""
+        import json
+
         config = self._shared_resources.get("config")
         mcp_servers: dict[str, Any] = {}
 
@@ -498,17 +507,48 @@ class OptionsBuilder:
             for name, server_config in config.tools.mcp_servers.items():
                 if hasattr(server_config, "model_dump"):
                     mcp_servers[name] = server_config.model_dump(exclude_none=True)
-                else:
+                elif isinstance(server_config, dict):
                     mcp_servers[name] = server_config
-        
+                else:
+                    # Try to convert to dict via dataclasses.asdict or __dict__
+                    try:
+                        from dataclasses import asdict
+                        if hasattr(server_config, "__dataclass_fields__"):
+                            mcp_servers[name] = asdict(server_config)
+                        elif hasattr(server_config, "__dict__"):
+                            mcp_servers[name] = {
+                                k: v for k, v in server_config.__dict__.items()
+                                if not k.startswith("_")
+                            }
+                        else:
+                            logger.warning(
+                                f"MCP server '{name}' config type {type(server_config)} "
+                                f"is not serializable, skipping"
+                            )
+                            continue
+                    except Exception as e:
+                        logger.warning(
+                            f"Failed to serialize MCP server '{name}' config: {e}, skipping"
+                        )
+                        continue
+
+                # Validate that the config is JSON serializable
+                try:
+                    json.dumps(mcp_servers[name])
+                except (TypeError, ValueError) as e:
+                    logger.warning(
+                        f"MCP server '{name}' config is not JSON serializable: {e}, skipping"
+                    )
+                    mcp_servers.pop(name, None)
+
         if self._skill_converter:
             skills_mcp = self._skill_converter.convert_all_skills()
             mcp_servers.update(skills_mcp)
-        
+
         if self._tool_adapter:
             tools_mcp = self._tool_adapter.create_mcp_server()
             mcp_servers.update(tools_mcp)
-        
+
         return mcp_servers
     
     def _get_resume_session(self, session_key: str | None) -> str | None:
@@ -679,6 +719,10 @@ class ClaudeSDKBackend(AgentBackend):
         "approval_required",
     }
 
+    # Client pool management constants
+    MAX_CLIENTS = 100  # Maximum number of concurrent clients
+    CLIENT_TTL_SECONDS = 3600  # 1 hour TTL for idle clients
+
     def __init__(self):
         """Initialize the backend."""
         if not SDK_AVAILABLE:
@@ -694,6 +738,7 @@ class ClaudeSDKBackend(AgentBackend):
         self._capabilities: CapabilityCatalog | None = None
         self._clients: dict[str, ClaudeSDKClient] = {}
         self._clients_lock = asyncio.Lock()
+        self._client_last_used: dict[str, float] = {}  # Track last usage time for TTL cleanup
         self._active_task_ids: dict[str, str] = {}
         self._session_commands: dict[str, list[str]] = {}
         self._delegation_traces: list[DelegationTrace] = []
@@ -750,11 +795,19 @@ class ClaudeSDKBackend(AgentBackend):
         if provider_name != "auto":
             spec = get_provider_spec(provider_name)
             if not spec:
-                raise ValueError(f"Unknown provider: {provider_name}")
+                from xbot.exceptions import ProviderConfigError
+                raise ProviderConfigError(
+                    f"Unknown provider: {provider_name}",
+                    details={"provider": provider_name},
+                )
             if not spec.supported_by_sdk:
-                raise ValueError(
-                    f"Provider '{provider_name}' is not compatible with Claude SDK Agent. "
-                    f"Compatible providers: anthropic, aliyun-codingplan, alrun"
+                from xbot.exceptions import ProviderNotSupportedError
+                raise ProviderNotSupportedError(
+                    f"Provider '{provider_name}' is not compatible with Claude SDK Agent",
+                    details={
+                        "provider": provider_name,
+                        "supported_providers": ["anthropic", "aliyun-codingplan", "alrun"],
+                    },
                 )
 
         # Initialize skill converter
@@ -872,7 +925,10 @@ class ClaudeSDKBackend(AgentBackend):
     ) -> "ClaudeAgentOptions":
         """Build ClaudeAgentOptions from configuration."""
         if self._options_builder is None:
-            raise RuntimeError("Backend not initialized")
+            from xbot.exceptions import BackendNotInitializedError
+            raise BackendNotInitializedError(
+                "Cannot build options: backend not initialized. Call initialize() first."
+            )
         return self._options_builder.build(session_key, include_agents=include_agents)
 
     async def _get_or_create_client(self, session_key: str) -> "ClaudeSDKClient":
@@ -881,6 +937,9 @@ class ClaudeSDKBackend(AgentBackend):
         This method is thread-safe and prevents race conditions when
         multiple concurrent requests arrive for the same session.
 
+        Implements LRU eviction when MAX_CLIENTS is reached and TTL-based
+        cleanup for idle clients to prevent memory leaks.
+
         Args:
             session_key: Session identifier
 
@@ -888,15 +947,77 @@ class ClaudeSDKBackend(AgentBackend):
             ClaudeSDKClient instance for the session
         """
         async with self._clients_lock:
-            client = self._clients.get(session_key)
-            if client is not None:
-                return client
+            # Update last used time for existing client
+            if session_key in self._clients:
+                self._client_last_used[session_key] = time.time()
+                return self._clients[session_key]
+
+            # Cleanup expired clients before creating new one
+            await self._cleanup_stale_clients_unlocked()
+
+            # Evict LRU client if at capacity
+            if len(self._clients) >= self.MAX_CLIENTS:
+                await self._evict_lru_client_unlocked()
 
             client = _ClaudeSDKClient(options=self._build_options(session_key))
             await client.connect()
             await self._refresh_session_commands(session_key, client)
             self._clients[session_key] = client
+            self._client_last_used[session_key] = time.time()
             return client
+
+    async def _cleanup_stale_clients_unlocked(self) -> int:
+        """Remove clients that have been idle longer than TTL.
+
+        Must be called while holding _clients_lock.
+
+        Returns:
+            Number of clients removed.
+        """
+        now = time.time()
+        stale_keys = [
+            key for key, last_used in self._client_last_used.items()
+            if now - last_used > self.CLIENT_TTL_SECONDS
+        ]
+
+        for key in stale_keys:
+            client = self._clients.pop(key, None)
+            self._client_last_used.pop(key, None)
+            self._session_commands.pop(key, None)
+            self._active_task_ids.pop(key, None)
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    logger.debug(f"Ignoring error while disconnecting stale client for session {key}")
+
+        if stale_keys:
+            logger.info(f"Cleaned up {len(stale_keys)} stale client(s) (TTL={self.CLIENT_TTL_SECONDS}s)")
+
+        return len(stale_keys)
+
+    async def _evict_lru_client_unlocked(self) -> None:
+        """Evict the least recently used client.
+
+        Must be called while holding _clients_lock.
+        """
+        if not self._client_last_used:
+            return
+
+        # Find the oldest (LRU) client
+        lru_key = min(self._client_last_used, key=self._client_last_used.get)
+
+        client = self._clients.pop(lru_key, None)
+        self._client_last_used.pop(lru_key, None)
+        self._session_commands.pop(lru_key, None)
+        self._active_task_ids.pop(lru_key, None)
+
+        if client is not None:
+            try:
+                await client.disconnect()
+                logger.info(f"Evicted LRU client for session {lru_key} (pool at capacity)")
+            except Exception:
+                logger.debug(f"Ignoring error while disconnecting evicted client for session {lru_key}")
 
     async def _refresh_session_commands(self, session_key: str, client: "ClaudeSDKClient") -> None:
         """Refresh slash commands discovered from SDK init metadata."""
@@ -1378,6 +1499,7 @@ class ClaudeSDKBackend(AgentBackend):
             except Exception:
                 logger.debug(f"Ignoring error while disconnecting Claude SDK session {session_key}")
         self._clients.clear()
+        self._client_last_used.clear()
         self._session_commands.clear()
         self._active_task_ids.clear()
         # Clear session contexts for compact notifications
@@ -1387,6 +1509,7 @@ class ClaudeSDKBackend(AgentBackend):
     async def reset_session(self, session_key: str) -> None:
         """Reset a session, disconnecting client and clearing state."""
         client = self._clients.pop(session_key, None)
+        self._client_last_used.pop(session_key, None)
         self._session_commands.pop(session_key, None)
         self._active_task_ids.pop(session_key, None)
         # Clear session context for compact notifications

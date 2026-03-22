@@ -5,6 +5,7 @@ import json
 import os
 import re
 import threading
+import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Literal
@@ -277,8 +278,13 @@ class FeishuChannel(BaseChannel):
         self._client: Any = None
         self._ws_client: Any = None
         self._ws_thread: threading.Thread | None = None
-        self._processed_message_ids: OrderedDict[str, None] = OrderedDict()  # Ordered dedup cache
-        self._loop: asyncio.AbstractEventLoop | None = None
+        self._ws_loop: asyncio.AbstractEventLoop | None = None  # WebSocket thread's loop
+        self._main_loop: asyncio.AbstractEventLoop | None = None  # Main async loop
+        self._processed_message_ids: OrderedDict[str, float] = OrderedDict()  # message_id -> timestamp
+        self._message_dedup_ttl = 300  # 5 minutes TTL for dedup cache
+        self._ws_reconnect_delay = 5  # seconds between reconnect attempts
+        self._ws_max_reconnect_delay = 60  # max delay with exponential backoff
+        self._pending_messages: asyncio.Queue[tuple[Any, asyncio.Future]] | None = None
 
     @staticmethod
     def _register_optional_event(builder: Any, method_name: str, handler: Any) -> Any:
@@ -298,7 +304,8 @@ class FeishuChannel(BaseChannel):
 
         import lark_oapi as lark
         self._running = True
-        self._loop = asyncio.get_running_loop()
+        self._main_loop = asyncio.get_running_loop()
+        self._pending_messages = asyncio.Queue()
 
         # Create Lark client for sending messages
         self._client = lark.Client.builder() \
@@ -339,24 +346,39 @@ class FeishuChannel(BaseChannel):
         # instead of the already-running main asyncio loop, which would cause
         # "This event loop is already running" errors.
         def run_ws():
-            import time
             import lark_oapi.ws.client as _lark_ws_client
-            ws_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(ws_loop)
+            self._ws_loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(self._ws_loop)
             # Patch the module-level loop used by lark's ws Client.start()
-            _lark_ws_client.loop = ws_loop
+            _lark_ws_client.loop = self._ws_loop
+
+            reconnect_delay = self._ws_reconnect_delay
+
             try:
                 while self._running:
                     try:
+                        logger.info("Feishu WebSocket connecting...")
                         self._ws_client.start()
+                        # Reset delay on successful connection
+                        reconnect_delay = self._ws_reconnect_delay
                     except Exception as e:
                         logger.warning("Feishu WebSocket error: {}", e)
-                    if self._running:
-                        time.sleep(5)
-            finally:
-                ws_loop.close()
 
-        self._ws_thread = threading.Thread(target=run_ws, daemon=True)
+                    if self._running:
+                        logger.info(
+                            f"Feishu WebSocket disconnected, reconnecting in {reconnect_delay}s..."
+                        )
+                        time.sleep(reconnect_delay)
+                        # Exponential backoff with max
+                        reconnect_delay = min(
+                            reconnect_delay * 2,
+                            self._ws_max_reconnect_delay
+                        )
+            finally:
+                self._ws_loop.close()
+                self._ws_loop = None
+
+        self._ws_thread = threading.Thread(target=run_ws, daemon=True, name="feishu-ws")
         self._ws_thread.start()
 
         logger.info("Feishu bot started with WebSocket long connection")
@@ -370,11 +392,24 @@ class FeishuChannel(BaseChannel):
         """
         Stop the Feishu bot.
 
-        Notice: lark.ws.Client does not expose stop method， simply exiting the program will close the client.
+        Notice: lark.ws.Client does not expose stop method，
+        simply exiting the program will close the client.
 
         Reference: https://github.com/larksuite/oapi-sdk-python/blob/v2_main/lark_oapi/ws/client.py#L86
         """
         self._running = False
+
+        # Wait for WebSocket thread to finish (with timeout)
+        if self._ws_thread and self._ws_thread.is_alive():
+            self._ws_thread.join(timeout=5)
+            if self._ws_thread.is_alive():
+                logger.warning("Feishu WebSocket thread did not stop gracefully")
+
+        # Clean up references
+        self._main_loop = None
+        self._ws_loop = None
+        self._pending_messages = None
+
         logger.info("Feishu bot stopped")
 
     def _is_bot_mentioned(self, message: Any) -> bool:
@@ -1034,8 +1069,21 @@ class FeishuChannel(BaseChannel):
         Sync handler for incoming messages (called from WebSocket thread).
         Schedules async handling in the main event loop.
         """
-        if self._loop and self._loop.is_running():
-            asyncio.run_coroutine_threadsafe(self._on_message(data), self._loop)
+        if self._main_loop is None or not self._main_loop.is_running():
+            logger.warning(
+                "Feishu: cannot process message - main event loop not available. "
+                "This may happen during shutdown."
+            )
+            return
+
+        try:
+            future = asyncio.run_coroutine_threadsafe(
+                self._on_message(data), self._main_loop
+            )
+            # Don't wait for result - fire and forget for better throughput
+            # The future will complete asynchronously
+        except Exception as e:
+            logger.error(f"Feishu: failed to schedule message handler: {e}")
 
     async def _on_message(self, data: Any) -> None:
         """Handle incoming message from Feishu."""
@@ -1044,14 +1092,28 @@ class FeishuChannel(BaseChannel):
             message = event.message
             sender = event.sender
             
-            # Deduplication check
+            # Deduplication check with TTL-based cleanup
             message_id = message.message_id
+            now = time.time()
+
+            # Clean up expired entries first (TTL-based)
+            expired_keys = [
+                key for key, ts in list(self._processed_message_ids.items())
+                if now - ts > self._message_dedup_ttl
+            ]
+            for key in expired_keys:
+                del self._processed_message_ids[key]
+
+            # Check if message was already processed
             if message_id in self._processed_message_ids:
                 return
-            self._processed_message_ids[message_id] = None
 
-            # Trim cache
-            while len(self._processed_message_ids) > 1000:
+            # Mark as processed
+            self._processed_message_ids[message_id] = now
+
+            # Trim cache if still over limit after TTL cleanup
+            max_cache_size = 1000
+            while len(self._processed_message_ids) > max_cache_size:
                 self._processed_message_ids.popitem(last=False)
 
             # Skip bot messages

@@ -6,10 +6,10 @@ import asyncio
 import inspect
 import os
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from loguru import logger
 
@@ -32,10 +32,172 @@ class SessionPhase(str, Enum):
     ERROR = "error"
 
 
+# Valid state transitions: {from_phase: {to_phase1, to_phase2, ...}}
+VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
+    SessionPhase.IDLE: {
+        SessionPhase.RUNNING,
+        SessionPhase.STOPPING,
+        SessionPhase.RESETTING,
+        SessionPhase.ERROR,
+    },
+    SessionPhase.RUNNING: {
+        SessionPhase.IDLE,
+        SessionPhase.WAITING_PERMISSION,
+        SessionPhase.WAITING_INTERACTION,
+        SessionPhase.STOPPING,
+        SessionPhase.RESETTING,
+        SessionPhase.ERROR,
+    },
+    SessionPhase.WAITING_PERMISSION: {
+        SessionPhase.RUNNING,
+        SessionPhase.IDLE,
+        SessionPhase.STOPPING,
+        SessionPhase.RESETTING,
+        SessionPhase.ERROR,
+    },
+    SessionPhase.WAITING_INTERACTION: {
+        SessionPhase.RUNNING,
+        SessionPhase.IDLE,
+        SessionPhase.STOPPING,
+        SessionPhase.RESETTING,
+        SessionPhase.ERROR,
+    },
+    SessionPhase.STOPPING: {
+        SessionPhase.IDLE,
+        SessionPhase.ERROR,
+    },
+    SessionPhase.RESETTING: {
+        SessionPhase.IDLE,
+        SessionPhase.ERROR,
+    },
+    SessionPhase.ERROR: {
+        SessionPhase.IDLE,
+        SessionPhase.RUNNING,
+        SessionPhase.RESETTING,
+    },
+}
+
+
 @dataclass
 class SessionState:
     phase: SessionPhase = SessionPhase.IDLE
     reason: str = ""
+    previous_phase: SessionPhase | None = None
+    transition_count: int = 0
+
+
+class SessionStateMachine:
+    """Manages session state transitions with validation and logging."""
+
+    def __init__(
+        self,
+        on_transition: Callable[[str, SessionPhase, SessionPhase, str], None] | None = None,
+    ):
+        self._states: dict[str, SessionState] = {}
+        self._on_transition = on_transition
+
+    def get_state(self, session_key: str) -> SessionState:
+        """Get or create state for a session."""
+        if session_key not in self._states:
+            self._states[session_key] = SessionState()
+        return self._states[session_key]
+
+    def get_phase(self, session_key: str) -> SessionPhase:
+        """Get current phase for a session."""
+        return self.get_state(session_key).phase
+
+    def transition(
+        self,
+        session_key: str,
+        to_phase: SessionPhase,
+        *,
+        reason: str = "",
+        force: bool = False,
+    ) -> bool:
+        """Attempt a state transition.
+
+        Args:
+            session_key: Session identifier
+            to_phase: Target phase
+            reason: Reason for transition
+            force: If True, bypass validation (for error recovery)
+
+        Returns:
+            True if transition succeeded, False otherwise
+        """
+        state = self.get_state(session_key)
+        from_phase = state.phase
+
+        # Skip if already in target phase with same reason
+        if from_phase == to_phase and state.reason == reason:
+            return True
+
+        # Validate transition
+        if not force and from_phase not in VALID_TRANSITIONS.get(to_phase, set()):
+            # Check reverse: can we go from current to target?
+            allowed_targets = VALID_TRANSITIONS.get(from_phase, set())
+            if to_phase not in allowed_targets:
+                logger.warning(
+                    f"Invalid state transition: {from_phase.value} -> {to_phase.value} "
+                    f"(session={session_key}, reason={reason})"
+                )
+                return False
+
+        # Perform transition
+        state.previous_phase = from_phase
+        state.phase = to_phase
+        state.reason = reason
+        state.transition_count += 1
+
+        # Log transition
+        logger.debug(
+            f"Session state transition: {session_key} {from_phase.value} -> {to_phase.value} ({reason})"
+        )
+
+        # Callback
+        if self._on_transition:
+            self._on_transition(session_key, from_phase, to_phase, reason)
+
+        return True
+
+    def force_transition(self, session_key: str, to_phase: SessionPhase, *, reason: str = "") -> None:
+        """Force a state transition, bypassing validation."""
+        state = self.get_state(session_key)
+        from_phase = state.phase
+
+        state.previous_phase = from_phase
+        state.phase = to_phase
+        state.reason = reason
+        state.transition_count += 1
+
+        logger.debug(
+            f"Session state transition (forced): {session_key} {from_phase.value} -> {to_phase.value} ({reason})"
+        )
+
+        if self._on_transition:
+            self._on_transition(session_key, from_phase, to_phase, reason)
+
+    def reset(self, session_key: str) -> None:
+        """Reset a session to IDLE state."""
+        if session_key in self._states:
+            self._states[session_key] = SessionState()
+
+    def clear(self, session_key: str) -> None:
+        """Remove session state entirely."""
+        self._states.pop(session_key, None)
+
+    def is_idle(self, session_key: str) -> bool:
+        """Check if session is idle."""
+        return self.get_phase(session_key) == SessionPhase.IDLE
+
+    def is_waiting(self, session_key: str) -> bool:
+        """Check if session is waiting for user input."""
+        phase = self.get_phase(session_key)
+        return phase in {SessionPhase.WAITING_PERMISSION, SessionPhase.WAITING_INTERACTION}
+
+    def is_active(self, session_key: str) -> bool:
+        """Check if session has active work."""
+        return self.get_phase(session_key) == SessionPhase.RUNNING
 
 
 class AgentRuntime:
@@ -65,7 +227,10 @@ class AgentRuntime:
         self._running = False
         self._active_tasks: dict[str, list[asyncio.Task]] = {}
         self._session_locks: dict[str, asyncio.Lock] = {}
-        self._session_states: dict[str, SessionState] = {}
+        # Use state machine for session state management
+        self._state_machine = SessionStateMachine(
+            on_transition=self._on_state_transition
+        )
 
     @property
     def backend(self):
@@ -114,12 +279,7 @@ class AgentRuntime:
             task = asyncio.create_task(self._dispatch(msg))
             self._active_tasks.setdefault(msg.session_key, []).append(task)
             self._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="dispatch_started")
-            task.add_done_callback(
-                lambda t, k=msg.session_key: self._active_tasks.get(k, [])
-                and self._active_tasks[k].remove(t)
-                if t in self._active_tasks.get(k, [])
-                else None
-            )
+            task.add_done_callback(self._make_task_done_callback(msg.session_key))
 
     async def _handle_permission_response(self, msg: InboundMessage) -> bool:
         """Check if the message is a permission response and handle it.
@@ -130,13 +290,7 @@ class AgentRuntime:
         if self.bus is None:
             return False
 
-        # Check if there's a pending permission request for this session
-        request_id = self.bus.get_pending_request_for_session(msg.session_key)
-        if not request_id:
-            return False
-        self._set_session_phase(msg.session_key, SessionPhase.WAITING_PERMISSION, reason="pending_permission_detected")
-
-        # Parse the user's response
+        # Parse the user's response first
         content = msg.content.strip().lower()
         decision = None
         reason = ""
@@ -146,6 +300,8 @@ class AgentRuntime:
         # Deny variations: "拒绝", "deny", "no", "n", "否"
         deny_variations = {"拒绝", "deny", "no", "n", "否", "取消"}
 
+        is_permission_keyword = content in allow_variations or content in deny_variations
+
         if content in allow_variations:
             decision = "allow"
         elif content in deny_variations:
@@ -154,6 +310,24 @@ class AgentRuntime:
         else:
             # Not a clear permission response, treat as normal message
             return False
+
+        # Check if there's a pending permission request for this session
+        request_id = self.bus.get_pending_request_for_session(msg.session_key)
+        if not request_id:
+            # User sent a permission keyword but no pending request exists
+            # This could be a stale response after timeout - inform the user
+            if is_permission_keyword:
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content="⚠️ 没有待处理的权限请求，可能已超时过期。请重新发起操作。",
+                    )
+                )
+                return True  # Consume the message to avoid re-processing
+            return False
+
+        self._set_session_phase(msg.session_key, SessionPhase.WAITING_PERMISSION, reason="pending_permission_detected")
 
         # Submit the response
         from xbot.bus.queue import PermissionResponse
@@ -166,7 +340,15 @@ class AgentRuntime:
         submitted = await self.bus.submit_permission_response(response)
         if not submitted:
             logger.warning(f"Permission response no longer pending: request={request_id}")
-            return False
+            # Request was removed between check and submit - inform user
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="⚠️ 权限请求已过期或被取消，请重新发起操作。",
+                )
+            )
+            return True  # Consume the message
         logger.info(f"Permission response submitted: {decision} for request {request_id}")
         self._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="permission_response_submitted")
         return True
@@ -208,22 +390,45 @@ class AgentRuntime:
         if self._is_local_runtime_command(msg.content):
             return False
 
+        content = msg.content.strip()
+        normalized = content.lower()
+
+        # Check if this looks like a confirmation/approval keyword
+        allow_variations = {"允许", "allow", "yes", "y", "是", "ok", "同意", "确认"}
+        deny_variations = {"拒绝", "deny", "no", "n", "否", "取消"}
+        is_interaction_keyword = normalized in allow_variations or normalized in deny_variations
+
         request_id = self.bus.get_pending_interaction_for_session(msg.session_key)
         if not request_id:
+            # User sent an interaction keyword but no pending request exists
+            if is_interaction_keyword:
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content="⚠️ 没有待处理的交互请求，可能已超时过期。请重新发起操作。",
+                    )
+                )
+                return True  # Consume the message
             return False
+
         self._set_session_phase(msg.session_key, SessionPhase.WAITING_INTERACTION, reason="pending_interaction_detected")
 
         req = self.bus.get_interaction_request(request_id)
         if req is None:
-            return False
+            # Request was removed between check and get
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="⚠️ 交互请求已过期或被取消，请重新发起操作。",
+                )
+            )
+            return True  # Consume the message
 
-        content = msg.content.strip()
-        normalized = content.lower()
         action = "reply"
 
         if req.kind in {"confirmation", "approval"}:
-            allow_variations = {"允许", "allow", "yes", "y", "是", "ok", "同意", "确认"}
-            deny_variations = {"拒绝", "deny", "no", "n", "否", "取消"}
             if normalized in allow_variations:
                 action = "confirm" if req.kind == "confirmation" else "allow"
             elif normalized in deny_variations:
@@ -244,7 +449,19 @@ class AgentRuntime:
         )
         if not submitted:
             logger.warning(f"Interaction response no longer pending: request={request_id}")
-            return False
+            # Request was removed between check and submit - inform user
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="⚠️ 交互请求已过期或被取消，请重新发起操作。",
+                )
+            )
+            return True  # Consume the message
+
+        logger.info(f"Interaction response submitted: action={action}, request={request_id}")
+        self._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="interaction_response_submitted")
+        return True
         logger.info(f"Interaction response submitted: action={action}, request={request_id}")
         self._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="interaction_response_submitted")
         return True
@@ -488,41 +705,62 @@ class AgentRuntime:
             "cleared_requests": cleared_requests,
         }
 
-    def _set_session_phase(self, session_key: str, phase: SessionPhase, *, reason: str = "") -> None:
-        state = self._session_states.setdefault(session_key, SessionState())
-        if state.phase == phase and state.reason == reason:
-            return
-        prev = state.phase.value
-        state.phase = phase
-        state.reason = reason
+    def _on_state_transition(
+        self, session_key: str, from_phase: SessionPhase, to_phase: SessionPhase, reason: str
+    ) -> None:
+        """Callback for state machine transitions - logs to session trace."""
         append_session_trace(
             self.sessions,
             session_key,
             "session_state",
             {
-                "from": prev,
-                "to": phase.value,
+                "from": from_phase.value,
+                "to": to_phase.value,
                 "reason": reason,
             },
         )
 
+    def _make_task_done_callback(self, session_key: str):
+        """Create a done callback for task cleanup.
+
+        Returns a callback that removes the task from _active_tasks when done.
+        This avoids the lambda capture issue where the task references itself.
+        """
+        def _on_task_done(task: asyncio.Task) -> None:
+            tasks = self._active_tasks.get(session_key)
+            if tasks and task in tasks:
+                tasks.remove(task)
+                # Clean up empty lists
+                if not tasks:
+                    self._active_tasks.pop(session_key, None)
+        return _on_task_done
+
+    def _set_session_phase(self, session_key: str, phase: SessionPhase, *, reason: str = "") -> None:
+        """Set session phase using state machine."""
+        self._state_machine.transition(session_key, phase, reason=reason, force=True)
+
     def _sync_session_phase(self, session_key: str) -> None:
+        """Synchronize session phase based on current state."""
         if self.bus is not None:
             if self.bus.get_pending_request_for_session(session_key):
-                self._set_session_phase(session_key, SessionPhase.WAITING_PERMISSION, reason="sync_pending_permission")
+                self._state_machine.force_transition(
+                    session_key, SessionPhase.WAITING_PERMISSION, reason="sync_pending_permission"
+                )
                 return
             if self.bus.get_pending_interaction_for_session(session_key):
-                self._set_session_phase(session_key, SessionPhase.WAITING_INTERACTION, reason="sync_pending_interaction")
+                self._state_machine.force_transition(
+                    session_key, SessionPhase.WAITING_INTERACTION, reason="sync_pending_interaction"
+                )
                 return
         active = [t for t in self._active_tasks.get(session_key, []) if not t.done()]
         if active:
-            self._set_session_phase(session_key, SessionPhase.RUNNING, reason="sync_active_tasks")
+            self._state_machine.force_transition(session_key, SessionPhase.RUNNING, reason="sync_active_tasks")
         else:
-            self._set_session_phase(session_key, SessionPhase.IDLE, reason="sync_idle")
+            self._state_machine.force_transition(session_key, SessionPhase.IDLE, reason="sync_idle")
 
     def get_session_state(self, session_key: str) -> str:
         """Return current runtime session phase for diagnostics."""
-        return self._session_states.get(session_key, SessionState()).phase.value
+        return self._state_machine.get_phase(session_key).value
 
     def _session_diagnostics_text(self, session_key: str) -> str:
         phase = self.get_session_state(session_key)
