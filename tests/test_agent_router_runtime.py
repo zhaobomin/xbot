@@ -214,6 +214,40 @@ async def test_router_runtime_help_uses_sdk_fallback_commands_when_discovery_emp
 
 
 @pytest.mark.asyncio
+async def test_router_runtime_help_merges_sdk_commands_with_fallback_baseline(tmp_path) -> None:
+    """Regression: /help must remain complete when SDK command discovery is partial."""
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    class _PartialCommandBackend(_FakeBackend):
+        async def get_session_commands(self, session_key: str) -> list[str]:
+            # Simulate SDK returning only a subset of user-known slash commands.
+            return ["/compact", "/debug"]
+
+    AgentRouter._backends = {"claude_sdk": _PartialCommandBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("/help")
+
+    assert "/debug" in response
+    # Baseline compatibility commands should always be visible.
+    assert "/help" in response
+    assert "/clear" in response
+    assert "/compact" in response
+
+
+@pytest.mark.asyncio
 async def test_router_runtime_new_is_passthrough_without_local_alias(tmp_path) -> None:
     from xbot.agent.runtime import AgentRuntime
     from xbot.bus.queue import MessageBus

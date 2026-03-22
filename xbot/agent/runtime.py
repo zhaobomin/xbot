@@ -1560,9 +1560,11 @@ class AgentRuntime:
         )
 
     async def _help_text(self, session_key: str) -> str:
-        sdk_commands = sorted(set(await self.router.backend.get_session_commands(session_key)))
-        if not sdk_commands:
-            sdk_commands = list(self.SDK_HELP_FALLBACK_COMMANDS)
+        # Keep baseline runtime-compatible commands visible even when SDK discovery
+        # returns only a partial command list (regression guard for "/help incomplete").
+        discovered = set(await self.router.backend.get_session_commands(session_key))
+        baseline = set(self.SDK_HELP_FALLBACK_COMMANDS)
+        sdk_commands = sorted(discovered | baseline)
 
         # Get workspace commands
         workspace_commands = self.commands.list_commands()
