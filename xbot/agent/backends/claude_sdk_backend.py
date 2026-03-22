@@ -426,8 +426,50 @@ class OptionsBuilder:
         # Add PreCompact hook if compact_notify is enabled
         if getattr(self._sdk_config, "compact_notify", True):
             from xbot.agent.hooks import CompactHookHandler
+            from xbot.bus.events import OutboundMessage
 
-            compact_handler = CompactHookHandler(enabled=True)
+            def send_compact_notification(session_key: str, message: str) -> None:
+                """Send compact notification to the user's channel."""
+                bus = self._shared_resources.get("bus")
+                if bus is None:
+                    logger.debug(f"No bus available for compact notification: {session_key}")
+                    return
+
+                # Look up channel and chat_id for this session
+                session_contexts = self._shared_resources.get("_session_contexts", {})
+                context_info = session_contexts.get(session_key)
+                if context_info is None:
+                    logger.debug(f"No context info for session: {session_key}")
+                    return
+
+                channel, chat_id = context_info
+                # Fire and forget - send notification asynchronously
+                import asyncio
+                async def _send():
+                    try:
+                        await bus.publish_outbound(
+                            OutboundMessage(
+                                channel=channel,
+                                chat_id=chat_id,
+                                content=message,
+                                metadata={"_progress": True, "_event_type": "system"},
+                            )
+                        )
+                        logger.debug(f"Sent compact notification to {channel}:{chat_id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to send compact notification: {e}")
+
+                # Schedule the send without blocking the hook
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(_send())
+                except RuntimeError:
+                    logger.debug("No event loop available for compact notification")
+
+            compact_handler = CompactHookHandler(
+                enabled=True,
+                message_callback=send_compact_notification,
+            )
             hooks.setdefault("PreCompact", []).append({"hooks": [compact_handler]})
 
         return hooks if hooks else None
@@ -979,6 +1021,10 @@ class ClaudeSDKBackend(AgentBackend):
         Yields:
             AgentResponse objects
         """
+        # Store session context for compact notifications
+        session_contexts = self._shared_resources.setdefault("_session_contexts", {})
+        session_contexts[context.session_key] = (context.channel, context.chat_id)
+
         if self._tool_adapter:
             if not self._tool_adapter._tools:
                 self._tool_adapter._register_xbot_tools()
@@ -1324,6 +1370,8 @@ class ClaudeSDKBackend(AgentBackend):
         self._clients.clear()
         self._session_commands.clear()
         self._active_task_ids.clear()
+        # Clear session contexts for compact notifications
+        self._shared_resources.pop("_session_contexts", None)
         logger.info("Claude SDK backend shutdown complete")
 
     async def reset_session(self, session_key: str) -> None:
@@ -1331,6 +1379,9 @@ class ClaudeSDKBackend(AgentBackend):
         client = self._clients.pop(session_key, None)
         self._session_commands.pop(session_key, None)
         self._active_task_ids.pop(session_key, None)
+        # Clear session context for compact notifications
+        session_contexts = self._shared_resources.get("_session_contexts", {})
+        session_contexts.pop(session_key, None)
         if client is not None:
             try:
                 await client.disconnect()
