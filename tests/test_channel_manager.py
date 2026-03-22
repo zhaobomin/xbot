@@ -483,6 +483,66 @@ class TestChannelManagerProgressFiltering:
         mock_channel.send.assert_not_called()
 
     @pytest.mark.asyncio
+    async def test_dispatch_task_event_respects_send_progress(self):
+        mock_config = make_mock_config(enabled_channels=[])
+        mock_config.channels.send_progress = True
+
+        bus = MessageBus()
+        manager = ChannelManager(mock_config, bus)
+        mock_channel = AsyncMock(spec=BaseChannel)
+        manager.channels["telegram"] = mock_channel
+
+        task = asyncio.create_task(manager._dispatch_outbound())
+        try:
+            from xbot.bus.events import OutboundMessage
+
+            await bus.publish_outbound(
+                OutboundMessage(
+                    channel="telegram",
+                    chat_id="c1",
+                    content="Task completed",
+                    metadata={"_progress": True, "_event_type": "task"},
+                )
+            )
+            await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            await task
+
+        mock_channel.send.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_system_event_blocked_when_send_progress_disabled(self):
+        mock_config = make_mock_config(enabled_channels=[])
+        mock_config.channels.send_progress = False
+        mock_config.channels.send_usage_summary = True
+        mock_config.channels.send_tool_hints = True
+
+        bus = MessageBus()
+        manager = ChannelManager(mock_config, bus)
+        mock_channel = AsyncMock(spec=BaseChannel)
+        manager.channels["telegram"] = mock_channel
+
+        task = asyncio.create_task(manager._dispatch_outbound())
+        try:
+            from xbot.bus.events import OutboundMessage
+
+            await bus.publish_outbound(
+                OutboundMessage(
+                    channel="telegram",
+                    chat_id="c1",
+                    content="Context compacted.",
+                    metadata={"_progress": True, "_event_type": "system"},
+                )
+            )
+            await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            await task
+
+        mock_channel.send.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_dispatch_default_visibility_snapshot_for_core_events(self):
         mock_config = make_mock_config(enabled_channels=[])
         # Defaults should expose all core progress categories.

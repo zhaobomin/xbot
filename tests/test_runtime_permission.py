@@ -259,6 +259,7 @@ class TestRuntimePermissionResponse:
 
         runtime = MagicMock(spec=AgentRuntime)
         runtime.bus = bus
+        runtime._is_local_runtime_command = AgentRuntime._is_local_runtime_command
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
 
         await bus.publish_interaction_request(
@@ -317,3 +318,78 @@ class TestRuntimePermissionResponse:
             )
         )
         assert handled is False
+
+    @pytest.mark.asyncio
+    async def test_permission_response_takes_priority_over_interaction(self, bus):
+        from xbot.agent.runtime import AgentRuntime
+
+        runtime = MagicMock(spec=AgentRuntime)
+        runtime.bus = bus
+        runtime._is_local_runtime_command = AgentRuntime._is_local_runtime_command
+        runtime._handle_permission_response = AgentRuntime._handle_permission_response.__get__(runtime, AgentRuntime)
+        runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
+
+        # both pending on same session
+        bus._session_pending_requests["telegram:456"] = "perm-1"
+        bus._pending_permission_responses["perm-1"] = asyncio.Event()
+        await bus.publish_interaction_request(
+            InteractionRequest(
+                request_id="ir-priority",
+                session_key="telegram:456",
+                channel="telegram",
+                chat_id="456",
+                kind="question",
+                prompt="继续吗？",
+            )
+        )
+        _ = await bus.consume_outbound()
+
+        msg = InboundMessage(
+            channel="telegram",
+            sender_id="user",
+            chat_id="456",
+            content="允许",
+        )
+
+        handled_perm = await runtime._handle_permission_response(msg)
+        if handled_perm:
+            handled_interaction = False
+        else:
+            handled_interaction = await runtime._handle_interaction_response(msg)
+
+        assert handled_perm is True
+        assert bus._permission_results["perm-1"].decision == "allow"
+        assert handled_interaction is False
+        assert bus.get_pending_interaction_for_session("telegram:456") == "ir-priority"
+
+    @pytest.mark.asyncio
+    async def test_confirmation_interaction_unclear_text_not_consumed(self, bus):
+        from xbot.agent.runtime import AgentRuntime
+
+        runtime = MagicMock(spec=AgentRuntime)
+        runtime.bus = bus
+        runtime._is_local_runtime_command = AgentRuntime._is_local_runtime_command
+        runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
+
+        await bus.publish_interaction_request(
+            InteractionRequest(
+                request_id="ir-confirm-1",
+                session_key="telegram:456",
+                channel="telegram",
+                chat_id="456",
+                kind="confirmation",
+                prompt="请确认",
+            )
+        )
+        _ = await bus.consume_outbound()
+
+        handled = await runtime._handle_interaction_response(
+            InboundMessage(
+                channel="telegram",
+                sender_id="user",
+                chat_id="456",
+                content="我再想想",
+            )
+        )
+        assert handled is False
+        assert bus.get_pending_interaction_for_session("telegram:456") == "ir-confirm-1"

@@ -552,6 +552,43 @@ def test_agent_warns_about_deprecated_memory_window(mock_agent_runtime):
     assert "contextWindowTokens" in result.stdout
 
 
+def test_agent_message_mode_uses_non_interactive_cli_permission_handler(mock_agent_runtime):
+    sentinel_handler = object()
+    with patch("xbot.cli.commands.CLIPermissionHandler", return_value=sentinel_handler) as mock_cli_perm:
+        result = runner.invoke(app, ["agent", "-m", "hello"])
+
+    assert result.exit_code == 0
+    mock_cli_perm.assert_called_once()
+    assert mock_cli_perm.call_args.kwargs["interactive"] is False
+    shared = mock_agent_runtime["runtime_cls"].call_args.kwargs["shared_resources"]
+    assert shared["permission_handler"] is sentinel_handler
+
+
+def test_agent_interactive_mode_uses_interactive_permission_handler(monkeypatch, mock_agent_runtime):
+    class _SentinelInteractiveHandler:
+        def __init__(self, *args, **kwargs):
+            self.spinner = None
+
+        def set_thinking_spinner(self, spinner):
+            self.spinner = spinner
+
+    monkeypatch.setattr("xbot.cli.commands.InteractivePermissionHandler", _SentinelInteractiveHandler)
+    monkeypatch.setattr("xbot.cli.commands._init_prompt_session", lambda: None)
+    monkeypatch.setattr("xbot.cli.commands._restore_terminal", lambda: None)
+
+    def _fake_asyncio_run(coro):
+        coro.close()
+        return None
+
+    monkeypatch.setattr("xbot.cli.commands.asyncio.run", _fake_asyncio_run)
+
+    result = runner.invoke(app, ["agent"])
+
+    assert result.exit_code == 0
+    shared = mock_agent_runtime["runtime_cls"].call_args.kwargs["shared_resources"]
+    assert isinstance(shared["permission_handler"], _SentinelInteractiveHandler)
+
+
 def test_gateway_uses_workspace_from_config_by_default(monkeypatch, tmp_path: Path) -> None:
     config_file = tmp_path / "instance" / "config.json"
     config_file.parent.mkdir(parents=True)

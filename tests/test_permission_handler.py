@@ -111,6 +111,46 @@ class TestInteractivePermissionHandler:
         handler.set_thinking_spinner(mock_spinner)
         assert handler._thinking == mock_spinner
 
+    @pytest.mark.asyncio
+    async def test_request_interaction_pauses_spinner(self):
+        class _PauseCtx:
+            def __init__(self):
+                self.entered = False
+                self.exited = False
+
+            def __enter__(self):
+                self.entered = True
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                self.exited = True
+                return False
+
+        pause_ctx = _PauseCtx()
+        spinner = MagicMock()
+        spinner.pause.return_value = pause_ctx
+
+        handler = InteractivePermissionHandler()
+        handler.set_thinking_spinner(spinner)
+        handler._ask_interaction_in_terminal = AsyncMock(
+            return_value=InteractionResponse(
+                request_id="",
+                session_key="cli:direct",
+                action="reply",
+                content="继续",
+            )
+        )
+
+        result = await handler.request_interaction(
+            kind="question",
+            prompt="请输入后续",
+            session_key="cli:direct",
+        )
+
+        assert result.action == "reply"
+        assert pause_ctx.entered is True
+        assert pause_ctx.exited is True
+
 
 class TestPermissionRequestHandler:
     """Tests for PermissionRequestHandler (Channel mode)."""
@@ -252,6 +292,17 @@ class TestPermissionRequestHandler:
         response = await task
         assert response.action == "confirm"
         assert response.content == "确认"
+
+    @pytest.mark.asyncio
+    async def test_interaction_request_without_context_returns_cancel(self, bus):
+        handler = PermissionRequestHandler(bus=bus, timeout=0.5)
+        response = await handler.request_interaction(
+            kind="question",
+            prompt="请输入",
+            session_key="missing-session",
+        )
+        assert response.action == "cancel"
+        assert "No active session context" in response.content
 
 
 class TestCreatePermissionHandler:

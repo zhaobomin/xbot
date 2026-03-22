@@ -1307,3 +1307,108 @@ class TestBackendInputRequiredInteraction:
         result = await backend._wait_for_user_input(context, msg)
 
         assert result == "继续"
+
+    @pytest.mark.asyncio
+    async def test_wait_for_user_input_maps_confirmation_required(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.protocol import AgentContext
+
+        backend = ClaudeSDKBackend()
+        backend.sdk_config = MagicMock()
+        backend.sdk_config.permission = MagicMock(timeout=3.0)
+        backend._shared_resources = {}
+        backend._clients = {}
+        backend._active_task_ids = {}
+
+        handler = MagicMock()
+        handler.request_interaction = AsyncMock(
+            return_value=type("Resp", (), {"action": "confirm", "content": ""})()
+        )
+        backend._permission_handler = handler
+
+        msg = type(
+            "TaskNotificationMessage",
+            (),
+            {"summary": "请确认继续", "task_id": "t-confirm", "status": "confirmation_required"},
+        )()
+        context = AgentContext(session_key="s-confirm", prompt="p", channel="telegram", chat_id="c1", metadata={})
+
+        result = await backend._wait_for_user_input(context, msg)
+
+        assert result == "confirm"
+        kwargs = handler.request_interaction.await_args.kwargs
+        assert kwargs["kind"] == "confirmation"
+        assert kwargs["suggestions"] == ["确认", "取消"]
+
+    @pytest.mark.asyncio
+    async def test_wait_for_user_input_cancel_stops_active_task(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.protocol import AgentContext
+
+        backend = ClaudeSDKBackend()
+        backend.sdk_config = MagicMock()
+        backend.sdk_config.permission = MagicMock(timeout=3.0)
+        backend._shared_resources = {}
+        backend._active_task_ids = {"s-cancel": "task-1"}
+
+        mock_client = MagicMock()
+        mock_client.stop_task = AsyncMock(return_value=None)
+        backend._clients = {"s-cancel": mock_client}
+
+        handler = MagicMock()
+        handler.request_interaction = AsyncMock(
+            return_value=type("Resp", (), {"action": "cancel", "content": ""})()
+        )
+        backend._permission_handler = handler
+
+        msg = type(
+            "TaskNotificationMessage",
+            (),
+            {"summary": "需要确认", "task_id": "task-1", "status": "confirmation_required"},
+        )()
+        context = AgentContext(session_key="s-cancel", prompt="p", channel="telegram", chat_id="c1", metadata={})
+
+        result = await backend._wait_for_user_input(context, msg)
+
+        assert result is None
+        mock_client.stop_task.assert_awaited_once_with("task-1")
+
+    @pytest.mark.asyncio
+    async def test_wait_for_user_input_falls_back_to_bus_when_handler_missing(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.protocol import AgentContext
+        from xbot.bus.queue import InteractionRequest, InteractionResponse
+
+        backend = ClaudeSDKBackend()
+        backend.sdk_config = MagicMock()
+        backend.sdk_config.permission = MagicMock(timeout=1.0)
+        backend._permission_handler = None
+        backend._clients = {}
+        backend._active_task_ids = {}
+
+        mock_bus = MagicMock()
+        mock_bus.publish_interaction_request = AsyncMock(return_value=None)
+        mock_bus.wait_interaction_response = AsyncMock(
+            return_value=InteractionResponse(
+                request_id="ir-1",
+                session_key="s-bus",
+                action="reply",
+                content="继续",
+            )
+        )
+        backend._shared_resources = {"bus": mock_bus}
+
+        msg = type(
+            "TaskNotificationMessage",
+            (),
+            {"summary": "请输入后续", "task_id": "task-bus", "status": "input_required"},
+        )()
+        context = AgentContext(session_key="s-bus", prompt="p", channel="telegram", chat_id="c1", metadata={})
+
+        result = await backend._wait_for_user_input(context, msg)
+
+        assert result == "继续"
+        mock_bus.publish_interaction_request.assert_awaited_once()
+        req = mock_bus.publish_interaction_request.await_args.args[0]
+        assert isinstance(req, InteractionRequest)
+        assert req.kind == "question"
