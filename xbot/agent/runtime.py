@@ -950,7 +950,6 @@ class AgentRuntime:
 
         Uses coordinator for unified state access.
         """
-        # Coordinator provides unified access (currently in shadow mode)
         return self._state_coordinator.get_phase(session_key).value
 
     def get_session_phase(self, session_key: str) -> SessionPhase:
