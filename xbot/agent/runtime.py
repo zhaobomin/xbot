@@ -146,8 +146,8 @@ class SessionStateMachine:
             return True
 
         # Validate transition
-        if not force and from_phase not in VALID_TRANSITIONS.get(to_phase, set()):
-            # Check reverse: can we go from current to target?
+        if not force:
+            # VALID_TRANSITIONS[from_phase] contains all valid target phases from from_phase
             allowed_targets = VALID_TRANSITIONS.get(from_phase, set())
             if to_phase not in allowed_targets:
                 logger.warning(
@@ -1266,6 +1266,7 @@ class AgentRuntime:
 
         Returns a callback that removes the task from _active_tasks when done.
         This avoids the lambda capture issue where the task references itself.
+        Also syncs the session phase after task removal to ensure correct state.
         """
         def _on_task_done(task: asyncio.Task) -> None:
             tasks = self._active_tasks.get(session_key)
@@ -1274,6 +1275,12 @@ class AgentRuntime:
                 # Clean up empty lists
                 if not tasks:
                     self._active_tasks.pop(session_key, None)
+
+            # Sync phase after task is done to ensure correct state
+            # This is critical: _sync_session_phase in _dispatch's finally runs
+            # before this task is marked done, so we need to sync again here
+            self._sync_session_phase(session_key)
+
         return _on_task_done
 
     def _set_session_phase(self, session_key: str, phase: SessionPhase, *, reason: str = "") -> None:

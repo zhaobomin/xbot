@@ -126,6 +126,7 @@ class StateTransaction:
         self._pending_phase: SessionPhase | None = None
         self._pending_phase_reason: str = ""
         self._pending_tasks: list[asyncio.Task] = []
+        self._pending_unregister_tasks: list[asyncio.Task] = []
         self._pending_lock_acquire: bool = False
         self._pending_lock_release: bool = False
 
@@ -252,6 +253,9 @@ class StateTransaction:
         if task in self._pending_tasks:
             self._pending_tasks.remove(task)
 
+        # 添加到待注销列表
+        self._pending_unregister_tasks.append(task)
+
         logger.trace(
             f"Transaction[{self._session_key}]: unregister_task({task.get_name()})"
         )
@@ -340,6 +344,9 @@ class StateTransaction:
 
             for task in self._pending_tasks:
                 self._coordinator.register_task(self._session_key, task)
+
+            for task in self._pending_unregister_tasks:
+                self._coordinator.unregister_task(self._session_key, task)
 
             if self._pending_lock_acquire:
                 self._coordinator.get_lock(self._session_key)
