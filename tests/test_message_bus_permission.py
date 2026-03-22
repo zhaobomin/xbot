@@ -4,7 +4,13 @@ import asyncio
 
 import pytest
 
-from xbot.bus.queue import MessageBus, PermissionRequest, PermissionResponse
+from xbot.bus.queue import (
+    InteractionRequest,
+    InteractionResponse,
+    MessageBus,
+    PermissionRequest,
+    PermissionResponse,
+)
 
 
 class TestPermissionRequest:
@@ -94,6 +100,7 @@ class TestMessageBusPermission:
             tool_name="exec",
             tool_input={"command": "ls"},
             message="Need permission",
+            metadata={"message_thread_id": 7},
         )
 
         await bus.publish_permission_request(req)
@@ -108,6 +115,7 @@ class TestMessageBusPermission:
         assert "Need permission" in msg.content
         assert msg.metadata.get("permission_request") is True
         assert msg.metadata.get("permission_request_id") == "req-123"
+        assert msg.metadata.get("message_thread_id") == 7
 
     @pytest.mark.asyncio
     async def test_wait_permission_response(self, bus):
@@ -144,6 +152,43 @@ class TestMessageBusPermission:
         response = await bus.wait_permission_response("req-123", timeout=0.2)
         assert response.decision == "deny"
         assert "Timeout" in response.reason
+
+    @pytest.mark.asyncio
+    async def test_wait_permission_response_cleans_state_on_success(self, bus):
+        req = PermissionRequest(
+            request_id="req-clean",
+            session_key="telegram:456",
+            channel="telegram",
+            chat_id="456",
+            tool_name="exec",
+            tool_input={"command": "ls"},
+            message="Need permission",
+        )
+        await bus.publish_permission_request(req)
+        _ = await bus.consume_outbound()
+
+        waiter = asyncio.create_task(bus.wait_permission_response("req-clean", timeout=1.0))
+        await asyncio.sleep(0.05)
+        ok = await bus.submit_permission_response(
+            PermissionResponse(
+                request_id="req-clean",
+                session_key="telegram:456",
+                decision="allow",
+            )
+        )
+        assert ok is True
+        response = await waiter
+        assert response.decision == "allow"
+        assert "req-clean" not in bus._pending_permission_responses
+        assert bus.get_pending_request_for_session("telegram:456") is None
+
+    @pytest.mark.asyncio
+    async def test_wait_permission_response_timeout_cleans_session_mapping(self, bus):
+        bus._session_pending_requests["telegram:456"] = "req-timeout"
+        response = await bus.wait_permission_response("req-timeout", timeout=0.05)
+        assert response.decision == "deny"
+        assert bus.get_pending_request_for_session("telegram:456") is None
+        assert "req-timeout" not in bus._pending_permission_responses
 
     @pytest.mark.asyncio
     async def test_submit_permission_response_no_waiter(self, bus):
@@ -224,3 +269,40 @@ class TestMessageBusPermission:
         assert bus.has_pending_permission_request("req-123") is False
         bus._pending_permission_responses["req-123"] = asyncio.Event()
         assert bus.has_pending_permission_request("req-123") is True
+
+    @pytest.mark.asyncio
+    async def test_interaction_request_roundtrip(self, bus):
+        req = InteractionRequest(
+            request_id="ir-1",
+            session_key="slack:C1:thread:1",
+            channel="slack",
+            chat_id="C1",
+            kind="question",
+            prompt="Please confirm",
+            suggestions=["继续", "取消"],
+            metadata={"slack": {"thread_ts": "1"}},
+        )
+        await bus.publish_interaction_request(req)
+
+        outbound = await bus.consume_outbound()
+        assert outbound.metadata.get("interaction_request") is True
+        assert outbound.metadata.get("interaction_request_id") == "ir-1"
+        assert outbound.metadata.get("interaction_kind") == "question"
+        assert outbound.metadata.get("slack", {}).get("thread_ts") == "1"
+        assert bus.get_pending_interaction_for_session("slack:C1:thread:1") == "ir-1"
+
+        waiter = asyncio.create_task(bus.wait_interaction_response("ir-1", timeout=1.0))
+        await asyncio.sleep(0.05)
+        ok = await bus.submit_interaction_response(
+            InteractionResponse(
+                request_id="ir-1",
+                session_key="slack:C1:thread:1",
+                action="reply",
+                content="继续",
+            )
+        )
+        assert ok is True
+
+        resp = await waiter
+        assert resp.content == "继续"
+        assert bus.get_pending_interaction_for_session("slack:C1:thread:1") is None

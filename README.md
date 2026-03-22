@@ -1,6 +1,6 @@
 <div align="center">
   <img src="xbot_logo.png" alt="xbot" width="500">
-  <h1>xbot: Ultra-Lightweight Personal AI Assistant</h1>
+  <h1>xbot: Ultra-Lightweight Personal AI Assistant Framework</h1>
   <p>
     <a href="https://pypi.org/project/xbot/"><img src="https://img.shields.io/pypi/v/xbot" alt="PyPI"></a>
     <a href="https://pepy.tech/project/xbot"><img src="https://static.pepy.tech/badge/xbot" alt="Downloads"></a>
@@ -12,59 +12,60 @@
   </p>
 </div>
 
-🐈 **xbot** is an **ultra-lightweight** personal AI assistant inspired by [OpenClaw](https://github.com/openclaw/openclaw).
+🐈 **xbot** is an **ultra-lightweight** personal AI assistant framework inspired by [OpenClaw](https://github.com/openclaw/openclaw).
 
 ⚡️ Delivers core agent functionality with **99% fewer lines of code** than OpenClaw.
 
 📏 Real-time line count: run `bash core_agent_lines.sh` to verify anytime.
 
-## 📢 News
+## 📢 Latest Updates
 
-- **2026-03-16** 🚀 Released **v0.1.4.post5** — a refinement-focused release with stronger reliability and channel support, and a more dependable day-to-day experience. Please see [release notes](https://github.com/HKUDS/xbot/releases/tag/v0.1.4.post5) for details.
-- **2026-03-15** 🧩 DingTalk rich media, smarter built-in skills, and cleaner model compatibility.
-- **2026-03-14** 💬 Channel plugins, Feishu replies, and steadier MCP, QQ, and media handling.
-- **2026-03-13** 🌐 Multi-provider web search, LangSmith, and broader reliability improvements.
-- **2026-03-12** 🚀 VolcEngine support, Telegram reply context, `/restart`, and sturdier memory.
-- **2026-03-11** 🔌 WeCom, Ollama, cleaner discovery, and safer tool behavior.
-- **2026-03-10** 🧠 Token-based memory, shared retries, and cleaner gateway and Telegram behavior.
-- **2026-03-09** 💬 Slack thread polish and better Feishu audio compatibility.
-- **2026-03-08** 🚀 Released **v0.1.4.post4** — a reliability-packed release with safer defaults, better multi-instance support, sturdier MCP, and major channel and provider improvements. Please see [release notes](https://github.com/HKUDS/xbot/releases/tag/v0.1.4.post4) for details.
-- **2026-03-07** 🚀 Azure OpenAI provider, WhatsApp media, QQ group chats, and more Telegram/Feishu polish.
-- **2026-03-06** 🪄 Lighter providers, smarter media handling, and sturdier memory and CLI compatibility.
+- **2026-03-22** 🚀 **Major Architecture Upgrade** — Agent Router with pluggable backends, Claude SDK native integration, capability-based permission system, and enhanced memory with reme-ai
+- **2026-03-16** 🚀 Released **v0.1.4.post5** — a refinement-focused release with stronger reliability and channel support
+- **2026-03-15** 🧩 DingTalk rich media, smarter built-in skills, and cleaner model compatibility
+- **2026-03-14** 💬 Channel plugins, Feishu replies, and steadier MCP, QQ, and media handling
+- **2026-03-13** 🌐 Multi-provider web search, LangSmith, and broader reliability improvements
 
 <details>
 <summary>Earlier news</summary>
 
-- **2026-03-05** ⚡️ Telegram draft streaming, MCP SSE support, and broader channel reliability fixes.
-- **2026-03-04** 🛠️ Dependency cleanup, safer file reads, and another round of test and Cron fixes.
-- **2026-03-03** 🧠 Cleaner user-message merging, safer multimodal saves, and stronger Cron guards.
-- **2026-03-02** 🛡️ Safer default access control, sturdier Cron reloads, and cleaner Matrix media handling.
-- **2026-03-01** 🌐 Web proxy support, smarter Cron reminders, and Feishu rich-text parsing improvements.
-- **2026-02-28** 🚀 Released **v0.1.4.post3** — cleaner context, hardened session history, and smarter agent. Please see [release notes](https://github.com/HKUDS/xbot/releases/tag/v0.1.4.post3) for details.
-- **2026-02-27** 🧠 Experimental thinking mode support, DingTalk media messages, Feishu and QQ channel fixes.
-- **2026-02-26** 🛡️ Session poisoning fix, WhatsApp dedup, Windows path guard, Mistral compatibility.
-- **2026-02-25** 🧹 New Matrix channel, cleaner session context, auto workspace template sync.
-- **2026-02-24** 🚀 Released **v0.1.4.post2** — a reliability-focused release with a redesigned heartbeat, prompt cache optimization, and hardened provider & channel stability. See [release notes](https://github.com/HKUDS/xbot/releases/tag/v0.1.4.post2) for details.
-- **2026-02-23** 🔧 Virtual tool-call heartbeat, prompt cache optimization, Slack mrkdwn fixes.
-- **2026-02-22** 🛡️ Slack thread isolation, Discord typing fix, agent reliability improvements.
-- **2026-02-21** 🎉 Released **v0.1.4.post1** — new providers, media support across channels, and major stability improvements. See [release notes](https://github.com/HKUDS/xbot/releases/tag/v0.1.4.post1) for details.
-- **2026-02-20** 🐦 Feishu now receives multimodal files from users. More reliable memory under the hood.
-- **2026-02-19** ✨ Slack now sends files, Discord splits long messages, and subagents work in CLI mode.
-- **2026-02-18** ⚡️ xbot now supports VolcEngine, MCP custom auth headers, and Anthropic prompt caching.
-- **2026-02-17** 🎉 Released **v0.1.4** — MCP support, progress streaming, new providers, and multiple channel improvements. Please see [release notes](https://github.com/HKUDS/xbot/releases/tag/v0.1.4) for details.
-- **2026-02-16** 🦞 xbot now integrates a [ClawHub](https://clawhub.ai) skill — search and install public agent skills.
-- **2026-02-15** 🔑 xbot now supports OpenAI Codex provider with OAuth login support.
-- **2026-02-14** 🔌 xbot now supports MCP! See [MCP section](#mcp-model-context-protocol) for details.
-- **2026-02-13** 🎉 Released **v0.1.3.post7** — includes security hardening and multiple improvements. **Please upgrade to the latest version to address security issues**. See [release notes](https://github.com/HKUDS/xbot/releases/tag/v0.1.3.post7) for more details.
-- **2026-02-12** 🧠 Redesigned memory system — Less code, more reliable. Join the [discussion](https://github.com/HKUDS/xbot/discussions/566) about it!
+- **2026-03-12** 🚀 VolcEngine support, Telegram reply context, `/restart`, and sturdier memory
+- **2026-03-11** 🔌 WeCom, Ollama, cleaner discovery, and safer tool behavior
+- **2026-03-10** 🧠 Token-based memory, shared retries, and cleaner gateway and Telegram behavior
+- **2026-03-09** 💬 Slack thread polish and better Feishu audio compatibility
+- **2026-03-08** 🚀 Released **v0.1.4.post4** — a reliability-packed release with safer defaults, better multi-instance support
+- **2026-03-07** 🚀 Azure OpenAI provider, WhatsApp media, QQ group chats, and more Telegram/Feishu polish
+- **2026-03-06** 🪄 Lighter providers, smarter media handling, and sturdier memory and CLI compatibility
+- **2026-03-05** ⚡️ Telegram draft streaming, MCP SSE support, and broader channel reliability fixes
+- **2026-03-04** 🛠️ Dependency cleanup, safer file reads, and another round of test and Cron fixes
+- **2026-03-03** 🧠 Cleaner user-message merging, safer multimodal saves, and stronger Cron guards
+- **2026-03-02** 🛡️ Safer default access control, sturdier Cron reloads, and cleaner Matrix media handling
+- **2026-03-01** 🌐 Web proxy support, smarter Cron reminders, and Feishu rich-text parsing improvements
+- **2026-02-28** 🚀 Released **v0.1.4.post3** — cleaner context, hardened session history, and smarter agent
+- **2026-02-27** 🧠 Experimental thinking mode support, DingTalk media messages, Feishu and QQ channel fixes
+- **2026-02-26** 🛡️ Session poisoning fix, WhatsApp dedup, Windows path guard, Mistral compatibility
+- **2026-02-25** 🧹 New Matrix channel, cleaner session context, auto workspace template sync
+- **2026-02-24** 🚀 Released **v0.1.4.post2** — a reliability-focused release with a redesigned heartbeat
+- **2026-02-23** 🔧 Virtual tool-call heartbeat, prompt cache optimization, Slack mrkdwn fixes
+- **2026-02-22** 🛡️ Slack thread isolation, Discord typing fix, agent reliability improvements
+- **2026-02-21** 🎉 Released **v0.1.4.post1** — new providers, media support across channels
+- **2026-02-20** 🐦 Feishu now receives multimodal files from users. More reliable memory under the hood
+- **2026-02-19** ✨ Slack now sends files, Discord splits long messages, and subagents work in CLI mode
+- **2026-02-18** ⚡️ xbot now supports VolcEngine, MCP custom auth headers, and Anthropic prompt caching
+- **2026-02-17** 🎉 Released **v0.1.4** — MCP support, progress streaming, new providers
+- **2026-02-16** 🦞 xbot now integrates a [ClawHub](https://clawhub.ai) skill — search and install public agent skills
+- **2026-02-15** 🔑 xbot now supports OpenAI Codex provider with OAuth login support
+- **2026-02-14** 🔌 xbot now supports MCP! See [MCP section](#mcp-model-context-protocol) for details
+- **2026-02-13** 🎉 Released **v0.1.3.post7** — includes security hardening and multiple improvements
+- **2026-02-12** 🧠 Redesigned memory system — Less code, more reliable
 - **2026-02-11** ✨ Enhanced CLI experience and added MiniMax support!
-- **2026-02-10** 🎉 Released **v0.1.3.post6** with improvements! Check the updates [notes](https://github.com/HKUDS/xbot/releases/tag/v0.1.3.post6) and our [roadmap](https://github.com/HKUDS/xbot/discussions/431).
+- **2026-02-10** 🎉 Released **v0.1.3.post6** with improvements!
 - **2026-02-09** 💬 Added Slack, Email, and QQ support — xbot now supports multiple chat platforms!
-- **2026-02-08** 🔧 Refactored Providers—adding a new LLM provider now takes just 2 simple steps! Check [here](#providers).
-- **2026-02-07** 🚀 Released **v0.1.3.post5** with Qwen support & several key improvements! Check [here](https://github.com/HKUDS/xbot/releases/tag/v0.1.3.post5) for details.
+- **2026-02-08** 🔧 Refactored Providers—adding a new LLM provider now takes just 2 simple steps!
+- **2026-02-07** 🚀 Released **v0.1.3.post5** with Qwen support & several key improvements!
 - **2026-02-06** ✨ Added Moonshot/Kimi provider, Discord integration, and enhanced security hardening!
 - **2026-02-05** ✨ Added Feishu channel, DeepSeek provider, and enhanced scheduled tasks support!
-- **2026-02-04** 🚀 Released **v0.1.3.post4** with multi-provider & Docker support! Check [here](https://github.com/HKUDS/xbot/releases/tag/v0.1.3.post4) for details.
+- **2026-02-04** 🚀 Released **v0.1.3.post4** with multi-provider & Docker support!
 - **2026-02-03** ⚡ Integrated vLLM for local LLM support and improved natural language task scheduling!
 - **2026-02-02** 🎉 xbot officially launched! Welcome to try 🐈 xbot!
 
@@ -72,7 +73,7 @@
 
 > 🐈 xbot is for educational, research, and technical exchange purposes only. It is unrelated to crypto and does not involve any official token or coin.
 
-## Key Features of xbot:
+## 🌟 Key Features
 
 🪶 **Ultra-Lightweight**: A super lightweight implementation of OpenClaw — 99% smaller, significantly faster.
 
@@ -82,16 +83,36 @@
 
 💎 **Easy-to-Use**: One-click to deploy and you're ready to go.
 
+🔌 **Pluggable Architecture**: Agent Router with swappable backends (Claude SDK, LiteLLM, custom).
+
+🧠 **Advanced Memory**: Token-based memory with reme-ai integration for long-term context retention.
+
+🛡️ **Capability-Based Security**: Fine-grained permission control with capability policies.
+
 ## 🏗️ Architecture
 
 <p align="center">
   <img src="xbot_arch.png" alt="xbot architecture" width="800">
 </p>
 
+### Agent Router Architecture
+
+xbot features a modern **Agent Router** architecture that supports multiple backend implementations:
+
+- **Claude SDK Backend**: Native Claude integration with Anthropic and compatible providers
+- **LiteLLM Backend**: Universal LLM support via LiteLLM
+- **Custom Backends**: Easily implement your own agent logic
+
+The router provides:
+- Dynamic backend switching
+- Unified message processing interface
+- Backend lifecycle management
+- Capability-based tool routing
+
 ## Table of Contents
 
-- [News](#-news)
-- [Key Features](#key-features-of-xbot)
+- [Latest Updates](#-latest-updates)
+- [Key Features](#-key-features)
 - [Architecture](#️-architecture)
 - [Features](#-features)
 - [Install](#-install)
@@ -188,7 +209,7 @@ xbot channels login
 **1. Initialize**
 
 ```bash
-xbot onboard
+xbot init
 ```
 
 **2. Configure** (`~/.xbot/config.json`)
@@ -199,20 +220,21 @@ Add or merge these **two parts** into your config (other options have defaults).
 ```json
 {
   "providers": {
-    "openrouter": {
-      "apiKey": "sk-or-v1-xxx"
+    "anthropic": {
+      "apiKey": "sk-ant-xxx"
     }
   }
 }
 ```
 
-*Set your model* (optionally pin a provider — defaults to auto-detection):
+*Set your model and backend* (optionally pin a provider — defaults to auto-detection):
 ```json
 {
   "agents": {
+    "type": "claude_sdk",
     "defaults": {
-      "model": "anthropic/claude-opus-4-5",
-      "provider": "openrouter"
+      "model": "claude-sonnet-4-5",
+      "provider": "anthropic"
     }
   }
 }
@@ -244,6 +266,7 @@ Connect xbot to your favorite chat platform. Want to build your own? See the [Ch
 | **Email** | IMAP/SMTP credentials |
 | **QQ** | App ID + App Secret |
 | **Wecom** | Bot ID + Bot Secret |
+| **Matrix** | User ID + Access Token |
 
 <details>
 <summary><b>Telegram</b> (Recommended)</summary>
@@ -772,6 +795,25 @@ Simply send the command above to your xbot (via CLI or any chat channel), and it
 
 Config file: `~/.xbot/config.json`
 
+### Agent Backend Configuration
+
+xbot currently uses a single backend (`claude_sdk`) through the Agent Router:
+
+```json
+{
+  "agents": {
+    "type": "claude_sdk",
+    "defaults": {
+      "model": "anthropic/claude-sonnet-4-6",
+      "provider": "anthropic"
+    }
+  }
+}
+```
+
+Available backend type:
+- `claude_sdk`: Native Claude SDK integration
+
 ### Providers
 
 > [!TIP]
@@ -1163,28 +1205,31 @@ MCP tools are automatically discovered and registered on startup. The LLM can us
 | `tools.restrictToWorkspace` | `false` | When `true`, restricts **all** agent tools (shell, file read/write/edit, list) to the workspace directory. Prevents path traversal and out-of-scope access. |
 | `tools.exec.pathAppend` | `""` | Extra directories to append to `PATH` when running shell commands (e.g. `/usr/sbin` for `ufw`). |
 | `channels.*.allowFrom` | `[]` (deny all) | Whitelist of user IDs. Empty denies all; use `["*"]` to allow everyone. |
+| `channels.sendToolHints` | `true` | Send tool-call hint events to chat channels. |
+| `channels.sendUsageSummary` | `true` | Send token usage summary events to chat channels. |
+| `channels.sendProgress` | `true` | Send agent progress events to channels (including thinking/task/system/content-delta style progress). |
 
 
 ## 🧩 Multiple Instances
 
-Run multiple xbot instances simultaneously with separate configs and runtime data. Use `--config` as the main entrypoint. Optionally pass `--workspace` during `onboard` when you want to initialize or update the saved workspace for a specific instance.
+Run multiple xbot instances simultaneously with separate configs and runtime data. Use `--config` as the main entrypoint. Optionally pass `--workspace` during `init` when you want to initialize or update the saved workspace for a specific instance.
 
 ### Quick Start
 
-If you want each instance to have its own dedicated workspace from the start, pass both `--config` and `--workspace` during onboarding.
+If you want each instance to have its own dedicated workspace from the start, pass both `--config` and `--workspace` during initialization.
 
 **Initialize instances:**
 
 ```bash
 # Create separate instance configs and workspaces
-xbot onboard --config ~/.xbot-telegram/config.json --workspace ~/.xbot-telegram/workspace
-xbot onboard --config ~/.xbot-discord/config.json --workspace ~/.xbot-discord/workspace
-xbot onboard --config ~/.xbot-feishu/config.json --workspace ~/.xbot-feishu/workspace
+xbot init --config ~/.xbot-telegram/config.json --workspace ~/.xbot-telegram/workspace
+xbot init --config ~/.xbot-discord/config.json --workspace ~/.xbot-discord/workspace
+xbot init --config ~/.xbot-feishu/config.json --workspace ~/.xbot-feishu/workspace
 ```
 
 **Configure each instance:**
 
-Edit `~/.xbot-telegram/config.json`, `~/.xbot-discord/config.json`, etc. with different channel settings. The workspace you passed during `onboard` is saved into each config as that instance's default workspace.
+Edit `~/.xbot-telegram/config.json`, `~/.xbot-discord/config.json`, etc. with different channel settings. The workspace you passed during `init` is saved into each config as that instance's default workspace.
 
 **Run instances:**
 
@@ -1287,8 +1332,9 @@ xbot gateway --config ~/.xbot-telegram/config.json --workspace /tmp/xbot-telegra
 
 | Command | Description |
 |---------|-------------|
-| `xbot onboard` | Initialize config & workspace at `~/.xbot/` |
-| `xbot onboard -c <config> -w <workspace>` | Initialize or refresh a specific instance config and workspace |
+| `xbot init` | Initialize config, workspace, and default packs at `~/.xbot/` |
+| `xbot init -c <config> -w <workspace>` | Initialize or refresh a specific instance config and workspace |
+| `xbot onboard` | Legacy alias of `xbot init` |
 | `xbot agent -m "..."` | Chat with the agent |
 | `xbot agent -w <workspace>` | Chat against a specific workspace |
 | `xbot agent -w <workspace> -c <config>` | Chat against a specific workspace/config |
@@ -1303,12 +1349,16 @@ xbot gateway --config ~/.xbot-telegram/config.json --workspace /tmp/xbot-telegra
 
 Interactive mode exits: `exit`, `quit`, `/exit`, `/quit`, `:q`, or `Ctrl+D`.
 
+Runtime command model:
+- Claude SDK slash commands are passed through directly (for example: `/help`, `/clear`, `/compact`).
+- xbot runtime controls use non-slash commands: `!help`, `!stop`, `!restart`.
+
 <details>
 <summary><b>Heartbeat (Periodic Tasks)</b></summary>
 
 The gateway wakes up every 30 minutes and checks `HEARTBEAT.md` in your workspace (`~/.xbot/workspace/HEARTBEAT.md`). If the file has tasks, the agent executes them and delivers results to your most recently active chat channel.
 
-**Setup:** edit `~/.xbot/workspace/HEARTBEAT.md` (created automatically by `xbot onboard`):
+**Setup:** edit `~/.xbot/workspace/HEARTBEAT.md` (created automatically by `xbot init`):
 
 ```markdown
 ## Periodic Tasks
@@ -1331,7 +1381,7 @@ The agent can also manage this file itself — ask it to "add a periodic task" a
 ### Docker Compose
 
 ```bash
-docker compose run --rm xbot-cli onboard   # first-time setup
+docker compose run --rm xbot-cli init      # first-time setup
 vim ~/.xbot/config.json                     # add API keys
 docker compose up -d xbot-gateway           # start gateway
 ```
@@ -1349,7 +1399,7 @@ docker compose down                                      # stop
 docker build -t xbot .
 
 # Initialize config (first time only)
-docker run -v ~/.xbot:/root/.xbot --rm xbot onboard
+docker run -v ~/.xbot:/root/.xbot --rm xbot init
 
 # Edit config on host to add API keys
 vim ~/.xbot/config.json
@@ -1419,22 +1469,27 @@ If you edit the `.service` file itself, run `systemctl --user daemon-reload` bef
 
 ```
 xbot/
-├── agent/          # 🧠 Core agent logic
-│   ├── loop.py     #    Agent loop (LLM ↔ tool execution)
-│   ├── context.py  #    Prompt builder
-│   ├── memory.py   #    Persistent memory
-│   ├── skills.py   #    Skills loader
-│   ├── subagent.py #    Background task execution
-│   └── tools/      #    Built-in tools (incl. spawn)
-├── skills/         # 🎯 Bundled skills (github, weather, tmux...)
-├── channels/       # 📱 Chat channel integrations (supports plugins)
-├── bus/            # 🚌 Message routing
-├── cron/           # ⏰ Scheduled tasks
-├── heartbeat/      # 💓 Proactive wake-up
-├── providers/      # 🤖 LLM providers (OpenRouter, etc.)
-├── session/        # 💬 Conversation sessions
-├── config/         # ⚙️ Configuration
-└── cli/            # 🖥️ Commands
+├── agent/              # 🧠 Core agent logic
+│   ├── backends/       #    Agent backends (Claude SDK, LiteLLM)
+│   ├── router.py       #    Agent router for backend selection
+│   ├── context.py      #    Prompt builder
+│   ├── memory.py       #    Persistent memory
+│   ├── memory_reme.py  #    reme-ai integration
+│   ├── skills.py       #    Skills loader
+│   ├── subagent.py     #    Background task execution
+│   ├── capabilities.py #    Capability catalog
+│   ├── capability_policy.py # Permission policies
+│   ├── handoff_policy.py    # Agent handoff decisions
+│   └── tools/          #    Built-in tools (incl. spawn)
+├── skills/             # 🎯 Bundled skills (github, weather, tmux...)
+├── channels/           # 📱 Chat channel integrations (supports plugins)
+├── bus/                # 🚌 Message routing
+├── cron/               # ⏰ Scheduled tasks
+├── heartbeat/          # 💓 Proactive wake-up
+├── providers/          # 🤖 LLM providers (OpenRouter, etc.)
+├── session/            # 💬 Conversation sessions
+├── config/             # ⚙️ Configuration
+└── cli/                # 🖥️ Commands
 ```
 
 ## 🤝 Contribute & Roadmap
@@ -1457,6 +1512,8 @@ PRs welcome! The codebase is intentionally small and readable. 🤗
 - [ ] **Better reasoning** — Multi-step planning and reflection
 - [ ] **More integrations** — Calendar and more
 - [ ] **Self-improvement** — Learn from feedback and mistakes
+- [ ] **Multi-agent collaboration** — Team-based problem solving
+- [ ] **Advanced tool orchestration** — Complex workflow automation
 
 ### Contributors
 

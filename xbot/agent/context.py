@@ -4,16 +4,18 @@ import base64
 import mimetypes
 import platform
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
 from xbot.utils.helpers import current_time_str
 
 from xbot.agent.memory import MemoryStore
-from xbot.agent.memory_reme import ReMeMemoryStore, _REME_AVAILABLE
 from xbot.agent.skills import SkillsLoader
 from xbot.utils.helpers import build_assistant_message, detect_image_mime
+
+if TYPE_CHECKING:
+    from xbot.agent.memory_reme import ReMeMemoryStore
 
 
 class ContextBuilder:
@@ -40,9 +42,20 @@ class ContextBuilder:
         self.workspace = workspace
         self.skills = SkillsLoader(workspace)
 
+        reme_available = False
+        reme_store_cls = None
+        if use_reme:
+            try:
+                from xbot.agent.memory_reme import ReMeMemoryStore as _ReMeMemoryStore, _REME_AVAILABLE
+
+                reme_available = bool(_REME_AVAILABLE)
+                reme_store_cls = _ReMeMemoryStore
+            except Exception as e:
+                logger.debug(f"ReMe import failed, using fallback memory: {e}")
+
         # Initialize memory store
-        if use_reme and _REME_AVAILABLE:
-            self.memory: ReMeMemoryStore | MemoryStore = ReMeMemoryStore(
+        if use_reme and reme_available and reme_store_cls is not None:
+            self.memory: "ReMeMemoryStore | MemoryStore" = reme_store_cls(
                 workspace=workspace,
                 llm_config=llm_config,
                 enable_vector_search=enable_vector_search,
@@ -52,7 +65,7 @@ class ContextBuilder:
         else:
             self.memory = MemoryStore(workspace)
             self._using_reme = False
-            if use_reme and not _REME_AVAILABLE:
+            if use_reme and not reme_available:
                 logger.debug("ReMe not available, using fallback memory")
 
     @property

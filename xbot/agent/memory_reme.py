@@ -53,6 +53,9 @@ _sqlite_patched = _patch_sqlite3()
 # ReMe imports with graceful fallback
 _REME_AVAILABLE = False
 try:
+    # ReMe dependency key_value.aio installs beartype import hooks by default.
+    # Disable it to avoid global import side effects in host runtimes/tests.
+    os.environ.setdefault("PY_KEY_VALUE_DISABLE_BEARTYPE", "1")
     from reme.reme_light import ReMeLight
     _REME_AVAILABLE = True
 except ImportError:

@@ -22,15 +22,16 @@ class ChannelsConfig(Base):
 
     model_config = ConfigDict(extra="allow")
 
-    send_progress: bool = True  # stream agent's text progress to the channel
-    send_tool_hints: bool = False  # stream tool-call hints (e.g. read_file("…"))
+    send_progress: bool = True  # send progress events (thinking/task/system/content-delta)
+    send_tool_hints: bool = True  # send tool-call hints (e.g. read_file("…"))
+    send_usage_summary: bool = True  # send token usage summary when available
 
 
 class AgentDefaults(Base):
     """Default agent configuration."""
 
     workspace: str = "~/.xbot/workspace"
-    model: str = "anthropic/claude-opus-4-5"
+    model: str = "claude-sonnet-4-5"
     provider: str = (
         "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
     )
@@ -76,6 +77,8 @@ class ClaudeSDKAgentConfig(Base):
     disallowed_tools: list[str] = Field(default_factory=lambda: ["WebFetch", "WebSearch"])
     # Context Compaction 通知配置
     compact_notify: bool = True  # 是否在压缩上下文时发送通知
+    include_partial_messages: bool = False  # Disable SDK partial/delta messages by default for stable output
+    memory_consolidation_mode: Literal["off", "async", "sync"] = "off"  # Local memory consolidation strategy in SDK mode
 
 
 class AgentDefinition(Base):

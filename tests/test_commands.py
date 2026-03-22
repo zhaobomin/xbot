@@ -2,7 +2,7 @@ import json
 import re
 import shutil
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
 from typer.testing import CliRunner
@@ -127,6 +127,69 @@ def test_onboard_help_shows_workspace_and_config_options():
     assert "--config" in stripped_output
     assert "-c" in stripped_output
     assert "--dir" not in stripped_output
+
+
+def test_init_help_shows_pack_options():
+    result = runner.invoke(app, ["init", "--help"])
+
+    assert result.exit_code == 0
+    stripped_output = _strip_ansi(result.stdout)
+    assert "--workspace" in stripped_output
+    assert "--config" in stripped_output
+    assert "--skill-pack" in stripped_output
+    assert "--command-pack" in stripped_output
+    assert "--no-skill-pack" in stripped_output
+    assert "--no-command-pack" in stripped_output
+
+
+def test_init_installs_default_packs(mock_paths, monkeypatch):
+    monkeypatch.setattr("xbot.channels.registry.discover_all", lambda: {})
+    calls: dict[str, tuple[Path, str] | None] = {"skills": None, "commands": None}
+
+    def _fake_skills(workspace: Path, pack_name: str = "default") -> list[str]:
+        calls["skills"] = (workspace, pack_name)
+        return ["skills/memory"]
+
+    def _fake_commands(workspace: Path, pack_name: str = "default") -> list[str]:
+        calls["commands"] = (workspace, pack_name)
+        return ["commands/review.md"]
+
+    monkeypatch.setattr("xbot.cli.commands.sync_workspace_skill_pack", _fake_skills)
+    monkeypatch.setattr("xbot.cli.commands.sync_workspace_command_pack", _fake_commands)
+
+    _config_file, workspace_dir, _mock_ws = mock_paths
+    result = runner.invoke(app, ["init"])
+
+    assert result.exit_code == 0
+    assert calls["skills"] == (workspace_dir, "default")
+    assert calls["commands"] == (workspace_dir, "default")
+    assert "Installed skill pack 'default'" in result.stdout
+    assert "Installed command pack 'default'" in result.stdout
+
+
+def test_init_can_skip_pack_installation(mock_paths, monkeypatch):
+    monkeypatch.setattr("xbot.channels.registry.discover_all", lambda: {})
+    skill_called = False
+    command_called = False
+
+    def _fake_skills(_workspace: Path, pack_name: str = "default") -> list[str]:
+        nonlocal skill_called
+        skill_called = True
+        return []
+
+    def _fake_commands(_workspace: Path, pack_name: str = "default") -> list[str]:
+        nonlocal command_called
+        command_called = True
+        return []
+
+    monkeypatch.setattr("xbot.cli.commands.sync_workspace_skill_pack", _fake_skills)
+    monkeypatch.setattr("xbot.cli.commands.sync_workspace_command_pack", _fake_commands)
+
+    result = runner.invoke(app, ["init", "--no-skill-pack", "--no-command-pack"])
+
+    assert result.exit_code == 0
+    assert not skill_called
+    assert not command_called
 
 
 def test_onboard_uses_explicit_config_and_workspace_paths(tmp_path, monkeypatch):
@@ -326,6 +389,81 @@ def test_agent_uses_default_config_when_no_workspace_or_config_flags(mock_agent_
     )
     mock_agent_runtime["runtime"].process_direct.assert_awaited_once()
     mock_agent_runtime["print_response"].assert_called_once_with("mock-response", render_markdown=True)
+
+
+def test_agent_single_message_shows_content_delta_progress_by_default(mock_agent_runtime):
+    async def _fake_process_direct(_message, _session_id, on_progress=None):
+        if on_progress:
+            await on_progress(
+                "partial response",
+                tool_hint=False,
+                event_type="content_delta",
+                event_data=None,
+            )
+        return "final response"
+
+    mock_agent_runtime["runtime"].process_direct.side_effect = _fake_process_direct
+    with patch("xbot.cli.commands._print_cli_progress_line") as mock_progress:
+        result = runner.invoke(app, ["agent", "-m", "hello"])
+
+    assert result.exit_code == 0
+    mock_progress.assert_any_call("partial response", ANY)
+
+
+def test_agent_single_message_blocks_content_delta_when_progress_disabled(mock_agent_runtime):
+    async def _fake_process_direct(_message, _session_id, on_progress=None):
+        if on_progress:
+            await on_progress(
+                "partial response",
+                tool_hint=False,
+                event_type="content_delta",
+                event_data=None,
+            )
+        return "final response"
+
+    mock_agent_runtime["config"].channels.send_progress = False
+    mock_agent_runtime["runtime"].process_direct.side_effect = _fake_process_direct
+    with patch("xbot.cli.commands._print_cli_progress_line") as mock_progress:
+        result = runner.invoke(app, ["agent", "-m", "hello"])
+
+    assert result.exit_code == 0
+    mock_progress.assert_not_called()
+
+
+def test_agent_single_message_default_visibility_snapshot_for_core_events(mock_agent_runtime):
+    async def _fake_process_direct(_message, _session_id, on_progress=None):
+        if on_progress:
+            events = [
+                ("content_delta", False, "delta chunk"),
+                ("thinking", False, "Thinking: planning"),
+                ("task", False, "Running: compact"),
+                ("system", False, "Context compacted."),
+                ("usage", False, "Usage: input 12 tokens, output 3 tokens"),
+                ("tool_hint", True, 'Tool: compact()'),
+            ]
+            for event_type, tool_hint, content in events:
+                await on_progress(
+                    content,
+                    tool_hint=tool_hint,
+                    event_type=event_type,
+                    event_data=None,
+                )
+        return "final response"
+
+    mock_agent_runtime["runtime"].process_direct.side_effect = _fake_process_direct
+    with patch("xbot.cli.commands._print_cli_progress_line") as mock_progress:
+        result = runner.invoke(app, ["agent", "-m", "hello"])
+
+    assert result.exit_code == 0
+    printed = [c.args[0] for c in mock_progress.call_args_list]
+    assert set(printed) == {
+        "delta chunk",
+        "Thinking: planning",
+        "Running: compact",
+        "Context compacted.",
+        "Usage: input 12 tokens, output 3 tokens",
+        'Tool: compact()',
+    }
 
 
 def test_agent_uses_explicit_config_path(mock_agent_runtime, tmp_path: Path):

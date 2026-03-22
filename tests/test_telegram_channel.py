@@ -871,16 +871,22 @@ async def test_forward_command_does_not_inject_reply_context() -> None:
 
 
 @pytest.mark.asyncio
-async def test_on_help_includes_restart_command() -> None:
+async def test_forward_help_command_routes_to_runtime_path() -> None:
+    """Telegram /help should be forwarded to runtime for unified command listing."""
     channel = TelegramChannel(
         TelegramConfig(enabled=True, token="123:abc", allow_from=["*"], group_policy="open"),
         MessageBus(),
     )
+    channel._app = _FakeApp(lambda: None)
+    handled = []
+
+    async def capture_handle(**kwargs) -> None:
+        handled.append(kwargs)
+
+    channel._handle_message = capture_handle
+
     update = _make_telegram_update(text="/help", chat_type="private")
-    update.message.reply_text = AsyncMock()
+    await channel._forward_command(update, None)
 
-    await channel._on_help(update, None)
-
-    update.message.reply_text.assert_awaited_once()
-    help_text = update.message.reply_text.await_args.args[0]
-    assert "/restart" in help_text
+    assert len(handled) == 1
+    assert handled[0]["content"] == "/help"

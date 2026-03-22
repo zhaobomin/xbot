@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -18,9 +19,15 @@ from xbot.agent.capability_policy import CapabilityPolicy
 from xbot.agent.context import ContextBuilder
 from xbot.agent.handoff_policy import HandoffDecision, HandoffPolicy
 from xbot.agent.memory import MemoryConsolidator
+from xbot.agent.event_formatter import (
+    format_compact_event,
+    format_task_notification,
+)
 from xbot.agent.protocol import AgentBackend, AgentContext, AgentResponse
+from xbot.agent.trace import append_session_trace
 from xbot.agent.tools.base import Tool
 from xbot.config.provider_registry import get_provider_spec
+from xbot.config.sdk_resolver import detect_provider_from_model, resolve_sdk_provider_and_model
 from xbot.config.schema import AgentsConfig, ProviderConfig
 from xbot.session.manager import SessionManager
 
@@ -121,9 +128,35 @@ class MessageConverter:
         elif isinstance(message, TaskNotificationMessage):
             return self._convert_task_notification(message)
         elif isinstance(message, SystemMessage):
-            return None
+            return self._convert_system_message(message)
         elif isinstance(message, ResultMessage):
             return self._convert_result_message(message)
+        return None
+
+    def _convert_system_message(self, message: "SystemMessage") -> AgentResponse | None:
+        """Convert generic SystemMessage into user-visible progress when useful."""
+        if message.subtype == "compact_boundary":
+            compact_metadata = message.data.get("compact_metadata", {}) if isinstance(message.data, dict) else {}
+            pre_tokens = compact_metadata.get("pre_tokens")
+            post_tokens = compact_metadata.get("post_tokens")
+            trigger = compact_metadata.get("trigger")
+            text = format_compact_event(
+                pre_tokens=pre_tokens if isinstance(pre_tokens, int) else None,
+                post_tokens=post_tokens if isinstance(post_tokens, int) else None,
+                trigger=trigger if isinstance(trigger, str) else None,
+            )
+            return AgentResponse(
+                content="",
+                progress_texts=[text],
+                raw_message=message,
+                event_type="system",
+                event_data={
+                    "subtype": "compact_boundary",
+                    "compact_metadata": compact_metadata,
+                },
+            )
+
+        # Keep other system events silent unless we have an explicit mapping.
         return None
     
     def _convert_assistant_message(self, message: "AssistantMessage") -> AgentResponse:
@@ -146,12 +179,25 @@ class MessageConverter:
                     "kind": self._classify_tool_name(block.name),
                 })
 
+        event_type = ""
+        event_data: dict[str, Any] | None = None
+        if progress_texts and not text and not tool_calls:
+            event_type = "thinking"
+            event_data = {"thinking_chunks": len(progress_texts)}
+        elif tool_calls:
+            event_type = "tool_call"
+            event_data = {"tool_calls": len(tool_calls)}
+        elif text:
+            event_type = "content"
+
         return AgentResponse(
             content=text,
             progress_texts=progress_texts,
             tool_calls=tool_calls if tool_calls else None,
             finish_reason="tool_use" if tool_calls else "stop",
             raw_message=message,
+            event_type=event_type,
+            event_data=event_data,
         )
     
     def _convert_stream_event(self, message: "StreamEvent") -> AgentResponse | None:
@@ -160,17 +206,28 @@ class MessageConverter:
         if event.get("type") != "content_block_delta":
             return None
         delta = event.get("delta", {})
-        if delta.get("type") != "text_delta":
-            return None
-        text = delta.get("text", "")
-        if not text:
-            return None
-        return AgentResponse(
-            content="",
-            is_delta=True,
-            delta_content=text,
-            raw_message=message,
-        )
+        delta_type = delta.get("type")
+        if delta_type == "text_delta":
+            text = delta.get("text", "")
+            if not text:
+                return None
+            return AgentResponse(
+                content="",
+                is_delta=True,
+                delta_content=text,
+                raw_message=message,
+                event_type="content_delta",
+            )
+        if delta_type == "thinking_delta":
+            thinking = delta.get("thinking", "") or delta.get("text", "")
+            if thinking:
+                return AgentResponse(
+                    content="",
+                    progress_texts=[f"Thinking: {thinking}"],
+                    raw_message=message,
+                    event_type="thinking",
+                )
+        return None
     
     def _convert_task_started(self, message: "TaskStartedMessage") -> AgentResponse:
         """Convert TaskStartedMessage to AgentResponse."""
@@ -184,6 +241,12 @@ class MessageConverter:
             content="",
             progress_texts=progress_texts,
             raw_message=message,
+            event_type="task",
+            event_data={
+                "status": "started",
+                "task_id": message.task_id,
+                "task_type": message.task_type,
+            },
         )
     
     def _convert_task_progress(self, message: "TaskProgressMessage") -> AgentResponse:
@@ -201,34 +264,65 @@ class MessageConverter:
             tool_calls=tool_calls,
             finish_reason="tool_use" if tool_calls else "stop",
             raw_message=message,
+            event_type="task",
+            event_data={
+                "status": "progress",
+                "task_id": message.task_id,
+                "last_tool_name": message.last_tool_name,
+            },
         )
     
     def _convert_task_notification(self, message: "TaskNotificationMessage") -> AgentResponse:
         """Convert TaskNotificationMessage to AgentResponse."""
-        summary = message.summary or message.status
-        progress_texts = [f"Running: {summary}"] if summary else []
+        progress_texts = [
+            format_task_notification(
+                status=message.status,
+                summary=message.summary,
+                task_id=message.task_id,
+                output_file=message.output_file,
+            )
+        ]
         if self._handoff_policy:
-            if handoff_trace := self._handoff_policy.format_task_trace(str(summary)):
+            if handoff_trace := self._handoff_policy.format_task_trace(str(message.summary or message.status)):
                 progress_texts.append(handoff_trace)
         return AgentResponse(
             content="",
             progress_texts=progress_texts,
             raw_message=message,
+            event_type="task",
+            event_data={
+                "status": message.status,
+                "task_id": message.task_id,
+                "output_file": message.output_file,
+            },
         )
     
     def _convert_result_message(self, message: "ResultMessage") -> AgentResponse:
         """Convert ResultMessage to AgentResponse."""
         usage = None
         if hasattr(message, "usage") and message.usage:
-            usage = {
-                "input_tokens": getattr(message.usage, "input_tokens", 0),
-                "output_tokens": getattr(message.usage, "output_tokens", 0),
-            }
+            if isinstance(message.usage, dict):
+                usage = {
+                    "input_tokens": int(message.usage.get("input_tokens", 0) or 0),
+                    "output_tokens": int(message.usage.get("output_tokens", 0) or 0),
+                }
+            else:
+                usage = {
+                    "input_tokens": int(getattr(message.usage, "input_tokens", 0) or 0),
+                    "output_tokens": int(getattr(message.usage, "output_tokens", 0) or 0),
+                }
+        content = message.result if isinstance(message.result, str) else ""
         return AgentResponse(
-            content="",
+            content=content,
             finish_reason="stop",
             usage=usage,
             raw_message=message,
+            event_type="result",
+            event_data={
+                "stop_reason": message.stop_reason,
+                "num_turns": message.num_turns,
+                "total_cost_usd": message.total_cost_usd,
+            },
         )
     
     def _classify_tool_name(self, name: str) -> str:
@@ -313,6 +407,7 @@ class OptionsBuilder:
             model=model,
             max_turns=self._sdk_config.max_turns,
             permission_mode=self._sdk_config.permission_mode,
+            include_partial_messages=getattr(self._sdk_config, "include_partial_messages", False),
             resume=resume_session,
             mcp_servers=mcp_servers if mcp_servers else None,
             agents=sdk_agents,
@@ -384,10 +479,7 @@ class OptionsBuilder:
     def _get_provider_config(self) -> tuple[str, str]:
         """Get provider API key and base URL."""
         config = self._shared_resources.get("config")
-        provider_name = config.agents.defaults.provider
-
-        if provider_name == "auto":
-            provider_name = self._detect_provider_from_model(config.agents.defaults.model)
+        provider_name, _ = resolve_sdk_provider_and_model(config)
 
         spec = get_provider_spec(provider_name)
         if not spec:
@@ -410,32 +502,12 @@ class OptionsBuilder:
     def _get_model_name(self) -> str:
         """Get the model name with provider-specific transformations."""
         config = self._shared_resources.get("config")
-        model = config.agents.defaults.model
-        provider = config.agents.defaults.provider
-
-        if provider == "auto":
-            provider = self._detect_provider_from_model(model)
-
-        if provider == "alrun" and model.startswith("alrun-"):
-            return model[len("alrun-"):]
-
+        _, model = resolve_sdk_provider_and_model(config)
         return model
     
     def _detect_provider_from_model(self, model: str) -> str:
         """Detect provider from model name."""
-        model_lower = model.lower()
-        
-        # Check alrun prefix first (most specific)
-        if model_lower.startswith("alrun-"):
-            return "alrun"
-        
-        # Then check other patterns
-        if "claude" in model_lower:
-            return "anthropic"
-        elif "qwen" in model_lower or "glm" in model_lower:
-            return "aliyun_coding_plan"
-        
-        return "anthropic"
+        return detect_provider_from_model(model)
     
     def _build_system_prompt(self) -> str:
         """Build the system prompt."""
@@ -557,6 +629,13 @@ class ClaudeSDKBackend(AgentBackend):
     """
 
     name = "claude_sdk"
+    _INPUT_REQUIRED_STATUSES = {
+        "input_required",
+        "awaiting_input",
+        "waiting_for_input",
+        "confirmation_required",
+        "approval_required",
+    }
 
     def __init__(self):
         """Initialize the backend."""
@@ -573,6 +652,8 @@ class ClaudeSDKBackend(AgentBackend):
         self._capabilities: CapabilityCatalog | None = None
         self._clients: dict[str, ClaudeSDKClient] = {}
         self._clients_lock = asyncio.Lock()
+        self._active_task_ids: dict[str, str] = {}
+        self._session_commands: dict[str, list[str]] = {}
         self._delegation_traces: list[DelegationTrace] = []
         self._delegation_traces_lock = asyncio.Lock()
         self.tools: Any = None
@@ -601,7 +682,20 @@ class ClaudeSDKBackend(AgentBackend):
             Path(shared_resources.get("workspace", config.defaults.workspace))
         )
         workspace_path = Path(shared_resources.get("workspace", config.defaults.workspace))
-        self._context_builder = ContextBuilder(workspace_path)
+        runtime_config = shared_resources.get("config")
+        memory_config = getattr(getattr(runtime_config, "tools", None), "memory", None)
+        memory_provider = getattr(memory_config, "provider", "file")
+        use_reme = memory_provider == "reme"
+        enable_vector_search = bool(getattr(memory_config, "enable_vector_search", False))
+        llm_model = getattr(memory_config, "llm_model", None)
+        llm_config = {"model_name": llm_model} if llm_model else None
+
+        self._context_builder = ContextBuilder(
+            workspace_path,
+            use_reme=use_reme,
+            llm_config=llm_config,
+            enable_vector_search=enable_vector_search,
+        )
         self._capabilities = CapabilityCatalog(workspace_path)
         self._handoff_policy = HandoffPolicy(self.sdk_config.agents if self.sdk_config else None)
         self._capability_policy = CapabilityPolicy(
@@ -760,8 +854,55 @@ class ClaudeSDKBackend(AgentBackend):
 
             client = _ClaudeSDKClient(options=self._build_options(session_key))
             await client.connect()
+            await self._refresh_session_commands(session_key, client)
             self._clients[session_key] = client
             return client
+
+    async def _refresh_session_commands(self, session_key: str, client: "ClaudeSDKClient") -> None:
+        """Refresh slash commands discovered from SDK init metadata."""
+        try:
+            info = await client.get_server_info()
+        except Exception:
+            return
+        self._session_commands[session_key] = self._extract_slash_commands(info)
+
+    @staticmethod
+    def _extract_slash_commands(info: Any) -> list[str]:
+        """Extract slash commands from SDK initialization payload."""
+        if not isinstance(info, dict):
+            return []
+
+        def _to_slash(name: str) -> str | None:
+            raw = name.strip()
+            if not raw:
+                return None
+            return raw if raw.startswith("/") else f"/{raw}"
+
+        candidates = info.get("slash_commands")
+        if isinstance(candidates, list):
+            normalized = {
+                c.strip()
+                for c in candidates
+                if isinstance(c, str)
+                if c.strip().startswith("/")
+            }
+            return sorted(normalized)
+
+        commands = info.get("commands")
+        result: set[str] = set()
+        if isinstance(commands, list):
+            for cmd in commands:
+                if isinstance(cmd, str):
+                    normalized = _to_slash(cmd)
+                    if normalized:
+                        result.add(normalized)
+                elif isinstance(cmd, dict):
+                    name = cmd.get("name")
+                    if isinstance(name, str):
+                        normalized = _to_slash(name)
+                        if normalized:
+                            result.add(normalized)
+        return sorted(result)
 
     async def _create_temp_client(
         self,
@@ -838,8 +979,12 @@ class ClaudeSDKBackend(AgentBackend):
             self._tool_adapter.set_tool_context(
                 channel=context.channel,
                 chat_id=context.chat_id,
+                session_key=context.session_key,
                 message_id=context.metadata.get("message_id"),
             )
+            message_tool = self._tool_adapter.get_tool("message")
+            if message_tool and hasattr(message_tool, "start_turn"):
+                message_tool.start_turn()
 
         # Set permission handler session context
         if self._permission_handler and hasattr(self._permission_handler, "set_session_context"):
@@ -847,6 +992,7 @@ class ClaudeSDKBackend(AgentBackend):
                 context.session_key,
                 context.channel,
                 context.chat_id,
+                context.metadata,
             )
             if hasattr(self._permission_handler, "set_current_session"):
                 self._permission_handler.set_current_session(context.session_key)
@@ -855,8 +1001,13 @@ class ClaudeSDKBackend(AgentBackend):
         if session is not None:
             session.add_message("user", context.prompt)
             self.sessions.save(session)
-            if self.memory_consolidator:
+            mode = getattr(self.sdk_config, "memory_consolidation_mode", "off")
+            if self.memory_consolidator and mode == "sync":
                 await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+            elif self.memory_consolidator and mode == "async":
+                asyncio.create_task(
+                    self.memory_consolidator.maybe_consolidate_by_tokens(session)
+                )
 
         try:
             final_content = ""
@@ -879,15 +1030,59 @@ class ClaudeSDKBackend(AgentBackend):
                 prompt = f"{self._handoff_policy.build_request_prefix(decision)}\n{context.prompt}"
             
             client = await self._get_or_create_client(context.session_key)
+            query_sent_at = time.perf_counter()
+            append_session_trace(
+                self.sessions,
+                context.session_key,
+                "sdk_query_sent",
+                {
+                    "backend": self.name,
+                },
+            )
             await client.query(
                 prompt,
                 session_id=self._query_session_id(context.session_key, session),
             )
 
+            first_sdk_message_logged = False
             async for message in client.receive_response():
-                if isinstance(message, ResultMessage) and session is not None and message.session_id:
-                    session.metadata["sdk_session_id"] = message.session_id
-                    self.sessions.save(session)
+                if not first_sdk_message_logged:
+                    first_sdk_message_logged = True
+                    append_session_trace(
+                        self.sessions,
+                        context.session_key,
+                        "sdk_first_message",
+                        {
+                            "backend": self.name,
+                            "latency_ms": int((time.perf_counter() - query_sent_at) * 1000),
+                            "message_type": message.__class__.__name__,
+                            "subtype": getattr(message, "subtype", None),
+                        },
+                    )
+                if isinstance(message, SystemMessage) and message.subtype == "init":
+                    self._session_commands[context.session_key] = self._extract_slash_commands(message.data)
+                if isinstance(message, TaskStartedMessage) and message.task_id:
+                    self._active_task_ids[context.session_key] = message.task_id
+                if (
+                    isinstance(message, TaskNotificationMessage)
+                    and message.status in {"completed", "failed", "stopped"}
+                ):
+                    self._active_task_ids.pop(context.session_key, None)
+                if (
+                    isinstance(message, TaskNotificationMessage)
+                    and str(message.status or "").lower() in self._INPUT_REQUIRED_STATUSES
+                ):
+                    user_input = await self._wait_for_user_input(context, message)
+                    if user_input:
+                        await client.query(
+                            user_input,
+                            session_id=self._query_session_id(context.session_key, session),
+                        )
+                if isinstance(message, ResultMessage):
+                    self._active_task_ids.pop(context.session_key, None)
+                    if session is not None and message.session_id:
+                        session.metadata["sdk_session_id"] = message.session_id
+                        self.sessions.save(session)
 
                 if self._message_converter:
                     response = self._message_converter.convert(message)
@@ -905,8 +1100,13 @@ class ClaudeSDKBackend(AgentBackend):
             if session is not None and final_content:
                 session.add_message("assistant", final_content)
                 self.sessions.save(session)
-                if self.memory_consolidator:
+                mode = getattr(self.sdk_config, "memory_consolidation_mode", "off")
+                if self.memory_consolidator and mode == "sync":
                     await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+                elif self.memory_consolidator and mode == "async":
+                    asyncio.create_task(
+                        self.memory_consolidator.maybe_consolidate_by_tokens(session)
+                    )
 
         except Exception as e:
             client = self._clients.pop(context.session_key, None)
@@ -949,9 +1149,20 @@ class ClaudeSDKBackend(AgentBackend):
                             session_id=self._query_session_id(context.session_key, session),
                         )
                         async for message in fallback_client.receive_response():
-                            if isinstance(message, ResultMessage) and session is not None and message.session_id:
-                                session.metadata["sdk_session_id"] = message.session_id
-                                self.sessions.save(session)
+                            if isinstance(message, SystemMessage) and message.subtype == "init":
+                                self._session_commands[context.session_key] = self._extract_slash_commands(message.data)
+                            if isinstance(message, TaskStartedMessage) and message.task_id:
+                                self._active_task_ids[context.session_key] = message.task_id
+                            if (
+                                isinstance(message, TaskNotificationMessage)
+                                and message.status in {"completed", "failed", "stopped"}
+                            ):
+                                self._active_task_ids.pop(context.session_key, None)
+                            if isinstance(message, ResultMessage):
+                                self._active_task_ids.pop(context.session_key, None)
+                                if session is not None and message.session_id:
+                                    session.metadata["sdk_session_id"] = message.session_id
+                                    self.sessions.save(session)
                             
                             if self._message_converter:
                                 response = self._message_converter.convert(message)
@@ -971,8 +1182,13 @@ class ClaudeSDKBackend(AgentBackend):
                     if session is not None and final_content:
                         session.add_message("assistant", final_content)
                         self.sessions.save(session)
-                        if self.memory_consolidator:
+                        mode = getattr(self.sdk_config, "memory_consolidation_mode", "off")
+                        if self.memory_consolidator and mode == "sync":
                             await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+                        elif self.memory_consolidator and mode == "async":
+                            asyncio.create_task(
+                                self.memory_consolidator.maybe_consolidate_by_tokens(session)
+                            )
                     return
                 except Exception:
                     logger.exception("Claude SDK fallback to main agent failed")
@@ -989,6 +1205,85 @@ class ClaudeSDKBackend(AgentBackend):
             if self._permission_handler and hasattr(self._permission_handler, "clear_session_context"):
                 self._permission_handler.clear_session_context(context.session_key)
 
+    async def _wait_for_user_input(
+        self,
+        context: AgentContext,
+        message: "TaskNotificationMessage",
+    ) -> str | None:
+        """Ask user for input when SDK task enters input-required state."""
+        summary = str(message.summary or "").strip()
+        prompt = summary or "Task requires your input. Please reply to continue."
+        if not summary:
+            prompt = f"Task `{message.task_id or ''}` requires your input. Please reply to continue.".strip()
+
+        status = str(message.status or "").lower()
+        if status == "approval_required":
+            interaction_kind = "approval"
+            suggestions = ["允许", "拒绝"]
+        elif status == "confirmation_required":
+            interaction_kind = "confirmation"
+            suggestions = ["确认", "取消"]
+        else:
+            interaction_kind = "question"
+            suggestions = ["继续", "取消"]
+
+        timeout = float(getattr(getattr(self.sdk_config, "permission", None), "timeout", 300.0))
+        response = None
+        if self._permission_handler and hasattr(self._permission_handler, "request_interaction"):
+            response = await self._permission_handler.request_interaction(
+                kind=interaction_kind,
+                prompt=prompt,
+                suggestions=suggestions,
+                session_key=context.session_key,
+                channel=context.channel,
+                chat_id=context.chat_id,
+                metadata=dict(context.metadata or {}),
+                timeout=timeout,
+            )
+        else:
+            bus = self._shared_resources.get("bus")
+            if bus is None:
+                return None
+            from xbot.bus.queue import InteractionRequest
+            import uuid
+
+            request = InteractionRequest(
+                request_id=str(uuid.uuid4()),
+                session_key=context.session_key,
+                channel=context.channel,
+                chat_id=context.chat_id,
+                kind=interaction_kind,
+                prompt=prompt,
+                suggestions=suggestions,
+                metadata=dict(context.metadata or {}),
+            )
+            await bus.publish_interaction_request(request)
+            response = await bus.wait_interaction_response(request.request_id, timeout=timeout)
+
+        if response is None:
+            return None
+
+        content = (response.content or "").strip()
+
+        if response.action in {"cancel", "deny"}:
+            task_id = self._active_task_ids.get(context.session_key)
+            if task_id:
+                client = self._clients.get(context.session_key)
+                if client is not None:
+                    try:
+                        await client.stop_task(task_id)
+                    except Exception:
+                        logger.debug("Failed to stop task after user cancelled interaction")
+            return None
+
+        if interaction_kind == "approval" and response.action == "allow" and not content:
+            return "allow"
+        if interaction_kind == "confirmation" and response.action == "confirm" and not content:
+            return "confirm"
+        if not content:
+            return None
+        return content
+
     def _convert_message_legacy(self, message: Any) -> AgentResponse | None:
         """Legacy message converter for backward compatibility."""
         if self._message_converter:
@@ -1003,11 +1298,15 @@ class ClaudeSDKBackend(AgentBackend):
             except Exception:
                 logger.debug(f"Ignoring error while disconnecting Claude SDK session {session_key}")
         self._clients.clear()
+        self._session_commands.clear()
+        self._active_task_ids.clear()
         logger.info("Claude SDK backend shutdown complete")
 
     async def reset_session(self, session_key: str) -> None:
         """Reset a session, disconnecting client and clearing state."""
         client = self._clients.pop(session_key, None)
+        self._session_commands.pop(session_key, None)
+        self._active_task_ids.pop(session_key, None)
         if client is not None:
             try:
                 await client.disconnect()
@@ -1034,6 +1333,32 @@ class ClaudeSDKBackend(AgentBackend):
             return 0
         return await manager.cancel_by_session(session_key)
 
+    async def get_session_commands(self, session_key: str) -> list[str]:
+        """Return discovered SDK slash commands for a session."""
+        if session_key not in self._session_commands:
+            try:
+                await self._get_or_create_client(session_key)
+            except Exception:
+                return []
+        return list(self._session_commands.get(session_key, []))
+
+    async def stop_active_task(self, session_key: str) -> bool:
+        """Stop the latest active SDK task for a session."""
+        task_id = self._active_task_ids.get(session_key)
+        if not task_id:
+            return False
+        client = self._clients.get(session_key)
+        if client is None:
+            return False
+        try:
+            await client.stop_task(task_id)
+            self._active_task_ids.pop(session_key, None)
+            logger.info(f"Stopped SDK task for session {session_key}: {task_id}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to stop SDK task for session {session_key}: {e}")
+            return False
+
     async def interrupt_session(self, session_key: str) -> bool:
         """Interrupt the SDK client for a session.
 
@@ -1049,7 +1374,7 @@ class ClaudeSDKBackend(AgentBackend):
         if client is None:
             return False
         try:
-            client.interrupt()
+            await client.interrupt()
             logger.info(f"Interrupted SDK client for session {session_key}")
             return True
         except Exception as e:
@@ -1057,7 +1382,7 @@ class ClaudeSDKBackend(AgentBackend):
             return False
 
     async def compact_session(self, session_key: str) -> dict[str, Any]:
-        """Force context compaction for a session.
+        """Force SDK-native context compaction for a session.
 
         Args:
             session_key: Session identifier
@@ -1065,18 +1390,46 @@ class ClaudeSDKBackend(AgentBackend):
         Returns:
             Dict with compaction stats
         """
-        if not self.sessions or not self.memory_consolidator:
-            return {
-                "messages_consolidated": 0,
-                "tokens_before": 0,
-                "tokens_after": 0,
-                "success": True,
-                "message": "Compaction not available",
-            }
+        session = self.sessions.get_or_create(session_key) if self.sessions else None
+        client = await self._get_or_create_client(session_key)
 
-        session = self.sessions.get_or_create(session_key)
-        result = await self.memory_consolidator.force_consolidate(session)
-        return result
+        compact_stats = {
+            "messages_consolidated": 0,
+            "tokens_before": 0,
+            "tokens_after": 0,
+            "success": True,
+            "message": "SDK compaction requested",
+        }
+        saw_result = False
+
+        await client.query(
+            "/compact",
+            session_id=self._query_session_id(session_key, session),
+        )
+
+        async for message in client.receive_response():
+            if isinstance(message, ResultMessage):
+                saw_result = True
+                if session is not None and message.session_id:
+                    session.metadata["sdk_session_id"] = message.session_id
+                    self.sessions.save(session)
+                if message.is_error:
+                    compact_stats["success"] = False
+                    compact_stats["message"] = message.result or "SDK compact request failed"
+            if isinstance(message, SystemMessage) and message.subtype == "compact_boundary":
+                metadata = message.data.get("compact_metadata", {}) if isinstance(message.data, dict) else {}
+                pre_tokens = metadata.get("pre_tokens")
+                post_tokens = metadata.get("post_tokens")
+                if isinstance(pre_tokens, int):
+                    compact_stats["tokens_before"] = pre_tokens
+                if isinstance(post_tokens, int):
+                    compact_stats["tokens_after"] = post_tokens
+
+        if not saw_result:
+            compact_stats["success"] = False
+            compact_stats["message"] = "SDK compact request did not return a result"
+
+        return compact_stats
 
     def get_tools_summary(self) -> str:
         """Get a summary of available tools and capabilities."""

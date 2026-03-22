@@ -35,7 +35,17 @@ class TestValidateConfig:
         config = Config()
         config.agents.type = "claude_sdk"
         config.agents.defaults.provider = "auto"
+        config.providers.anthropic.api_key = "sk-test"
         
+        # Should not raise
+        validate_config(config)
+
+    def test_validate_config_with_auto_provider_missing_sdk_keys(self):
+        """Auto provider remains non-blocking at validation time."""
+        config = Config()
+        config.agents.type = "claude_sdk"
+        config.agents.defaults.provider = "auto"
+
         # Should not raise
         validate_config(config)
 

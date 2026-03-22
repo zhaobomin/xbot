@@ -4,7 +4,7 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from xbot.bus.queue import MessageBus, PermissionRequest, PermissionResponse
+from xbot.bus.queue import InteractionResponse, MessageBus, PermissionRequest, PermissionResponse
 from xbot.agent.permission_handler import (
     BasePermissionHandler,
     CLIPermissionHandler,
@@ -89,6 +89,17 @@ class TestCLIPermissionHandler:
         assert decision == "deny"
         assert "Non-interactive mode" in result
 
+    @pytest.mark.asyncio
+    async def test_non_interactive_interaction_request_is_cancelled(self):
+        handler = CLIPermissionHandler(auto_approve_safe_tools=False, interactive=False)
+        response = await handler.request_interaction(
+            kind="question",
+            prompt="请输入下一步",
+            session_key="cli:direct",
+        )
+        assert response.action == "cancel"
+        assert "Non-interactive" in response.content
+
 
 class TestInteractivePermissionHandler:
     """Tests for InteractivePermissionHandler."""
@@ -113,10 +124,11 @@ class TestPermissionRequestHandler:
         return PermissionRequestHandler(bus=bus, timeout=1.0)
 
     def test_set_session_context(self, handler):
-        handler.set_session_context("test:123", "telegram", "456")
+        handler.set_session_context("test:123", "telegram", "456", {"message_thread_id": 99})
         assert "test:123" in handler._session_context
         assert handler._session_context["test:123"]["channel"] == "telegram"
         assert handler._session_context["test:123"]["chat_id"] == "456"
+        assert handler._session_context["test:123"]["metadata"]["message_thread_id"] == 99
 
     def test_clear_session_context(self, handler):
         handler.set_session_context("test:123", "telegram", "456")
@@ -128,6 +140,25 @@ class TestPermissionRequestHandler:
         handler.set_session_context("test:456", "cli", "direct")
         handler.set_current_session("test:456")
         assert handler.get_current_session_key() == "test:456"
+
+    @pytest.mark.asyncio
+    async def test_current_session_is_task_local(self, bus):
+        handler = PermissionRequestHandler(bus=bus, timeout=1.0)
+        handler.set_session_context("test:123", "telegram", "123")
+        handler.set_session_context("test:456", "telegram", "456")
+
+        async def _worker(session_key: str, delay: float) -> str | None:
+            handler.set_current_session(session_key)
+            await asyncio.sleep(delay)
+            return handler.get_current_session_key()
+
+        first, second = await asyncio.gather(
+            _worker("test:123", 0.05),
+            _worker("test:456", 0.01),
+        )
+
+        assert first == "test:123"
+        assert second == "test:456"
 
     def test_get_current_session_single(self, handler):
         handler.set_session_context("test:123", "telegram", "456")
@@ -189,6 +220,38 @@ class TestPermissionRequestHandler:
         decision, result = await handler.can_use_tool("exec", {"command": "ls"}, None)
         assert decision == "deny"
         assert "Timeout" in result
+
+    @pytest.mark.asyncio
+    async def test_interaction_request_flow(self, bus):
+        handler = PermissionRequestHandler(bus=bus, timeout=0.5)
+        handler.set_session_context("test:123", "telegram", "456")
+
+        async def request_interaction():
+            return await handler.request_interaction(
+                kind="confirmation",
+                prompt="继续执行吗？",
+                suggestions=["确认", "取消"],
+                session_key="test:123",
+            )
+
+        task = asyncio.create_task(request_interaction())
+        await asyncio.sleep(0.1)
+
+        request_id = bus.get_pending_interaction_for_session("test:123")
+        assert request_id is not None
+
+        ok = await bus.submit_interaction_response(
+            InteractionResponse(
+                request_id=request_id,
+                session_key="test:123",
+                action="confirm",
+                content="确认",
+            )
+        )
+        assert ok is True
+        response = await task
+        assert response.action == "confirm"
+        assert response.content == "确认"
 
 
 class TestCreatePermissionHandler:

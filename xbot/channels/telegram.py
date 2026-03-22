@@ -182,10 +182,10 @@ class TelegramChannel(BaseChannel):
     # Commands registered with Telegram's command menu
     BOT_COMMANDS = [
         BotCommand("start", "Start the bot"),
-        BotCommand("new", "Start a new conversation"),
-        BotCommand("stop", "Stop the current task"),
+        BotCommand("new", "Start a new conversation (SDK command)"),
+        BotCommand("stop", "Stop current task (SDK command)"),
         BotCommand("help", "Show available commands"),
-        BotCommand("restart", "Restart the bot"),
+        BotCommand("restart", "Restart the bot (SDK command)"),
     ]
 
     @classmethod
@@ -264,7 +264,7 @@ class TelegramChannel(BaseChannel):
         self._app.add_handler(CommandHandler("new", self._forward_command))
         self._app.add_handler(CommandHandler("stop", self._forward_command))
         self._app.add_handler(CommandHandler("restart", self._forward_command))
-        self._app.add_handler(CommandHandler("help", self._on_help))
+        self._app.add_handler(CommandHandler("help", self._forward_command))
 
         # Add message handler for text, photos, voice, documents
         self._app.add_handler(
@@ -501,18 +501,6 @@ class TelegramChannel(BaseChannel):
             f"👋 Hi {user.first_name}! I'm xbot.\n\n"
             "Send me a message and I'll respond!\n"
             "Type /help to see available commands."
-        )
-
-    async def _on_help(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-        """Handle /help command, bypassing ACL so all users can access it."""
-        if not update.message:
-            return
-        await update.message.reply_text(
-            "🐈 xbot commands:\n"
-            "/new — Start a new conversation\n"
-            "/stop — Stop the current task\n"
-            "/restart — Restart the bot\n"
-            "/help — Show available commands"
         )
 
     @staticmethod

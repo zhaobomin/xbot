@@ -222,6 +222,7 @@ class ToolAdapter:
         self,
         channel: str = "",
         chat_id: str = "",
+        session_key: str | None = None,
         message_id: str | None = None,
     ) -> None:
         """Set context for tools that need it (e.g., message tool).
@@ -234,12 +235,13 @@ class ToolAdapter:
         self._tool_context = {
             "channel": channel,
             "chat_id": chat_id,
+            "session_key": session_key,
             "message_id": message_id,
         }
 
         for name, args in {
             "message": (channel, chat_id, message_id),
-            "spawn": (channel, chat_id),
+            "spawn": (channel, chat_id, session_key),
             "cron": (channel, chat_id),
         }.items():
             tool = self._tools.get(name)

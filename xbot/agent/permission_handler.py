@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import asyncio
+from contextvars import ContextVar
 import json
 import uuid
 from contextlib import nullcontext
@@ -26,7 +27,13 @@ from typing import Any, Literal
 
 from loguru import logger
 
-from xbot.bus.queue import MessageBus, PermissionRequest, PermissionResponse
+from xbot.bus.queue import (
+    InteractionRequest,
+    InteractionResponse,
+    MessageBus,
+    PermissionRequest,
+    PermissionResponse,
+)
 
 
 class BasePermissionHandler:
@@ -123,6 +130,27 @@ class BasePermissionHandler:
         """处理权限请求（子类实现）。"""
         raise NotImplementedError("Subclasses must implement can_use_tool()")
 
+    async def request_interaction(
+        self,
+        *,
+        kind: Literal["question", "confirmation", "approval"] = "question",
+        prompt: str,
+        suggestions: list[str] | None = None,
+        session_key: str | None = None,
+        channel: str | None = None,
+        chat_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        timeout: float = 300.0,
+    ) -> InteractionResponse:
+        """处理通用用户交互（子类可覆盖）。"""
+        _ = (kind, prompt, suggestions, session_key, channel, chat_id, metadata, timeout)
+        return InteractionResponse(
+            request_id="",
+            session_key=session_key or "",
+            action="cancel",
+            content="Interaction is not supported by this handler",
+        )
+
 
 class PermissionRequestHandler(BasePermissionHandler):
     """Channel 模式的权限请求处理器。
@@ -152,33 +180,41 @@ class PermissionRequestHandler(BasePermissionHandler):
 
         # 会话上下文: session_key -> {"channel": str, "chat_id": str}
         self._session_context: dict[str, dict[str, str]] = {}
-        # 当前处理的会话
-        self._current_session_key: str | None = None
+        # 当前处理的会话（task-local，避免并发会话串扰）
+        self._current_session_key: ContextVar[str | None] = ContextVar(
+            "permission_current_session_key",
+            default=None,
+        )
 
     def set_session_context(
         self,
         session_key: str,
         channel: str,
         chat_id: str,
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """设置会话上下文（在 process() 开始时调用）。"""
         self._session_context[session_key] = {
             "channel": channel,
             "chat_id": chat_id,
+            "metadata": dict(metadata or {}),
         }
 
     def clear_session_context(self, session_key: str) -> None:
         """清除会话上下文。"""
         self._session_context.pop(session_key, None)
+        if self._current_session_key.get() == session_key:
+            self._current_session_key.set(None)
 
     def set_current_session(self, session_key: str) -> None:
         """设置当前正在处理的会话。"""
-        self._current_session_key = session_key
+        self._current_session_key.set(session_key)
 
     def get_current_session_key(self) -> str | None:
         """获取当前会话 key。"""
-        if self._current_session_key:
-            return self._current_session_key
+        current = self._current_session_key.get()
+        if current:
+            return current
         if len(self._session_context) == 1:
             return list(self._session_context.keys())[0]
         return None
@@ -214,6 +250,7 @@ class PermissionRequestHandler(BasePermissionHandler):
             tool_input=tool_input,
             message=self.format_permission_message(tool_name, tool_input),
             suggestions=["允许", "拒绝"],
+            metadata=dict(ctx.get("metadata") or {}),
         )
 
         # 4. 发送请求并等待响应
@@ -231,6 +268,43 @@ class PermissionRequestHandler(BasePermissionHandler):
             return "allow", response.updated_input or tool_input
         else:
             return "deny", response.reason or "User denied"
+
+    async def request_interaction(
+        self,
+        *,
+        kind: Literal["question", "confirmation", "approval"] = "question",
+        prompt: str,
+        suggestions: list[str] | None = None,
+        session_key: str | None = None,
+        channel: str | None = None,
+        chat_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        timeout: float = 300.0,
+    ) -> InteractionResponse:
+        """通过 MessageBus 发起交互并等待用户响应。"""
+        resolved_session = session_key or self.get_current_session_key()
+        if not resolved_session or resolved_session not in self._session_context:
+            return InteractionResponse(
+                request_id="",
+                session_key=resolved_session or "",
+                action="cancel",
+                content="No active session context",
+            )
+
+        ctx = self._session_context[resolved_session]
+        request_id = str(uuid.uuid4())
+        request = InteractionRequest(
+            request_id=request_id,
+            session_key=resolved_session,
+            channel=channel or ctx["channel"],
+            chat_id=chat_id or ctx["chat_id"],
+            kind=kind,
+            prompt=prompt,
+            suggestions=list(suggestions or []),
+            metadata=dict(metadata or ctx.get("metadata") or {}),
+        )
+        await self.bus.publish_interaction_request(request)
+        return await self.bus.wait_interaction_response(request_id, timeout=timeout)
 
 
 class CLIPermissionHandler(BasePermissionHandler):
@@ -273,6 +347,35 @@ class CLIPermissionHandler(BasePermissionHandler):
 
         # 3. 交互模式：在终端询问用户
         return await self._ask_user_in_terminal(tool_name, tool_input)
+
+    async def request_interaction(
+        self,
+        *,
+        kind: Literal["question", "confirmation", "approval"] = "question",
+        prompt: str,
+        suggestions: list[str] | None = None,
+        session_key: str | None = None,
+        channel: str | None = None,
+        chat_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        timeout: float = 300.0,
+    ) -> InteractionResponse:
+        """在 CLI 终端处理通用交互。"""
+        _ = (channel, chat_id, metadata, timeout)
+        if not self.interactive:
+            return InteractionResponse(
+                request_id="",
+                session_key=session_key or "",
+                action="cancel",
+                content="Non-interactive mode",
+            )
+
+        return await self._ask_interaction_in_terminal(
+            kind=kind,
+            prompt=prompt,
+            suggestions=suggestions or [],
+            session_key=session_key or "",
+        )
 
     async def _ask_user_in_terminal(
         self,
@@ -351,6 +454,98 @@ class CLIPermissionHandler(BasePermissionHandler):
         else:
             return "deny", "User denied"
 
+    async def _ask_interaction_in_terminal(
+        self,
+        *,
+        kind: Literal["question", "confirmation", "approval"],
+        prompt: str,
+        suggestions: list[str],
+        session_key: str,
+    ) -> InteractionResponse:
+        """终端交互：question 接收文本，confirmation/approval 接收 y/n。"""
+        try:
+            from rich.console import Console
+            from rich.prompt import Prompt
+        except ImportError:
+            return await self._ask_interaction_basic(
+                kind=kind,
+                prompt=prompt,
+                session_key=session_key,
+            )
+
+        console = Console()
+        console.print()
+        console.print("[yellow]💬 需要输入[/yellow]")
+        console.print(prompt)
+        if suggestions:
+            console.print(f"[dim]建议: {' / '.join(suggestions)}[/dim]")
+
+        loop = asyncio.get_event_loop()
+        try:
+            if kind in {"confirmation", "approval"}:
+                raw = await loop.run_in_executor(
+                    None,
+                    lambda: Prompt.ask("请选择", choices=["y", "n"], default="y"),
+                )
+                action = "confirm" if kind == "confirmation" else "allow"
+                if raw == "n":
+                    action = "cancel" if kind == "confirmation" else "deny"
+                return InteractionResponse(
+                    request_id="",
+                    session_key=session_key,
+                    action=action,
+                    content=raw,
+                )
+
+            text = await loop.run_in_executor(None, lambda: Prompt.ask("请输入", default=""))
+            return InteractionResponse(
+                request_id="",
+                session_key=session_key,
+                action="reply",
+                content=(text or "").strip(),
+            )
+        except (KeyboardInterrupt, EOFError):
+            return InteractionResponse(
+                request_id="",
+                session_key=session_key,
+                action="cancel",
+                content="User cancelled",
+            )
+
+    async def _ask_interaction_basic(
+        self,
+        *,
+        kind: Literal["question", "confirmation", "approval"],
+        prompt: str,
+        session_key: str,
+    ) -> InteractionResponse:
+        print()
+        print("💬 需要输入")
+        print(prompt)
+        loop = asyncio.get_event_loop()
+        try:
+            if kind in {"confirmation", "approval"}:
+                raw = await loop.run_in_executor(None, lambda: input("请选择 [y/n]: ").strip().lower())
+                action = "confirm" if kind == "confirmation" else "allow"
+                if raw in {"n", "no", "否", "取消"}:
+                    action = "cancel" if kind == "confirmation" else "deny"
+                return InteractionResponse(request_id="", session_key=session_key, action=action, content=raw)
+
+            text = await loop.run_in_executor(None, lambda: input("请输入: ").strip())
+            return InteractionResponse(
+                request_id="",
+                session_key=session_key,
+                action="reply",
+                content=text,
+            )
+        except (KeyboardInterrupt, EOFError):
+            return InteractionResponse(
+                request_id="",
+                session_key=session_key,
+                action="cancel",
+                content="User cancelled",
+            )
+
 
 class InteractivePermissionHandler(CLIPermissionHandler):
     """交互模式的权限请求处理器。
@@ -425,6 +620,40 @@ class InteractivePermissionHandler(CLIPermissionHandler):
                 return "allow", tool_input
             else:
                 return "deny", "User denied"
+
+    async def request_interaction(
+        self,
+        *,
+        kind: Literal["question", "confirmation", "approval"] = "question",
+        prompt: str,
+        suggestions: list[str] | None = None,
+        session_key: str | None = None,
+        channel: str | None = None,
+        chat_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+        timeout: float = 300.0,
+    ) -> InteractionResponse:
+        """在交互模式下暂停 spinner 进行问答。"""
+        _ = (channel, chat_id, metadata, timeout)
+        if not self.interactive:
+            return InteractionResponse(
+                request_id="",
+                session_key=session_key or "",
+                action="cancel",
+                content="Non-interactive mode",
+            )
+        pause_context = (
+            self._thinking.pause()
+            if self._thinking and hasattr(self._thinking, "pause")
+            else nullcontext()
+        )
+        with pause_context:
+            return await self._ask_interaction_in_terminal(
+                kind=kind,
+                prompt=prompt,
+                suggestions=suggestions or [],
+                session_key=session_key or "",
+            )
 
 
 def create_permission_handler(

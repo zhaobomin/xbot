@@ -62,6 +62,7 @@ def make_mock_config(enabled_channels=None):
     mock_config.providers.groq.api_key = None
     mock_config.channels.send_tool_hints = True
     mock_config.channels.send_progress = True
+    mock_config.channels.send_usage_summary = True
     
     return mock_config
 
@@ -205,3 +206,336 @@ class TestChannelManagerStopAll:
         
         mock_channel1.stop.assert_called_once()
         mock_channel2.stop.assert_called_once()
+
+
+class TestChannelManagerProgressFiltering:
+    """Tests for structured progress filtering."""
+
+    @pytest.mark.asyncio
+    async def test_dispatch_usage_when_progress_disabled_but_usage_enabled(self):
+        mock_config = make_mock_config(enabled_channels=[])
+        mock_config.channels.send_progress = False
+        mock_config.channels.send_usage_summary = True
+
+        bus = MessageBus()
+        manager = ChannelManager(mock_config, bus)
+        mock_channel = AsyncMock(spec=BaseChannel)
+        manager.channels["telegram"] = mock_channel
+
+        task = asyncio.create_task(manager._dispatch_outbound())
+        try:
+            from xbot.bus.events import OutboundMessage
+
+            await bus.publish_outbound(
+                OutboundMessage(
+                    channel="telegram",
+                    chat_id="c1",
+                    content="Usage: input 10 tokens, output 5 tokens",
+                    metadata={"_progress": True, "_event_type": "usage"},
+                )
+            )
+            await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            await task
+
+        mock_channel.send.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_blocks_usage_when_usage_disabled(self):
+        mock_config = make_mock_config(enabled_channels=[])
+        mock_config.channels.send_progress = True
+        mock_config.channels.send_usage_summary = False
+
+        bus = MessageBus()
+        manager = ChannelManager(mock_config, bus)
+        mock_channel = AsyncMock(spec=BaseChannel)
+        manager.channels["telegram"] = mock_channel
+
+        task = asyncio.create_task(manager._dispatch_outbound())
+        try:
+            from xbot.bus.events import OutboundMessage
+
+            await bus.publish_outbound(
+                OutboundMessage(
+                    channel="telegram",
+                    chat_id="c1",
+                    content="Usage: input 10 tokens, output 5 tokens",
+                    metadata={"_progress": True, "_event_type": "usage"},
+                )
+            )
+            await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            await task
+
+        mock_channel.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_sends_content_delta_when_progress_enabled(self):
+        mock_config = make_mock_config(enabled_channels=[])
+        mock_config.channels.send_progress = True
+        mock_config.channels.send_usage_summary = True
+
+        bus = MessageBus()
+        manager = ChannelManager(mock_config, bus)
+        mock_channel = AsyncMock(spec=BaseChannel)
+        manager.channels["telegram"] = mock_channel
+
+        task = asyncio.create_task(manager._dispatch_outbound())
+        try:
+            from xbot.bus.events import OutboundMessage
+
+            await bus.publish_outbound(
+                OutboundMessage(
+                    channel="telegram",
+                    chat_id="c1",
+                    content="partial delta",
+                    metadata={"_progress": True, "_event_type": "content_delta"},
+                )
+            )
+            await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            await task
+
+        mock_channel.send.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_blocks_content_delta_when_progress_disabled(self):
+        mock_config = make_mock_config(enabled_channels=[])
+        mock_config.channels.send_progress = False
+        mock_config.channels.send_usage_summary = True
+
+        bus = MessageBus()
+        manager = ChannelManager(mock_config, bus)
+        mock_channel = AsyncMock(spec=BaseChannel)
+        manager.channels["telegram"] = mock_channel
+
+        task = asyncio.create_task(manager._dispatch_outbound())
+        try:
+            from xbot.bus.events import OutboundMessage
+
+            await bus.publish_outbound(
+                OutboundMessage(
+                    channel="telegram",
+                    chat_id="c1",
+                    content="partial delta",
+                    metadata={"_progress": True, "_event_type": "content_delta"},
+                )
+            )
+            await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            await task
+
+        mock_channel.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_thinking_progress_when_enabled(self):
+        mock_config = make_mock_config(enabled_channels=[])
+        mock_config.channels.send_progress = True
+        mock_config.channels.send_tool_hints = True
+        mock_config.channels.send_usage_summary = True
+
+        bus = MessageBus()
+        manager = ChannelManager(mock_config, bus)
+        mock_channel = AsyncMock(spec=BaseChannel)
+        manager.channels["telegram"] = mock_channel
+
+        task = asyncio.create_task(manager._dispatch_outbound())
+        try:
+            from xbot.bus.events import OutboundMessage
+
+            await bus.publish_outbound(
+                OutboundMessage(
+                    channel="telegram",
+                    chat_id="c1",
+                    content="thinking...",
+                    metadata={"_progress": True, "_event_type": "thinking"},
+                )
+            )
+            await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            await task
+
+        mock_channel.send.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_thinking_respects_send_progress_switch(self):
+        mock_config = make_mock_config(enabled_channels=[])
+        mock_config.channels.send_progress = False
+        mock_config.channels.send_tool_hints = True
+        mock_config.channels.send_usage_summary = True
+
+        bus = MessageBus()
+        manager = ChannelManager(mock_config, bus)
+        mock_channel = AsyncMock(spec=BaseChannel)
+        manager.channels["telegram"] = mock_channel
+
+        task = asyncio.create_task(manager._dispatch_outbound())
+        try:
+            from xbot.bus.events import OutboundMessage
+
+            await bus.publish_outbound(
+                OutboundMessage(
+                    channel="telegram",
+                    chat_id="c1",
+                    content="thinking...",
+                    metadata={"_progress": True, "_event_type": "thinking"},
+                )
+            )
+            await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            await task
+
+        mock_channel.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_allows_tool_hint_when_enabled(self):
+        mock_config = make_mock_config(enabled_channels=[])
+        mock_config.channels.send_tool_hints = True
+
+        bus = MessageBus()
+        manager = ChannelManager(mock_config, bus)
+        mock_channel = AsyncMock(spec=BaseChannel)
+        manager.channels["telegram"] = mock_channel
+
+        task = asyncio.create_task(manager._dispatch_outbound())
+        try:
+            from xbot.bus.events import OutboundMessage
+
+            await bus.publish_outbound(
+                OutboundMessage(
+                    channel="telegram",
+                    chat_id="c1",
+                    content='Tool: read_file("README.md")',
+                    metadata={"_progress": True, "_event_type": "tool_hint", "_tool_hint": True},
+                )
+            )
+            await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            await task
+
+        mock_channel.send.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_blocks_tool_hint_when_disabled(self):
+        mock_config = make_mock_config(enabled_channels=[])
+        mock_config.channels.send_tool_hints = False
+
+        bus = MessageBus()
+        manager = ChannelManager(mock_config, bus)
+        mock_channel = AsyncMock(spec=BaseChannel)
+        manager.channels["telegram"] = mock_channel
+
+        task = asyncio.create_task(manager._dispatch_outbound())
+        try:
+            from xbot.bus.events import OutboundMessage
+
+            await bus.publish_outbound(
+                OutboundMessage(
+                    channel="telegram",
+                    chat_id="c1",
+                    content='Tool: read_file("README.md")',
+                    metadata={"_progress": True, "_event_type": "tool_hint", "_tool_hint": True},
+                )
+            )
+            await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            await task
+
+        mock_channel.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_unknown_progress_respects_send_progress_switch(self):
+        mock_config = make_mock_config(enabled_channels=[])
+        mock_config.channels.send_progress = False
+        mock_config.channels.send_usage_summary = True
+        mock_config.channels.send_tool_hints = True
+
+        bus = MessageBus()
+        manager = ChannelManager(mock_config, bus)
+        mock_channel = AsyncMock(spec=BaseChannel)
+        manager.channels["telegram"] = mock_channel
+
+        task = asyncio.create_task(manager._dispatch_outbound())
+        try:
+            from xbot.bus.events import OutboundMessage
+
+            await bus.publish_outbound(
+                OutboundMessage(
+                    channel="telegram",
+                    chat_id="c1",
+                    content="other progress event",
+                    metadata={"_progress": True, "_event_type": "status_update"},
+                )
+            )
+            await asyncio.sleep(0.05)
+        finally:
+            task.cancel()
+            await task
+
+        mock_channel.send.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dispatch_default_visibility_snapshot_for_core_events(self):
+        mock_config = make_mock_config(enabled_channels=[])
+        # Defaults should expose all core progress categories.
+        mock_config.channels.send_progress = True
+        mock_config.channels.send_tool_hints = True
+        mock_config.channels.send_usage_summary = True
+
+        bus = MessageBus()
+        manager = ChannelManager(mock_config, bus)
+        mock_channel = AsyncMock(spec=BaseChannel)
+        manager.channels["telegram"] = mock_channel
+
+        task = asyncio.create_task(manager._dispatch_outbound())
+        try:
+            from xbot.bus.events import OutboundMessage
+
+            events = [
+                ("content_delta", False, "delta chunk"),
+                ("thinking", False, "Thinking: planning"),
+                ("task", False, "Running: compact"),
+                ("system", False, "Context compacted."),
+                ("usage", False, "Usage: input 12 tokens, output 3 tokens"),
+                ("tool_hint", True, 'Tool: compact()'),
+            ]
+
+            for event_type, tool_hint, content in events:
+                await bus.publish_outbound(
+                    OutboundMessage(
+                        channel="telegram",
+                        chat_id="c1",
+                        content=content,
+                        metadata={
+                            "_progress": True,
+                            "_event_type": event_type,
+                            "_tool_hint": tool_hint,
+                        },
+                    )
+                )
+            await asyncio.sleep(0.1)
+        finally:
+            task.cancel()
+            await task
+
+        assert mock_channel.send.call_count == 6
+        sent_event_types = [
+            call.args[0].metadata["_event_type"]
+            for call in mock_channel.send.call_args_list
+        ]
+        assert sent_event_types == [
+            "content_delta",
+            "thinking",
+            "task",
+            "system",
+            "usage",
+            "tool_hint",
+        ]

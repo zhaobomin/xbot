@@ -7,6 +7,7 @@ import pytest
 
 from xbot.agent.protocol import AgentContext, AgentResponse
 from xbot.agent.router import AgentRouter
+from xbot.bus.events import OutboundMessage
 from xbot.bus.events import InboundMessage
 from xbot.config.schema import Config
 from xbot.session.manager import SessionManager
@@ -38,11 +39,17 @@ class _FakeBackend:
     async def cancel_session(self, session_key: str) -> int:
         return 0
 
+    async def stop_active_task(self, session_key: str) -> bool:
+        return False
+
     async def interrupt_session(self, session_key: str) -> bool:
         return False
 
     async def compact_session(self, session_key: str) -> dict[str, Any]:
         return {"messages_consolidated": 0, "tokens_before": 0, "tokens_after": 0, "success": True}
+
+    async def get_session_commands(self, session_key: str) -> list[str]:
+        return ["/compact", "/clear", "/help"]
 
 
 @pytest.mark.asyncio
@@ -75,7 +82,41 @@ async def test_router_runtime_process_direct_routes_through_selected_backend(tmp
 
 
 @pytest.mark.asyncio
-async def test_router_runtime_help_is_handled_before_backend_invocation(tmp_path) -> None:
+async def test_router_runtime_help_includes_dynamic_sdk_commands(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("!help")
+
+    assert "!restart" in response
+    assert "/restart" in response
+    assert "/compact" in response
+    assert "passthrough" in response
+    assert backend.initialized is True
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_slash_help_is_local_compat_entry(tmp_path) -> None:
     from xbot.agent.runtime import AgentRuntime
     from xbot.bus.queue import MessageBus
 
@@ -101,8 +142,100 @@ async def test_router_runtime_help_is_handled_before_backend_invocation(tmp_path
 
     response = await runtime.process_direct("/help")
 
-    assert "/restart" in response
-    assert backend.initialized is False
+    assert "command reference" in response
+    assert "Claude SDK slash commands" in response
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_compact_routes_to_backend(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("/compact")
+
+    assert response == "echo:/compact"
+    assert backend.initialized is True
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_help_uses_sdk_fallback_commands_when_discovery_empty(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    class _NoCommandBackend(_FakeBackend):
+        async def get_session_commands(self, session_key: str) -> list[str]:
+            return []
+
+    AgentRouter._backends = {"claude_sdk": _NoCommandBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("/help")
+
+    assert "/help" in response
+    assert "/clear" in response
+    assert "/compact" in response
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_new_is_passthrough_without_local_alias(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("/new")
+
+    assert response == "echo:/new"
+    assert backend.initialized is True
 
 
 @pytest.mark.asyncio
@@ -136,9 +269,45 @@ async def test_router_runtime_stop_delegates_backend_session_cancellation(tmp_pa
         },
     )
 
-    response = await runtime.process_direct("/stop")
+    response = await runtime.process_direct("!stop")
 
     assert "2 subagent" in response
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_stop_includes_sdk_task_when_stopped(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    async def _stop_active_task(session_key: str) -> bool:
+        assert session_key == "cli:direct"
+        return True
+
+    backend.stop_active_task = _stop_active_task  # type: ignore[method-assign]
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("!stop")
+
+    assert "SDK task" in response
 
 
 @pytest.mark.asyncio
@@ -177,6 +346,48 @@ async def test_router_runtime_process_direct_forwards_progress_deltas(tmp_path) 
 
 
 @pytest.mark.asyncio
+async def test_router_runtime_dispatch_serializes_same_session(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    AgentRouter._backends = {"claude_sdk": _FakeBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    bus = MessageBus()
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": bus,
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    active = 0
+    max_active = 0
+    events: list[tuple[str, str]] = []
+
+    async def _fake_handle(msg: InboundMessage, on_progress=None) -> OutboundMessage:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        events.append(("start", msg.content))
+        await asyncio.sleep(0.05)
+        events.append(("end", msg.content))
+        active -= 1
+        return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=f"ok:{msg.content}")
+
+    runtime._handle_message = _fake_handle  # type: ignore[method-assign]
+
+    msg1 = InboundMessage(channel="cli", sender_id="u1", chat_id="same", content="first")
+    msg2 = InboundMessage(channel="cli", sender_id="u1", chat_id="same", content="second")
+    await asyncio.gather(runtime._dispatch(msg1), runtime._dispatch(msg2))
+
+    assert max_active == 1
+    assert events == [("start", "first"), ("end", "first"), ("start", "second"), ("end", "second")]
+
+@pytest.mark.asyncio
 async def test_router_runtime_process_direct_forwards_progress_texts(tmp_path) -> None:
     from xbot.agent.runtime import AgentRuntime
     from xbot.bus.queue import MessageBus
@@ -209,6 +420,45 @@ async def test_router_runtime_process_direct_forwards_progress_texts(tmp_path) -
 
     assert response == "done"
     assert seen == [("planning", False), ("reading files", False)]
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_process_direct_forwards_usage_summary(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    class _UsageBackend(_FakeBackend):
+        async def process(self, context: AgentContext):
+            yield AgentResponse(
+                content="done",
+                finish_reason="stop",
+                usage={"input_tokens": 120, "output_tokens": 45},
+            )
+
+    AgentRouter._backends = {"claude_sdk": _UsageBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    config.channels.send_usage_summary = True
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    seen: list[tuple[str, bool]] = []
+
+    async def _progress(content: str, *, tool_hint: bool = False) -> None:
+        seen.append((content, tool_hint))
+
+    response = await runtime.process_direct("hello", on_progress=_progress)
+
+    assert response == "done"
+    assert seen == [("Usage: input 120 tokens, output 45 tokens", False)]
 
 
 @pytest.mark.asyncio
@@ -260,10 +510,69 @@ async def test_router_runtime_run_publishes_progress_messages_to_bus(tmp_path) -
     assert progress.content == "thinking"
     assert progress.metadata["_progress"] is True
     assert progress.metadata["_tool_hint"] is False
+    assert progress.metadata["_event_type"] == "progress"
+    assert progress.metadata["_progress_kind"] == "progress"
 
     assert tool_hint.content == 'Tool: read_file("README.md")'
     assert tool_hint.metadata["_progress"] is True
     assert tool_hint.metadata["_tool_hint"] is True
+    assert tool_hint.metadata["_event_type"] == "tool_call"
+    assert tool_hint.metadata["_progress_kind"] == "tool"
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_run_publishes_usage_event_metadata(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    class _UsageBackend(_FakeBackend):
+        async def process(self, context: AgentContext):
+            yield AgentResponse(
+                content="done",
+                finish_reason="stop",
+                usage={"input_tokens": 10, "output_tokens": 5},
+            )
+
+    AgentRouter._backends = {"claude_sdk": _UsageBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    config.channels.send_usage_summary = True
+    bus = MessageBus()
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": bus,
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    run_task = asyncio.create_task(runtime.run())
+    try:
+        await bus.publish_inbound(
+            InboundMessage(
+                channel="telegram",
+                sender_id="u1",
+                chat_id="c1",
+                content="hello",
+            )
+        )
+
+        usage_msg = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
+        final = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
+    finally:
+        runtime.stop()
+        run_task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await run_task
+
+    assert usage_msg.content == "Usage: input 10 tokens, output 5 tokens"
+    assert usage_msg.metadata["_event_type"] == "usage"
+    assert usage_msg.metadata["_progress_kind"] == "usage"
+    assert usage_msg.metadata["_event_data"]["usage"]["input_tokens"] == 10
+    assert final.content == "done"
 
 
 @pytest.mark.asyncio

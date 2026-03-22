@@ -7,6 +7,7 @@ from typing import Any
 
 from loguru import logger
 
+from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
 from xbot.config.schema import Config
@@ -122,24 +123,48 @@ class ChannelManager:
                 )
 
                 if msg.metadata.get("_progress"):
-                    if msg.metadata.get("_tool_hint") and not self.config.channels.send_tool_hints:
-                        continue
-                    if not msg.metadata.get("_tool_hint") and not self.config.channels.send_progress:
+                    event_type = str(msg.metadata.get("_event_type", "progress"))
+                    is_tool_hint = bool(msg.metadata.get("_tool_hint"))
+
+                    if is_tool_hint:
+                        if self.config.channels.send_tool_hints:
+                            await self._send_with_channel(msg)
                         continue
 
-                channel = self.channels.get(msg.channel)
-                if channel:
-                    try:
-                        await channel.send(msg)
-                    except Exception as e:
-                        logger.error("Error sending to {}: {}", msg.channel, e)
-                else:
-                    logger.warning("Unknown channel: {}", msg.channel)
+                    if event_type == "usage":
+                        if self.config.channels.send_usage_summary:
+                            await self._send_with_channel(msg)
+                        continue
+
+                    # Unknown progress events follow send_progress gate.
+                    if self.config.channels.send_progress:
+                        await self._send_with_channel(msg)
+                    continue
+
+                await self._send_with_channel(msg)
 
             except asyncio.TimeoutError:
                 continue
             except asyncio.CancelledError:
                 break
+
+    async def _send_with_channel(self, msg: OutboundMessage, content: str | None = None) -> None:
+        channel = self.channels.get(msg.channel)
+        if channel is None:
+            logger.warning("Unknown channel: {}", msg.channel)
+            return
+        payload = msg if content is None else OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=content,
+            reply_to=msg.reply_to,
+            media=list(msg.media),
+            metadata=dict(msg.metadata),
+        )
+        try:
+            await channel.send(payload)
+        except Exception as e:
+            logger.error("Error sending to {}: {}", msg.channel, e)
 
     def get_channel(self, name: str) -> BaseChannel | None:
         """Get a channel by name."""

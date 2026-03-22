@@ -127,6 +127,9 @@ class CronTool(Tool):
                 dt = datetime.fromisoformat(at)
             except ValueError:
                 return f"Error: invalid ISO datetime format '{at}'. Expected format: YYYY-MM-DDTHH:MM:SS"
+            if dt.tzinfo is None:
+                local_tz = datetime.now().astimezone().tzinfo
+                dt = dt.replace(tzinfo=local_tz)
             at_ms = int(dt.timestamp() * 1000)
             schedule = CronSchedule(kind="at", at_ms=at_ms)
             delete_after = True

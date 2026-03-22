@@ -20,6 +20,8 @@ class AgentResponse:
     finish_reason: str = "stop"  # stop | tool_use | error | max_iterations
     usage: dict[str, Any] | None = None
     raw_message: Any = None
+    event_type: str = ""
+    event_data: dict[str, Any] | None = None
 
     # For streaming support
     is_delta: bool = False
@@ -108,6 +110,14 @@ class AgentBackend(ABC):
         """Cancel active backend-managed work for one session (optional)."""
         return 0
 
+    async def stop_active_task(self, session_key: str) -> bool:
+        """Stop active backend task for one session (optional).
+
+        Returns:
+            True if a task stop was requested, False otherwise
+        """
+        return False
+
     async def interrupt_session(self, session_key: str) -> bool:
         """Interrupt any ongoing LLM request for a session (optional).
 
@@ -129,6 +139,10 @@ class AgentBackend(ABC):
             "success": True,
             "message": "Compaction not supported",
         }
+
+    async def get_session_commands(self, session_key: str) -> list[str]:
+        """Get available slash commands for a session (optional)."""
+        return []
 
     def get_tools_summary(self) -> str:
         """Get a summary of available tools (optional).

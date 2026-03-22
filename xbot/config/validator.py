@@ -11,6 +11,7 @@ from xbot.config.provider_registry import (
     get_sdk_compatible_providers,
 )
 from xbot.config.schema import Config
+from xbot.config.sdk_resolver import resolve_sdk_provider_and_model
 
 
 class ConfigurationError(Exception):
@@ -30,7 +31,8 @@ def validate_config(config: Config) -> None:
     """
     provider_name = config.agents.defaults.provider
 
-    # Skip validation if provider is "auto" (will be auto-detected at runtime)
+    # Keep auto mode non-blocking at validation time.
+    # Final provider/model resolution still happens at runtime.
     if provider_name == "auto":
         return
 

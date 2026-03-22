@@ -38,3 +38,25 @@ async def test_tool_adapter_message_tool_uses_injected_context(tmp_path) -> None
     assert sent[0].channel == "telegram"
     assert sent[0].chat_id == "chat-1"
     assert sent[0].metadata["message_id"] == "msg-1"
+
+
+@pytest.mark.asyncio
+async def test_message_tool_start_turn_resets_sent_flag() -> None:
+    sent = []
+
+    async def _send(msg) -> None:
+        sent.append(msg)
+
+    tool = MessageTool(
+        send_callback=_send,
+        default_channel="telegram",
+        default_chat_id="chat-1",
+    )
+
+    assert tool._sent_in_turn is False
+    result = await tool.execute(content="hello")
+    assert "Message sent to telegram:chat-1" in result
+    assert tool._sent_in_turn is True
+
+    tool.start_turn()
+    assert tool._sent_in_turn is False

@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from xbot.bus.events import InboundMessage
-from xbot.bus.queue import MessageBus, PermissionResponse
+from xbot.bus.queue import InteractionRequest, MessageBus, PermissionResponse
 
 
 class TestRuntimePermissionResponse:
@@ -234,3 +234,86 @@ class TestRuntimePermissionResponse:
         result = await mock_runtime._handle_permission_response(msg)
         assert result is True
         assert bus._permission_results["req-123"].decision == "allow"
+
+    @pytest.mark.asyncio
+    async def test_stale_pending_request_falls_back_to_normal_message(self, mock_runtime, bus):
+        """If request mapping exists but no waiter is alive, runtime should not swallow message."""
+        bus._session_pending_requests["telegram:456"] = "req-stale"
+        # Intentionally do not create _pending_permission_responses["req-stale"]
+
+        msg = InboundMessage(
+            channel="telegram",
+            sender_id="user",
+            chat_id="456",
+            content="allow",
+        )
+
+        result = await mock_runtime._handle_permission_response(msg)
+        assert result is False
+        assert "req-stale" not in bus._permission_results
+
+    @pytest.mark.asyncio
+    async def test_generic_interaction_response_is_captured(self, bus):
+        from xbot.agent.runtime import AgentRuntime
+        from xbot.config.schema import Config
+
+        runtime = MagicMock(spec=AgentRuntime)
+        runtime.bus = bus
+        runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
+
+        await bus.publish_interaction_request(
+            InteractionRequest(
+                request_id="ir-42",
+                session_key="telegram:456",
+                channel="telegram",
+                chat_id="456",
+                kind="question",
+                prompt="继续吗？",
+            )
+        )
+        _ = await bus.consume_outbound()
+
+        waiter = asyncio.create_task(bus.wait_interaction_response("ir-42", timeout=1.0))
+        await asyncio.sleep(0.05)
+        msg = InboundMessage(
+            channel="telegram",
+            sender_id="user",
+            chat_id="456",
+            content="继续",
+        )
+        handled = await runtime._handle_interaction_response(msg)
+        assert handled is True
+        resp = await waiter
+        assert resp.action == "reply"
+        assert resp.content == "继续"
+
+    @pytest.mark.asyncio
+    async def test_runtime_command_not_consumed_as_interaction_reply(self, bus):
+        from xbot.agent.runtime import AgentRuntime
+
+        runtime = MagicMock(spec=AgentRuntime)
+        runtime.bus = bus
+        runtime._is_local_runtime_command = AgentRuntime._is_local_runtime_command
+        runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
+
+        await bus.publish_interaction_request(
+            InteractionRequest(
+                request_id="ir-99",
+                session_key="telegram:456",
+                channel="telegram",
+                chat_id="456",
+                kind="question",
+                prompt="继续吗？",
+            )
+        )
+        _ = await bus.consume_outbound()
+
+        handled = await runtime._handle_interaction_response(
+            InboundMessage(
+                channel="telegram",
+                sender_id="user",
+                chat_id="456",
+                content="/stop",
+            )
+        )
+        assert handled is False

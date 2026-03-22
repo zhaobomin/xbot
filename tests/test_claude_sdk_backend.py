@@ -184,6 +184,59 @@ class TestClaudeSDKBackendResetSession:
             mock_session.clear.assert_called_once()
 
 
+class TestClaudeSDKBackendToolContext:
+    """Tests for tool context wiring in process()."""
+
+    @pytest.mark.asyncio
+    async def test_process_sets_tool_context_with_session_key_and_resets_message_turn(self):
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+            from xbot.agent.protocol import AgentContext
+
+            backend = ClaudeSDKBackend()
+
+            message_tool = MagicMock()
+            tool_adapter = MagicMock()
+            tool_adapter._tools = {"message": message_tool}
+            tool_adapter.get_tool.return_value = message_tool
+            backend._tool_adapter = tool_adapter
+
+            mock_client = MagicMock()
+            mock_client.query = AsyncMock()
+
+            async def _empty_receive():
+                if False:
+                    yield None
+
+            mock_client.receive_response = _empty_receive
+            backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
+            backend.sessions = None
+
+            context = AgentContext(
+                session_key="slack:C123:thread:1700.1",
+                prompt="hello",
+                channel="slack",
+                chat_id="C123",
+                metadata={"message_id": "m-1"},
+            )
+
+            _ = [resp async for resp in backend.process(context)]
+
+            tool_adapter.set_tool_context.assert_called_once_with(
+                channel="slack",
+                chat_id="C123",
+                session_key="slack:C123:thread:1700.1",
+                message_id="m-1",
+            )
+            message_tool.start_turn.assert_called_once()
+
+
 class TestMessageConverter:
     """Tests for MessageConverter class."""
 
@@ -302,6 +355,84 @@ class TestOptionsBuilder:
             json_str = json.dumps(mcp_servers)
             assert "test_server" in json_str
             assert "npx" in json_str
+
+    def test_get_model_name_normalizes_legacy_prefix(self):
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+            from xbot.config.schema import Config
+
+            config = Config()
+            config.agents.defaults.provider = "anthropic"
+            config.agents.defaults.model = "anthropic/claude-sonnet-4-5"
+            config.providers.anthropic.api_key = "test-key"
+
+            builder = OptionsBuilder(
+                shared_resources={"config": config},
+                sdk_config=None,
+                skill_converter=None,
+                tool_adapter=None,
+                sessions=None,
+                context_builder=None,
+                handoff_policy=None,
+                capability_policy=None,
+            )
+
+            assert builder._get_model_name() == "claude-sonnet-4-5"
+
+
+class TestClaudeSDKBackendMemoryConfig:
+    """Tests for memory backend configuration wiring."""
+
+    @pytest.mark.asyncio
+    async def test_initialize_uses_file_memory_provider(self, tmp_path):
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+            from xbot.config.schema import Config
+
+            config = Config()
+            config.agents.defaults.provider = "auto"
+            config.tools.memory.provider = "file"
+            config.tools.memory.enable_vector_search = True
+            config.tools.memory.llm_model = "gpt-4.1-nano"
+
+            captured = {}
+
+            class _FakeContextBuilder:
+                def __init__(self, workspace, use_reme=True, llm_config=None, enable_vector_search=False):
+                    captured["workspace"] = workspace
+                    captured["use_reme"] = use_reme
+                    captured["llm_config"] = llm_config
+                    captured["enable_vector_search"] = enable_vector_search
+                    self.memory = object()
+
+            backend = ClaudeSDKBackend()
+
+            with patch("xbot.agent.backends.claude_sdk_backend.ContextBuilder", _FakeContextBuilder):
+                await backend.initialize(
+                    config.agents,
+                    {
+                        "workspace": tmp_path,
+                        "config": config,
+                        "tools_config": config.tools,
+                    },
+                )
+
+            assert captured["workspace"] == tmp_path
+            assert captured["use_reme"] is False
+            assert captured["enable_vector_search"] is True
+            assert captured["llm_config"] == {"model_name": "gpt-4.1-nano"}
 
     def test_build_mcp_servers_with_dict_config(self):
         """Test that dict configs are passed through unchanged."""
@@ -668,12 +799,12 @@ class TestInterruptSession:
             backend = ClaudeSDKBackend()
 
             mock_client = MagicMock()
-            mock_client.interrupt = MagicMock()
+            mock_client.interrupt = AsyncMock()
             backend._clients["test_session"] = mock_client
 
             result = await backend.interrupt_session("test_session")
             assert result is True
-            mock_client.interrupt.assert_called_once()
+            mock_client.interrupt.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_interrupt_session_exception(self):
@@ -690,107 +821,489 @@ class TestInterruptSession:
             backend = ClaudeSDKBackend()
 
             mock_client = MagicMock()
-            mock_client.interrupt = MagicMock(side_effect=Exception("Interrupt failed"))
+            mock_client.interrupt = AsyncMock(side_effect=Exception("Interrupt failed"))
             backend._clients["test_session"] = mock_client
 
             result = await backend.interrupt_session("test_session")
             assert result is False
 
 
+class TestStopActiveTask:
+    """Tests for stop_active_task method."""
+
+    @pytest.mark.asyncio
+    async def test_stop_active_task_no_task(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        backend = ClaudeSDKBackend()
+        backend._active_task_ids = {}
+        backend._clients = {}
+
+        result = await backend.stop_active_task("test_session")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_stop_active_task_success(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        backend = ClaudeSDKBackend()
+        backend._active_task_ids["test_session"] = "task-1"
+
+        mock_client = MagicMock()
+        mock_client.stop_task = AsyncMock()
+        backend._clients["test_session"] = mock_client
+
+        result = await backend.stop_active_task("test_session")
+
+        assert result is True
+        mock_client.stop_task.assert_awaited_once_with("task-1")
+        assert "test_session" not in backend._active_task_ids
+
+    @pytest.mark.asyncio
+    async def test_stop_active_task_exception(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        backend = ClaudeSDKBackend()
+        backend._active_task_ids["test_session"] = "task-1"
+
+        mock_client = MagicMock()
+        mock_client.stop_task = AsyncMock(side_effect=Exception("stop failed"))
+        backend._clients["test_session"] = mock_client
+
+        result = await backend.stop_active_task("test_session")
+        assert result is False
+
+    @pytest.mark.asyncio
+    async def test_terminal_task_notification_clears_active_task(self):
+        from claude_agent_sdk.types import ResultMessage, TaskNotificationMessage, TaskStartedMessage
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.protocol import AgentContext
+
+        backend = ClaudeSDKBackend()
+        backend._message_converter = None  # Force legacy convert path still records task lifecycle
+
+        mock_session = MagicMock()
+        mock_session.metadata = {}
+        mock_session.add_message = MagicMock()
+        backend.sessions = MagicMock()
+        backend.sessions.get_or_create = MagicMock(return_value=mock_session)
+        backend.sessions.save = MagicMock()
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
+
+        async def _receive():
+            yield TaskStartedMessage(
+                subtype="task_started",
+                data={},
+                task_id="task-1",
+                description="work",
+                uuid="u1",
+                session_id="s1",
+            )
+            yield TaskNotificationMessage(
+                subtype="task_notification",
+                data={},
+                task_id="task-1",
+                status="completed",
+                output_file="",
+                summary="done",
+                uuid="u2",
+                session_id="s1",
+            )
+            yield ResultMessage(
+                subtype="success",
+                duration_ms=1,
+                duration_api_ms=1,
+                is_error=False,
+                num_turns=1,
+                session_id="s1",
+            )
+
+        mock_client.receive_response = _receive
+        backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
+
+        context = AgentContext(session_key="test_session", prompt="hello")
+        _ = [msg async for msg in backend.process(context)]
+
+        assert "test_session" not in backend._active_task_ids
+
+    @pytest.mark.asyncio
+    async def test_result_message_clears_active_task_without_session_store(self):
+        from claude_agent_sdk.types import ResultMessage, TaskStartedMessage
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.protocol import AgentContext
+
+        backend = ClaudeSDKBackend()
+        backend._message_converter = None
+        backend.sessions = None
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
+
+        async def _receive():
+            yield TaskStartedMessage(
+                subtype="task_started",
+                data={},
+                task_id="task-2",
+                description="work",
+                uuid="u1",
+                session_id="s1",
+            )
+            yield ResultMessage(
+                subtype="success",
+                duration_ms=1,
+                duration_api_ms=1,
+                is_error=False,
+                num_turns=1,
+                session_id="s1",
+            )
+
+        mock_client.receive_response = _receive
+        backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
+
+        context = AgentContext(session_key="test_session", prompt="hello")
+        _ = [msg async for msg in backend.process(context)]
+
+        assert "test_session" not in backend._active_task_ids
+
+
+class TestSessionCommands:
+    """Tests for SDK slash command discovery/cache."""
+
+    def test_extract_slash_commands_from_slash_commands_field(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        commands = ClaudeSDKBackend._extract_slash_commands(
+            {"slash_commands": ["/compact", "/clear", "not-slash", "/help"]}
+        )
+        assert commands == ["/clear", "/compact", "/help"]
+
+    def test_extract_slash_commands_from_commands_field(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        commands = ClaudeSDKBackend._extract_slash_commands(
+            {
+                "commands": [
+                    {"name": "/compact"},
+                    {"name": "plain"},
+                    "/clear",
+                ]
+            }
+        )
+        assert commands == ["/clear", "/compact", "/plain"]
+
+    def test_extract_slash_commands_normalizes_sdk_command_names(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        commands = ClaudeSDKBackend._extract_slash_commands(
+            {
+                "commands": [
+                    {"name": "help"},
+                    {"name": "compact"},
+                    {"name": "clear"},
+                ]
+            }
+        )
+        assert commands == ["/clear", "/compact", "/help"]
+
+    @pytest.mark.asyncio
+    async def test_get_session_commands_fetches_on_cache_miss(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        backend = ClaudeSDKBackend()
+        backend._session_commands = {}
+
+        async def _fake_get_or_create_client(session_key: str):
+            backend._session_commands[session_key] = ["/compact", "/clear"]
+            return MagicMock()
+
+        backend._get_or_create_client = AsyncMock(side_effect=_fake_get_or_create_client)  # type: ignore[method-assign]
+
+        commands = await backend.get_session_commands("s1")
+
+        assert commands == ["/compact", "/clear"]
+
+
 class TestCompactSession:
     """Tests for compact_session method."""
 
     @pytest.mark.asyncio
-    async def test_compact_session_no_sessions(self):
-        """Test compact_session returns not available when no session manager."""
-        with patch.dict(
-            "sys.modules",
-            {
-                "claude_agent_sdk": MagicMock(),
-                "claude_agent_sdk.types": MagicMock(),
-            },
-        ):
-            from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+    async def test_compact_session_uses_sdk_compact_command(self):
+        """compact_session should request SDK-native /compact and parse compact stats."""
+        from claude_agent_sdk.types import ResultMessage, SystemMessage
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 
-            backend = ClaudeSDKBackend()
-            backend.sessions = None
-            backend.memory_consolidator = None
+        backend = ClaudeSDKBackend()
 
-            result = await backend.compact_session("test_session")
-            assert result["success"] is True
-            assert result["messages_consolidated"] == 0
-            assert "not available" in result["message"].lower()
+        mock_sessions = MagicMock()
+        mock_session = MagicMock()
+        mock_session.metadata = {}
+        mock_sessions.get_or_create = MagicMock(return_value=mock_session)
+        mock_sessions.save = MagicMock()
+        backend.sessions = mock_sessions
 
-    @pytest.mark.asyncio
-    async def test_compact_session_empty_session(self):
-        """Test compact_session with empty session."""
-        with patch.dict(
-            "sys.modules",
-            {
-                "claude_agent_sdk": MagicMock(),
-                "claude_agent_sdk.types": MagicMock(),
-            },
-        ):
-            from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
 
-            backend = ClaudeSDKBackend()
+        async def _receive():
+            yield SystemMessage(
+                subtype="compact_boundary",
+                data={"compact_metadata": {"pre_tokens": 1200, "post_tokens": 450, "trigger": "manual"}},
+            )
+            yield ResultMessage(
+                subtype="success",
+                duration_ms=1,
+                duration_api_ms=1,
+                is_error=False,
+                num_turns=1,
+                session_id="sdk-session-1",
+            )
 
-            mock_sessions = MagicMock()
-            mock_session = MagicMock()
-            mock_session.messages = []
-            mock_session.last_consolidated = 0
-            mock_sessions.get_or_create = MagicMock(return_value=mock_session)
-            backend.sessions = mock_sessions
+        mock_client.receive_response = _receive
+        backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
 
-            mock_consolidator = MagicMock()
-            mock_consolidator.force_consolidate = AsyncMock(return_value={
-                "messages_consolidated": 0,
-                "tokens_before": 0,
-                "tokens_after": 0,
-                "success": True,
-            })
-            backend.memory_consolidator = mock_consolidator
+        result = await backend.compact_session("test_session")
 
-            result = await backend.compact_session("test_session")
-            assert result["success"] is True
-            assert result["messages_consolidated"] == 0
+        mock_client.query.assert_awaited_once_with("/compact", session_id="test_session")
+        assert result["success"] is True
+        assert result["tokens_before"] == 1200
+        assert result["tokens_after"] == 450
+        assert mock_session.metadata["sdk_session_id"] == "sdk-session-1"
+        mock_sessions.save.assert_called()
 
     @pytest.mark.asyncio
-    async def test_compact_session_with_messages(self):
-        """Test compact_session with messages to consolidate."""
-        with patch.dict(
-            "sys.modules",
-            {
-                "claude_agent_sdk": MagicMock(),
-                "claude_agent_sdk.types": MagicMock(),
+    async def test_compact_session_without_boundary_keeps_default_stats(self):
+        """compact_session should still succeed when SDK returns no compact boundary event."""
+        from claude_agent_sdk.types import ResultMessage
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        backend = ClaudeSDKBackend()
+        backend.sessions = None
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
+
+        async def _receive():
+            yield ResultMessage(
+                subtype="success",
+                duration_ms=1,
+                duration_api_ms=1,
+                is_error=False,
+                num_turns=1,
+                session_id="sdk-session-2",
+            )
+
+        mock_client.receive_response = _receive
+        backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
+
+        result = await backend.compact_session("test_session")
+
+        mock_client.query.assert_awaited_once_with("/compact", session_id="test_session")
+        assert result["success"] is True
+        assert result["tokens_before"] == 0
+        assert result["tokens_after"] == 0
+
+    @pytest.mark.asyncio
+    async def test_compact_session_result_error_marks_failure(self):
+        """compact_session should return failed status when SDK ResultMessage is_error is true."""
+        from claude_agent_sdk.types import ResultMessage
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        backend = ClaudeSDKBackend()
+        backend.sessions = None
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
+
+        async def _receive():
+            yield ResultMessage(
+                subtype="error",
+                duration_ms=1,
+                duration_api_ms=1,
+                is_error=True,
+                num_turns=1,
+                session_id="sdk-session-3",
+                result="compact failed",
+            )
+
+        mock_client.receive_response = _receive
+        backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
+
+        result = await backend.compact_session("test_session")
+
+        assert result["success"] is False
+        assert result["message"] == "compact failed"
+
+
+class TestMessageConverterEnhancements:
+    """Tests for compact/system/result conversion improvements."""
+
+    def test_convert_compact_boundary_system_message(self):
+        from claude_agent_sdk.types import SystemMessage
+        from xbot.agent.backends.claude_sdk_backend import MessageConverter
+
+        converter = MessageConverter(handoff_policy=None, capabilities=None, config=None)
+        msg = SystemMessage(
+            subtype="compact_boundary",
+            data={"compact_metadata": {"pre_tokens": 5000, "post_tokens": 3100, "trigger": "manual"}},
+        )
+
+        response = converter.convert(msg)
+
+        assert response is not None
+        assert response.progress_texts
+        assert "Context compacted" in response.progress_texts[0]
+        assert "5,000" in response.progress_texts[0]
+        assert "3,100" in response.progress_texts[0]
+
+    def test_convert_result_message_preserves_result_text(self):
+        from claude_agent_sdk.types import ResultMessage
+        from xbot.agent.backends.claude_sdk_backend import MessageConverter
+
+        converter = MessageConverter(handoff_policy=None, capabilities=None, config=None)
+        msg = ResultMessage(
+            subtype="success",
+            duration_ms=1,
+            duration_api_ms=1,
+            is_error=False,
+            num_turns=1,
+            session_id="s1",
+            result="final answer",
+            usage={"input_tokens": 10, "output_tokens": 20},
+        )
+
+        response = converter.convert(msg)
+
+        assert response is not None
+        assert response.content == "final answer"
+        assert response.usage is not None
+        assert response.usage["input_tokens"] == 10
+        assert response.usage["output_tokens"] == 20
+
+    def test_convert_assistant_thinking_only_sets_thinking_event_type(self):
+        from claude_agent_sdk.types import AssistantMessage, ThinkingBlock
+        from xbot.agent.backends.claude_sdk_backend import MessageConverter
+
+        converter = MessageConverter(handoff_policy=None, capabilities=None, config=None)
+        msg = AssistantMessage(
+            content=[ThinkingBlock(thinking="analyzing", signature="sig")],
+            model="claude-3-5-sonnet",
+        )
+
+        response = converter.convert(msg)
+
+        assert response is not None
+        assert response.event_type == "thinking"
+        assert response.event_data == {"thinking_chunks": 1}
+        assert response.progress_texts == ["Thinking: analyzing"]
+
+    def test_convert_task_notification_includes_status_and_task_metadata(self):
+        from claude_agent_sdk.types import TaskNotificationMessage
+        from xbot.agent.backends.claude_sdk_backend import MessageConverter
+
+        converter = MessageConverter(handoff_policy=None, capabilities=None, config=None)
+        msg = TaskNotificationMessage(
+            subtype="task_notification",
+            data={},
+            task_id="task-1",
+            status="failed",
+            output_file="/tmp/out.txt",
+            summary="Tool crashed",
+            uuid="u1",
+            session_id="s1",
+        )
+
+        response = converter.convert(msg)
+
+        assert response is not None
+        assert response.progress_texts
+        text = response.progress_texts[0]
+        assert "Task failed" in text
+        assert "Tool crashed" in text
+        assert "task-1" in text
+
+    def test_convert_stream_event_thinking_delta_is_visible(self):
+        from claude_agent_sdk.types import StreamEvent
+        from xbot.agent.backends.claude_sdk_backend import MessageConverter
+
+        converter = MessageConverter(handoff_policy=None, capabilities=None, config=None)
+        msg = StreamEvent(
+            uuid="u1",
+            session_id="s1",
+            event={
+                "type": "content_block_delta",
+                "delta": {"type": "thinking_delta", "thinking": "analyzing"},
             },
-        ):
-            from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        )
 
-            backend = ClaudeSDKBackend()
+        response = converter.convert(msg)
 
-            mock_sessions = MagicMock()
-            mock_session = MagicMock()
-            mock_session.messages = [
-                {"role": "user", "content": "Hello"},
-                {"role": "assistant", "content": "Hi"},
-            ]
-            mock_session.last_consolidated = 0
-            mock_sessions.get_or_create = MagicMock(return_value=mock_session)
-            backend.sessions = mock_sessions
+        assert response is not None
+        assert response.progress_texts == ["Thinking: analyzing"]
 
-            mock_consolidator = MagicMock()
-            mock_consolidator.force_consolidate = AsyncMock(return_value={
-                "messages_consolidated": 2,
-                "tokens_before": 100,
-                "tokens_after": 20,
-                "success": True,
-            })
-            backend.memory_consolidator = mock_consolidator
 
-            result = await backend.compact_session("test_session")
-            assert result["success"] is True
-            assert result["messages_consolidated"] == 2
-            assert result["tokens_before"] == 100
-            assert result["tokens_after"] == 20
-            mock_consolidator.force_consolidate.assert_called_once_with(mock_session)
+class TestBackendInputRequiredInteraction:
+    """Tests for SDK input_required interaction behavior."""
+
+    @pytest.mark.asyncio
+    async def test_wait_for_user_input_maps_approval_required_to_approval_kind(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.protocol import AgentContext
+
+        backend = ClaudeSDKBackend()
+        backend.sdk_config = MagicMock()
+        backend.sdk_config.permission = MagicMock(timeout=3.0)
+        backend._shared_resources = {}
+        backend._clients = {}
+        backend._active_task_ids = {}
+
+        handler = MagicMock()
+        handler.request_interaction = AsyncMock(
+            return_value=type("Resp", (), {"action": "allow", "content": ""})()
+        )
+        backend._permission_handler = handler
+
+        msg = type(
+            "TaskNotificationMessage",
+            (),
+            {"summary": "请确认授权", "task_id": "t1", "status": "approval_required"},
+        )()
+        context = AgentContext(session_key="s1", prompt="p", channel="telegram", chat_id="c1", metadata={})
+
+        result = await backend._wait_for_user_input(context, msg)
+
+        assert result == "allow"
+        handler.request_interaction.assert_awaited_once()
+        kwargs = handler.request_interaction.await_args.kwargs
+        assert kwargs["kind"] == "approval"
+        assert kwargs["suggestions"] == ["允许", "拒绝"]
+
+    @pytest.mark.asyncio
+    async def test_wait_for_user_input_uses_handler_without_bus(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.protocol import AgentContext
+
+        backend = ClaudeSDKBackend()
+        backend.sdk_config = MagicMock()
+        backend.sdk_config.permission = MagicMock(timeout=3.0)
+        backend._shared_resources = {}  # no bus
+        backend._clients = {}
+        backend._active_task_ids = {}
+
+        handler = MagicMock()
+        handler.request_interaction = AsyncMock(
+            return_value=type("Resp", (), {"action": "reply", "content": "继续"})()
+        )
+        backend._permission_handler = handler
+
+        msg = type(
+            "TaskNotificationMessage",
+            (),
+            {"summary": "需要你输入", "task_id": "t2", "status": "input_required"},
+        )()
+        context = AgentContext(session_key="s2", prompt="p", channel="cli", chat_id="direct", metadata={})
+
+        result = await backend._wait_for_user_input(context, msg)
+
+        assert result == "继续"

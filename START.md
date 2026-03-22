@@ -4,7 +4,7 @@
 
 ## 1. 默认目录结构
 
-执行一次 `xbot onboard` 后，默认会生成一套本地目录：
+执行一次 `xbot init` 后，默认会生成一套本地目录：
 
 ```text
 ~/.xbot/
@@ -95,10 +95,11 @@
 ```json
 {
   "agents": {
+    "type": "claude_sdk",
     "defaults": {
       "workspace": "~/.xbot/workspace",
-      "model": "openai/gpt-5",
-      "provider": "openai",
+      "model": "claude-sonnet-4-5",
+      "provider": "anthropic",
       "maxTokens": 8192,
       "contextWindowTokens": 65536,
       "temperature": 0.1
@@ -142,8 +143,9 @@
 
 通用字段：
 
-- `sendProgress`: 是否把 agent 的过程性文本实时发到 channel
-- `sendToolHints`: 是否把工具调用提示也发到 channel
+- `sendProgress`: 是否发送 agent 的进度事件（包含 `thinking/content_delta/task/system` 等）
+- `sendToolHints`: 是否发送工具调用提示
+- `sendUsageSummary`: 是否发送 token 使用统计（`Usage: input ..., output ...`）
 
 不同平台自己的 token、appId、secret、allowFrom 等，也会写在 `channels.<name>` 下。
 
@@ -429,7 +431,7 @@ MCP 配置写在：
 如果你想做多实例，可以换一套配置路径：
 
 ```bash
-xbot onboard --config ~/.xbot-telegram/config.json --workspace ~/.xbot-telegram/workspace
+xbot init --config ~/.xbot-telegram/config.json --workspace ~/.xbot-telegram/workspace
 xbot gateway --config ~/.xbot-telegram/config.json
 ```
 

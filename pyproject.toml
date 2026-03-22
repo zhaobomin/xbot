@@ -89,6 +89,7 @@ include = [
     "xbot/templates/**/*.md",
     "xbot/skills/**/*.md",
     "xbot/skills/**/*.sh",
+    "xbot/init_templates/**",
 ]
 
 [tool.hatch.build.targets.wheel]

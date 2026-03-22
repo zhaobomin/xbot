@@ -21,6 +21,7 @@ class PermissionRequest:
     tool_input: dict[str, Any]
     message: str  # 给用户的提示信息
     suggestions: list[str] = field(default_factory=list)  # 可选的建议回复
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -32,6 +33,31 @@ class PermissionResponse:
     decision: Literal["allow", "deny"]
     reason: str = ""
     updated_input: dict[str, Any] | None = None
+
+
+@dataclass
+class InteractionRequest:
+    """通用交互请求（例如 ask question / confirm / approve）。"""
+
+    request_id: str
+    session_key: str
+    channel: str
+    chat_id: str
+    kind: Literal["question", "confirmation", "approval"] = "question"
+    prompt: str = ""
+    suggestions: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class InteractionResponse:
+    """通用交互响应。"""
+
+    request_id: str
+    session_key: str
+    action: str = "reply"  # reply / confirm / cancel / allow / deny
+    content: str = ""
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 class MessageBus:
@@ -54,6 +80,13 @@ class MessageBus:
         self._permission_lock = asyncio.Lock()
         # 按会话追踪 pending request: session_key -> request_id
         self._session_pending_requests: dict[str, str] = {}
+
+        # 通用交互请求/响应支持
+        self._pending_interaction_responses: dict[str, asyncio.Event] = {}
+        self._interaction_results: dict[str, InteractionResponse] = {}
+        self._interaction_requests: dict[str, InteractionRequest] = {}
+        self._interaction_lock = asyncio.Lock()
+        self._session_pending_interactions: dict[str, str] = {}
 
     async def publish_inbound(self, msg: InboundMessage) -> None:
         """Publish a message from a channel to the agent."""
@@ -91,10 +124,30 @@ class MessageBus:
             chat_id=req.chat_id,
             content=req.message,
             metadata={
+                **(req.metadata or {}),
                 "permission_request_id": req.request_id,
                 "permission_request": True,
                 "suggestions": req.suggestions,
             }
+        ))
+
+    async def publish_interaction_request(self, req: InteractionRequest) -> None:
+        """发布通用交互请求并通知用户。"""
+        async with self._interaction_lock:
+            self._session_pending_interactions[req.session_key] = req.request_id
+            self._interaction_requests[req.request_id] = req
+
+        await self.publish_outbound(OutboundMessage(
+            channel=req.channel,
+            chat_id=req.chat_id,
+            content=req.prompt,
+            metadata={
+                **(req.metadata or {}),
+                "interaction_request_id": req.request_id,
+                "interaction_request": True,
+                "interaction_kind": req.kind,
+                "suggestions": req.suggestions,
+            },
         ))
 
     async def wait_permission_response(
@@ -119,6 +172,10 @@ class MessageBus:
             await asyncio.wait_for(event.wait(), timeout=timeout)
             async with self._permission_lock:
                 result = self._permission_results.pop(request_id, None)
+                self._pending_permission_responses.pop(request_id, None)
+                to_remove = [k for k, v in self._session_pending_requests.items() if v == request_id]
+                for k in to_remove:
+                    del self._session_pending_requests[k]
             if result is None:
                 return PermissionResponse(
                     request_id=request_id,
@@ -130,11 +187,55 @@ class MessageBus:
         except asyncio.TimeoutError:
             async with self._permission_lock:
                 self._pending_permission_responses.pop(request_id, None)
+                to_remove = [k for k, v in self._session_pending_requests.items() if v == request_id]
+                for k in to_remove:
+                    del self._session_pending_requests[k]
             return PermissionResponse(
                 request_id=request_id,
                 session_key="",
                 decision="deny",
                 reason="Timeout waiting for user response",
+            )
+
+    async def wait_interaction_response(
+        self,
+        request_id: str,
+        timeout: float = 300.0,
+    ) -> InteractionResponse:
+        """等待通用交互响应。"""
+        event = asyncio.Event()
+        async with self._interaction_lock:
+            self._pending_interaction_responses[request_id] = event
+
+        try:
+            await asyncio.wait_for(event.wait(), timeout=timeout)
+            async with self._interaction_lock:
+                result = self._interaction_results.pop(request_id, None)
+                self._pending_interaction_responses.pop(request_id, None)
+                self._interaction_requests.pop(request_id, None)
+                to_remove = [k for k, v in self._session_pending_interactions.items() if v == request_id]
+                for k in to_remove:
+                    del self._session_pending_interactions[k]
+            if result is None:
+                return InteractionResponse(
+                    request_id=request_id,
+                    session_key="",
+                    action="cancel",
+                    content="No response received",
+                )
+            return result
+        except asyncio.TimeoutError:
+            async with self._interaction_lock:
+                self._pending_interaction_responses.pop(request_id, None)
+                self._interaction_requests.pop(request_id, None)
+                to_remove = [k for k, v in self._session_pending_interactions.items() if v == request_id]
+                for k in to_remove:
+                    del self._session_pending_interactions[k]
+            return InteractionResponse(
+                request_id=request_id,
+                session_key="",
+                action="cancel",
+                content="Timeout waiting for user response",
             )
 
     async def submit_permission_response(self, resp: PermissionResponse) -> bool:
@@ -158,6 +259,19 @@ class MessageBus:
                     del self._session_pending_requests[resp.session_key]
         return True
 
+    async def submit_interaction_response(self, resp: InteractionResponse) -> bool:
+        """提交通用交互响应。"""
+        async with self._interaction_lock:
+            event = self._pending_interaction_responses.get(resp.request_id)
+            if event is None:
+                return False
+            self._interaction_results[resp.request_id] = resp
+            event.set()
+            if resp.session_key in self._session_pending_interactions:
+                if self._session_pending_interactions[resp.session_key] == resp.request_id:
+                    del self._session_pending_interactions[resp.session_key]
+        return True
+
     def get_pending_request_for_session(self, session_key: str) -> str | None:
         """获取指定会话的 pending request_id。
 
@@ -168,6 +282,14 @@ class MessageBus:
             request_id 如果有待处理的请求，否则 None
         """
         return self._session_pending_requests.get(session_key)
+
+    def get_pending_interaction_for_session(self, session_key: str) -> str | None:
+        """获取指定会话的 pending 通用交互 request_id。"""
+        return self._session_pending_interactions.get(session_key)
+
+    def get_interaction_request(self, request_id: str) -> InteractionRequest | None:
+        """获取通用交互请求详情。"""
+        return self._interaction_requests.get(request_id)
 
     def has_pending_permission_request(self, request_id: str) -> bool:
         """检查是否有等待中的权限请求。"""
@@ -181,6 +303,15 @@ class MessageBus:
         to_remove = [k for k, v in self._session_pending_requests.items() if v == request_id]
         for k in to_remove:
             del self._session_pending_requests[k]
+
+    def clear_interaction_request(self, request_id: str) -> None:
+        """清除通用交互请求状态。"""
+        self._pending_interaction_responses.pop(request_id, None)
+        self._interaction_results.pop(request_id, None)
+        self._interaction_requests.pop(request_id, None)
+        to_remove = [k for k, v in self._session_pending_interactions.items() if v == request_id]
+        for k in to_remove:
+            del self._session_pending_interactions[k]
 
     # =========================================================================
     # Properties

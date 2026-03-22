@@ -34,9 +34,14 @@ from rich.text import Text
 
 from xbot import __logo__, __version__
 from xbot.agent.runtime import AgentRuntime
+from xbot.agent.progress_coalescer import ProgressCoalescer
 from xbot.config.paths import get_workspace_path
 from xbot.config.schema import Config
-from xbot.utils.helpers import sync_workspace_templates
+from xbot.utils.helpers import (
+    sync_workspace_command_pack,
+    sync_workspace_skill_pack,
+    sync_workspace_templates,
+)
 from xbot.agent.permission_handler import CLIPermissionHandler, InteractivePermissionHandler
 
 app = typer.Typer(
@@ -263,11 +268,15 @@ def main(
 # ============================================================================
 
 
-@app.command()
-def onboard(
-    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
-    config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
-):
+def _run_init(
+    *,
+    workspace: str | None = None,
+    config: str | None = None,
+    skill_pack: str = "default",
+    command_pack: str = "default",
+    install_skill_pack: bool = False,
+    install_command_pack: bool = False,
+) -> None:
     """Initialize xbot configuration and workspace."""
     from xbot.config.loader import get_config_path, load_config, save_config, set_config_path
     from xbot.config.schema import Config
@@ -306,12 +315,36 @@ def onboard(
     _onboard_plugins(config_path)
 
     # Create workspace, preferring the configured workspace path.
-    workspace = get_workspace_path(config.workspace_path)
-    if not workspace.exists():
-        workspace.mkdir(parents=True, exist_ok=True)
-        console.print(f"[green]✓[/green] Created workspace at {workspace}")
+    workspace_path = get_workspace_path(config.workspace_path)
+    if not workspace_path.exists():
+        workspace_path.mkdir(parents=True, exist_ok=True)
+        console.print(f"[green]✓[/green] Created workspace at {workspace_path}")
 
-    sync_workspace_templates(workspace)
+    sync_workspace_templates(workspace_path)
+
+    if install_skill_pack:
+        try:
+            installed_skills = sync_workspace_skill_pack(workspace_path, skill_pack)
+        except FileNotFoundError:
+            console.print(f"[red]Error: skill pack not found: {skill_pack}[/red]")
+            raise typer.Exit(1)
+        if installed_skills:
+            console.print(
+                f"[green]✓[/green] Installed skill pack '{skill_pack}' "
+                f"({len(installed_skills)} item(s))"
+            )
+
+    if install_command_pack:
+        try:
+            installed_commands = sync_workspace_command_pack(workspace_path, command_pack)
+        except FileNotFoundError:
+            console.print(f"[red]Error: command pack not found: {command_pack}[/red]")
+            raise typer.Exit(1)
+        if installed_commands:
+            console.print(
+                f"[green]✓[/green] Installed command pack '{command_pack}' "
+                f"({len(installed_commands)} item(s))"
+            )
 
     agent_cmd = 'xbot agent -m "Hello!"'
     if config:
@@ -323,6 +356,40 @@ def onboard(
     console.print("     Get one at: https://openrouter.ai/keys")
     console.print(f"  2. Chat: [cyan]{agent_cmd}[/cyan]")
     console.print("\n[dim]Want Telegram/WhatsApp? See: https://github.com/HKUDS/xbot#-chat-apps[/dim]")
+
+
+@app.command()
+def onboard(
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+):
+    """Initialize xbot configuration and workspace (legacy alias)."""
+    _run_init(
+        workspace=workspace,
+        config=config,
+        install_skill_pack=True,
+        install_command_pack=True,
+    )
+
+
+@app.command("init")
+def init_cmd(
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+    skill_pack: str = typer.Option("default", "--skill-pack", help="Skill pack to install"),
+    command_pack: str = typer.Option("default", "--command-pack", help="Command pack to install"),
+    no_skill_pack: bool = typer.Option(False, "--no-skill-pack", help="Skip skill pack installation"),
+    no_command_pack: bool = typer.Option(False, "--no-command-pack", help="Skip command pack installation"),
+):
+    """Initialize xbot environment (config, workspace, default packs)."""
+    _run_init(
+        workspace=workspace,
+        config=config,
+        skill_pack=skill_pack,
+        command_pack=command_pack,
+        install_skill_pack=not no_skill_pack,
+        install_command_pack=not no_command_pack,
+    )
 
 
 def _merge_missing_defaults(existing: Any, defaults: Any) -> Any:
@@ -368,10 +435,17 @@ def _make_provider(config: Config):
     from xbot.providers.base import GenerationSettings
     from xbot.providers.openai_codex_provider import OpenAICodexProvider
     from xbot.providers.azure_openai_provider import AzureOpenAIProvider
+    from xbot.config.sdk_resolver import resolve_sdk_provider_and_model
 
     model = config.agents.defaults.model
-    provider_name = config.get_provider_name(model)
-    p = config.get_provider(model)
+    sdk_compatible = {"auto", "anthropic", "aliyun_coding_plan", "alrun"}
+    if config.agents.type == "claude_sdk" and config.agents.defaults.provider in sdk_compatible:
+        provider_name, model = resolve_sdk_provider_and_model(config)
+        provider_attr = provider_name.replace("-", "_")
+        p = getattr(config.providers, provider_attr, None)
+    else:
+        provider_name = config.get_provider_name(model)
+        p = config.get_provider(model)
 
     # OpenAI Codex (OAuth)
     if provider_name == "openai_codex" or model.startswith("openai-codex/"):
@@ -785,23 +859,70 @@ def agent(
         # Spinner will be set when _thinking is created in run_interactive
         pass
 
-    async def _cli_progress(content: str, *, tool_hint: bool = False) -> None:
+    def _should_emit_cli_progress(tool_hint: bool, event_type: str) -> bool:
         ch = agent_loop.channels_config
         if ch is None:
             ch = config.channels
         if ch and tool_hint and not ch.send_tool_hints:
-            return
-        if ch and not tool_hint and not ch.send_progress:
+            return False
+        if ch and not tool_hint and event_type == "usage" and not ch.send_usage_summary:
+            return False
+        if ch and not tool_hint and event_type != "usage" and not ch.send_progress:
+            return False
+        return True
+
+    async def _cli_progress(
+        content: str,
+        *,
+        tool_hint: bool = False,
+        event_type: str = "progress",
+        event_data: dict[str, Any] | None = None,
+    ) -> None:
+        _ = event_data
+        if not _should_emit_cli_progress(tool_hint, event_type):
             return
         _print_cli_progress_line(content, _thinking)
+
+    if ":" in session_id:
+        cli_channel, cli_chat_id = session_id.split(":", 1)
+    else:
+        cli_channel, cli_chat_id = "cli", session_id
 
     if message:
         # Single message mode — direct call, no bus needed
         async def run_once():
             nonlocal _thinking
+            progress_coalescer = ProgressCoalescer()
             _thinking = _ThinkingSpinner(enabled=not logs)
+
+            async def _coalesced_cli_progress(
+                content: str,
+                *,
+                tool_hint: bool = False,
+                event_type: str = "progress",
+                event_data: dict[str, Any] | None = None,
+            ) -> None:
+                _ = event_data
+                if not _should_emit_cli_progress(tool_hint, event_type):
+                    return
+                key = (cli_channel, cli_chat_id, event_type)
+                ready = progress_coalescer.push(
+                    key=key,
+                    text=content,
+                    event_type=event_type,
+                    tool_hint=tool_hint,
+                )
+                for item in ready:
+                    _print_cli_progress_line(item.text, _thinking)
+
             with _thinking:
-                response = await agent_loop.process_direct(message, session_id, on_progress=_cli_progress)
+                response = await agent_loop.process_direct(
+                    message,
+                    session_id,
+                    on_progress=_coalesced_cli_progress,
+                )
+                for item in progress_coalescer.flush_all():
+                    _print_cli_progress_line(item.text, _thinking)
             _thinking = None
             _print_agent_response(response, render_markdown=markdown)
             await agent_loop.close_mcp()
@@ -812,11 +933,6 @@ def agent(
         from xbot.bus.events import InboundMessage
         _init_prompt_session()
         console.print(f"{__logo__} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n")
-
-        if ":" in session_id:
-            cli_channel, cli_chat_id = session_id.split(":", 1)
-        else:
-            cli_channel, cli_chat_id = "cli", session_id
 
         def _handle_signal(signum, frame):
             sig_name = signal.Signals(signum).name
@@ -844,6 +960,7 @@ def agent(
             turn_done = asyncio.Event()
             turn_done.set()
             turn_response: list[str] = []
+            progress_coalescer = ProgressCoalescer()
 
             async def _consume_outbound():
                 while True:
@@ -851,22 +968,32 @@ def agent(
                         msg = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
                         if msg.metadata.get("_progress"):
                             is_tool_hint = msg.metadata.get("_tool_hint", False)
-                            ch = getattr(agent_loop, "channels_config", None) or config.channels
-                            if ch and is_tool_hint and not ch.send_tool_hints:
-                                pass
-                            elif ch and not is_tool_hint and not ch.send_progress:
-                                pass
-                            else:
-                                await _print_interactive_progress_line(msg.content, _thinking)
+                            event_type = msg.metadata.get("_event_type", "progress")
+                            if _should_emit_cli_progress(bool(is_tool_hint), str(event_type)):
+                                key = (msg.channel, msg.chat_id, event_type)
+                                ready = progress_coalescer.push(
+                                    key=key,
+                                    text=msg.content,
+                                    event_type=str(event_type),
+                                    tool_hint=bool(is_tool_hint),
+                                )
+                                for item in ready:
+                                    await _print_interactive_progress_line(item.text, _thinking)
 
                         elif not turn_done.is_set():
+                            for item in progress_coalescer.flush_all():
+                                await _print_interactive_progress_line(item.text, _thinking)
                             if msg.content:
                                 turn_response.append(msg.content)
                             turn_done.set()
                         elif msg.content:
+                            for item in progress_coalescer.flush_all():
+                                await _print_interactive_progress_line(item.text, _thinking)
                             await _print_interactive_response(msg.content, render_markdown=markdown)
 
                     except asyncio.TimeoutError:
+                        for item in progress_coalescer.flush_due():
+                            await _print_interactive_progress_line(item.text, _thinking)
                         continue
                     except asyncio.CancelledError:
                         break
