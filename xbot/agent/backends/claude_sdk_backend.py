@@ -862,9 +862,13 @@ class ClaudeSDKBackend(AgentBackend):
         """Refresh slash commands discovered from SDK init metadata."""
         try:
             info = await client.get_server_info()
-        except Exception:
+            logger.debug(f"SDK server info for session {session_key}: {info}")
+        except Exception as e:
+            logger.warning(f"Failed to get SDK server info for session {session_key}: {e}")
             return
-        self._session_commands[session_key] = self._extract_slash_commands(info)
+        commands = self._extract_slash_commands(info)
+        logger.info(f"Discovered {len(commands)} SDK slash commands for session {session_key}: {commands}")
+        self._session_commands[session_key] = commands
 
     @staticmethod
     def _extract_slash_commands(info: Any) -> list[str]:
@@ -1060,7 +1064,9 @@ class ClaudeSDKBackend(AgentBackend):
                         },
                     )
                 if isinstance(message, SystemMessage) and message.subtype == "init":
-                    self._session_commands[context.session_key] = self._extract_slash_commands(message.data)
+                    commands = self._extract_slash_commands(message.data)
+                    logger.info(f"SDK init message for session {context.session_key}, discovered {len(commands)} commands: {commands}")
+                    self._session_commands[context.session_key] = commands
                 if isinstance(message, TaskStartedMessage) and message.task_id:
                     self._active_task_ids[context.session_key] = message.task_id
                 if (
@@ -1150,7 +1156,9 @@ class ClaudeSDKBackend(AgentBackend):
                         )
                         async for message in fallback_client.receive_response():
                             if isinstance(message, SystemMessage) and message.subtype == "init":
-                                self._session_commands[context.session_key] = self._extract_slash_commands(message.data)
+                                commands = self._extract_slash_commands(message.data)
+                                logger.info(f"SDK init message (fallback) for session {context.session_key}, discovered {len(commands)} commands: {commands}")
+                                self._session_commands[context.session_key] = commands
                             if isinstance(message, TaskStartedMessage) and message.task_id:
                                 self._active_task_ids[context.session_key] = message.task_id
                             if (
