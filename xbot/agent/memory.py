@@ -14,7 +14,7 @@ from loguru import logger
 from xbot.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain
 
 if TYPE_CHECKING:
-    from xbot.providers.base import LLMProvider
+    from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
     from xbot.session.manager import Session, SessionManager
 
 
@@ -114,8 +114,7 @@ class MemoryStore:
     async def consolidate(
         self,
         messages: list[dict],
-        provider: LLMProvider,
-        model: str,
+        backend: "ClaudeSDKBackend",
     ) -> bool:
         """Consolidate the provided message chunk into MEMORY.md + HISTORY.md."""
         if not messages:
@@ -137,10 +136,9 @@ class MemoryStore:
 
         try:
             forced = {"type": "function", "function": {"name": "save_memory"}}
-            response = await provider.chat_with_retry(
+            response = await backend.call_for_consolidation(
                 messages=chat_messages,
                 tools=_SAVE_MEMORY_TOOL,
-                model=model,
                 tool_choice=forced,
             )
 
@@ -148,10 +146,9 @@ class MemoryStore:
                 response.content
             ):
                 logger.warning("Forced tool_choice unsupported, retrying with auto")
-                response = await provider.chat_with_retry(
+                response = await backend.call_for_consolidation(
                     messages=chat_messages,
                     tools=_SAVE_MEMORY_TOOL,
-                    model=model,
                     tool_choice="auto",
                 )
 
@@ -227,8 +224,7 @@ class MemoryConsolidator:
     def __init__(
         self,
         workspace: Path,
-        provider: LLMProvider,
-        model: str,
+        backend: "ClaudeSDKBackend",
         sessions: SessionManager,
         context_window_tokens: int,
         build_messages: Callable[..., list[dict[str, Any]]],
@@ -237,8 +233,7 @@ class MemoryConsolidator:
     ):
         # Use provided memory store or create default MemoryStore
         self.store = memory_store if memory_store is not None else MemoryStore(workspace)
-        self.provider = provider
-        self.model = model
+        self.backend = backend
         self.sessions = sessions
         self.context_window_tokens = context_window_tokens
         self._build_messages = build_messages
@@ -251,7 +246,7 @@ class MemoryConsolidator:
 
     async def consolidate_messages(self, messages: list[dict[str, object]]) -> bool:
         """Archive a selected message chunk into persistent memory."""
-        return await self.store.consolidate(messages, self.provider, self.model)
+        return await self.store.consolidate(messages, self.backend)
 
     def pick_consolidation_boundary(
         self,
@@ -286,8 +281,8 @@ class MemoryConsolidator:
             chat_id=chat_id,
         )
         return estimate_prompt_tokens_chain(
-            self.provider,
-            self.model,
+            None,  # No provider needed - use tiktoken fallback
+            None,  # No model needed for tiktoken
             probe_messages,
             self._get_tool_definitions(),
         )

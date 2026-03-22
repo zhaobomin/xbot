@@ -780,13 +780,11 @@ class ClaudeSDKBackend(AgentBackend):
         except ImportError:
             logger.warning("ToolAdapter not available")
 
-        # Initialize memory consolidator
-        provider = shared_resources.get("provider")
-        if provider and self.sessions and self._context_builder:
+        # Initialize memory consolidator (use backend directly, no separate provider)
+        if self.sessions and self._context_builder:
             self.memory_consolidator = MemoryConsolidator(
                 workspace=Path(shared_resources.get("workspace", config.defaults.workspace)),
-                provider=provider,
-                model=config.defaults.model,
+                backend=self,
                 sessions=self.sessions,
                 context_window_tokens=config.defaults.context_window_tokens,
                 build_messages=self._context_builder.build_messages,
@@ -1607,3 +1605,147 @@ class ClaudeSDKBackend(AgentBackend):
             f"local_tools={len(self._tool_adapter._tools) if self._tool_adapter else 0}"
         )
         return f"{capability_summary} | {policy_summary} | {handoff} | {runtime}"
+
+    async def call_for_consolidation(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> "LLMResponse":
+        """Call LLM API directly for memory consolidation.
+
+        This method bypasses the SDK and uses httpx to call the API directly.
+        It's used for memory consolidation which doesn't need the full SDK capabilities.
+
+        Args:
+            messages: Chat messages in OpenAI format
+            tools: Optional tools for the LLM to call
+            tool_choice: Optional tool choice (e.g., "auto", "required", or {"type": "function", "function": {"name": "..."}})
+
+        Returns:
+            LLMResponse with content, tool_calls, finish_reason, and usage
+        """
+        import httpx
+
+        from xbot.providers.base import LLMResponse, ToolCallRequest
+
+        api_key, base_url = self._get_provider_config()
+        model = self._get_model_name()
+
+        # Build Anthropic API request
+        # Convert OpenAI format messages to Anthropic format
+        anthropic_messages = []
+        system_content = None
+
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            if role == "system":
+                system_content = content
+            elif role in ("user", "assistant"):
+                anthropic_messages.append({
+                    "role": role,
+                    "content": content,
+                })
+
+        request_body: dict[str, Any] = {
+            "model": model,
+            "max_tokens": 2048,
+            "messages": anthropic_messages,
+        }
+
+        if system_content:
+            request_body["system"] = system_content
+
+        if tools:
+            # Convert OpenAI tools format to Anthropic format
+            anthropic_tools = []
+            for tool in tools:
+                if tool.get("type") == "function":
+                    func = tool.get("function", {})
+                    anthropic_tools.append({
+                        "name": func.get("name", ""),
+                        "description": func.get("description", ""),
+                        "input_schema": func.get("parameters", {"type": "object"}),
+                    })
+            request_body["tools"] = anthropic_tools
+
+            # Handle tool_choice
+            if tool_choice:
+                if isinstance(tool_choice, dict):
+                    # Forced tool call: {"type": "function", "function": {"name": "..."}}
+                    if tool_choice.get("type") == "function":
+                        func_name = tool_choice.get("function", {}).get("name")
+                        if func_name:
+                            request_body["tool_choice"] = {"type": "tool", "name": func_name}
+                elif tool_choice == "auto":
+                    request_body["tool_choice"] = {"type": "auto"}
+                elif tool_choice == "required":
+                    request_body["tool_choice"] = {"type": "any"}
+
+        # Determine API endpoint
+        # Anthropic API: https://api.anthropic.com/v1/messages
+        # Compatible APIs: {base_url}/v1/messages
+        if base_url:
+            api_endpoint = base_url.rstrip("/")
+            if not api_endpoint.endswith("/v1/messages"):
+                if api_endpoint.endswith("/v1"):
+                    api_endpoint = f"{api_endpoint}/messages"
+                else:
+                    api_endpoint = f"{api_endpoint}/v1/messages"
+        else:
+            api_endpoint = "https://api.anthropic.com/v1/messages"
+
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            response = await client.post(
+                api_endpoint,
+                headers=headers,
+                json=request_body,
+            )
+            response.raise_for_status()
+            data = response.json()
+
+        # Parse Anthropic response
+        content_parts = []
+        tool_calls = []
+        finish_reason = "stop"
+
+        for block in data.get("content", []):
+            block_type = block.get("type")
+
+            if block_type == "text":
+                content_parts.append(block.get("text", ""))
+            elif block_type == "tool_use":
+                tool_calls.append(ToolCallRequest(
+                    id=block.get("id", ""),
+                    name=block.get("name", ""),
+                    arguments=block.get("input", {}),
+                ))
+
+        # Map stop_reason to finish_reason
+        stop_reason = data.get("stop_reason")
+        if stop_reason == "tool_use":
+            finish_reason = "tool_calls"
+        elif stop_reason == "end_turn":
+            finish_reason = "stop"
+        elif stop_reason == "max_tokens":
+            finish_reason = "length"
+
+        usage = data.get("usage", {})
+
+        return LLMResponse(
+            content="".join(content_parts) if content_parts else None,
+            tool_calls=tool_calls,
+            finish_reason=finish_reason,
+            usage={
+                "input_tokens": usage.get("input_tokens", 0),
+                "output_tokens": usage.get("output_tokens", 0),
+            },
+        )

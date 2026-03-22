@@ -417,6 +417,9 @@ class TestClaudeSDKBackendMemoryConfig:
                     captured["enable_vector_search"] = enable_vector_search
                     self.memory = object()
 
+                def build_messages(self, *args, **kwargs):
+                    return []
+
             backend = ClaudeSDKBackend()
 
             with patch("xbot.agent.backends.claude_sdk_backend.ContextBuilder", _FakeContextBuilder):
