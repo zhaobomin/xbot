@@ -18,6 +18,7 @@ from xbot.agent.commands import CommandsLoader
 from xbot.agent.event_formatter import format_usage_summary
 from xbot.agent.protocol import AgentContext
 from xbot.agent.router import AgentRouter, register_default_backends
+from xbot.agent.state_checker import StateConsistencyChecker
 from xbot.agent.trace import append_session_trace
 from xbot.bus.events import InboundMessage, OutboundMessage
 
@@ -243,6 +244,10 @@ class AgentRuntime:
             on_transition=self._on_state_transition
         )
 
+        # State consistency checker (for debugging and monitoring)
+        self._state_checker = StateConsistencyChecker(self)
+        self._state_check_enabled = True  # Feature flag for state checking
+
         # Register backend state sync callbacks
         self.shared_resources["on_backend_client_cleanup"] = self._on_backend_client_cleanup
 
@@ -368,6 +373,9 @@ class AgentRuntime:
         return True
 
     async def _dispatch(self, msg: InboundMessage) -> None:
+        # Log state snapshot at dispatch start
+        self._log_state_snapshot(msg.session_key, "dispatch_start")
+
         lock = self._session_locks.setdefault(msg.session_key, asyncio.Lock())
         try:
             async with lock:
@@ -395,6 +403,8 @@ class AgentRuntime:
                 )
         finally:
             self._sync_session_phase(msg.session_key)
+            # Log state snapshot at dispatch end
+            self._log_state_snapshot(msg.session_key, "dispatch_end")
 
     async def _handle_interaction_response(self, msg: InboundMessage) -> bool:
         """Handle pending generic interaction replies for a session."""
@@ -779,6 +789,39 @@ class AgentRuntime:
             self._state_machine.force_transition(session_key, SessionPhase.RUNNING, reason="sync_active_tasks")
         else:
             self._state_machine.force_transition(session_key, SessionPhase.IDLE, reason="sync_idle")
+
+    def _log_state_snapshot(self, session_key: str, event: str) -> None:
+        """Log state snapshot to session trace for debugging.
+
+        Captures current state and checks for inconsistencies.
+        If inconsistencies are found, logs a warning.
+
+        Args:
+            session_key: Session to check
+            event: Event name for trace (e.g., "dispatch_start", "dispatch_end")
+        """
+        if not self._state_check_enabled:
+            return
+
+        try:
+            snapshot = self._state_checker.check_session(session_key)
+
+            # Record to session trace
+            append_session_trace(
+                self.sessions,
+                session_key,
+                f"state_snapshot_{event}",
+                snapshot.to_dict(),
+            )
+
+            # Warn if inconsistencies detected
+            if not snapshot.is_consistent():
+                logger.warning(
+                    f"State inconsistency at {event} for {session_key}: "
+                    f"{snapshot.inconsistencies}"
+                )
+        except Exception as e:
+            logger.debug(f"State snapshot logging failed: {e}")
 
     def _on_backend_client_cleanup(self, session_key: str) -> None:
         """Callback when backend cleans up a client (TTL/LRU eviction).
