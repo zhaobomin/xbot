@@ -341,6 +341,60 @@ class AgentRuntime:
         """Check if coordinator transitions are enabled."""
         return self._use_coordinator_transitions
 
+    # === Full Migration Mode ===
+
+    def enable_full_coordinator_mode(self) -> None:
+        """Enable full coordinator mode.
+
+        This enables all atomic operations and disables shadow mode.
+        The runtime will fully use the coordinator for all state management.
+
+        WARNING: This is a major behavior change. Ensure all tests pass
+        before enabling in production.
+        """
+        # Enable all atomic operations
+        self._use_atomic_dispatch = True
+        self._use_atomic_terminate = True
+        self._use_coordinator_transitions = True
+
+        # Disable shadow mode
+        self._coordinator_shadow_mode = False
+        self._state_coordinator.disable_shadow_mode()
+
+        logger.info(
+            "Full coordinator mode enabled: "
+            f"dispatch={self._use_atomic_dispatch}, "
+            f"terminate={self._use_atomic_terminate}, "
+            f"transitions={self._use_coordinator_transitions}, "
+            f"shadow_mode={self._coordinator_shadow_mode}"
+        )
+
+    def disable_full_coordinator_mode(self) -> None:
+        """Disable full coordinator mode.
+
+        Reverts to legacy behavior with shadow mode enabled.
+        """
+        # Disable all atomic operations
+        self._use_atomic_dispatch = False
+        self._use_atomic_terminate = False
+        self._use_coordinator_transitions = False
+
+        # Re-enable shadow mode
+        self._coordinator_shadow_mode = True
+        self._state_coordinator.enable_shadow_mode()
+
+        logger.info("Full coordinator mode disabled, reverted to legacy behavior")
+
+    @property
+    def is_full_coordinator_mode_enabled(self) -> bool:
+        """Check if full coordinator mode is enabled."""
+        return (
+            self._use_atomic_dispatch
+            and self._use_atomic_terminate
+            and self._use_coordinator_transitions
+            and not self._coordinator_shadow_mode
+        )
+
     async def initialize(self) -> None:
         await self.router.initialize()
 
