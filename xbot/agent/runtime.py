@@ -251,18 +251,12 @@ class AgentRuntime:
 
         # Session state coordinator (unified state management)
         self._state_coordinator = SessionStateCoordinator(self)
-        self._coordinator_shadow_mode = True  # Start in shadow mode for safe migration
-        if self._coordinator_shadow_mode:
-            self._state_coordinator.enable_shadow_mode()
+        self._coordinator_shadow_mode = False  # Shadow mode disabled - coordinator is now default
 
-        # Feature flag for atomic dispatch (uses coordinator transactions)
-        self._use_atomic_dispatch = False  # Off by default, enable after validation
-
-        # Feature flag for atomic terminate (uses coordinator transactions)
-        self._use_atomic_terminate = False  # Off by default, enable after validation
-
-        # Feature flag for using coordinator for permission/interaction transitions
-        self._use_coordinator_transitions = False  # Off by default, enable after validation
+        # Coordinator mode is now the default (atomic operations enabled)
+        self._use_atomic_dispatch = True  # Atomic dispatch enabled by default
+        self._use_atomic_terminate = True  # Atomic terminate enabled by default
+        self._use_coordinator_transitions = True  # Coordinator transitions enabled by default
 
         # Register backend state sync callbacks
         self.shared_resources["on_backend_client_cleanup"] = self._on_backend_client_cleanup
