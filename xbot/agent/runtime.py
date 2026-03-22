@@ -981,6 +981,29 @@ class AgentRuntime:
                 content=self._session_diagnostics_text(msg.session_key),
                 metadata=msg.metadata or {},
             )
+        if cmd in {"!coord", "/coord"}:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=self._coord_status_text(),
+                metadata=msg.metadata or {},
+            )
+        if cmd in {"!coord on", "/coord on"}:
+            self.enable_full_coordinator_mode()
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="✅ Coordinator mode enabled.\n\nAll state operations now use atomic transactions.",
+                metadata=msg.metadata or {},
+            )
+        if cmd in {"!coord off", "/coord off"}:
+            self.disable_full_coordinator_mode()
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="⏹️ Coordinator mode disabled.\n\nReverted to legacy state management.",
+                metadata=msg.metadata or {},
+            )
 
         # Check for workspace command
         command_prefix = ""
@@ -1373,6 +1396,34 @@ class AgentRuntime:
             f"SDK session id: {sdk_session_id or 'none'}",
             f"Backend: {self.router.backend_type}",
         ]
+        return "\n".join(lines)
+
+    def _coord_status_text(self) -> str:
+        """Generate coordinator mode status text."""
+        mode = "Full Coordinator" if self.is_full_coordinator_mode_enabled else "Legacy"
+
+        lines = [
+            f"🔧 Coordinator Mode: {mode}",
+            "",
+            f"  atomic_dispatch: {'✅' if self._use_atomic_dispatch else '⬜'}",
+            f"  atomic_terminate: {'✅' if self._use_atomic_terminate else '⬜'}",
+            f"  coord_transitions: {'✅' if self._use_coordinator_transitions else '⬜'}",
+            f"  shadow_mode: {'✅' if self._coordinator_shadow_mode else '⬜'}",
+            "",
+            "Commands:",
+            "  !coord on  - Enable full coordinator mode",
+            "  !coord off - Disable (revert to legacy)",
+        ]
+
+        # Add stats if coordinator has any
+        if hasattr(self._state_coordinator, '_stats'):
+            stats = self._state_coordinator._stats
+            lines.append("")
+            lines.append("Stats:")
+            lines.append(f"  phase_transitions: {stats.phase_transitions}")
+            lines.append(f"  lock_acquisitions: {stats.lock_acquisitions}")
+            lines.append(f"  task_registrations: {stats.task_registrations}")
+
         return "\n".join(lines)
 
     def _should_send_usage_summary(self) -> bool:
