@@ -135,6 +135,23 @@ class TestFullCoordinatorModeConsistency:
         assert is_consistent or len(issues) == 0 or all("no backend" in i for i in issues)
 
 
+class TestCoordinatorStatusText:
+    """测试协调器状态文本。"""
+
+    def test_coord_status_text_includes_stats(self, runtime_with_coordinator):
+        """测试 !coord 状态文本包含统计字段且不会抛异常。"""
+        runtime_with_coordinator._state_coordinator._stats.phase_transitions = 3
+        runtime_with_coordinator._state_coordinator._stats.locks_created = 2
+        runtime_with_coordinator._state_coordinator._stats.tasks_created = 4
+
+        text = runtime_with_coordinator._coord_status_text()
+
+        assert "Coordinator Mode" in text
+        assert "phase_transitions: 3" in text
+        assert "locks_created: 2" in text
+        assert "tasks_created: 4" in text
+
+
 # === Fixtures ===
 
 class MockRuntimeForCoordinator:
@@ -236,5 +253,7 @@ def runtime_with_coordinator():
     runtime._atomic_handle_permission_response = AgentRuntime._atomic_handle_permission_response.__get__(runtime, MockRuntimeForCoordinator)
     runtime.enable_full_coordinator_mode = AgentRuntime.enable_full_coordinator_mode.__get__(runtime, MockRuntimeForCoordinator)
     runtime.disable_full_coordinator_mode = AgentRuntime.disable_full_coordinator_mode.__get__(runtime, MockRuntimeForCoordinator)
+    runtime._coord_status_text = AgentRuntime._coord_status_text.__get__(runtime, MockRuntimeForCoordinator)
+    runtime.is_full_coordinator_mode_enabled = False
 
     return runtime

@@ -1428,8 +1428,8 @@ class AgentRuntime:
             lines.append("")
             lines.append("Stats:")
             lines.append(f"  phase_transitions: {stats.phase_transitions}")
-            lines.append(f"  lock_acquisitions: {stats.lock_acquisitions}")
-            lines.append(f"  task_registrations: {stats.task_registrations}")
+            lines.append(f"  locks_created: {stats.locks_created}")
+            lines.append(f"  tasks_created: {stats.tasks_created}")
 
         return "\n".join(lines)
 
