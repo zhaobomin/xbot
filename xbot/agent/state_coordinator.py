@@ -213,7 +213,7 @@ class SessionStateCoordinator:
             )
 
         return self._runtime._state_machine.force_transition(
-            session_key, to_phase, reason
+            session_key, to_phase, reason=reason
         )
 
     # === 任务管理 ===

@@ -775,27 +775,27 @@ class AgentRuntime:
         return _on_task_done
 
     def _set_session_phase(self, session_key: str, phase: SessionPhase, *, reason: str = "") -> None:
-        """Set session phase using state machine."""
-        self._state_machine.transition(session_key, phase, reason=reason, force=True)
+        """Set session phase using coordinator."""
+        self._state_coordinator.transition(session_key, phase, reason=reason, force=True)
 
     def _sync_session_phase(self, session_key: str) -> None:
-        """Synchronize session phase based on current state."""
+        """Synchronize session phase based on current state using coordinator."""
         if self.bus is not None:
             if self.bus.get_pending_request_for_session(session_key):
-                self._state_machine.force_transition(
+                self._state_coordinator.force_transition(
                     session_key, SessionPhase.WAITING_PERMISSION, reason="sync_pending_permission"
                 )
                 return
             if self.bus.get_pending_interaction_for_session(session_key):
-                self._state_machine.force_transition(
+                self._state_coordinator.force_transition(
                     session_key, SessionPhase.WAITING_INTERACTION, reason="sync_pending_interaction"
                 )
                 return
         active = [t for t in self._active_tasks.get(session_key, []) if not t.done()]
         if active:
-            self._state_machine.force_transition(session_key, SessionPhase.RUNNING, reason="sync_active_tasks")
+            self._state_coordinator.force_transition(session_key, SessionPhase.RUNNING, reason="sync_active_tasks")
         else:
-            self._state_machine.force_transition(session_key, SessionPhase.IDLE, reason="sync_idle")
+            self._state_coordinator.force_transition(session_key, SessionPhase.IDLE, reason="sync_idle")
 
     def _log_state_snapshot(self, session_key: str, event: str) -> None:
         """Log state snapshot to session trace for debugging.
@@ -839,12 +839,12 @@ class AgentRuntime:
         Args:
             session_key: The session whose client was cleaned up
         """
-        current_phase = self._state_machine.get_phase(session_key)
+        current_phase = self._state_coordinator.get_phase(session_key)
 
         # Only update if session is active
         if current_phase == SessionPhase.RUNNING:
             logger.debug(f"Backend client cleaned up for active session: {session_key}")
-            self._state_machine.force_transition(
+            self._state_coordinator.force_transition(
                 session_key, SessionPhase.IDLE, reason="backend_client_cleanup"
             )
             # Clean up related runtime state
