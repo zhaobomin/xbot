@@ -57,7 +57,7 @@ class PermissionConfig(Base):
     auto_approve_safe_tools: bool = True  # 是否自动批准安全工具
     safe_tools: list[str] = [  # 安全工具列表（自动批准）
         "read_file", "list_dir", "web_search", "web_fetch",
-        "message", "cron", "spawn",
+        "message", "cron",
     ]
 
 
@@ -315,8 +315,8 @@ class Config(BaseSettings):
         if p and p.api_base:
             return p.api_base
         # Only gateways get a default api_base here. Standard providers
-        # (like Moonshot) set their base URL via env vars in _setup_env
-        # to avoid polluting the global litellm.api_base.
+        # (like Moonshot) set their base URL via env vars in backend env setup
+        # to avoid polluting shared global client defaults.
         if name:
             spec = find_by_name(name)
             if spec and (spec.is_gateway or spec.is_local) and spec.default_api_base:

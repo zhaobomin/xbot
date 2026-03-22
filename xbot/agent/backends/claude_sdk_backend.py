@@ -1410,13 +1410,9 @@ class ClaudeSDKBackend(AgentBackend):
 
     async def cancel_session(self, session_key: str) -> int:
         """Cancel active work for a session."""
-        if not self._tool_adapter:
-            return 0
-        spawn_tool = self._tool_adapter.get_tool("spawn")
-        manager = getattr(spawn_tool, "_manager", None)
-        if manager is None:
-            return 0
-        return await manager.cancel_by_session(session_key)
+        _ = session_key
+        # SDK-native delegation no longer uses the legacy local spawn manager.
+        return 0
 
     async def get_session_commands(self, session_key: str) -> list[str]:
         """Return discovered SDK slash commands for a session."""
@@ -1606,31 +1602,74 @@ class ClaudeSDKBackend(AgentBackend):
         )
         return f"{capability_summary} | {policy_summary} | {handoff} | {runtime}"
 
-    async def call_for_consolidation(
+    def _resolve_consolidation_provider(self) -> tuple[str, str, dict[str, str] | None]:
+        """Resolve API credentials/base URL for direct consolidation calls."""
+        config = self._shared_resources.get("config")
+        if config is None:
+            raise ValueError("Missing runtime config for consolidation")
+
+        provider_name, _ = resolve_sdk_provider_and_model(config)
+        spec = get_provider_spec(provider_name)
+        if not spec:
+            raise ValueError(f"Unknown provider: {provider_name}")
+
+        provider_attr = provider_name.replace("-", "_")
+        provider_config: ProviderConfig | None = getattr(config.providers, provider_attr, None)
+        if not provider_config or not provider_config.api_key:
+            raise ValueError(
+                f"API key not configured for provider '{provider_name}'. "
+                f"Please set providers.{provider_name}.api_key in config.json"
+            )
+
+        api_key = provider_config.api_key
+        base_url = provider_config.api_base if provider_config.api_base else spec.default_base_url
+        return api_key, base_url, provider_config.extra_headers
+
+    def _resolve_consolidation_model(self) -> str:
+        """Resolve model name for direct consolidation calls."""
+        config = self._shared_resources.get("config")
+        if config is None:
+            raise ValueError("Missing runtime config for consolidation")
+        _, model = resolve_sdk_provider_and_model(config)
+        return model
+
+    async def call_for_auxiliary(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         tool_choice: str | dict[str, Any] | None = None,
+        *,
+        max_tokens: int = 2048,
+        temperature: float | None = None,
     ) -> "LLMResponse":
-        """Call LLM API directly for memory consolidation.
+        """Call LLM API directly for auxiliary tasks (memory/heartbeat/evaluator).
 
-        This method bypasses the SDK and uses httpx to call the API directly.
-        It's used for memory consolidation which doesn't need the full SDK capabilities.
+        This method bypasses the SDK stream loop and uses httpx to call the
+        Anthropic-compatible Messages API endpoint directly.
 
         Args:
             messages: Chat messages in OpenAI format
             tools: Optional tools for the LLM to call
             tool_choice: Optional tool choice (e.g., "auto", "required", or {"type": "function", "function": {"name": "..."}})
+            max_tokens: Max tokens for this auxiliary request
+            temperature: Optional temperature override
 
         Returns:
             LLMResponse with content, tool_calls, finish_reason, and usage
         """
-        import httpx
-
         from xbot.providers.base import LLMResponse, ToolCallRequest
 
-        api_key, base_url = self._get_provider_config()
-        model = self._get_model_name()
+        import httpx
+
+        try:
+            api_key, base_url, extra_headers = self._resolve_consolidation_provider()
+            model = self._resolve_consolidation_model()
+        except Exception as e:
+            logger.warning(f"Consolidation config resolution failed: {e}")
+            return LLMResponse(
+                content=f"Error calling LLM: {str(e)}",
+                finish_reason="error",
+            )
 
         # Build Anthropic API request
         # Convert OpenAI format messages to Anthropic format
@@ -1651,9 +1690,11 @@ class ClaudeSDKBackend(AgentBackend):
 
         request_body: dict[str, Any] = {
             "model": model,
-            "max_tokens": 2048,
+            "max_tokens": max(1, int(max_tokens)),
             "messages": anthropic_messages,
         }
+        if temperature is not None:
+            request_body["temperature"] = temperature
 
         if system_content:
             request_body["system"] = system_content
@@ -1697,20 +1738,60 @@ class ClaudeSDKBackend(AgentBackend):
         else:
             api_endpoint = "https://api.anthropic.com/v1/messages"
 
-        headers = {
+        headers: dict[str, str] = {
             "x-api-key": api_key,
             "anthropic-version": "2023-06-01",
             "content-type": "application/json",
         }
+        if isinstance(extra_headers, dict):
+            headers.update({str(k): str(v) for k, v in extra_headers.items()})
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            response = await client.post(
-                api_endpoint,
-                headers=headers,
-                json=request_body,
+        retry_delays = (0.5, 1.0, 2.0)
+        retryable_statuses = {429, 500, 502, 503, 504}
+        data: dict[str, Any] | None = None
+        for attempt in range(len(retry_delays) + 1):
+            try:
+                async with httpx.AsyncClient(timeout=60.0) as client:
+                    response = await client.post(
+                        api_endpoint,
+                        headers=headers,
+                        json=request_body,
+                    )
+                    response.raise_for_status()
+                    body = response.json()
+                data = body if isinstance(body, dict) else {}
+                break
+            except httpx.HTTPStatusError as e:
+                code = e.response.status_code if e.response is not None else 0
+                if code in retryable_statuses and attempt < len(retry_delays):
+                    await asyncio.sleep(retry_delays[attempt])
+                    continue
+                logger.warning(f"Consolidation HTTP error {code}: {e}")
+                return LLMResponse(
+                    content=f"Error calling LLM: {str(e)}",
+                    finish_reason="error",
+                )
+            except (httpx.TimeoutException, httpx.NetworkError, httpx.TransportError) as e:
+                if attempt < len(retry_delays):
+                    await asyncio.sleep(retry_delays[attempt])
+                    continue
+                logger.warning(f"Consolidation network error: {e}")
+                return LLMResponse(
+                    content=f"Error calling LLM: {str(e)}",
+                    finish_reason="error",
+                )
+            except Exception as e:
+                logger.warning(f"Consolidation request failed: {e}")
+                return LLMResponse(
+                    content=f"Error calling LLM: {str(e)}",
+                    finish_reason="error",
+                )
+
+        if data is None:
+            return LLMResponse(
+                content="Error calling LLM: no response received",
+                finish_reason="error",
             )
-            response.raise_for_status()
-            data = response.json()
 
         # Parse Anthropic response
         content_parts = []
@@ -1748,4 +1829,18 @@ class ClaudeSDKBackend(AgentBackend):
                 "input_tokens": usage.get("input_tokens", 0),
                 "output_tokens": usage.get("output_tokens", 0),
             },
+        )
+
+    async def call_for_consolidation(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: str | dict[str, Any] | None = None,
+    ) -> "LLMResponse":
+        """Backward-compatible wrapper for memory consolidation calls."""
+        return await self.call_for_auxiliary(
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            max_tokens=2048,
         )

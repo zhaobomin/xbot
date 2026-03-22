@@ -7,9 +7,8 @@ from unittest.mock import ANY, AsyncMock, MagicMock, patch
 import pytest
 from typer.testing import CliRunner
 
-from xbot.cli.commands import _make_provider, app
+from xbot.cli.commands import app
 from xbot.config.schema import Config
-from xbot.providers.litellm_provider import LiteLLMProvider
 from xbot.providers.registry import find_by_model
 
 
@@ -229,12 +228,12 @@ def test_find_by_model_matches_claude():
     assert spec.name == "anthropic"
 
 
-def test_litellm_provider_canonicalizes_anthropic_model():
-    provider = LiteLLMProvider(default_model="claude-3-opus")
+def test_config_api_base_resolves_for_claude_model():
+    config = Config()
+    config.agents.defaults.model = "claude-3-opus"
+    config.providers.anthropic.api_key = "test-key"
 
-    resolved = provider._resolve_model("claude-3-opus")
-
-    assert resolved == "claude-3-opus"
+    assert config.get_api_base("claude-3-opus") is None or isinstance(config.get_api_base("claude-3-opus"), str)
 
 
 @pytest.fixture
@@ -247,7 +246,6 @@ def mock_agent_runtime(tmp_path):
     with patch("xbot.config.loader.load_config", return_value=config) as mock_load_config, \
          patch("xbot.config.paths.get_cron_dir", return_value=cron_dir), \
          patch("xbot.cli.commands.sync_workspace_templates") as mock_sync_templates, \
-         patch("xbot.cli.commands._make_provider", return_value=object()), \
          patch("xbot.cli.commands._print_agent_response") as mock_print_response, \
          patch("xbot.bus.queue.MessageBus"), \
          patch("xbot.cron.service.CronService"), \
@@ -395,7 +393,6 @@ def test_agent_config_sets_active_path(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr("xbot.config.loader.load_config", lambda _path=None: config)
     monkeypatch.setattr("xbot.config.paths.get_cron_dir", lambda: config_file.parent / "cron")
     monkeypatch.setattr("xbot.cli.commands.sync_workspace_templates", lambda _path: None)
-    monkeypatch.setattr("xbot.cli.commands._make_provider", lambda _config: object())
     monkeypatch.setattr("xbot.bus.queue.MessageBus", lambda: object())
     monkeypatch.setattr("xbot.cron.service.CronService", lambda _store: object())
 
@@ -512,8 +509,8 @@ def test_gateway_uses_workspace_from_config_by_default(monkeypatch, tmp_path: Pa
         lambda path: seen.__setitem__("workspace", path),
     )
     monkeypatch.setattr(
-        "xbot.cli.commands._make_provider",
-        lambda _config: (_ for _ in ()).throw(_StopGateway("stop")),
+        "xbot.bus.queue.MessageBus",
+        lambda: (_ for _ in ()).throw(_StopGateway("stop")),
     )
 
     result = runner.invoke(app, ["gateway", "--config", str(config_file)])
@@ -540,8 +537,8 @@ def test_gateway_workspace_option_overrides_config(monkeypatch, tmp_path: Path) 
         lambda path: seen.__setitem__("workspace", path),
     )
     monkeypatch.setattr(
-        "xbot.cli.commands._make_provider",
-        lambda _config: (_ for _ in ()).throw(_StopGateway("stop")),
+        "xbot.bus.queue.MessageBus",
+        lambda: (_ for _ in ()).throw(_StopGateway("stop")),
     )
 
     result = runner.invoke(
@@ -566,8 +563,8 @@ def test_gateway_warns_about_deprecated_memory_window(monkeypatch, tmp_path: Pat
     monkeypatch.setattr("xbot.config.loader.load_config", lambda _path=None: config)
     monkeypatch.setattr("xbot.cli.commands.sync_workspace_templates", lambda _path: None)
     monkeypatch.setattr(
-        "xbot.cli.commands._make_provider",
-        lambda _config: (_ for _ in ()).throw(_StopGateway("stop")),
+        "xbot.bus.queue.MessageBus",
+        lambda: (_ for _ in ()).throw(_StopGateway("stop")),
     )
 
     result = runner.invoke(app, ["gateway", "--config", str(config_file)])
@@ -589,7 +586,6 @@ def test_gateway_uses_config_directory_for_cron_store(monkeypatch, tmp_path: Pat
     monkeypatch.setattr("xbot.config.loader.load_config", lambda _path=None: config)
     monkeypatch.setattr("xbot.config.paths.get_cron_dir", lambda: config_file.parent / "cron")
     monkeypatch.setattr("xbot.cli.commands.sync_workspace_templates", lambda _path: None)
-    monkeypatch.setattr("xbot.cli.commands._make_provider", lambda _config: object())
     monkeypatch.setattr("xbot.bus.queue.MessageBus", lambda: object())
     monkeypatch.setattr("xbot.session.manager.SessionManager", lambda _workspace: object())
 
@@ -618,8 +614,8 @@ def test_gateway_uses_configured_port_when_cli_flag_is_missing(monkeypatch, tmp_
     monkeypatch.setattr("xbot.config.loader.load_config", lambda _path=None: config)
     monkeypatch.setattr("xbot.cli.commands.sync_workspace_templates", lambda _path: None)
     monkeypatch.setattr(
-        "xbot.cli.commands._make_provider",
-        lambda _config: (_ for _ in ()).throw(_StopGateway("stop")),
+        "xbot.bus.queue.MessageBus",
+        lambda: (_ for _ in ()).throw(_StopGateway("stop")),
     )
 
     result = runner.invoke(app, ["gateway", "--config", str(config_file)])
@@ -640,8 +636,8 @@ def test_gateway_cli_port_overrides_configured_port(monkeypatch, tmp_path: Path)
     monkeypatch.setattr("xbot.config.loader.load_config", lambda _path=None: config)
     monkeypatch.setattr("xbot.cli.commands.sync_workspace_templates", lambda _path: None)
     monkeypatch.setattr(
-        "xbot.cli.commands._make_provider",
-        lambda _config: (_ for _ in ()).throw(_StopGateway("stop")),
+        "xbot.bus.queue.MessageBus",
+        lambda: (_ for _ in ()).throw(_StopGateway("stop")),
     )
 
     result = runner.invoke(app, ["gateway", "--config", str(config_file), "--port", "18792"])

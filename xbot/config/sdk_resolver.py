@@ -20,7 +20,6 @@ _LEGACY_MODEL_PREFIXES = {
     "aliyun_coding_plan",
     "alrun",
     "openrouter",
-    "litellm",
 }
 
 

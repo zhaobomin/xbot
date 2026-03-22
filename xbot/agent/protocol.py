@@ -1,7 +1,7 @@
 """Agent protocol definitions.
 
 This module defines the abstract interface for Agent backends,
-enabling interchangeable implementations (LiteLLM, Claude SDK, etc.).
+enabling interchangeable implementations (Claude SDK and custom backends).
 """
 
 from abc import ABC, abstractmethod
@@ -50,8 +50,8 @@ class AgentBackend(ABC):
     - Streaming responses
 
     Implementations:
-    - LiteLLMBackend: Uses the existing AgentLoop with LiteLLM
     - ClaudeSDKBackend: Uses the Claude Agent SDK
+    - Custom backends implementing this protocol
     """
 
     @property

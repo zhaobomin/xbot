@@ -431,35 +431,3 @@ def test_tool_adapter_applies_workspace_restriction_to_sdk_tools(tmp_path) -> No
     assert adapter.get_tool("list_dir")._allowed_dir == tmp_path
     assert adapter.get_tool("shell").restrict_to_workspace is True
 
-
-def test_tool_adapter_registers_spawn_tool_when_provider_is_available(tmp_path, monkeypatch) -> None:
-    from xbot.agent.tool_adapter import ToolAdapter
-
-    created = {}
-
-    class _FakeSubagentManager:
-        def __init__(self, **kwargs) -> None:
-            created.update(kwargs)
-
-    monkeypatch.setattr("xbot.agent.tool_adapter.SubagentManager", _FakeSubagentManager)
-
-    tools_config = SimpleNamespace(
-        web=SimpleNamespace(proxy=None, search=None),
-        exec=SimpleNamespace(timeout=60, path_append=""),
-        restrict_to_workspace=True,
-    )
-    provider = object()
-    bus = object()
-    adapter = ToolAdapter(
-        workspace=str(tmp_path),
-        tools_config=tools_config,
-        shared_resources={"provider": provider, "bus": bus, "model": "test-model"},
-    )
-
-    adapter._register_xbot_tools()
-
-    assert adapter.get_tool("spawn") is not None
-    assert created["provider"] is provider
-    assert created["bus"] is bus
-    assert created["model"] == "test-model"
-    assert created["restrict_to_workspace"] is True

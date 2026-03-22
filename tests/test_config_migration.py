@@ -58,7 +58,7 @@ def test_save_config_writes_context_window_tokens_but_not_memory_window(tmp_path
     assert "memoryWindow" not in defaults
 
 
-def test_onboard_refresh_rewrites_legacy_config_template(tmp_path, monkeypatch) -> None:
+def test_onboard_refresh_rewrites_legacy_config_defaults(tmp_path, monkeypatch) -> None:
     config_path = tmp_path / "config.json"
     workspace = tmp_path / "workspace"
     config_path.write_text(

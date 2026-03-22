@@ -147,7 +147,7 @@ class TestHandoffPolicy:
         """Test build_request_prefix for background."""
         decision = HandoffDecision(mode="background", reason="test")
         prefix = policy_with_agents.build_request_prefix(decision)
-        assert "spawn" in prefix.lower()
+        assert "background task" in prefix.lower()
 
     def test_build_request_prefix_main(self, policy_with_agents: HandoffPolicy) -> None:
         """Test build_request_prefix for main."""

@@ -1591,3 +1591,137 @@ class TestBackendInputRequiredInteraction:
         req = mock_bus.publish_interaction_request.await_args.args[0]
         assert isinstance(req, InteractionRequest)
         assert req.kind == "question"
+
+
+class TestClaudeSDKBackendConsolidationCall:
+    """Tests for direct consolidation API call behavior."""
+
+    @pytest.mark.asyncio
+    async def test_call_for_consolidation_resolves_provider_and_parses_tool_result(self):
+        import httpx
+
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.config.schema import Config
+
+        backend = ClaudeSDKBackend()
+        config = Config()
+        config.agents.defaults.provider = "anthropic"
+        config.agents.defaults.model = "anthropic/claude-sonnet-4-5"
+        config.providers.anthropic.api_key = "test-key"
+        config.providers.anthropic.api_base = "https://api.example.com/v1"
+        config.providers.anthropic.extra_headers = {"x-extra-header": "abc"}
+        backend._shared_resources = {"config": config}
+
+        captured: dict[str, object] = {}
+
+        class _FakeClient:
+            def __init__(self, *args, **kwargs):
+                captured["timeout"] = kwargs.get("timeout")
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, url, headers=None, json=None):
+                captured["url"] = url
+                captured["headers"] = headers
+                captured["json"] = json
+                req = httpx.Request("POST", url)
+                return httpx.Response(
+                    200,
+                    request=req,
+                    json={
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "tool_1",
+                                "name": "save_memory",
+                                "input": {"history_entry": "h", "memory_update": "m"},
+                            }
+                        ],
+                        "stop_reason": "tool_use",
+                        "usage": {"input_tokens": 11, "output_tokens": 7},
+                    },
+                )
+
+        with patch("httpx.AsyncClient", _FakeClient):
+            response = await backend.call_for_consolidation(
+                messages=[
+                    {"role": "system", "content": "sys"},
+                    {"role": "user", "content": "hello"},
+                ],
+                tools=[
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "save_memory",
+                            "description": "desc",
+                            "parameters": {"type": "object"},
+                        },
+                    }
+                ],
+                tool_choice={"type": "function", "function": {"name": "save_memory"}},
+            )
+
+        assert captured["url"] == "https://api.example.com/v1/messages"
+        assert captured["headers"]["x-api-key"] == "test-key"
+        assert captured["headers"]["x-extra-header"] == "abc"
+        assert captured["json"]["model"] == "claude-sonnet-4-5"
+        assert response.finish_reason == "tool_calls"
+        assert response.tool_calls
+        assert response.tool_calls[0].name == "save_memory"
+        assert response.usage["input_tokens"] == 11
+        assert response.usage["output_tokens"] == 7
+
+    @pytest.mark.asyncio
+    async def test_call_for_consolidation_retries_retryable_http_status(self):
+        import httpx
+
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.config.schema import Config
+
+        backend = ClaudeSDKBackend()
+        config = Config()
+        config.agents.defaults.provider = "anthropic"
+        config.agents.defaults.model = "claude-sonnet-4-5"
+        config.providers.anthropic.api_key = "test-key"
+        backend._shared_resources = {"config": config}
+
+        state = {"calls": 0}
+
+        class _FlakyClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, exc_type, exc, tb):
+                return False
+
+            async def post(self, url, headers=None, json=None):
+                state["calls"] += 1
+                req = httpx.Request("POST", url)
+                if state["calls"] == 1:
+                    resp = httpx.Response(503, request=req, json={"error": "busy"})
+                    raise httpx.HTTPStatusError("service unavailable", request=req, response=resp)
+                return httpx.Response(
+                    200,
+                    request=req,
+                    json={
+                        "content": [{"type": "text", "text": "ok"}],
+                        "stop_reason": "end_turn",
+                        "usage": {"input_tokens": 1, "output_tokens": 1},
+                    },
+                )
+
+        sleep_mock = AsyncMock()
+        with patch("httpx.AsyncClient", return_value=_FlakyClient()):
+            with patch("xbot.agent.backends.claude_sdk_backend.asyncio.sleep", sleep_mock):
+                response = await backend.call_for_consolidation(
+                    messages=[{"role": "user", "content": "hello"}],
+                )
+
+        assert state["calls"] == 2
+        sleep_mock.assert_awaited_once()
+        assert response.finish_reason == "stop"
+        assert response.content == "ok"

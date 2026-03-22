@@ -114,6 +114,8 @@ async def test_router_runtime_help_includes_dynamic_sdk_commands(tmp_path) -> No
     assert "/restart" in response
     assert "!reset" in response
     assert "/reset" in response
+    assert "!state" in response
+    assert "/state" in response
     assert "/compact" in response
     assert "Claude SDK slash commands" in response
     assert backend.initialized is True
@@ -275,7 +277,7 @@ async def test_router_runtime_stop_delegates_backend_session_cancellation(tmp_pa
 
     response = await runtime.process_direct("!stop")
 
-    assert "2 subagent" in response
+    assert "2 background task" in response
 
 
 @pytest.mark.asyncio
@@ -417,6 +419,134 @@ async def test_router_runtime_reset_clears_pending_bus_requests_for_session(tmp_
 
     assert bus.get_pending_request_for_session("cli:direct") is None
     assert bus.get_pending_interaction_for_session("cli:direct") is None
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_stop_clears_pending_bus_requests_for_session(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    AgentRouter._backends = {"claude_sdk": _FakeBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    bus = MessageBus()
+
+    await bus.publish_permission_request(
+        PermissionRequest(
+            request_id="perm-stop-1",
+            session_key="cli:direct",
+            channel="cli",
+            chat_id="direct",
+            tool_name="exec_command",
+            tool_input={"cmd": "echo hi"},
+            message="allow?",
+        )
+    )
+    await bus.publish_interaction_request(
+        InteractionRequest(
+            request_id="int-stop-1",
+            session_key="cli:direct",
+            channel="cli",
+            chat_id="direct",
+            kind="question",
+            prompt="continue?",
+        )
+    )
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": bus,
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("/stop")
+
+    assert "pending permission" in response
+    assert "pending interaction" in response
+    assert bus.get_pending_request_for_session("cli:direct") is None
+    assert bus.get_pending_interaction_for_session("cli:direct") is None
+    assert runtime.get_session_state("cli:direct") == "idle"
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_process_direct_sets_session_state_back_to_idle(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    AgentRouter._backends = {"claude_sdk": _FakeBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("hello")
+    assert response == "echo:hello"
+    assert runtime.get_session_state("cli:direct") == "idle"
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_state_command_reports_session_diagnostics(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import InteractionRequest, MessageBus, PermissionRequest
+
+    AgentRouter._backends = {"claude_sdk": _FakeBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    bus = MessageBus()
+
+    await bus.publish_permission_request(
+        PermissionRequest(
+            request_id="perm-state-1",
+            session_key="cli:direct",
+            channel="cli",
+            chat_id="direct",
+            tool_name="exec_command",
+            tool_input={"cmd": "echo hi"},
+            message="allow?",
+        )
+    )
+    await bus.publish_interaction_request(
+        InteractionRequest(
+            request_id="int-state-1",
+            session_key="cli:direct",
+            channel="cli",
+            chat_id="direct",
+            kind="question",
+            prompt="continue?",
+        )
+    )
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": bus,
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+    # Explicit set for deterministic output
+    from xbot.agent.runtime import SessionPhase
+    runtime._set_session_phase("cli:direct", SessionPhase.RUNNING, reason="test")
+
+    response = await runtime.process_direct("/state")
+
+    assert "Session: cli:direct" in response
+    assert "Phase: running" in response
+    assert "Pending permission: perm-state-1" in response
+    assert "Pending interaction: int-state-1" in response
+    assert "Backend: claude_sdk" in response
 
 
 @pytest.mark.asyncio

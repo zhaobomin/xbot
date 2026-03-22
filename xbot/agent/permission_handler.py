@@ -53,7 +53,7 @@ class BasePermissionHandler:
         self.auto_approve_safe_tools = auto_approve_safe_tools
         self._safe_tools = safe_tools or {
             "read_file", "list_dir", "web_search", "web_fetch",
-            "message", "cron", "spawn", "read", "ls",
+            "message", "cron", "read", "ls",
         }
 
     def is_safe_tool(self, tool_name: str) -> bool:

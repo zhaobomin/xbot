@@ -430,39 +430,6 @@ def _onboard_plugins(config_path: Path) -> None:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
 
-def _make_provider(config: Config):
-    """Create a LiteLLM provider for memory consolidation.
-
-    In SDK mode, the actual LLM calls are handled by the SDK backend.
-    This provider is only used for memory consolidation (summarization).
-    """
-    from xbot.providers.base import GenerationSettings
-    from xbot.providers.litellm_provider import LiteLLMProvider
-    from xbot.config.sdk_resolver import resolve_sdk_provider_and_model
-
-    model = config.agents.defaults.model
-    provider_name, model = resolve_sdk_provider_and_model(config)
-    provider_attr = provider_name.replace("-", "_")
-    p = getattr(config.providers, provider_attr, None)
-
-    # Create LiteLLMProvider for memory consolidation
-    provider = LiteLLMProvider(
-        api_key=p.api_key if p else None,
-        api_base=config.get_api_base(model),
-        default_model=model,
-        extra_headers=p.extra_headers if p else None,
-        provider_name=provider_name,
-    )
-
-    defaults = config.agents.defaults
-    provider.generation = GenerationSettings(
-        temperature=defaults.temperature,
-        max_tokens=defaults.max_tokens,
-        reasoning_effort=defaults.reasoning_effort,
-    )
-    return provider
-
-
 def _load_runtime_config(config: str | None = None, workspace: str | None = None) -> Config:
     """Load config and optionally override the active workspace."""
     from xbot.config.loader import load_config, set_config_path
@@ -492,7 +459,6 @@ def _make_agent_runtime(
     *,
     config: Config,
     bus,
-    provider,
     workspace: Path,
     cron_service,
     session_manager,
@@ -501,7 +467,6 @@ def _make_agent_runtime(
     """Create the unified router-backed runtime."""
     shared_resources = {
         "bus": bus,
-        "provider": provider,
         "workspace": workspace,
         "cron_service": cron_service,
         "session_manager": session_manager,
@@ -563,7 +528,6 @@ def gateway(
     console.print(f"[dim]Agent type: claude_sdk[/dim]")
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
-    provider = _make_provider(config)
     session_manager = SessionManager(config.workspace_path)
 
     # Create health check service
@@ -586,7 +550,6 @@ def gateway(
     agent = _make_agent_runtime(
         config=config,
         bus=bus,
-        provider=provider,
         workspace=config.workspace_path,
         cron_service=cron,
         session_manager=session_manager,
@@ -626,8 +589,9 @@ def gateway(
             return response
 
         if job.payload.deliver and job.payload.to and response:
+            llm_call = agent.backend.call_for_auxiliary
             should_notify = await evaluate_response(
-                response, job.payload.message, provider, agent.model,
+                response, job.payload.message, llm_call,
             )
             if should_notify:
                 from xbot.bus.events import OutboundMessage
@@ -682,11 +646,14 @@ def gateway(
             return  # No external channel available to deliver to
         await bus.publish_outbound(OutboundMessage(channel=channel, chat_id=chat_id, content=response))
 
+    async def _heartbeat_llm_call(*args, **kwargs):
+        """Defer backend access until runtime (after agent.initialize())."""
+        return await agent.backend.call_for_auxiliary(*args, **kwargs)
+
     hb_cfg = config.gateway.heartbeat
     heartbeat = HeartbeatService(
         workspace=config.workspace_path,
-        provider=provider,
-        model=agent.model,
+        llm_call=_heartbeat_llm_call,
         on_execute=on_heartbeat_execute,
         on_notify=on_heartbeat_notify,
         interval_s=hb_cfg.interval_s,
@@ -780,7 +747,6 @@ def agent(
     sync_workspace_templates(config.workspace_path)
 
     bus = MessageBus()
-    provider = _make_provider(config)
 
     # Create cron service for tool usage (no callback needed for CLI unless running)
     cron_store_path = get_cron_dir() / "jobs.json"
@@ -814,7 +780,6 @@ def agent(
     agent_loop = _make_agent_runtime(
         config=config,
         bus=bus,
-        provider=provider,
         workspace=config.workspace_path,
         cron_service=cron,
         session_manager=None,
@@ -1296,24 +1261,6 @@ def _login_openai_codex() -> None:
         console.print(f"[green]✓ Authenticated with OpenAI Codex[/green]  [dim]{token.account_id}[/dim]")
     except ImportError:
         console.print("[red]oauth_cli_kit not installed. Run: pip install oauth-cli-kit[/red]")
-        raise typer.Exit(1)
-
-
-@_register_login("github_copilot")
-def _login_github_copilot() -> None:
-    import asyncio
-
-    console.print("[cyan]Starting GitHub Copilot device flow...[/cyan]\n")
-
-    async def _trigger():
-        from litellm import acompletion
-        await acompletion(model="github_copilot/gpt-4o", messages=[{"role": "user", "content": "hi"}], max_tokens=1)
-
-    try:
-        asyncio.run(_trigger())
-        console.print("[green]✓ Authenticated with GitHub Copilot[/green]")
-    except Exception as e:
-        console.print(f"[red]Authentication error: {e}[/red]")
         raise typer.Exit(1)
 
 

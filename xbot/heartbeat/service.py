@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Coroutine
+from typing import Any, Awaitable, Callable, Coroutine
 
 from loguru import logger
-
-if TYPE_CHECKING:
-    from xbot.providers.base import LLMProvider
 
 _HEARTBEAT_TOOL = [
     {
@@ -36,6 +33,21 @@ _HEARTBEAT_TOOL = [
     }
 ]
 
+_TRANSIENT_ERROR_MARKERS = (
+    "429",
+    "rate limit",
+    "500",
+    "502",
+    "503",
+    "504",
+    "overloaded",
+    "timeout",
+    "timed out",
+    "connection",
+    "server error",
+    "temporarily unavailable",
+)
+
 
 class HeartbeatService:
     """
@@ -53,16 +65,14 @@ class HeartbeatService:
     def __init__(
         self,
         workspace: Path,
-        provider: LLMProvider,
-        model: str,
+        llm_call: Callable[..., Awaitable[Any]],
         on_execute: Callable[[str], Coroutine[Any, Any, str]] | None = None,
         on_notify: Callable[[str], Coroutine[Any, Any, None]] | None = None,
         interval_s: int = 30 * 60,
         enabled: bool = True,
     ):
         self.workspace = workspace
-        self.provider = provider
-        self.model = model
+        self._llm_call = llm_call
         self.on_execute = on_execute
         self.on_notify = on_notify
         self.interval_s = interval_s
@@ -89,18 +99,27 @@ class HeartbeatService:
         """
         from xbot.utils.helpers import current_time_str
 
-        response = await self.provider.chat_with_retry(
-            messages=[
-                {"role": "system", "content": "You are a heartbeat agent. Call the heartbeat tool to report your decision."},
-                {"role": "user", "content": (
-                    f"Current Time: {current_time_str()}\n\n"
-                    "Review the following HEARTBEAT.md and decide whether there are active tasks.\n\n"
-                    f"{content}"
-                )},
-            ],
-            tools=_HEARTBEAT_TOOL,
-            model=self.model,
-        )
+        response = None
+        for attempt, delay in enumerate((0, 1, 2, 4)):
+            if delay:
+                await asyncio.sleep(delay)
+            response = await self._llm_call(
+                messages=[
+                    {"role": "system", "content": "You are a heartbeat agent. Call the heartbeat tool to report your decision."},
+                    {"role": "user", "content": (
+                        f"Current Time: {current_time_str()}\n\n"
+                        "Review the following HEARTBEAT.md and decide whether there are active tasks.\n\n"
+                        f"{content}"
+                    )},
+                ],
+                tools=_HEARTBEAT_TOOL,
+                tool_choice="auto",
+                max_tokens=256,
+            )
+            is_error = getattr(response, "finish_reason", "") == "error"
+            err_text = (getattr(response, "content", "") or "").lower()
+            if not is_error or not any(marker in err_text for marker in _TRANSIENT_ERROR_MARKERS):
+                break
 
         if not response.has_tool_calls:
             return "skip", ""
@@ -164,7 +183,7 @@ class HeartbeatService:
 
                 if response:
                     should_notify = await evaluate_response(
-                        response, tasks, self.provider, self.model,
+                        response, tasks, self._llm_call,
                     )
                     if should_notify and self.on_notify:
                         logger.info("Heartbeat: completed, delivering response")

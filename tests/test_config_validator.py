@@ -111,7 +111,6 @@ class TestValidateProviderForAgent:
     def test_validate_auto_provider(self):
         """Test that 'auto' provider always passes."""
         validate_provider_for_agent("auto", "claude_sdk")
-        validate_provider_for_agent("auto", "litellm")
 
     def test_validate_unknown_provider(self):
         """Test validation fails for unknown provider."""
@@ -134,11 +133,10 @@ class TestValidateProviderForAgent:
 
         assert "Unknown provider" in str(exc_info.value)
 
-    def test_validate_litellm_agent_accepts_sdk_providers(self):
-        """Test that litellm agent accepts SDK-compatible providers."""
-        # litellm should accept SDK-compatible providers
-        validate_provider_for_agent("anthropic", "litellm")
-        validate_provider_for_agent("aliyun_coding_plan", "litellm")
+    def test_validate_non_sdk_agent_type_is_non_blocking(self):
+        """Unknown/legacy agent type remains non-blocking for provider checks."""
+        validate_provider_for_agent("anthropic", "custom")
+        validate_provider_for_agent("aliyun_coding_plan", "custom")
 
 
 class TestGetAllProviderNamesSafe:

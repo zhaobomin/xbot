@@ -6,6 +6,8 @@ import asyncio
 import inspect
 import os
 import sys
+from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -20,9 +22,28 @@ from xbot.agent.trace import append_session_trace
 from xbot.bus.events import InboundMessage, OutboundMessage
 
 
+class SessionPhase(str, Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    WAITING_PERMISSION = "waiting_permission"
+    WAITING_INTERACTION = "waiting_interaction"
+    STOPPING = "stopping"
+    RESETTING = "resetting"
+    ERROR = "error"
+
+
+@dataclass
+class SessionState:
+    phase: SessionPhase = SessionPhase.IDLE
+    reason: str = ""
+
+
 class AgentRuntime:
     """Single runtime entrypoint for gateway and CLI."""
-    LOCAL_RUNTIME_COMMANDS = {"!help", "!restart", "!stop", "!reset", "/help", "/restart", "/stop", "/reset"}
+    LOCAL_RUNTIME_COMMANDS = {
+        "!help", "!restart", "!stop", "!reset", "!state",
+        "/help", "/restart", "/stop", "/reset", "/state",
+    }
     COMMAND_ALIASES: dict[str, str] = {}
     SDK_HELP_FALLBACK_COMMANDS = ["/help", "/clear", "/compact"]
 
@@ -44,6 +65,7 @@ class AgentRuntime:
         self._running = False
         self._active_tasks: dict[str, list[asyncio.Task]] = {}
         self._session_locks: dict[str, asyncio.Lock] = {}
+        self._session_states: dict[str, SessionState] = {}
 
     @property
     def backend(self):
@@ -91,6 +113,7 @@ class AgentRuntime:
 
             task = asyncio.create_task(self._dispatch(msg))
             self._active_tasks.setdefault(msg.session_key, []).append(task)
+            self._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="dispatch_started")
             task.add_done_callback(
                 lambda t, k=msg.session_key: self._active_tasks.get(k, [])
                 and self._active_tasks[k].remove(t)
@@ -111,6 +134,7 @@ class AgentRuntime:
         request_id = self.bus.get_pending_request_for_session(msg.session_key)
         if not request_id:
             return False
+        self._set_session_phase(msg.session_key, SessionPhase.WAITING_PERMISSION, reason="pending_permission_detected")
 
         # Parse the user's response
         content = msg.content.strip().lower()
@@ -144,6 +168,7 @@ class AgentRuntime:
             logger.warning(f"Permission response no longer pending: request={request_id}")
             return False
         logger.info(f"Permission response submitted: {decision} for request {request_id}")
+        self._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="permission_response_submitted")
         return True
 
     async def _dispatch(self, msg: InboundMessage) -> None:
@@ -156,6 +181,7 @@ class AgentRuntime:
         except asyncio.CancelledError:
             raise
         except Exception:
+            self._set_session_phase(msg.session_key, SessionPhase.ERROR, reason="dispatch_error")
             logger.exception("Error processing message for session {}", msg.session_key)
             append_session_trace(
                 self.sessions,
@@ -171,6 +197,8 @@ class AgentRuntime:
                         content="Sorry, I encountered an error.",
                     )
                 )
+        finally:
+            self._sync_session_phase(msg.session_key)
 
     async def _handle_interaction_response(self, msg: InboundMessage) -> bool:
         """Handle pending generic interaction replies for a session."""
@@ -183,6 +211,7 @@ class AgentRuntime:
         request_id = self.bus.get_pending_interaction_for_session(msg.session_key)
         if not request_id:
             return False
+        self._set_session_phase(msg.session_key, SessionPhase.WAITING_INTERACTION, reason="pending_interaction_detected")
 
         req = self.bus.get_interaction_request(request_id)
         if req is None:
@@ -200,7 +229,8 @@ class AgentRuntime:
             elif normalized in deny_variations:
                 action = "cancel" if req.kind == "confirmation" else "deny"
             else:
-                return False
+                # Confirmation/approval also allows free-text replies.
+                action = "reply"
 
         from xbot.bus.queue import InteractionResponse
 
@@ -216,6 +246,7 @@ class AgentRuntime:
             logger.warning(f"Interaction response no longer pending: request={request_id}")
             return False
         logger.info(f"Interaction response submitted: action={action}, request={request_id}")
+        self._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="interaction_response_submitted")
         return True
 
     async def _handle_message(self, msg: InboundMessage, on_progress=None) -> OutboundMessage | None:
@@ -233,26 +264,21 @@ class AgentRuntime:
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="Restarting...")
         if cmd in {"!stop", "/stop"}:
             await self.initialize()
-            tasks = self._active_tasks.pop(msg.session_key, [])
-            cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
-            for task in tasks:
-                try:
-                    await task
-                except (asyncio.CancelledError, Exception):
-                    pass
-            backend_cancelled = await self.router.backend.cancel_session(msg.session_key)
-            backend_task_stopped = await self.router.backend.stop_active_task(msg.session_key)
-            interrupt_result = await self.router.backend.interrupt_session(msg.session_key)
+            state = await self._terminate_session(msg.session_key, hard_reset=False)
 
             parts = []
-            if cancelled:
-                parts.append(f"{cancelled} task(s)")
-            if backend_cancelled:
-                parts.append(f"{backend_cancelled} subagent(s)")
-            if backend_task_stopped:
+            if state["cancelled"]:
+                parts.append(f"{state['cancelled']} task(s)")
+            if state["backend_cancelled"]:
+                parts.append(f"{state['backend_cancelled']} background task(s)")
+            if state["backend_task_stopped"]:
                 parts.append("SDK task")
-            if interrupt_result.get("interrupted"):
+            if state["interrupted"]:
                 parts.append("LLM request")
+            if state["cleared_requests"].get("permission"):
+                parts.append("pending permission")
+            if state["cleared_requests"].get("interaction"):
+                parts.append("pending interaction")
 
             # Build response message
             content_parts = []
@@ -262,7 +288,7 @@ class AgentRuntime:
                 content_parts.append("No active task to stop.")
 
             # Add usage info if available
-            usage = interrupt_result.get("usage")
+            usage = state["usage"]
             if usage:
                 input_tokens = usage.get("input_tokens", 0)
                 output_tokens = usage.get("output_tokens", 0)
@@ -275,41 +301,33 @@ class AgentRuntime:
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(content_parts))
         if cmd in {"!reset", "/reset"}:
             await self.initialize()
-            tasks = self._active_tasks.pop(msg.session_key, [])
-            cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
-            for task in tasks:
-                try:
-                    await task
-                except (asyncio.CancelledError, Exception):
-                    pass
-
-            backend_cancelled = await self.router.backend.cancel_session(msg.session_key)
-            backend_task_stopped = await self.router.backend.stop_active_task(msg.session_key)
-            interrupt_result = await self.router.backend.interrupt_session(msg.session_key)
-            await self.router.backend.reset_session(msg.session_key)
-
-            cleared_requests = {"permission": False, "interaction": False}
-            if self.bus is not None and hasattr(self.bus, "clear_session_requests"):
-                cleared_requests = self.bus.clear_session_requests(msg.session_key)
+            state = await self._terminate_session(msg.session_key, hard_reset=True)
 
             parts = ["♻️ Session reset completed."]
             details = []
-            if cancelled:
-                details.append(f"{cancelled} runtime task(s)")
-            if backend_cancelled:
-                details.append(f"{backend_cancelled} subagent(s)")
-            if backend_task_stopped:
+            if state["cancelled"]:
+                details.append(f"{state['cancelled']} runtime task(s)")
+            if state["backend_cancelled"]:
+                details.append(f"{state['backend_cancelled']} background task(s)")
+            if state["backend_task_stopped"]:
                 details.append("SDK task")
-            if interrupt_result.get("interrupted"):
+            if state["interrupted"]:
                 details.append("LLM request")
-            if cleared_requests.get("permission"):
+            if state["cleared_requests"].get("permission"):
                 details.append("pending permission")
-            if cleared_requests.get("interaction"):
+            if state["cleared_requests"].get("interaction"):
                 details.append("pending interaction")
             if details:
                 parts.append(f"Cleared: {', '.join(details)}.")
 
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(parts))
+        if cmd in {"!state", "/state"}:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=self._session_diagnostics_text(msg.session_key),
+                metadata=msg.metadata or {},
+            )
 
         # Check for workspace command
         command_prefix = ""
@@ -434,6 +452,101 @@ class AgentRuntime:
             content=final,
             metadata=msg.metadata or {},
         )
+
+    async def _terminate_session(self, session_key: str, *, hard_reset: bool) -> dict[str, Any]:
+        """Cancel runtime/backend activity and clear pending requests for a session."""
+        self._set_session_phase(
+            session_key,
+            SessionPhase.RESETTING if hard_reset else SessionPhase.STOPPING,
+            reason="terminate_session",
+        )
+        tasks = self._active_tasks.pop(session_key, [])
+        cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
+        for task in tasks:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        backend_cancelled = await self.router.backend.cancel_session(session_key)
+        backend_task_stopped = await self.router.backend.stop_active_task(session_key)
+        interrupt_result = await self.router.backend.interrupt_session(session_key)
+        if hard_reset:
+            await self.router.backend.reset_session(session_key)
+
+        cleared_requests = {"permission": False, "interaction": False}
+        if self.bus is not None and hasattr(self.bus, "clear_session_requests"):
+            cleared_requests = self.bus.clear_session_requests(session_key)
+
+        self._set_session_phase(session_key, SessionPhase.IDLE, reason="terminate_session_completed")
+        return {
+            "cancelled": cancelled,
+            "backend_cancelled": backend_cancelled,
+            "backend_task_stopped": backend_task_stopped,
+            "interrupted": bool(interrupt_result.get("interrupted")),
+            "usage": interrupt_result.get("usage"),
+            "cleared_requests": cleared_requests,
+        }
+
+    def _set_session_phase(self, session_key: str, phase: SessionPhase, *, reason: str = "") -> None:
+        state = self._session_states.setdefault(session_key, SessionState())
+        if state.phase == phase and state.reason == reason:
+            return
+        prev = state.phase.value
+        state.phase = phase
+        state.reason = reason
+        append_session_trace(
+            self.sessions,
+            session_key,
+            "session_state",
+            {
+                "from": prev,
+                "to": phase.value,
+                "reason": reason,
+            },
+        )
+
+    def _sync_session_phase(self, session_key: str) -> None:
+        if self.bus is not None:
+            if self.bus.get_pending_request_for_session(session_key):
+                self._set_session_phase(session_key, SessionPhase.WAITING_PERMISSION, reason="sync_pending_permission")
+                return
+            if self.bus.get_pending_interaction_for_session(session_key):
+                self._set_session_phase(session_key, SessionPhase.WAITING_INTERACTION, reason="sync_pending_interaction")
+                return
+        active = [t for t in self._active_tasks.get(session_key, []) if not t.done()]
+        if active:
+            self._set_session_phase(session_key, SessionPhase.RUNNING, reason="sync_active_tasks")
+        else:
+            self._set_session_phase(session_key, SessionPhase.IDLE, reason="sync_idle")
+
+    def get_session_state(self, session_key: str) -> str:
+        """Return current runtime session phase for diagnostics."""
+        return self._session_states.get(session_key, SessionState()).phase.value
+
+    def _session_diagnostics_text(self, session_key: str) -> str:
+        phase = self.get_session_state(session_key)
+        active_tasks = sum(1 for t in self._active_tasks.get(session_key, []) if not t.done())
+        pending_permission = None
+        pending_interaction = None
+        if self.bus is not None:
+            pending_permission = self.bus.get_pending_request_for_session(session_key)
+            pending_interaction = self.bus.get_pending_interaction_for_session(session_key)
+        sdk_session_id = ""
+        if self.sessions is not None:
+            session = self.sessions.get_or_create(session_key)
+            sdk_session_id = str(session.metadata.get("sdk_session_id") or "")
+
+        lines = [
+            f"Session: {session_key}",
+            f"Phase: {phase}",
+            f"Active tasks: {active_tasks}",
+            f"Pending permission: {pending_permission or 'none'}",
+            f"Pending interaction: {pending_interaction or 'none'}",
+            f"SDK session id: {sdk_session_id or 'none'}",
+            f"Backend: {self.router.backend_type}",
+        ]
+        return "\n".join(lines)
 
     def _should_send_usage_summary(self) -> bool:
         ch = self.channels_config
@@ -580,6 +693,7 @@ class AgentRuntime:
             "!help or /help — Show available commands",
             "!stop or /stop — Stop the current task",
             "!reset or /reset — Hard reset current session state",
+            "!state or /state — Show runtime session diagnostics",
             "!restart or /restart — Restart the bot process",
         ]
 

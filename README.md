@@ -83,7 +83,7 @@
 
 💎 **Easy-to-Use**: One-click to deploy and you're ready to go.
 
-🔌 **Pluggable Architecture**: Agent Router with swappable backends (Claude SDK, LiteLLM, custom).
+🔌 **Pluggable Architecture**: Agent Router with Claude SDK backend and clear extension points.
 
 🧠 **Advanced Memory**: Token-based memory with reme-ai integration for long-term context retention.
 
@@ -100,7 +100,6 @@
 xbot features a modern **Agent Router** architecture that supports multiple backend implementations:
 
 - **Claude SDK Backend**: Native Claude integration with Anthropic and compatible providers
-- **LiteLLM Backend**: Universal LLM support via LiteLLM
 - **Custom Backends**: Easily implement your own agent logic
 
 The router provides:
@@ -826,7 +825,7 @@ Available backend type:
 
 | Provider | Purpose | Get API Key |
 |----------|---------|-------------|
-| `custom` | Any OpenAI-compatible endpoint (direct, no LiteLLM) | — |
+| `custom` | Any OpenAI-compatible endpoint (direct SDK routing) | — |
 | `openrouter` | LLM (recommended, access to all models) | [openrouter.ai](https://openrouter.ai) |
 | `volcengine` | LLM (VolcEngine, pay-per-use) | [Coding Plan](https://www.volcengine.com/activity/codingplan?utm_campaign=xbot&utm_content=xbot&utm_medium=devrel&utm_source=OWO&utm_term=xbot) · [volcengine.com](https://www.volcengine.com) |
 | `byteplus` | LLM (VolcEngine international, pay-per-use) | [Coding Plan](https://www.byteplus.com/en/activity/codingplan?utm_campaign=xbot&utm_content=xbot&utm_medium=devrel&utm_source=OWO&utm_term=xbot) · [byteplus.com](https://www.byteplus.com) |
@@ -886,7 +885,7 @@ xbot agent -c ~/.xbot-telegram/config.json -w /tmp/xbot-telegram-test -m "Hello!
 <details>
 <summary><b>Custom Provider (Any OpenAI-compatible API)</b></summary>
 
-Connects directly to any OpenAI-compatible endpoint — LM Studio, llama.cpp, Together AI, Fireworks, Azure OpenAI, or any self-hosted server. Bypasses LiteLLM; model name is passed as-is.
+Connects directly to any OpenAI-compatible endpoint — LM Studio, llama.cpp, Together AI, Fireworks, Azure OpenAI, or any self-hosted server. Model name is passed as-is.
 
 ```json
 {
@@ -988,9 +987,9 @@ Adding a new provider only takes **2 steps** — no if-elif chains to touch.
 ProviderSpec(
     name="myprovider",                   # config field name
     keywords=("myprovider", "mymodel"),  # model-name keywords for auto-matching
-    env_key="MYPROVIDER_API_KEY",        # env var for LiteLLM
+    env_key="MYPROVIDER_API_KEY",        # env var for provider auth
     display_name="My Provider",          # shown in `xbot status`
-    litellm_prefix="myprovider",         # auto-prefix: model → myprovider/model
+    model_prefix="myprovider",           # auto-prefix: model → myprovider/model
     skip_prefixes=("myprovider/",),      # don't double-prefix
 )
 ```
@@ -1009,7 +1008,7 @@ That's it! Environment variables, model prefixing, config matching, and `xbot st
 
 | Field | Description | Example |
 |-------|-------------|---------|
-| `litellm_prefix` | Auto-prefix model names for LiteLLM | `"dashscope"` → `dashscope/qwen-max` |
+| `model_prefix` | Auto-prefix model names | `"dashscope"` → `dashscope/qwen-max` |
 | `skip_prefixes` | Don't prefix if model already starts with these | `("dashscope/", "openrouter/")` |
 | `env_extras` | Additional env vars to set | `(("ZHIPUAI_API_KEY", "{api_key}"),)` |
 | `model_overrides` | Per-model parameter overrides | `(("kimi-k2.5", {"temperature": 1.0}),)` |
@@ -1470,7 +1469,7 @@ If you edit the `.service` file itself, run `systemctl --user daemon-reload` bef
 ```
 xbot/
 ├── agent/              # 🧠 Core agent logic
-│   ├── backends/       #    Agent backends (Claude SDK, LiteLLM)
+│   ├── backends/       #    Agent backends (Claude SDK)
 │   ├── router.py       #    Agent router for backend selection
 │   ├── context.py      #    Prompt builder
 │   ├── memory.py       #    Persistent memory

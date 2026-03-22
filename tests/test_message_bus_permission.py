@@ -201,6 +201,33 @@ class TestMessageBusPermission:
         assert result is False
 
     @pytest.mark.asyncio
+    async def test_permission_response_before_waiter_registration_is_not_lost(self, bus):
+        req = PermissionRequest(
+            request_id="req-race-1",
+            session_key="telegram:456",
+            channel="telegram",
+            chat_id="456",
+            tool_name="exec",
+            tool_input={"command": "ls"},
+            message="Need permission",
+        )
+        await bus.publish_permission_request(req)
+        _ = await bus.consume_outbound()
+
+        # Submit response before wait_permission_response is called.
+        ok = await bus.submit_permission_response(
+            PermissionResponse(
+                request_id="req-race-1",
+                session_key="telegram:456",
+                decision="allow",
+            )
+        )
+        assert ok is True
+
+        response = await bus.wait_permission_response("req-race-1", timeout=0.2)
+        assert response.decision == "allow"
+
+    @pytest.mark.asyncio
     async def test_multiple_requests_same_session(self, bus):
         # First request
         req1 = PermissionRequest(
@@ -244,6 +271,40 @@ class TestMessageBusPermission:
         )
         await bus.publish_permission_request(req2)
         assert bus.get_pending_request_for_session("telegram:456") == "req-2"
+
+    @pytest.mark.asyncio
+    async def test_publish_permission_request_supersedes_previous_session_request(self, bus):
+        req1 = PermissionRequest(
+            request_id="req-old",
+            session_key="telegram:456",
+            channel="telegram",
+            chat_id="456",
+            tool_name="exec",
+            tool_input={"command": "ls"},
+            message="Request old",
+        )
+        await bus.publish_permission_request(req1)
+        _ = await bus.consume_outbound()
+
+        waiter = asyncio.create_task(bus.wait_permission_response("req-old", timeout=1.0))
+        await asyncio.sleep(0.05)
+
+        req2 = PermissionRequest(
+            request_id="req-new",
+            session_key="telegram:456",
+            channel="telegram",
+            chat_id="456",
+            tool_name="write_file",
+            tool_input={"path": "/tmp/a"},
+            message="Request new",
+        )
+        await bus.publish_permission_request(req2)
+        _ = await bus.consume_outbound()
+
+        old_resp = await waiter
+        assert old_resp.decision == "deny"
+        assert "Superseded" in old_resp.reason
+        assert bus.get_pending_request_for_session("telegram:456") == "req-new"
 
     def test_clear_permission_request(self, bus):
         bus._pending_permission_responses["req-123"] = asyncio.Event()
@@ -305,6 +366,33 @@ class TestMessageBusPermission:
 
         resp = await waiter
         assert resp.content == "继续"
+
+    @pytest.mark.asyncio
+    async def test_interaction_response_before_waiter_registration_is_not_lost(self, bus):
+        req = InteractionRequest(
+            request_id="ir-race-1",
+            session_key="slack:C1:thread:1",
+            channel="slack",
+            chat_id="C1",
+            kind="question",
+            prompt="继续吗？",
+        )
+        await bus.publish_interaction_request(req)
+        _ = await bus.consume_outbound()
+
+        ok = await bus.submit_interaction_response(
+            InteractionResponse(
+                request_id="ir-race-1",
+                session_key="slack:C1:thread:1",
+                action="reply",
+                content="继续",
+            )
+        )
+        assert ok is True
+
+        response = await bus.wait_interaction_response("ir-race-1", timeout=0.2)
+        assert response.action == "reply"
+        assert response.content == "继续"
         assert bus.get_pending_interaction_for_session("slack:C1:thread:1") is None
 
     @pytest.mark.asyncio

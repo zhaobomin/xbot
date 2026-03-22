@@ -33,7 +33,7 @@ class ProviderSpec:
     display_name: str = ""  # shown in `xbot status`
 
     # model prefixing (for display/routing)
-    litellm_prefix: str = ""  # "anthropic" → model becomes "anthropic/{model}"
+    model_prefix: str = ""  # "anthropic" → model becomes "anthropic/{model}"
     skip_prefixes: tuple[str, ...] = ()  # don't prefix if model already starts with these
 
     # extra env vars, e.g. (("ZHIPUAI_API_KEY", "{api_key}"),)
@@ -49,7 +49,7 @@ class ProviderSpec:
 
     # gateway behavior
     strip_model_prefix: bool = False  # strip "provider/" before API call
-    litellm_kwargs: dict[str, Any] = field(default_factory=dict)  # extra kwargs passed to LiteLLM
+    provider_kwargs: dict[str, Any] = field(default_factory=dict)  # reserved provider-specific options
 
     # per-model param overrides, e.g. (("kimi-k2.5", {"temperature": 1.0}),)
     model_overrides: tuple[tuple[str, dict[str, Any]], ...] = ()
@@ -73,7 +73,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("anthropic", "claude"),
         env_key="ANTHROPIC_API_KEY",
         display_name="Anthropic",
-        litellm_prefix="",
+        model_prefix="",
         skip_prefixes=(),
         env_extras=(),
         is_gateway=False,
@@ -92,7 +92,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=("qwen", "glm"),  # Match qwen-* and glm-* models
         env_key="ANTHROPIC_API_KEY",
         display_name="Aliyun Coding Plan",
-        litellm_prefix="anthropic",  # Route through anthropic provider
+        model_prefix="anthropic",  # Route through anthropic provider
         skip_prefixes=(),
         env_extras=(),
         is_gateway=True,
@@ -110,7 +110,7 @@ PROVIDERS: tuple[ProviderSpec, ...] = (
         keywords=(),  # No keywords - must be explicitly configured
         env_key="ANTHROPIC_API_KEY",
         display_name="Alrun",
-        litellm_prefix="anthropic",  # Route through anthropic provider
+        model_prefix="anthropic",  # Route through anthropic provider
         skip_prefixes=(),
         env_extras=(),
         is_gateway=True,

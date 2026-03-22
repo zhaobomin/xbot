@@ -50,19 +50,6 @@ class TestToolAdapter:
         assert adapter._tool_context["session_key"] == "telegram:123:topic:99"
         assert adapter._tool_context["message_id"] == "456"
 
-    def test_set_tool_context_passes_session_key_to_spawn_tool(self, adapter: ToolAdapter) -> None:
-        """spawn tool should receive real runtime session_key instead of channel:chat fallback."""
-        recorder = MagicMock()
-        adapter._tools["spawn"] = recorder
-
-        adapter.set_tool_context(
-            channel="slack",
-            chat_id="C123",
-            session_key="slack:C123:1700000000.123",
-        )
-
-        recorder.set_context.assert_called_once_with("slack", "C123", "slack:C123:1700000000.123")
-
     def test_get_tool_empty(self, adapter: ToolAdapter) -> None:
         """Test getting tool when not registered."""
         result = adapter.get_tool("nonexistent")

@@ -6,12 +6,9 @@ LLM call to decide whether the result warrants notifying the user.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import Any, Awaitable, Callable
 
 from loguru import logger
-
-if TYPE_CHECKING:
-    from xbot.providers.base import LLMProvider
 
 _EVALUATE_TOOL = [
     {
@@ -53,8 +50,7 @@ _SYSTEM_PROMPT = (
 async def evaluate_response(
     response: str,
     task_context: str,
-    provider: LLMProvider,
-    model: str,
+    llm_call: Callable[..., Awaitable[Any]],
 ) -> bool:
     """Decide whether a background-task result should be delivered to the user.
 
@@ -63,7 +59,7 @@ async def evaluate_response(
     that important messages are never silently dropped.
     """
     try:
-        llm_response = await provider.chat_with_retry(
+        llm_response = await llm_call(
             messages=[
                 {"role": "system", "content": _SYSTEM_PROMPT},
                 {"role": "user", "content": (
@@ -72,7 +68,7 @@ async def evaluate_response(
                 )},
             ],
             tools=_EVALUATE_TOOL,
-            model=model,
+            tool_choice="auto",
             max_tokens=256,
             temperature=0.0,
         )

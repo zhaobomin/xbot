@@ -3,33 +3,28 @@ import asyncio
 import pytest
 
 from xbot.heartbeat.service import HeartbeatService
-from xbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
+from xbot.providers.base import LLMResponse, ToolCallRequest
 
 
-class DummyProvider(LLMProvider):
+class DummyCaller:
     def __init__(self, responses: list[LLMResponse]):
-        super().__init__()
         self._responses = list(responses)
         self.calls = 0
 
-    async def chat(self, *args, **kwargs) -> LLMResponse:
+    async def __call__(self, *args, **kwargs) -> LLMResponse:
         self.calls += 1
         if self._responses:
             return self._responses.pop(0)
         return LLMResponse(content="", tool_calls=[])
 
-    def get_default_model(self) -> str:
-        return "test-model"
-
 
 @pytest.mark.asyncio
 async def test_start_is_idempotent(tmp_path) -> None:
-    provider = DummyProvider([])
+    llm_call = DummyCaller([])
 
     service = HeartbeatService(
         workspace=tmp_path,
-        provider=provider,
-        model="openai/gpt-4o-mini",
+        llm_call=llm_call,
         interval_s=9999,
         enabled=True,
     )
@@ -46,11 +41,10 @@ async def test_start_is_idempotent(tmp_path) -> None:
 
 @pytest.mark.asyncio
 async def test_decide_returns_skip_when_no_tool_call(tmp_path) -> None:
-    provider = DummyProvider([LLMResponse(content="no tool call", tool_calls=[])])
+    llm_call = DummyCaller([LLMResponse(content="no tool call", tool_calls=[])])
     service = HeartbeatService(
         workspace=tmp_path,
-        provider=provider,
-        model="openai/gpt-4o-mini",
+        llm_call=llm_call,
     )
 
     action, tasks = await service._decide("heartbeat content")
@@ -62,7 +56,7 @@ async def test_decide_returns_skip_when_no_tool_call(tmp_path) -> None:
 async def test_trigger_now_executes_when_decision_is_run(tmp_path) -> None:
     (tmp_path / "HEARTBEAT.md").write_text("- [ ] do thing", encoding="utf-8")
 
-    provider = DummyProvider([
+    llm_call = DummyCaller([
         LLMResponse(
             content="",
             tool_calls=[
@@ -83,8 +77,7 @@ async def test_trigger_now_executes_when_decision_is_run(tmp_path) -> None:
 
     service = HeartbeatService(
         workspace=tmp_path,
-        provider=provider,
-        model="openai/gpt-4o-mini",
+        llm_call=llm_call,
         on_execute=_on_execute,
     )
 
@@ -97,7 +90,7 @@ async def test_trigger_now_executes_when_decision_is_run(tmp_path) -> None:
 async def test_trigger_now_returns_none_when_decision_is_skip(tmp_path) -> None:
     (tmp_path / "HEARTBEAT.md").write_text("- [ ] do thing", encoding="utf-8")
 
-    provider = DummyProvider([
+    llm_call = DummyCaller([
         LLMResponse(
             content="",
             tool_calls=[
@@ -115,8 +108,7 @@ async def test_trigger_now_returns_none_when_decision_is_skip(tmp_path) -> None:
 
     service = HeartbeatService(
         workspace=tmp_path,
-        provider=provider,
-        model="openai/gpt-4o-mini",
+        llm_call=llm_call,
         on_execute=_on_execute,
     )
 
@@ -128,7 +120,7 @@ async def test_tick_notifies_when_evaluator_says_yes(tmp_path, monkeypatch) -> N
     """Phase 1 run -> Phase 2 execute -> Phase 3 evaluate=notify -> on_notify called."""
     (tmp_path / "HEARTBEAT.md").write_text("- [ ] check deployments", encoding="utf-8")
 
-    provider = DummyProvider([
+    llm_call = DummyCaller([
         LLMResponse(
             content="",
             tool_calls=[
@@ -153,8 +145,7 @@ async def test_tick_notifies_when_evaluator_says_yes(tmp_path, monkeypatch) -> N
 
     service = HeartbeatService(
         workspace=tmp_path,
-        provider=provider,
-        model="openai/gpt-4o-mini",
+        llm_call=llm_call,
         on_execute=_on_execute,
         on_notify=_on_notify,
     )
@@ -174,7 +165,7 @@ async def test_tick_suppresses_when_evaluator_says_no(tmp_path, monkeypatch) -> 
     """Phase 1 run -> Phase 2 execute -> Phase 3 evaluate=silent -> on_notify NOT called."""
     (tmp_path / "HEARTBEAT.md").write_text("- [ ] check status", encoding="utf-8")
 
-    provider = DummyProvider([
+    llm_call = DummyCaller([
         LLMResponse(
             content="",
             tool_calls=[
@@ -199,8 +190,7 @@ async def test_tick_suppresses_when_evaluator_says_no(tmp_path, monkeypatch) -> 
 
     service = HeartbeatService(
         workspace=tmp_path,
-        provider=provider,
-        model="openai/gpt-4o-mini",
+        llm_call=llm_call,
         on_execute=_on_execute,
         on_notify=_on_notify,
     )
@@ -217,7 +207,7 @@ async def test_tick_suppresses_when_evaluator_says_no(tmp_path, monkeypatch) -> 
 
 @pytest.mark.asyncio
 async def test_decide_retries_transient_error_then_succeeds(tmp_path, monkeypatch) -> None:
-    provider = DummyProvider([
+    llm_call = DummyCaller([
         LLMResponse(content="429 rate limit", finish_reason="error"),
         LLMResponse(
             content="",
@@ -240,15 +230,14 @@ async def test_decide_retries_transient_error_then_succeeds(tmp_path, monkeypatc
 
     service = HeartbeatService(
         workspace=tmp_path,
-        provider=provider,
-        model="openai/gpt-4o-mini",
+        llm_call=llm_call,
     )
 
     action, tasks = await service._decide("heartbeat content")
 
     assert action == "run"
     assert tasks == "check open tasks"
-    assert provider.calls == 2
+    assert llm_call.calls == 2
     assert delays == [1]
 
 
@@ -258,8 +247,8 @@ async def test_decide_prompt_includes_current_time(tmp_path) -> None:
 
     captured_messages: list[dict] = []
 
-    class CapturingProvider(LLMProvider):
-        async def chat(self, *, messages=None, **kwargs) -> LLMResponse:
+    class CapturingCaller:
+        async def __call__(self, *, messages=None, **kwargs) -> LLMResponse:
             if messages:
                 captured_messages.extend(messages)
             return LLMResponse(
@@ -272,13 +261,9 @@ async def test_decide_prompt_includes_current_time(tmp_path) -> None:
                 ],
             )
 
-        def get_default_model(self) -> str:
-            return "test-model"
-
     service = HeartbeatService(
         workspace=tmp_path,
-        provider=CapturingProvider(),
-        model="test-model",
+        llm_call=CapturingCaller(),
     )
 
     await service._decide("- [ ] check servers at 10:00 UTC")
@@ -286,4 +271,3 @@ async def test_decide_prompt_includes_current_time(tmp_path) -> None:
     user_msg = captured_messages[1]
     assert user_msg["role"] == "user"
     assert "Current Time:" in user_msg["content"]
-

@@ -80,7 +80,7 @@ def validate_provider_for_agent(provider_name: str, agent_type: str) -> None:
 
     Args:
         provider_name: Provider name
-        agent_type: Agent type ("litellm" or "claude_sdk")
+        agent_type: Agent type (currently "claude_sdk")
 
     Raises:
         ConfigurationError: If provider is not compatible

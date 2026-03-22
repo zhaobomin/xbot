@@ -47,13 +47,13 @@ class TestCapabilityPolicy:
         policy = CapabilityPolicy(mock_catalog, mcp_servers=mcp)
         assert policy.mcp_servers == mcp
 
-    def test_available_tool_names_litellm(self, mock_catalog: CapabilityCatalog) -> None:
-        """Test available tools for litellm backend."""
+    def test_available_tool_names_non_sdk(self, mock_catalog: CapabilityCatalog) -> None:
+        """Test available tools for a non-SDK backend."""
         policy = CapabilityPolicy(mock_catalog)
-        names = policy.available_tool_names("litellm")
+        names = policy.available_tool_names("custom")
         assert "exec" in names
         assert "read" in names
-        # Skills are not included for litellm
+        # Skills are not included for non-SDK backends
         assert "weather" not in names
 
     def test_available_tool_names_claude_sdk(self, mock_catalog: CapabilityCatalog) -> None:
@@ -66,7 +66,7 @@ class TestCapabilityPolicy:
     def test_resolve_agent_tools_all_allowed(self, mock_catalog: CapabilityCatalog) -> None:
         """Test resolving all valid tools."""
         policy = CapabilityPolicy(mock_catalog)
-        result = policy.resolve_agent_tools(["exec", "read"], backend="litellm")
+        result = policy.resolve_agent_tools(["exec", "read"], backend="custom")
         assert "exec" in result.allowed
         assert "read" in result.allowed
         assert result.dropped == []
@@ -75,7 +75,7 @@ class TestCapabilityPolicy:
         """Test that unknown tools are dropped."""
         policy = CapabilityPolicy(mock_catalog)
         result = policy.resolve_agent_tools(
-            ["exec", "unknown_tool", "read"], backend="litellm"
+            ["exec", "unknown_tool", "read"], backend="custom"
         )
         assert "exec" in result.allowed
         assert "read" in result.allowed
@@ -84,28 +84,28 @@ class TestCapabilityPolicy:
     def test_resolve_agent_tools_allows_mcp_tools(self, mock_catalog: CapabilityCatalog) -> None:
         """Test that MCP tools are allowed."""
         policy = CapabilityPolicy(mock_catalog, mcp_servers={"fs": {}})
-        result = policy.resolve_agent_tools(["exec", "mcp_fs_read"], backend="litellm")
+        result = policy.resolve_agent_tools(["exec", "mcp_fs_read"], backend="custom")
         assert "exec" in result.allowed
         assert "mcp_fs_read" in result.allowed
 
     def test_resolve_agent_tools_empty_list(self, mock_catalog: CapabilityCatalog) -> None:
         """Test resolving empty tool list."""
         policy = CapabilityPolicy(mock_catalog)
-        result = policy.resolve_agent_tools([], backend="litellm")
+        result = policy.resolve_agent_tools([], backend="custom")
         assert result.allowed == []
         assert result.dropped == []
 
     def test_resolve_agent_tools_none(self, mock_catalog: CapabilityCatalog) -> None:
         """Test resolving None tool list."""
         policy = CapabilityPolicy(mock_catalog)
-        result = policy.resolve_agent_tools(None, backend="litellm")
+        result = policy.resolve_agent_tools(None, backend="custom")
         assert result.allowed == []
         assert result.dropped == []
 
-    def test_build_backend_trace_litellm(self, mock_catalog: CapabilityCatalog) -> None:
-        """Test building trace for litellm."""
+    def test_build_backend_trace_non_sdk(self, mock_catalog: CapabilityCatalog) -> None:
+        """Test building trace for a non-SDK backend."""
         policy = CapabilityPolicy(mock_catalog)
-        trace = policy.build_backend_trace("litellm")
+        trace = policy.build_backend_trace("custom")
         assert "builtin_tools=4" in trace
         assert "skill_tools=0" in trace
         assert "mcp_servers=0" in trace
@@ -120,5 +120,5 @@ class TestCapabilityPolicy:
     def test_build_backend_trace_with_mcp(self, mock_catalog: CapabilityCatalog) -> None:
         """Test building trace with MCP servers."""
         policy = CapabilityPolicy(mock_catalog, mcp_servers={"fs": {}, "git": {}})
-        trace = policy.build_backend_trace("litellm")
+        trace = policy.build_backend_trace("custom")
         assert "mcp_servers=2" in trace

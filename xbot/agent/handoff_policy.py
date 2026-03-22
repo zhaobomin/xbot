@@ -23,7 +23,7 @@ class HandoffDecision:
 
 
 class HandoffPolicy:
-    """Product policy for main-thread work, native handoff, and background spawn."""
+    """Product policy for main-thread work and SDK-native delegation."""
 
     def __init__(self, agents: dict[str, Any] | None):
         self._agents = agents or {}
@@ -61,7 +61,7 @@ class HandoffPolicy:
             "",
             "- Stay on the main agent for routine requests, lightweight tool use, and normal follow-up chat.",
             "- Use native agent handoff when one specialist agent is a clear fit and the user expects the result in this reply.",
-            "- Use the `spawn` tool for background, parallel, or long-running work, or when the user explicitly wants async progress.",
+            "- Use SDK-native background task delegation for parallel or long-running work, or when the user explicitly wants async progress.",
             "- If handoff is unnecessary or fails, continue on the main agent with the normal tools instead of blocking.",
             "",
             "### Specialist Agents",
@@ -134,7 +134,7 @@ class HandoffPolicy:
         if decision.mode == "background":
             return (
                 "[Runtime Policy]\n"
-                "Prefer handling this with the spawn tool for background execution when feasible.\n"
+                "Prefer handling this with SDK-native background task delegation when feasible.\n"
                 "Avoid native handoff unless background execution is clearly unsuitable.\n"
             )
         return (

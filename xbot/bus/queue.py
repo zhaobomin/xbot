@@ -114,9 +114,25 @@ class MessageBus:
         Args:
             req: 权限请求对象
         """
-        # 追踪会话的 pending request
+        # 追踪会话的 pending request，并预注册 waiter 事件，避免
+        # “用户先回复、waiter 后注册”导致的竞态丢失。
         async with self._permission_lock:
+            previous_request_id = self._session_pending_requests.get(req.session_key)
+            if previous_request_id and previous_request_id != req.request_id:
+                prev_event = self._pending_permission_responses.get(previous_request_id)
+                if prev_event is not None and not prev_event.is_set():
+                    self._permission_results[previous_request_id] = PermissionResponse(
+                        request_id=previous_request_id,
+                        session_key=req.session_key,
+                        decision="deny",
+                        reason="Superseded by a newer permission request",
+                    )
+                    prev_event.set()
+                else:
+                    self._pending_permission_responses.pop(previous_request_id, None)
+                    self._permission_results.pop(previous_request_id, None)
             self._session_pending_requests[req.session_key] = req.request_id
+            self._pending_permission_responses.setdefault(req.request_id, asyncio.Event())
 
         # 发送消息通知用户
         await self.publish_outbound(OutboundMessage(
@@ -153,6 +169,8 @@ class MessageBus:
 
             self._session_pending_interactions[req.session_key] = req.request_id
             self._interaction_requests[req.request_id] = req
+            # Pre-register waiter to avoid race with very fast user replies.
+            self._pending_interaction_responses.setdefault(req.request_id, asyncio.Event())
 
         await self.publish_outbound(OutboundMessage(
             channel=req.channel,
@@ -183,7 +201,7 @@ class MessageBus:
         """
         event = asyncio.Event()
         async with self._permission_lock:
-            self._pending_permission_responses[request_id] = event
+            event = self._pending_permission_responses.setdefault(request_id, event)
 
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout)
@@ -222,7 +240,7 @@ class MessageBus:
         """等待通用交互响应。"""
         event = asyncio.Event()
         async with self._interaction_lock:
-            self._pending_interaction_responses[request_id] = event
+            event = self._pending_interaction_responses.setdefault(request_id, event)
 
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout)

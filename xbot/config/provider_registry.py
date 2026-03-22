@@ -25,7 +25,7 @@ class ProviderSpec:
 
     name: str
     display_name: str
-    protocol: Literal["anthropic", "litellm"]
+    protocol: Literal["anthropic"]
     default_base_url: str
     supported_by_sdk: bool  # Always True for all providers in the registry
 

@@ -21,7 +21,6 @@ def test_make_agent_runtime_uses_router_runtime(monkeypatch, tmp_path: Path) -> 
     runtime = commands._make_agent_runtime(
         config=config,
         bus="BUS",
-        provider="PROVIDER",
         workspace=tmp_path,
         cron_service="CRON",
         session_manager="SESSIONS",
@@ -30,7 +29,6 @@ def test_make_agent_runtime_uses_router_runtime(monkeypatch, tmp_path: Path) -> 
     assert runtime is not None
     assert captured["config"] is config
     assert captured["shared_resources"]["bus"] == "BUS"
-    assert captured["shared_resources"]["provider"] == "PROVIDER"
     assert captured["shared_resources"]["workspace"] == tmp_path
     assert captured["shared_resources"]["cron_service"] == "CRON"
     assert captured["shared_resources"]["session_manager"] == "SESSIONS"

@@ -363,7 +363,7 @@ class TestRuntimePermissionResponse:
         assert bus.get_pending_interaction_for_session("telegram:456") == "ir-priority"
 
     @pytest.mark.asyncio
-    async def test_confirmation_interaction_unclear_text_not_consumed(self, bus):
+    async def test_confirmation_interaction_free_text_is_consumed(self, bus):
         from xbot.agent.runtime import AgentRuntime
 
         runtime = MagicMock(spec=AgentRuntime)
@@ -383,6 +383,9 @@ class TestRuntimePermissionResponse:
         )
         _ = await bus.consume_outbound()
 
+        waiter = asyncio.create_task(bus.wait_interaction_response("ir-confirm-1", timeout=1.0))
+        await asyncio.sleep(0.05)
+
         handled = await runtime._handle_interaction_response(
             InboundMessage(
                 channel="telegram",
@@ -391,5 +394,44 @@ class TestRuntimePermissionResponse:
                 content="我再想想",
             )
         )
-        assert handled is False
-        assert bus.get_pending_interaction_for_session("telegram:456") == "ir-confirm-1"
+        assert handled is True
+        resp = await waiter
+        assert resp.action == "reply"
+        assert resp.content == "我再想想"
+
+    @pytest.mark.asyncio
+    async def test_approval_interaction_free_text_is_consumed(self, bus):
+        from xbot.agent.runtime import AgentRuntime
+
+        runtime = MagicMock(spec=AgentRuntime)
+        runtime.bus = bus
+        runtime._is_local_runtime_command = AgentRuntime._is_local_runtime_command
+        runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
+
+        await bus.publish_interaction_request(
+            InteractionRequest(
+                request_id="ir-approval-1",
+                session_key="telegram:456",
+                channel="telegram",
+                chat_id="456",
+                kind="approval",
+                prompt="请审批",
+            )
+        )
+        _ = await bus.consume_outbound()
+
+        waiter = asyncio.create_task(bus.wait_interaction_response("ir-approval-1", timeout=1.0))
+        await asyncio.sleep(0.05)
+
+        handled = await runtime._handle_interaction_response(
+            InboundMessage(
+                channel="telegram",
+                sender_id="user",
+                chat_id="456",
+                content="先看下差异再决定",
+            )
+        )
+        assert handled is True
+        resp = await waiter
+        assert resp.action == "reply"
+        assert resp.content == "先看下差异再决定"

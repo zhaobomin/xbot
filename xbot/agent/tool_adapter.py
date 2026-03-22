@@ -14,9 +14,7 @@ from xbot.agent.tools.shell import ExecTool
 from xbot.agent.tools.web import WebSearchTool, WebFetchTool
 from xbot.agent.tools.message import MessageTool
 from xbot.agent.tools.cron import CronTool
-from xbot.agent.tools.spawn import SpawnTool
 from xbot.agent.tools.memory import MemoryTool
-from xbot.agent.subagent import SubagentManager
 
 logger = logging.getLogger(__name__)
 
@@ -125,22 +123,6 @@ class ToolAdapter:
         proxy = web_config.proxy if web_config else None
         search_config = web_config.search if web_config else None
 
-        provider = self.shared_resources.get("provider")
-        if provider and bus:
-            self._tools["spawn"] = SpawnTool(
-                manager=SubagentManager(
-                    provider=provider,
-                    workspace=self.workspace,
-                    bus=bus,
-                    model=self.shared_resources.get("model"),
-                    web_search_config=search_config,
-                    web_tools_config=self.tools_config.web if self.tools_config else None,
-                    web_proxy=proxy,
-                    exec_config=self.tools_config.exec if self.tools_config else None,
-                    restrict_to_workspace=bool(getattr(self.tools_config, "restrict_to_workspace", False)),
-                )
-            )
-
         self._tools["web_search"] = WebSearchTool(config=search_config, proxy=proxy)
         self._tools["web_fetch"] = WebFetchTool(proxy=proxy, web_config=self.tools_config.web if self.tools_config else None)
 
@@ -241,7 +223,6 @@ class ToolAdapter:
 
         for name, args in {
             "message": (channel, chat_id, message_id),
-            "spawn": (channel, chat_id, session_key),
             "cron": (channel, chat_id),
         }.items():
             tool = self._tools.get(name)

@@ -22,7 +22,6 @@ _BUILTIN_TOOL_SPECS = (
     ("web_search", ()),
     ("web_fetch", ()),
     ("message", ()),
-    ("spawn", ()),
     ("cron", ()),
     ("memory", ()),
 )
