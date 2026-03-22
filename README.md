@@ -20,6 +20,7 @@
 
 ## 📢 Latest Updates
 
+- **2026-03-23** 🔄 **Coordinator Mode Migration** — Unified state management with SessionStateCoordinator, transaction-based atomic operations, removed legacy dual-track architecture
 - **2026-03-22** 🚀 **Major Architecture Upgrade** — Agent Router with pluggable backends, Claude SDK native integration, capability-based permission system, and enhanced memory with reme-ai
 - **2026-03-16** 🚀 Released **v0.1.4.post5** — a refinement-focused release with stronger reliability and channel support
 - **2026-03-15** 🧩 DingTalk rich media, smarter built-in skills, and cleaner model compatibility
