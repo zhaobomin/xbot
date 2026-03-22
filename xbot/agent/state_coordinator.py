@@ -53,6 +53,22 @@ class CoordinatorStats:
     # Shadow mode 统计
     shadow_inconsistencies: int = 0
     shadow_operations: int = 0
+    shadow_discrepancies: int = 0  # coordinator 与实际行为的差异次数
+
+    # 差异详情（最近 N 条）
+    recent_discrepancies: list = field(default_factory=list)
+
+
+@dataclass
+class DiscrepancyRecord:
+    """差异记录。"""
+
+    timestamp: float
+    session_key: str
+    operation: str
+    expected: str
+    actual: str
+    details: dict = field(default_factory=dict)
 
 
 class SessionStateCoordinator:
@@ -75,6 +91,10 @@ class SessionStateCoordinator:
         self._runtime = runtime
         self._shadow_mode = False
         self._stats = CoordinatorStats()
+
+        # 差异监控配置
+        self._discrepancy_callback: Callable[[DiscrepancyRecord], None] | None = None
+        self._max_discrepancy_records = 100  # 保留最近 100 条差异记录
 
         # 引用 runtime 的状态组件
         # 注意：初始阶段这些引用已经存在于 runtime 中
@@ -622,3 +642,154 @@ class SessionStateCoordinator:
             tx.set_phase(SessionPhase.RUNNING, reason="resume_from_wait")
 
         return True
+
+    # === 差异监控 ===
+
+    def set_discrepancy_callback(
+        self, callback: Callable[[DiscrepancyRecord], None] | None
+    ) -> None:
+        """设置差异回调函数。
+
+        当检测到 coordinator 与实际行为不一致时调用。
+
+        Args:
+            callback: 回调函数，接收 DiscrepancyRecord 参数
+        """
+        self._discrepancy_callback = callback
+
+    def _record_discrepancy(
+        self,
+        session_key: str,
+        operation: str,
+        expected: str,
+        actual: str,
+        details: dict | None = None,
+    ) -> DiscrepancyRecord:
+        """记录差异。
+
+        Args:
+            session_key: 会话标识
+            operation: 操作类型
+            expected: 预期值
+            actual: 实际值
+            details: 额外详情
+
+        Returns:
+            DiscrepancyRecord 记录
+        """
+        record = DiscrepancyRecord(
+            timestamp=time.time(),
+            session_key=session_key,
+            operation=operation,
+            expected=expected,
+            actual=actual,
+            details=details or {},
+        )
+
+        self._stats.shadow_discrepancies += 1
+        self._stats.recent_discrepancies.append(record)
+
+        # 限制记录数量
+        if len(self._stats.recent_discrepancies) > self._max_discrepancy_records:
+            self._stats.recent_discrepancies = self._stats.recent_discrepancies[
+                -self._max_discrepancy_records :
+            ]
+
+        # 调用回调
+        if self._discrepancy_callback:
+            try:
+                self._discrepancy_callback(record)
+            except Exception as e:
+                logger.debug(f"Discrepancy callback error: {e}")
+
+        logger.warning(
+            f"Shadow mode discrepancy: {session_key} "
+            f"operation={operation} expected={expected} actual={actual}"
+        )
+
+        return record
+
+    def verify_state_integrity(
+        self,
+        session_key: str,
+    ) -> tuple[bool, list[DiscrepancyRecord]]:
+        """验证状态完整性，检测 coordinator 与实际行为的差异。
+
+        Args:
+            session_key: 会话标识
+
+        Returns:
+            (is_valid, discrepancies) 元组
+        """
+        discrepancies = []
+
+        # 验证阶段一致性
+        coordinator_phase = self.get_phase(session_key)
+        runtime_phase = self._runtime._state_machine.get_phase(session_key)
+
+        if coordinator_phase != runtime_phase:
+            record = self._record_discrepancy(
+                session_key,
+                "phase_mismatch",
+                coordinator_phase.value,
+                runtime_phase.value,
+            )
+            discrepancies.append(record)
+
+        # 验证锁一致性
+        coordinator_has_lock = self.has_lock(session_key)
+        runtime_has_lock = session_key in self._runtime._session_locks
+
+        if coordinator_has_lock != runtime_has_lock:
+            record = self._record_discrepancy(
+                session_key,
+                "lock_mismatch",
+                str(coordinator_has_lock),
+                str(runtime_has_lock),
+            )
+            discrepancies.append(record)
+
+        # 验证任务一致性
+        coordinator_tasks = self.get_active_tasks(session_key)
+        runtime_tasks = [
+            t for t in self._runtime._active_tasks.get(session_key, []) if not t.done()
+        ]
+
+        if len(coordinator_tasks) != len(runtime_tasks):
+            record = self._record_discrepancy(
+                session_key,
+                "task_count_mismatch",
+                str(len(coordinator_tasks)),
+                str(len(runtime_tasks)),
+            )
+            discrepancies.append(record)
+
+        return (len(discrepancies) == 0, discrepancies)
+
+    def get_discrepancy_stats(self) -> dict:
+        """获取差异统计信息。
+
+        Returns:
+            统计字典
+        """
+        return {
+            "total_discrepancies": self._stats.shadow_discrepancies,
+            "recent_count": len(self._stats.recent_discrepancies),
+            "recent_operations": self._summarize_recent_discrepancies(),
+        }
+
+    def _summarize_recent_discrepancies(self) -> dict[str, int]:
+        """汇总最近差异的操作类型。
+
+        Returns:
+            操作类型到数量的映射
+        """
+        summary: dict[str, int] = {}
+        for record in self._stats.recent_discrepancies:
+            summary[record.operation] = summary.get(record.operation, 0) + 1
+        return summary
+
+    def clear_discrepancy_history(self) -> None:
+        """清除差异历史记录。"""
+        self._stats.recent_discrepancies = []
+        logger.info("Discrepancy history cleared")

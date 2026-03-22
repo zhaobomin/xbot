@@ -5,6 +5,7 @@ import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 
 from xbot.agent.state_coordinator import SessionStateCoordinator, CoordinatorStats
+from xbot.agent.runtime import SessionPhase
 
 
 class TestCoordinatorStats:
@@ -612,3 +613,101 @@ def mock_runtime_with_state_machine():
     runtime._state_checker = state_checker
 
     return runtime
+
+
+class TestSessionStateCoordinatorDiscrepancy:
+    """测试差异监控"""
+
+    def test_record_discrepancy(self, mock_runtime_with_state_machine):
+        """测试记录差异"""
+        from xbot.agent.state_coordinator import DiscrepancyRecord
+
+        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
+
+        record = coordinator._record_discrepancy(
+            "test:1", "phase_mismatch", "running", "idle"
+        )
+
+        assert record.session_key == "test:1"
+        assert record.operation == "phase_mismatch"
+        assert record.expected == "running"
+        assert record.actual == "idle"
+        assert coordinator._stats.shadow_discrepancies == 1
+
+    def test_discrepancy_callback(self, mock_runtime_with_state_machine):
+        """测试差异回调"""
+        from xbot.agent.state_coordinator import DiscrepancyRecord
+
+        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
+
+        callback_records = []
+
+        def on_discrepancy(record):
+            callback_records.append(record)
+
+        coordinator.set_discrepancy_callback(on_discrepancy)
+        coordinator._record_discrepancy("test:1", "test_op", "expected", "actual")
+
+        assert len(callback_records) == 1
+        assert callback_records[0].operation == "test_op"
+
+    def test_verify_state_integrity_match(self, mock_runtime_with_state_machine):
+        """测试状态完整性验证 - 匹配"""
+        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
+
+        # 设置一致状态
+        coordinator.force_transition("test:1", SessionPhase.IDLE, reason="test")
+
+        is_valid, discrepancies = coordinator.verify_state_integrity("test:1")
+
+        assert is_valid is True
+        assert len(discrepancies) == 0
+
+    def test_verify_state_integrity_phase_mismatch(self, mock_runtime_with_state_machine):
+        """测试状态完整性验证 - 阶段不匹配"""
+        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
+
+        # 只在 runtime 状态机中设置，coordinator 看到的应该一致
+        # 因为 coordinator 直接操作 runtime 的状态机
+        coordinator.force_transition("test:1", SessionPhase.RUNNING, reason="test")
+
+        is_valid, discrepancies = coordinator.verify_state_integrity("test:1")
+
+        # 应该一致（因为 coordinator 直接操作状态机）
+        assert is_valid is True
+
+    def test_get_discrepancy_stats(self, mock_runtime_with_state_machine):
+        """测试获取差异统计"""
+        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
+
+        coordinator._record_discrepancy("test:1", "phase_mismatch", "running", "idle")
+        coordinator._record_discrepancy("test:2", "lock_mismatch", "True", "False")
+
+        stats = coordinator.get_discrepancy_stats()
+
+        assert stats["total_discrepancies"] == 2
+        assert stats["recent_count"] == 2
+        assert "phase_mismatch" in stats["recent_operations"]
+        assert "lock_mismatch" in stats["recent_operations"]
+
+    def test_clear_discrepancy_history(self, mock_runtime_with_state_machine):
+        """测试清除差异历史"""
+        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
+
+        coordinator._record_discrepancy("test:1", "test", "a", "b")
+        assert len(coordinator._stats.recent_discrepancies) == 1
+
+        coordinator.clear_discrepancy_history()
+
+        assert len(coordinator._stats.recent_discrepancies) == 0
+
+    def test_discrepancy_record_limit(self, mock_runtime_with_state_machine):
+        """测试差异记录数量限制"""
+        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
+        coordinator._max_discrepancy_records = 10
+
+        # 添加超过限制的记录
+        for i in range(20):
+            coordinator._record_discrepancy(f"test:{i}", "test", "a", "b")
+
+        assert len(coordinator._stats.recent_discrepancies) == 10
