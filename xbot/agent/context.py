@@ -10,6 +10,7 @@ from loguru import logger
 
 from xbot.utils.helpers import current_time_str
 
+from xbot.agent.commands import CommandsLoader
 from xbot.agent.memory import MemoryStore
 from xbot.agent.skills import SkillsLoader
 from xbot.utils.helpers import build_assistant_message, detect_image_mime
@@ -41,6 +42,7 @@ class ContextBuilder:
         """
         self.workspace = workspace
         self.skills = SkillsLoader(workspace)
+        self.commands = CommandsLoader(workspace)
 
         reme_available = False
         reme_store_cls = None

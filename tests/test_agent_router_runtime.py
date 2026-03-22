@@ -111,7 +111,7 @@ async def test_router_runtime_help_includes_dynamic_sdk_commands(tmp_path) -> No
     assert "!restart" in response
     assert "/restart" in response
     assert "/compact" in response
-    assert "passthrough" in response
+    assert "Claude SDK slash commands" in response
     assert backend.initialized is True
 
 

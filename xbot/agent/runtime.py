@@ -6,11 +6,13 @@ import asyncio
 import inspect
 import os
 import sys
+from pathlib import Path
 from typing import Any
 
 from loguru import logger
 
 from xbot.agent.capabilities import CapabilityCatalog, canonical_tool_name
+from xbot.agent.commands import CommandsLoader
 from xbot.agent.event_formatter import format_usage_summary
 from xbot.agent.protocol import AgentContext
 from xbot.agent.router import AgentRouter, register_default_backends
@@ -35,6 +37,9 @@ class AgentRuntime:
         self.channels_config = config.channels
         self.capabilities = CapabilityCatalog(
             self.shared_resources.get("workspace", config.agents.defaults.workspace)
+        )
+        self.commands = CommandsLoader(
+            Path(self.shared_resources.get("workspace", config.agents.defaults.workspace))
         )
         self._running = False
         self._active_tasks: dict[str, list[asyncio.Task]] = {}
@@ -249,7 +254,21 @@ class AgentRuntime:
                 parts.append("LLM request")
             content = f"🛑 Stopped {' and '.join(parts)}." if parts else "No active task to stop."
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=content)
+
+        # Check for workspace command
+        command_prefix = ""
+        cmd_name = self.commands.get_command_from_text(msg.content.strip())
+        if cmd_name:
+            cmd_content = self.commands.load_command(cmd_name)
+            if cmd_content:
+                command_prefix = f"[Workspace Command: /{cmd_name}]\n\n{cmd_content}\n\n---\n\n"
+                logger.info(f"Loaded workspace command '/{cmd_name}' for session {msg.session_key}")
+
         normalized_prompt = self._normalize_command_prompt(msg.content)
+        # Prepend command content if this is a workspace command
+        if command_prefix:
+            normalized_prompt = command_prefix + normalized_prompt
+
         context = AgentContext(
             session_key=msg.session_key,
             prompt=normalized_prompt,
@@ -491,16 +510,33 @@ class AgentRuntime:
         if not sdk_commands:
             sdk_commands = list(self.SDK_HELP_FALLBACK_COMMANDS)
 
+        # Get workspace commands
+        workspace_commands = self.commands.list_commands()
+        workspace_commands_lines = []
+        for cmd in workspace_commands:
+            desc = f" — {cmd['description']}" if cmd["description"] else ""
+            workspace_commands_lines.append(f"/{cmd['name']}{desc}")
+
         lines = [
             "🐈 xbot command reference:",
+            "",
             "Runtime controls:",
             "!help or /help — Show available commands",
-            "!stop or /stop — Stop the current task (cancel local/subagent/SDK task + interrupt request)",
+            "!stop or /stop — Stop the current task",
             "!restart or /restart — Restart the bot process",
-            "",
-            "Claude SDK slash commands (passthrough):",
         ]
+
+        # Add workspace commands if any
+        if workspace_commands_lines:
+            lines.append("")
+            lines.append("Workspace commands:")
+            lines.extend(workspace_commands_lines)
+
+        # Add SDK commands
+        lines.append("")
+        lines.append("Claude SDK slash commands:")
         lines.extend(sdk_commands)
+
         return "\n".join(lines)
 
     @staticmethod
