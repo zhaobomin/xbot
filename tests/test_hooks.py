@@ -64,14 +64,12 @@ class TestCompactHookHandler:
         assert result is None
 
     def test_handler_enabled_returns_message(self) -> None:
-        """Test that enabled handler returns notification message."""
+        """Test that enabled handler returns notification message dict."""
         from xbot.agent.hooks import CompactHookHandler
 
         handler = CompactHookHandler(enabled=True)
         # Create mock input and context
         mock_input = MagicMock()
-        mock_input.messages = [MagicMock() for _ in range(10)]
-        mock_input.token_count = 5000
         mock_input.trigger = "auto"
         mock_context = MagicMock()
         mock_context.session_id = "test_session"
@@ -79,9 +77,10 @@ class TestCompactHookHandler:
         import asyncio
         result = asyncio.run(handler(mock_input, None, mock_context))
         assert result is not None
-        assert "Compressing context" in result
-        assert "10 messages" in result
-        assert "5,000" in result
+        assert isinstance(result, dict)
+        assert "systemMessage" in result
+        assert "Compressing context" in result["systemMessage"]
+        assert "auto" in result["systemMessage"]
 
     def test_handler_stores_recent_events(self) -> None:
         """Test that handler stores recent events for debugging."""
@@ -89,9 +88,7 @@ class TestCompactHookHandler:
 
         handler = CompactHookHandler(enabled=True)
         mock_input = MagicMock()
-        mock_input.messages = [MagicMock() for _ in range(5)]
-        mock_input.token_count = 1000
-        mock_input.trigger = "auto"
+        mock_input.trigger = "manual"
         mock_context = MagicMock()
         mock_context.session_id = "test_session"
 
@@ -101,8 +98,7 @@ class TestCompactHookHandler:
         events = handler.get_recent_events()
         assert len(events) == 1
         assert events[0]["session_key"] == "test_session"
-        assert events[0]["trigger"] == "auto"
-        assert events[0]["messages_count"] == 5
+        assert events[0]["trigger"] == "manual"
 
     def test_handler_limits_recent_events(self) -> None:
         """Test that handler limits recent events to 50."""
@@ -113,8 +109,6 @@ class TestCompactHookHandler:
         # Simulate 60 events
         for i in range(60):
             mock_input = MagicMock()
-            mock_input.messages = [MagicMock()]
-            mock_input.token_count = 100
             mock_input.trigger = "auto"
             mock_context = MagicMock()
             mock_context.session_id = f"session_{i}"
@@ -134,22 +128,20 @@ class TestCompactHookHandler:
         assert len(all_events) == 50
 
     def test_handler_zero_tokens(self) -> None:
-        """Test handler with zero token count."""
+        """Test handler returns proper message format."""
         from xbot.agent.hooks import CompactHookHandler
 
         handler = CompactHookHandler(enabled=True)
         mock_input = MagicMock()
-        mock_input.messages = [MagicMock() for _ in range(3)]
-        mock_input.token_count = 0
         mock_input.trigger = "auto"
         mock_context = MagicMock()
         mock_context.session_id = "test_session"
 
         import asyncio
         result = asyncio.run(handler(mock_input, None, mock_context))
-        assert "3 messages" in result
-        # Should not include token count
-        assert "tokens" not in result.lower()
+        assert isinstance(result, dict)
+        assert "systemMessage" in result
+        assert "Compressing context" in result["systemMessage"]
 
 
 class TestBuildCompactHook:
