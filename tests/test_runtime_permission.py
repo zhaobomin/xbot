@@ -25,7 +25,9 @@ class TestRuntimePermissionResponse:
         config = Config()
         runtime = MagicMock(spec=AgentRuntime)
         runtime.bus = bus
+        runtime._use_coordinator_transitions = False  # Feature flag for coordinator transitions
         runtime._handle_permission_response = AgentRuntime._handle_permission_response.__get__(runtime, AgentRuntime)
+        runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
         return runtime
 
     @pytest.mark.asyncio
@@ -268,6 +270,7 @@ class TestRuntimePermissionResponse:
         runtime = MagicMock(spec=AgentRuntime)
         runtime.bus = bus
         runtime._is_local_runtime_command = AgentRuntime._is_local_runtime_command
+        runtime._use_coordinator_transitions = False
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
 
         await bus.publish_interaction_request(
@@ -303,6 +306,7 @@ class TestRuntimePermissionResponse:
         runtime = MagicMock(spec=AgentRuntime)
         runtime.bus = bus
         runtime._is_local_runtime_command = AgentRuntime._is_local_runtime_command
+        runtime._use_coordinator_transitions = False
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
 
         await bus.publish_interaction_request(
@@ -334,6 +338,7 @@ class TestRuntimePermissionResponse:
         runtime = MagicMock(spec=AgentRuntime)
         runtime.bus = bus
         runtime._is_local_runtime_command = AgentRuntime._is_local_runtime_command
+        runtime._use_coordinator_transitions = False
         runtime._handle_permission_response = AgentRuntime._handle_permission_response.__get__(runtime, AgentRuntime)
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
 
@@ -377,6 +382,7 @@ class TestRuntimePermissionResponse:
         runtime = MagicMock(spec=AgentRuntime)
         runtime.bus = bus
         runtime._is_local_runtime_command = AgentRuntime._is_local_runtime_command
+        runtime._use_coordinator_transitions = False
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
 
         await bus.publish_interaction_request(
@@ -414,6 +420,7 @@ class TestRuntimePermissionResponse:
         runtime = MagicMock(spec=AgentRuntime)
         runtime.bus = bus
         runtime._is_local_runtime_command = AgentRuntime._is_local_runtime_command
+        runtime._use_coordinator_transitions = False
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
 
         await bus.publish_interaction_request(

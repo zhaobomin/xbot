@@ -261,6 +261,9 @@ class AgentRuntime:
         # Feature flag for atomic terminate (uses coordinator transactions)
         self._use_atomic_terminate = False  # Off by default, enable after validation
 
+        # Feature flag for using coordinator for permission/interaction transitions
+        self._use_coordinator_transitions = False  # Off by default, enable after validation
+
         # Register backend state sync callbacks
         self.shared_resources["on_backend_client_cleanup"] = self._on_backend_client_cleanup
 
@@ -319,6 +322,25 @@ class AgentRuntime:
         """Check if atomic terminate is enabled."""
         return self._use_atomic_terminate
 
+    def enable_coordinator_transitions(self) -> None:
+        """Enable coordinator-based state transitions.
+
+        When enabled, permission/interaction state transitions use the coordinator.
+        This provides better observability and consistency tracking.
+        """
+        self._use_coordinator_transitions = True
+        logger.info("Coordinator transitions enabled")
+
+    def disable_coordinator_transitions(self) -> None:
+        """Disable coordinator-based state transitions."""
+        self._use_coordinator_transitions = False
+        logger.info("Coordinator transitions disabled")
+
+    @property
+    def is_coordinator_transitions_enabled(self) -> bool:
+        """Check if coordinator transitions are enabled."""
+        return self._use_coordinator_transitions
+
     async def initialize(self) -> None:
         await self.router.initialize()
 
@@ -372,6 +394,10 @@ class AgentRuntime:
         Returns:
             True if the message was handled as a permission response, False otherwise
         """
+        # Use atomic version if coordinator transitions are enabled
+        if self._use_coordinator_transitions:
+            return await self._atomic_handle_permission_response(msg)
+
         if self.bus is None:
             return False
 
@@ -436,6 +462,81 @@ class AgentRuntime:
             return True  # Consume the message
         logger.info(f"Permission response submitted: {decision} for request {request_id}")
         self._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="permission_response_submitted")
+        return True
+
+    async def _atomic_handle_permission_response(self, msg: InboundMessage) -> bool:
+        """Handle permission response with transaction-based state management.
+
+        This is an alternative to _handle_permission_response that uses
+        coordinator transactions for state changes.
+        """
+        if self.bus is None:
+            return False
+
+        # Parse the user's response
+        content = msg.content.strip().lower()
+        decision = None
+        reason = ""
+
+        allow_variations = {"允许", "allow", "yes", "y", "是", "ok", "同意", "确认"}
+        deny_variations = {"拒绝", "deny", "no", "n", "否", "取消"}
+
+        is_permission_keyword = content in allow_variations or content in deny_variations
+
+        if content in allow_variations:
+            decision = "allow"
+        elif content in deny_variations:
+            decision = "deny"
+            reason = "User denied"
+        else:
+            return False
+
+        request_id = self.bus.get_pending_request_for_session(msg.session_key)
+        if not request_id:
+            if is_permission_keyword:
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content="⚠️ 没有待处理的权限请求，可能已超时过期。请重新发起操作。",
+                    )
+                )
+                return True
+            return False
+
+        # Atomic state transition: set WAITING_PERMISSION
+        async with self._state_coordinator.transaction(
+            msg.session_key, validate_on_commit=False
+        ) as tx:
+            tx.set_phase(SessionPhase.WAITING_PERMISSION, reason="pending_permission_detected")
+
+        from xbot.bus.queue import PermissionResponse
+        response = PermissionResponse(
+            request_id=request_id,
+            session_key=msg.session_key,
+            decision=decision,
+            reason=reason,
+        )
+        submitted = await self.bus.submit_permission_response(response)
+        if not submitted:
+            logger.warning(f"Permission response no longer pending: request={request_id}")
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="⚠️ 权限请求已过期或被取消，请重新发起操作。",
+                )
+            )
+            return True
+
+        logger.info(f"Permission response submitted: {decision} for request {request_id}")
+
+        # Atomic state transition: set RUNNING
+        async with self._state_coordinator.transaction(
+            msg.session_key, validate_on_commit=False
+        ) as tx:
+            tx.set_phase(SessionPhase.RUNNING, reason="permission_response_submitted")
+
         return True
 
     async def _dispatch(self, msg: InboundMessage) -> None:
@@ -568,6 +669,10 @@ class AgentRuntime:
 
     async def _handle_interaction_response(self, msg: InboundMessage) -> bool:
         """Handle pending generic interaction replies for a session."""
+        # Use atomic version if coordinator transitions are enabled
+        if self._use_coordinator_transitions:
+            return await self._atomic_handle_interaction_response(msg)
+
         if self.bus is None:
             return False
 
@@ -646,8 +751,95 @@ class AgentRuntime:
         logger.info(f"Interaction response submitted: action={action}, request={request_id}")
         self._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="interaction_response_submitted")
         return True
+
+    async def _atomic_handle_interaction_response(self, msg: InboundMessage) -> bool:
+        """Handle interaction response with transaction-based state management.
+
+        This is an alternative to _handle_interaction_response that uses
+        coordinator transactions for state changes.
+        """
+        if self.bus is None:
+            return False
+
+        if self._is_local_runtime_command(msg.content):
+            return False
+
+        content = msg.content.strip()
+        normalized = content.lower()
+
+        allow_variations = {"允许", "allow", "yes", "y", "是", "ok", "同意", "确认"}
+        deny_variations = {"拒绝", "deny", "no", "n", "否", "取消"}
+        is_interaction_keyword = normalized in allow_variations or normalized in deny_variations
+
+        request_id = self.bus.get_pending_interaction_for_session(msg.session_key)
+        if not request_id:
+            if is_interaction_keyword:
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content="⚠️ 没有待处理的交互请求，可能已超时过期。请重新发起操作。",
+                    )
+                )
+                return True
+            return False
+
+        # Atomic state transition: set WAITING_INTERACTION
+        async with self._state_coordinator.transaction(
+            msg.session_key, validate_on_commit=False
+        ) as tx:
+            tx.set_phase(SessionPhase.WAITING_INTERACTION, reason="pending_interaction_detected")
+
+        req = self.bus.get_interaction_request(request_id)
+        if req is None:
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="⚠️ 交互请求已过期或被取消，请重新发起操作。",
+                )
+            )
+            return True
+
+        action = "reply"
+
+        if req.kind in {"confirmation", "approval"}:
+            if normalized in allow_variations:
+                action = "confirm" if req.kind == "confirmation" else "allow"
+            elif normalized in deny_variations:
+                action = "cancel" if req.kind == "confirmation" else "deny"
+            else:
+                action = "reply"
+
+        from xbot.bus.queue import InteractionResponse
+
+        submitted = await self.bus.submit_interaction_response(
+            InteractionResponse(
+                request_id=request_id,
+                session_key=msg.session_key,
+                action=action,
+                content=content,
+            )
+        )
+        if not submitted:
+            logger.warning(f"Interaction response no longer pending: request={request_id}")
+            await self.bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="⚠️ 交互请求已过期或被取消，请重新发起操作。",
+                )
+            )
+            return True
+
         logger.info(f"Interaction response submitted: action={action}, request={request_id}")
-        self._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="interaction_response_submitted")
+
+        # Atomic state transition: set RUNNING
+        async with self._state_coordinator.transaction(
+            msg.session_key, validate_on_commit=False
+        ) as tx:
+            tx.set_phase(SessionPhase.RUNNING, reason="interaction_response_submitted")
+
         return True
 
     async def _handle_message(self, msg: InboundMessage, on_progress=None) -> OutboundMessage | None:
