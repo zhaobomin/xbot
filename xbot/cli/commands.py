@@ -519,7 +519,7 @@ def gateway(
     health_port = health_port if health_port is not None else (port - 710)
 
     console.print(f"{__logo__} Starting xbot gateway version {__version__} on port {port}...")
-    console.print(f"[dim]Agent type: {config.agents.type}[/dim]")
+    console.print(f"[dim]Agent type: claude_sdk[/dim]")
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
     provider = _make_provider(config)
@@ -541,7 +541,7 @@ def gateway(
         safe_tools=set(perm_config.safe_tools),
     )
 
-    # Create agent based on config.agents.type
+    # Create agent runtime
     agent = _make_agent_runtime(
         config=config,
         bus=bus,

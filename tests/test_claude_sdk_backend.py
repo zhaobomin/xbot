@@ -630,3 +630,167 @@ class TestTypeAnnotations:
             backend = ClaudeSDKBackend()
             assert isinstance(backend._clients, dict)
             assert isinstance(backend._clients_lock, asyncio.Lock)
+
+
+class TestInterruptSession:
+    """Tests for interrupt_session method."""
+
+    @pytest.mark.asyncio
+    async def test_interrupt_session_no_client(self):
+        """Test interrupt_session returns False when no client exists."""
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+            backend = ClaudeSDKBackend()
+            backend._clients = {}
+
+            result = await backend.interrupt_session("nonexistent_session")
+            assert result is False
+
+    @pytest.mark.asyncio
+    async def test_interrupt_session_success(self):
+        """Test interrupt_session calls client.interrupt() and returns True."""
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+            backend = ClaudeSDKBackend()
+
+            mock_client = MagicMock()
+            mock_client.interrupt = MagicMock()
+            backend._clients["test_session"] = mock_client
+
+            result = await backend.interrupt_session("test_session")
+            assert result is True
+            mock_client.interrupt.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_interrupt_session_exception(self):
+        """Test interrupt_session returns False on exception."""
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+            backend = ClaudeSDKBackend()
+
+            mock_client = MagicMock()
+            mock_client.interrupt = MagicMock(side_effect=Exception("Interrupt failed"))
+            backend._clients["test_session"] = mock_client
+
+            result = await backend.interrupt_session("test_session")
+            assert result is False
+
+
+class TestCompactSession:
+    """Tests for compact_session method."""
+
+    @pytest.mark.asyncio
+    async def test_compact_session_no_sessions(self):
+        """Test compact_session returns not available when no session manager."""
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+            backend = ClaudeSDKBackend()
+            backend.sessions = None
+            backend.memory_consolidator = None
+
+            result = await backend.compact_session("test_session")
+            assert result["success"] is True
+            assert result["messages_consolidated"] == 0
+            assert "not available" in result["message"].lower()
+
+    @pytest.mark.asyncio
+    async def test_compact_session_empty_session(self):
+        """Test compact_session with empty session."""
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+            backend = ClaudeSDKBackend()
+
+            mock_sessions = MagicMock()
+            mock_session = MagicMock()
+            mock_session.messages = []
+            mock_session.last_consolidated = 0
+            mock_sessions.get_or_create = MagicMock(return_value=mock_session)
+            backend.sessions = mock_sessions
+
+            mock_consolidator = MagicMock()
+            mock_consolidator.force_consolidate = AsyncMock(return_value={
+                "messages_consolidated": 0,
+                "tokens_before": 0,
+                "tokens_after": 0,
+                "success": True,
+            })
+            backend.memory_consolidator = mock_consolidator
+
+            result = await backend.compact_session("test_session")
+            assert result["success"] is True
+            assert result["messages_consolidated"] == 0
+
+    @pytest.mark.asyncio
+    async def test_compact_session_with_messages(self):
+        """Test compact_session with messages to consolidate."""
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+            backend = ClaudeSDKBackend()
+
+            mock_sessions = MagicMock()
+            mock_session = MagicMock()
+            mock_session.messages = [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": "Hi"},
+            ]
+            mock_session.last_consolidated = 0
+            mock_sessions.get_or_create = MagicMock(return_value=mock_session)
+            backend.sessions = mock_sessions
+
+            mock_consolidator = MagicMock()
+            mock_consolidator.force_consolidate = AsyncMock(return_value={
+                "messages_consolidated": 2,
+                "tokens_before": 100,
+                "tokens_after": 20,
+                "success": True,
+            })
+            backend.memory_consolidator = mock_consolidator
+
+            result = await backend.compact_session("test_session")
+            assert result["success"] is True
+            assert result["messages_consolidated"] == 2
+            assert result["tokens_before"] == 100
+            assert result["tokens_after"] == 20
+            mock_consolidator.force_consolidate.assert_called_once_with(mock_session)

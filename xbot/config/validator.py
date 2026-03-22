@@ -1,7 +1,7 @@
 """Configuration validation for xbot.
 
 Validates configuration including:
-- Provider compatibility with Agent type
+- Provider compatibility with Claude SDK
 - Required API keys
 - Provider existence
 """
@@ -28,7 +28,6 @@ def validate_config(config: Config) -> None:
     Raises:
         ConfigurationError: If configuration is invalid
     """
-    agent_type = config.agents.type
     provider_name = config.agents.defaults.provider
 
     # Skip validation if provider is "auto" (will be auto-detected at runtime)
@@ -44,8 +43,8 @@ def validate_config(config: Config) -> None:
             f"Available providers: {all_providers}"
         )
 
-    # 2. Check provider compatibility with Agent type
-    if agent_type == "claude_sdk" and not spec.supported_by_sdk:
+    # 2. Check provider compatibility with Claude SDK
+    if not spec.supported_by_sdk:
         sdk_providers = ", ".join(get_sdk_compatible_providers())
         raise ConfigurationError(
             f"Provider '{provider_name}' is not compatible with Claude SDK Agent. "

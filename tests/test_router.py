@@ -89,11 +89,11 @@ class TestAgentRouter:
 
     @pytest.mark.asyncio
     async def test_initialize_unknown_backend(self) -> None:
-        """Test that unknown backend raises error."""
+        """Test that missing backend raises error."""
         AgentRouter._backends = {}
         config = AgentsConfig()  # Uses default claude_sdk
         router = AgentRouter(config, {})
-        with pytest.raises(ValueError, match="Unknown agent backend"):
+        with pytest.raises(RuntimeError, match="Claude SDK backend not registered"):
             await router.initialize()
 
     @pytest.mark.asyncio

@@ -13,7 +13,7 @@ from xbot.session.manager import SessionManager
 
 
 class _FakeBackend:
-    name = "fake"
+    name = "claude_sdk"  # Match the hardcoded backend type
 
     def __init__(self) -> None:
         self.initialized = False
@@ -32,6 +32,9 @@ class _FakeBackend:
     async def shutdown(self) -> None:
         return None
 
+    async def reset_session(self, session_key: str) -> None:
+        return None
+
     async def cancel_session(self, session_key: str) -> int:
         return 0
 
@@ -47,10 +50,9 @@ async def test_router_runtime_process_direct_routes_through_selected_backend(tmp
     from xbot.agent.runtime import AgentRuntime
     from xbot.bus.queue import MessageBus
 
-    AgentRouter._backends = {"fake": _FakeBackend}
+    AgentRouter._backends = {"claude_sdk": _FakeBackend}
 
     config = Config()
-    config.agents.type = "fake"  # type: ignore[assignment]
     config.agents.defaults.workspace = str(tmp_path)
 
     runtime = AgentRuntime(
@@ -83,10 +85,9 @@ async def test_router_runtime_help_is_handled_before_backend_invocation(tmp_path
         def __call__(self):
             return backend
 
-    AgentRouter._backends = {"fake": _BackendFactory()}  # type: ignore[dict-item]
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
 
     config = Config()
-    config.agents.type = "fake"  # type: ignore[assignment]
     config.agents.defaults.workspace = str(tmp_path)
 
     runtime = AgentRuntime(
@@ -121,10 +122,9 @@ async def test_router_runtime_stop_delegates_backend_session_cancellation(tmp_pa
         def __call__(self):
             return backend
 
-    AgentRouter._backends = {"fake": _BackendFactory()}  # type: ignore[dict-item]
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
 
     config = Config()
-    config.agents.type = "fake"  # type: ignore[assignment]
     config.agents.defaults.workspace = str(tmp_path)
 
     runtime = AgentRuntime(
@@ -151,10 +151,9 @@ async def test_router_runtime_process_direct_forwards_progress_deltas(tmp_path) 
             yield AgentResponse(content="", is_delta=True, delta_content="thinking")
             yield AgentResponse(content="done", finish_reason="stop")
 
-    AgentRouter._backends = {"fake": _DeltaBackend}
+    AgentRouter._backends = {"claude_sdk": _DeltaBackend}
 
     config = Config()
-    config.agents.type = "fake"  # type: ignore[assignment]
     config.agents.defaults.workspace = str(tmp_path)
 
     runtime = AgentRuntime(
@@ -187,10 +186,9 @@ async def test_router_runtime_process_direct_forwards_progress_texts(tmp_path) -
             yield AgentResponse(content="", progress_texts=["planning", "reading files"])
             yield AgentResponse(content="done", finish_reason="stop")
 
-    AgentRouter._backends = {"fake": _ProgressBackend}
+    AgentRouter._backends = {"claude_sdk": _ProgressBackend}
 
     config = Config()
-    config.agents.type = "fake"  # type: ignore[assignment]
     config.agents.defaults.workspace = str(tmp_path)
 
     runtime = AgentRuntime(
@@ -224,10 +222,9 @@ async def test_router_runtime_run_publishes_progress_messages_to_bus(tmp_path) -
             yield AgentResponse(content="", tool_calls=[{"name": "read_file", "input": {"path": "README.md"}}])
             yield AgentResponse(content="done", finish_reason="stop")
 
-    AgentRouter._backends = {"fake": _ProgressBackend}
+    AgentRouter._backends = {"claude_sdk": _ProgressBackend}
 
     config = Config()
-    config.agents.type = "fake"  # type: ignore[assignment]
     config.agents.defaults.workspace = str(tmp_path)
     bus = MessageBus()
 
@@ -279,10 +276,9 @@ async def test_router_runtime_process_direct_forwards_preformatted_tool_hint(tmp
             yield AgentResponse(content="", tool_hint_text='Tool: read_file("README.md")')
             yield AgentResponse(content="done", finish_reason="stop")
 
-    AgentRouter._backends = {"fake": _ProgressBackend}
+    AgentRouter._backends = {"claude_sdk": _ProgressBackend}
 
     config = Config()
-    config.agents.type = "fake"  # type: ignore[assignment]
     config.agents.defaults.workspace = str(tmp_path)
 
     runtime = AgentRuntime(
@@ -324,10 +320,9 @@ def test_router_runtime_describe_runtime_includes_backend_and_summary(tmp_path) 
         def __call__(self):
             return backend
 
-    AgentRouter._backends = {"fake": _BackendFactory()}  # type: ignore[dict-item]
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
 
     config = Config()
-    config.agents.type = "fake"  # type: ignore[assignment]
     config.agents.defaults.workspace = str(tmp_path)
 
     runtime = AgentRuntime(
@@ -343,7 +338,7 @@ def test_router_runtime_describe_runtime_includes_backend_and_summary(tmp_path) 
 
     summary = runtime.describe_runtime()
 
-    assert "backend=fake" in summary
+    assert "backend=claude_sdk" in summary
     assert "workspace=" in summary
     assert "builtin_tools=10 | skills=2" in summary
 
@@ -359,10 +354,9 @@ async def test_router_runtime_writes_session_runtime_trace(tmp_path) -> None:
             yield AgentResponse(content="", tool_hint_text='Tool: read_file("README.md")')
             yield AgentResponse(content="done", finish_reason="stop")
 
-    AgentRouter._backends = {"fake": _ProgressBackend}
+    AgentRouter._backends = {"claude_sdk": _ProgressBackend}
 
     config = Config()
-    config.agents.type = "fake"  # type: ignore[assignment]
     config.agents.defaults.workspace = str(tmp_path)
     sessions = SessionManager(tmp_path)
 
@@ -386,5 +380,5 @@ async def test_router_runtime_writes_session_runtime_trace(tmp_path) -> None:
         "tool_hint",
         "response_complete",
     ]
-    assert trace[0]["backend"] == "fake"
+    assert trace[0]["backend"] == "claude_sdk"
     assert trace[-1]["content_preview"] == "done"

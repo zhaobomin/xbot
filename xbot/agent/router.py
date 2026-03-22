@@ -1,7 +1,6 @@
-"""Agent router for selecting and managing Agent backends.
+"""Agent router for managing the Claude SDK backend.
 
-The router selects the appropriate backend based on configuration
-and provides a unified interface for message processing.
+Provides a unified interface for message processing through the Claude SDK.
 """
 
 import logging
@@ -14,13 +13,12 @@ logger = logging.getLogger(__name__)
 
 
 class AgentRouter:
-    """Router for selecting and managing Agent backends.
+    """Router for managing the Claude SDK Agent backend.
 
     The router:
-    - Selects backend based on config.agents.type
+    - Initializes the Claude SDK backend
     - Manages backend lifecycle
     - Provides unified interface for message processing
-    - Supports dynamic backend switching
     """
 
     # Backend registry - maps type names to backend classes
@@ -40,8 +38,8 @@ class AgentRouter:
 
     @property
     def backend_type(self) -> str:
-        """Current backend type."""
-        return self.config.type
+        """Current backend type (always 'claude_sdk')."""
+        return "claude_sdk"
 
     @property
     def backend(self) -> AgentBackend:
@@ -51,23 +49,20 @@ class AgentRouter:
         return self._backend
 
     async def initialize(self) -> None:
-        """Initialize the selected backend.
+        """Initialize the Claude SDK backend.
 
         Raises:
-            ValueError: If backend type is unknown
+            RuntimeError: If backend initialization fails
         """
         if self._initialized:
             return
 
-        backend_class = self._backends.get(self.config.type)
+        # Claude SDK is the only supported backend
+        backend_class = self._backends.get("claude_sdk")
         if not backend_class:
-            available = ", ".join(self._backends.keys())
-            raise ValueError(
-                f"Unknown agent backend type: '{self.config.type}'. "
-                f"Available backends: {available}"
-            )
+            raise RuntimeError("Claude SDK backend not registered")
 
-        logger.info(f"Initializing agent backend: {self.config.type}")
+        logger.info("Initializing agent backend: claude_sdk")
         self._backend = backend_class()
         await self._backend.initialize(self.config, self.shared_resources)
         self._initialized = True
@@ -87,33 +82,6 @@ class AgentRouter:
 
         async for response in self._backend.process(context):
             yield response
-
-    async def switch_backend(self, new_type: str) -> None:
-        """Switch to a different backend type.
-
-        Args:
-            new_type: New backend type name
-
-        Raises:
-            ValueError: If backend type is unknown
-        """
-        if new_type == self.config.type:
-            logger.info(f"Already using backend type: {new_type}")
-            return
-
-        logger.info(f"Switching backend from {self.config.type} to {new_type}")
-
-        # Shutdown current backend
-        if self._backend:
-            await self._backend.shutdown()
-
-        # Update config and reset
-        self.config.type = new_type
-        self._backend = None
-        self._initialized = False
-
-        # Initialize new backend
-        await self.initialize()
 
     async def shutdown(self) -> None:
         """Shutdown the current backend."""
@@ -149,7 +117,14 @@ def register_default_backends() -> None:
 
     This function should be called at module import time
     to ensure all backends are registered.
+
+    Note: This function is idempotent - it will not overwrite
+    existing registrations (useful for testing).
     """
+    # Don't overwrite existing registrations (supports testing with mocks)
+    if "claude_sdk" in AgentRouter._backends:
+        return
+
     # Claude SDK backend is the only supported backend
     from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 

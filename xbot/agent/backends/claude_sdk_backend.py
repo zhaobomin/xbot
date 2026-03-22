@@ -461,7 +461,7 @@ class OptionsBuilder:
             "## Runtime Identity",
             "",
             "- Agent name: `xbot`",
-            f"- Agent backend: `{config.agents.type}`",
+            "- Agent backend: `claude_sdk`",
             f"- Configured model: `{defaults.model}`",
             f"- Configured provider: `{defaults.provider}`",
             "",
