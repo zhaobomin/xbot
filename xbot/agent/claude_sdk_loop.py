@@ -90,6 +90,7 @@ class ClaudeSDKAgentLoop:
         self._mcp_stack: AsyncExitStack | None = None
         self._mcp_servers: dict = config.tools.mcp_servers or {}
         self._clients: dict[str, ClaudeSDKClient] = {}  # session_id -> client
+        self._active_tasks: dict[str, list[asyncio.Task]] = {}  # session_key -> tasks
 
         # Tool adapter for MCP tools
         self._tool_adapter = None
@@ -303,8 +304,20 @@ class ClaudeSDKAgentLoop:
                         timeout=1.0
                     )
 
-                    # Process the message
-                    await self._process_message(msg)
+                    # Check for slash commands that need immediate handling
+                    cmd = msg.content.strip().lower()
+                    if cmd == "/stop":
+                        await self._handle_stop(msg)
+                    elif cmd == "/restart":
+                        await self._handle_restart(msg)
+                    else:
+                        # Dispatch other messages as tasks
+                        task = asyncio.create_task(self._process_message(msg))
+                        self._active_tasks.setdefault(msg.session_key, []).append(task)
+                        task.add_done_callback(
+                            lambda t, k=msg.session_key: self._active_tasks.get(k, []) and self._active_tasks[k].remove(t)
+                            if t in self._active_tasks.get(k, []) else None
+                        )
 
                 except asyncio.TimeoutError:
                     # No message, continue loop
@@ -319,6 +332,48 @@ class ClaudeSDKAgentLoop:
             self._running = False
             logger.info("Claude SDK agent loop stopped")
 
+    async def _handle_stop(self, msg: InboundMessage) -> None:
+        """Handle /stop command - interrupt SDK client and cancel tasks."""
+        session_key = msg.session_key
+
+        # 1. Cancel asyncio tasks
+        tasks = self._active_tasks.pop(session_key, [])
+        cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
+        for t in tasks:
+            try:
+                await t
+            except (asyncio.CancelledError, Exception):
+                pass
+
+        # 2. Interrupt SDK client for this session
+        client = self._clients.get(session_key)
+        if client:
+            try:
+                client.interrupt()
+                logger.info(f"Interrupted SDK client for session {session_key}")
+            except Exception as e:
+                logger.warning(f"Failed to interrupt SDK client: {e}")
+
+        total = cancelled + (1 if client else 0)
+        content = f"🛑 Stopped {total} task(s)." if total else "No active task to stop."
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id, content=content,
+        ))
+
+    async def _handle_restart(self, msg: InboundMessage) -> None:
+        """Handle /restart command."""
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id, content="Restarting...",
+        ))
+
+        async def _do_restart():
+            await asyncio.sleep(1)
+            import sys
+            import os
+            os.execv(sys.executable, [sys.executable, "-m", "xbot"] + sys.argv[1:])
+
+        asyncio.create_task(_do_restart())
+
     async def _process_message(self, msg: InboundMessage) -> None:
         """Process an inbound message.
 
@@ -330,6 +385,18 @@ class ClaudeSDKAgentLoop:
 
         session_key = f"{msg.channel}:{msg.chat_id}"
         logger.info(f"Processing message from {session_key}")
+
+        # Check for slash commands that are handled per-message
+        cmd = msg.content.strip().lower()
+        if cmd == "/new":
+            await self._handle_new(msg, session_key)
+            return
+        if cmd == "/help":
+            await self._handle_help(msg)
+            return
+        if cmd == "/compact":
+            await self._handle_compact(msg, session_key)
+            return
 
         try:
             # Get or create client for this session
@@ -445,6 +512,51 @@ class ClaudeSDKAgentLoop:
         except Exception as e:
             logger.exception(f"Error in process_direct: {e}")
             return f"Error: {str(e)}"
+
+    async def _handle_new(self, msg: InboundMessage, session_key: str) -> None:
+        """Handle /new command - start a new session."""
+        # Clear session data
+        session = self.sessions.get_or_create(session_key)
+        session.clear()
+        self.sessions.save(session)
+        self.sessions.invalidate(session_key)
+
+        # Disconnect SDK client for fresh start
+        client = self._clients.pop(session_key, None)
+        if client:
+            try:
+                await client.disconnect()
+            except Exception:
+                pass
+
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id, content="✅ New session started.",
+        ))
+
+    async def _handle_help(self, msg: InboundMessage) -> None:
+        """Handle /help command."""
+        lines = [
+            "🐈 xbot commands:",
+            "/new — Start a new conversation",
+            "/compact — Compact context to save tokens",
+            "/stop — Stop the current task",
+            "/restart — Restart the bot",
+            "/help — Show available commands",
+        ]
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=msg.channel, chat_id=msg.chat_id, content="\n".join(lines),
+        ))
+
+    async def _handle_compact(self, msg: InboundMessage, session_key: str) -> None:
+        """Handle /compact command - trigger context compaction."""
+        # For SDK backend, compaction is handled by the SDK itself via PreCompact hook
+        # This command just notifies the user
+        await self.bus.publish_outbound(OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content="ℹ️ Context compaction is managed automatically by Claude SDK.\n"
+                    "When the context grows large, you'll see a 🔄 notification.",
+        ))
 
     def stop(self) -> None:
         """Stop the agent loop."""

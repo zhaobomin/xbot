@@ -305,6 +305,9 @@ class OptionsBuilder:
         # Get disallowed_tools from config (default: disable SDK WebFetch/WebSearch)
         disallowed_tools = list(getattr(self._sdk_config, "disallowed_tools", ["WebFetch", "WebSearch"]))
 
+        # Build hooks including compact notification hook
+        hooks = self._build_hooks()
+
         return ClaudeAgentOptions(
             cwd=self._shared_resources.get("workspace", defaults.workspace),
             model=model,
@@ -313,12 +316,26 @@ class OptionsBuilder:
             resume=resume_session,
             mcp_servers=mcp_servers if mcp_servers else None,
             agents=sdk_agents,
-            hooks=self._sdk_config.hooks,
+            hooks=hooks,
             system_prompt=self._build_system_prompt(),
             env=env,
             can_use_tool=can_use_tool,
             disallowed_tools=disallowed_tools,
         )
+
+    def _build_hooks(self) -> dict[str, list] | None:
+        """Build hooks configuration including compact notification."""
+        # Start with user-configured hooks
+        hooks: dict[str, list] = dict(self._sdk_config.hooks or {})
+
+        # Add PreCompact hook if compact_notify is enabled
+        if getattr(self._sdk_config, "compact_notify", True):
+            from xbot.agent.hooks import CompactHookHandler
+
+            compact_handler = CompactHookHandler(enabled=True)
+            hooks.setdefault("PreCompact", []).append({"hooks": [compact_handler]})
+
+        return hooks if hooks else None
     
     def _build_env_config(self) -> dict[str, str]:
         """Build environment configuration for SDK."""
@@ -616,10 +633,12 @@ class ClaudeSDKBackend(AgentBackend):
         try:
             from xbot.agent.tool_adapter import ToolAdapter
             tools_config = shared_resources.get("tools_config")
+            # Pass memory_store from ContextBuilder to ToolAdapter
+            memory_store = self._context_builder.memory if self._context_builder else None
             self._tool_adapter = ToolAdapter(
                 workspace=shared_resources.get("workspace", config.defaults.workspace),
                 tools_config=tools_config,
-                shared_resources={**shared_resources, "model": config.defaults.model},
+                shared_resources={**shared_resources, "model": config.defaults.model, "memory_store": memory_store},
             )
             self.tools = self._tool_adapter
         except ImportError:
@@ -636,6 +655,7 @@ class ClaudeSDKBackend(AgentBackend):
                 context_window_tokens=config.defaults.context_window_tokens,
                 build_messages=self._context_builder.build_messages,
                 get_tool_definitions=self._get_tool_definitions,
+                memory_store=self._context_builder.memory,
             )
 
         # Initialize permission handler

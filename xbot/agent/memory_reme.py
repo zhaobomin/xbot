@@ -35,11 +35,17 @@ def _patch_sqlite3() -> bool:
             try:
                 import pysqlite3
                 sys.modules['sqlite3'] = pysqlite3
+                # Re-import to get the patched version
+                import importlib
+                importlib.reload(sys.modules.get('sqlite3', sqlite3))
+                logger.debug(f"sqlite3 patched with pysqlite3")
                 return True
             except ImportError:
+                logger.warning("pysqlite3 not available, ReMe may not work")
                 return False
         return True
-    except Exception:
+    except Exception as e:
+        logger.warning(f"Failed to patch sqlite3: {e}")
         return False
 
 _sqlite_patched = _patch_sqlite3()
@@ -208,7 +214,29 @@ class ReMeMemoryStore:
 
         try:
             results = await self._reme.memory_search(query=query, max_results=max_results)
-            return results.get("results", []) if isinstance(results, dict) else []
+            # ReMe returns ToolResponse with content as list of dicts
+            if hasattr(results, 'content') and results.content:
+                # content is a list like [{'type': 'text', 'text': '...json...'}]
+                import json
+                for item in results.content:
+                    if isinstance(item, dict) and item.get('type') == 'text':
+                        text = item.get('text', '')
+                        try:
+                            parsed = json.loads(text)
+                            # parsed is a list of search results
+                            return [
+                                {
+                                    "memory": r.get("snippet", ""),
+                                    "source": r.get("path", "unknown"),
+                                    "score": r.get("score", 1.0),
+                                    "start_line": r.get("start_line"),
+                                    "end_line": r.get("end_line"),
+                                }
+                                for r in parsed
+                            ]
+                        except json.JSONDecodeError:
+                            pass
+            return []
         except Exception as e:
             logger.warning(f"Memory search failed: {e}")
             return self._fallback_search(query, max_results)

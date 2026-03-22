@@ -74,6 +74,8 @@ class ClaudeSDKAgentConfig(Base):
     # 禁用 SDK 内置工具，避免与 xbot MCP 工具冲突
     # 默认禁用 WebFetch/WebSearch，让 agent 使用带代理配置的 mcp__xbot__web_fetch/web_search
     disallowed_tools: list[str] = Field(default_factory=lambda: ["WebFetch", "WebSearch"])
+    # Context Compaction 通知配置
+    compact_notify: bool = True  # 是否在压缩上下文时发送通知
 
 
 class AgentDefinition(Base):

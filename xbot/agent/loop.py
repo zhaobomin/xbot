@@ -112,6 +112,7 @@ class AgentLoop:
             context_window_tokens=context_window_tokens,
             build_messages=self.context.build_messages,
             get_tool_definitions=self.tools.get_definitions,
+            memory_store=self.context.memory,
         )
         self._register_default_tools()
 
@@ -405,10 +406,26 @@ class AgentLoop:
 
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
                                   content="New session started.")
+        if cmd == "/compact":
+            # Force context compaction
+            result = await self.memory_consolidator.force_consolidate(session)
+            if result["messages_consolidated"] == 0:
+                content = "✅ No messages to compact (session already optimized)."
+            elif result["success"]:
+                tokens_saved = result["tokens_before"] - result["tokens_after"]
+                content = (
+                    f"🔄 Compacted {result['messages_consolidated']} messages.\n"
+                    f"Tokens: {result['tokens_before']:,} → {result['tokens_after']:,} "
+                    f"(saved ~{tokens_saved:,})"
+                )
+            else:
+                content = "⚠️ Compaction failed. Check logs for details."
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=content)
         if cmd == "/help":
             lines = [
                 "🐈 xbot commands:",
                 "/new — Start a new conversation",
+                "/compact — Compact context to save tokens",
                 "/stop — Stop the current task",
                 "/restart — Restart the bot",
                 "/help — Show available commands",

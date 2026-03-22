@@ -233,8 +233,10 @@ class MemoryConsolidator:
         context_window_tokens: int,
         build_messages: Callable[..., list[dict[str, Any]]],
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
+        memory_store: MemoryStore | None = None,
     ):
-        self.store = MemoryStore(workspace)
+        # Use provided memory store or create default MemoryStore
+        self.store = memory_store if memory_store is not None else MemoryStore(workspace)
         self.provider = provider
         self.model = model
         self.sessions = sessions
@@ -355,3 +357,66 @@ class MemoryConsolidator:
                 estimated, source = self.estimate_session_prompt_tokens(session)
                 if estimated <= 0:
                     return
+
+    async def force_consolidate(self, session: Session) -> dict[str, Any]:
+        """Force consolidate all unconsolidated messages in a session.
+
+        This is triggered by the /compact command.
+
+        Args:
+            session: The session to consolidate
+
+        Returns:
+            Dict with consolidation stats: {
+                "messages_consolidated": int,
+                "tokens_before": int,
+                "tokens_after": int,
+                "success": bool,
+            }
+        """
+        if not session.messages:
+            return {
+                "messages_consolidated": 0,
+                "tokens_before": 0,
+                "tokens_after": 0,
+                "success": True,
+            }
+
+        lock = self.get_lock(session.key)
+        async with lock:
+            # Get tokens before
+            tokens_before, _ = self.estimate_session_prompt_tokens(session)
+
+            # Get unconsolidated messages
+            unconsolidated = session.messages[session.last_consolidated:]
+            if not unconsolidated:
+                return {
+                    "messages_consolidated": 0,
+                    "tokens_before": tokens_before,
+                    "tokens_after": tokens_before,
+                    "success": True,
+                }
+
+            messages_count = len(unconsolidated)
+            logger.info(
+                "Force consolidation for {}: {} messages, {} tokens",
+                session.key,
+                messages_count,
+                tokens_before,
+            )
+
+            # Consolidate all unconsolidated messages
+            success = await self.consolidate_messages(unconsolidated)
+            if success:
+                session.last_consolidated = len(session.messages)
+                self.sessions.save(session)
+
+            # Get tokens after
+            tokens_after, _ = self.estimate_session_prompt_tokens(session)
+
+            return {
+                "messages_consolidated": messages_count,
+                "tokens_before": tokens_before,
+                "tokens_after": tokens_after,
+                "success": success,
+            }
