@@ -42,8 +42,8 @@ class _FakeBackend:
     async def stop_active_task(self, session_key: str) -> bool:
         return False
 
-    async def interrupt_session(self, session_key: str) -> bool:
-        return False
+    async def interrupt_session(self, session_key: str) -> dict[str, Any]:
+        return {"interrupted": False, "usage": None}
 
     async def compact_session(self, session_key: str) -> dict[str, Any]:
         return {"messages_consolidated": 0, "tokens_before": 0, "tokens_after": 0, "success": True}

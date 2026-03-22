@@ -118,13 +118,13 @@ class AgentBackend(ABC):
         """
         return False
 
-    async def interrupt_session(self, session_key: str) -> bool:
+    async def interrupt_session(self, session_key: str) -> dict[str, Any]:
         """Interrupt any ongoing LLM request for a session (optional).
 
         Returns:
-            True if interrupted, False otherwise
+            Dict with 'interrupted' bool and optional 'usage' dict
         """
-        return False
+        return {"interrupted": False, "usage": None}
 
     async def compact_session(self, session_key: str) -> dict[str, Any]:
         """Force context compaction for a session (optional).

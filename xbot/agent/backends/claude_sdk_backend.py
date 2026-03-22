@@ -862,7 +862,9 @@ class ClaudeSDKBackend(AgentBackend):
         """Refresh slash commands discovered from SDK init metadata."""
         try:
             info = await client.get_server_info()
-            logger.debug(f"SDK server info for session {session_key}: {info}")
+            # Debug: log full server info
+            import json
+            logger.info(f"SDK server info for session {session_key}: {json.dumps(info, indent=2, default=str) if info else 'None'}")
         except Exception as e:
             logger.warning(f"Failed to get SDK server info for session {session_key}: {e}")
             return
@@ -1381,27 +1383,57 @@ class ClaudeSDKBackend(AgentBackend):
             logger.warning(f"Failed to stop SDK task for session {session_key}: {e}")
             return False
 
-    async def interrupt_session(self, session_key: str) -> bool:
-        """Interrupt the SDK client for a session.
+    async def interrupt_session(self, session_key: str) -> dict[str, Any]:
+        """Interrupt the SDK client for a session and return usage info.
 
-        This immediately stops any ongoing LLM request.
+        This immediately stops any ongoing LLM request and returns the
+        token usage for the interrupted session.
 
         Args:
             session_key: Session identifier
 
         Returns:
-            True if a client was interrupted, False otherwise
+            Dict with 'interrupted' bool and 'usage' dict (if available)
         """
         client = self._clients.get(session_key)
         if client is None:
-            return False
+            return {"interrupted": False, "usage": None}
+
+        usage_info = None
         try:
+            # Send interrupt signal
             await client.interrupt()
             logger.info(f"Interrupted SDK client for session {session_key}")
-            return True
+
+            # Wait for ResultMessage to get usage info (with timeout)
+            from claude_agent_sdk import ResultMessage
+            import asyncio
+
+            try:
+                async with asyncio.timeout(3.0):
+                    async for message in client.receive_messages():
+                        if isinstance(message, ResultMessage):
+                            # Extract usage info
+                            if hasattr(message, "usage") and message.usage:
+                                usage_info = {
+                                    "input_tokens": int(getattr(message.usage, "input_tokens", 0) or 0),
+                                    "output_tokens": int(getattr(message.usage, "output_tokens", 0) or 0),
+                                }
+                            break
+            except asyncio.TimeoutError:
+                logger.debug(f"Timeout waiting for ResultMessage after interrupt for session {session_key}")
+
         except Exception as e:
             logger.warning(f"Failed to interrupt SDK client: {e}")
-            return False
+            return {"interrupted": False, "usage": None}
+        finally:
+            # Always remove client to force fresh connection on next request
+            # This prevents state inconsistency after interrupt
+            self._clients.pop(session_key, None)
+            self._active_task_ids.pop(session_key, None)
+            logger.debug(f"Removed client for session {session_key} after interrupt")
+
+        return {"interrupted": True, "usage": usage_info}
 
     async def compact_session(self, session_key: str) -> dict[str, Any]:
         """Force SDK-native context compaction for a session.

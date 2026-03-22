@@ -242,7 +242,8 @@ class AgentRuntime:
                     pass
             backend_cancelled = await self.router.backend.cancel_session(msg.session_key)
             backend_task_stopped = await self.router.backend.stop_active_task(msg.session_key)
-            interrupted = await self.router.backend.interrupt_session(msg.session_key)
+            interrupt_result = await self.router.backend.interrupt_session(msg.session_key)
+
             parts = []
             if cancelled:
                 parts.append(f"{cancelled} task(s)")
@@ -250,10 +251,28 @@ class AgentRuntime:
                 parts.append(f"{backend_cancelled} subagent(s)")
             if backend_task_stopped:
                 parts.append("SDK task")
-            if interrupted:
+            if interrupt_result.get("interrupted"):
                 parts.append("LLM request")
-            content = f"🛑 Stopped {' and '.join(parts)}." if parts else "No active task to stop."
-            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=content)
+
+            # Build response message
+            content_parts = []
+            if parts:
+                content_parts.append(f"🛑 Stopped {' and '.join(parts)}.")
+            else:
+                content_parts.append("No active task to stop.")
+
+            # Add usage info if available
+            usage = interrupt_result.get("usage")
+            if usage:
+                input_tokens = usage.get("input_tokens", 0)
+                output_tokens = usage.get("output_tokens", 0)
+                total_tokens = input_tokens + output_tokens
+                if total_tokens > 0:
+                    content_parts.append(
+                        f"\n📊 Session usage: {input_tokens:,} input + {output_tokens:,} output = {total_tokens:,} tokens"
+                    )
+
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(content_parts))
 
         # Check for workspace command
         command_prefix = ""

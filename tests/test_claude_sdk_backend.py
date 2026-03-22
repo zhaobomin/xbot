@@ -768,7 +768,7 @@ class TestInterruptSession:
 
     @pytest.mark.asyncio
     async def test_interrupt_session_no_client(self):
-        """Test interrupt_session returns False when no client exists."""
+        """Test interrupt_session returns dict with interrupted=False when no client exists."""
         with patch.dict(
             "sys.modules",
             {
@@ -782,11 +782,12 @@ class TestInterruptSession:
             backend._clients = {}
 
             result = await backend.interrupt_session("nonexistent_session")
-            assert result is False
+            assert result["interrupted"] is False
+            assert result["usage"] is None
 
     @pytest.mark.asyncio
     async def test_interrupt_session_success(self):
-        """Test interrupt_session calls client.interrupt() and returns True."""
+        """Test interrupt_session calls client.interrupt() and returns dict with interrupted=True."""
         with patch.dict(
             "sys.modules",
             {
@@ -800,15 +801,22 @@ class TestInterruptSession:
 
             mock_client = MagicMock()
             mock_client.interrupt = AsyncMock()
+            # Mock receive_messages to return empty async iterator
+            async def mock_receive_messages():
+                return
+                yield  # Makes it an async generator that yields nothing
+            mock_client.receive_messages = mock_receive_messages
             backend._clients["test_session"] = mock_client
 
             result = await backend.interrupt_session("test_session")
-            assert result is True
+            assert result["interrupted"] is True
             mock_client.interrupt.assert_awaited_once()
+            # Client should be removed after interrupt
+            assert "test_session" not in backend._clients
 
     @pytest.mark.asyncio
     async def test_interrupt_session_exception(self):
-        """Test interrupt_session returns False on exception."""
+        """Test interrupt_session returns dict with interrupted=False on exception."""
         with patch.dict(
             "sys.modules",
             {
@@ -825,7 +833,8 @@ class TestInterruptSession:
             backend._clients["test_session"] = mock_client
 
             result = await backend.interrupt_session("test_session")
-            assert result is False
+            assert result["interrupted"] is False
+            assert result["usage"] is None
 
 
 class TestStopActiveTask:

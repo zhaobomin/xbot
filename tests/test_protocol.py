@@ -114,7 +114,7 @@ class TestAgentBackend:
         assert backend.get_tools_summary() == ""
 
     def test_interrupt_session_default(self) -> None:
-        """Test default interrupt_session returns False."""
+        """Test default interrupt_session returns dict with interrupted=False."""
         import asyncio
 
         class MockBackend(AgentBackend):
@@ -133,7 +133,8 @@ class TestAgentBackend:
 
         backend = MockBackend()
         result = asyncio.run(backend.interrupt_session("test_session"))
-        assert result is False
+        assert result["interrupted"] is False
+        assert result["usage"] is None
 
     def test_compact_session_default(self) -> None:
         """Test default compact_session returns not supported message."""

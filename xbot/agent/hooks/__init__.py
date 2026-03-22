@@ -59,7 +59,7 @@ class CompactHookHandler:
         input: "PreCompactHookInput",
         output: str | None,
         context: "HookContext",
-    ) -> str | None:
+    ) -> dict[str, str] | None:
         """Handle PreCompact hook event.
 
         Args:
@@ -68,22 +68,20 @@ class CompactHookHandler:
             context: Hook context with session info
 
         Returns:
-            Notification message to display to user, or None if disabled
+            Hook output dict with systemMessage to display to user, or None if disabled
         """
         if not self.enabled:
             return None
 
         # Extract information from hook input
         session_key = getattr(context, "session_id", "unknown")
-        messages = getattr(input, "messages", [])
-        token_count = getattr(input, "token_count", 0)
         trigger = getattr(input, "trigger", "auto")
 
         event = CompactEvent(
             session_key=str(session_key),
             trigger=str(trigger),
-            messages_count=len(messages) if messages else 0,
-            tokens_before=token_count or 0,
+            messages_count=0,  # PreCompact doesn't have messages count
+            tokens_before=0,   # PreCompact doesn't have token count yet
             timestamp=datetime.now(),
         )
 
@@ -94,20 +92,16 @@ class CompactHookHandler:
 
         # Log the event
         logger.info(
-            "Context compaction triggered: session={}, messages={}, tokens={}",
+            "Context compaction triggered: session={}, trigger={}",
             event.session_key,
-            event.messages_count,
-            event.tokens_before,
+            event.trigger,
         )
 
-        # Return notification message
-        if event.tokens_before > 0:
-            return (
-                f"🔄 Compressing context "
-                f"({event.messages_count} messages, ~{event.tokens_before:,} tokens)..."
-            )
-        else:
-            return f"🔄 Compressing context ({event.messages_count} messages)..."
+        # Return notification message as systemMessage
+        trigger_text = f" ({trigger})" if trigger else ""
+        return {
+            "systemMessage": f"🔄 Compressing context{trigger_text}..."
+        }
 
     def get_recent_events(self, limit: int = 10) -> list[dict[str, Any]]:
         """Get recent compaction events for debugging.
