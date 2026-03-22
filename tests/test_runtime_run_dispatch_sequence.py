@@ -51,10 +51,6 @@ class _MockRuntimeForRun:
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._state_machine = SessionStateMachine()
         self._state_check_enabled = False
-        self._use_atomic_dispatch = False
-        self._use_atomic_terminate = False
-        self._use_coordinator_transitions = False
-        self._coordinator_shadow_mode = True
         self.sessions = None
         self.channels_config = None
         self.shared_resources = {}
@@ -67,7 +63,6 @@ class _MockRuntimeForRun:
         self.router._backend._client_last_used = {}
         self._state_checker = StateConsistencyChecker(self)
         self._state_coordinator = SessionStateCoordinator(self)
-        self._state_coordinator.enable_shadow_mode()
 
     async def initialize(self) -> None:
         return None
@@ -83,7 +78,6 @@ class _MockRuntimeForRun:
 def _bind_runtime_methods(runtime: _MockRuntimeForRun) -> None:
     runtime.run = AgentRuntime.run.__get__(runtime, _MockRuntimeForRun)
     runtime._dispatch = AgentRuntime._dispatch.__get__(runtime, _MockRuntimeForRun)
-    runtime._atomic_dispatch = AgentRuntime._atomic_dispatch.__get__(runtime, _MockRuntimeForRun)
     runtime._handle_permission_response = AgentRuntime._handle_permission_response.__get__(
         runtime, _MockRuntimeForRun
     )
@@ -101,7 +95,7 @@ def _bind_runtime_methods(runtime: _MockRuntimeForRun) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_loop_legacy_dispatch_sequence_ends_idle() -> None:
+async def test_run_loop_dispatch_sequence_ends_idle() -> None:
     msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="hello")
     bus = _OneShotBus(msg)
     runtime = _MockRuntimeForRun(bus)
@@ -129,36 +123,7 @@ async def test_run_loop_legacy_dispatch_sequence_ends_idle() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_loop_atomic_dispatch_sequence_ends_idle() -> None:
-    msg = InboundMessage(channel="test", sender_id="u2", chat_id="c2", content="hello")
-    bus = _OneShotBus(msg)
-    runtime = _MockRuntimeForRun(bus)
-    runtime._use_atomic_dispatch = True
-    _bind_runtime_methods(runtime)
-
-    async def _handle_message(_msg, on_progress=None):
-        return OutboundMessage(channel=_msg.channel, chat_id=_msg.chat_id, content="ok")
-
-    runtime._handle_message = _handle_message
-
-    async def _stop_when_done() -> None:
-        for _ in range(200):
-            await asyncio.sleep(0.01)
-            if bus._consumed and not runtime._active_tasks.get(msg.session_key):
-                runtime._running = False
-                return
-        runtime._running = False
-
-    stopper = asyncio.create_task(_stop_when_done())
-    await asyncio.wait_for(runtime.run(), timeout=3)
-    await stopper
-
-    assert runtime.get_session_phase(msg.session_key) == SessionPhase.IDLE
-    assert runtime._active_tasks.get(msg.session_key) in (None, [])
-
-
-@pytest.mark.asyncio
-async def test_run_loop_legacy_dispatch_keeps_waiting_permission_when_pending() -> None:
+async def test_run_loop_dispatch_keeps_waiting_permission_when_pending() -> None:
     msg = InboundMessage(channel="test", sender_id="u3", chat_id="c3", content="hello")
     bus = _OneShotBus(msg)
     runtime = _MockRuntimeForRun(bus)
@@ -187,11 +152,10 @@ async def test_run_loop_legacy_dispatch_keeps_waiting_permission_when_pending() 
 
 
 @pytest.mark.asyncio
-async def test_run_loop_atomic_dispatch_keeps_waiting_interaction_when_pending() -> None:
+async def test_run_loop_dispatch_keeps_waiting_interaction_when_pending() -> None:
     msg = InboundMessage(channel="test", sender_id="u4", chat_id="c4", content="hello")
     bus = _OneShotBus(msg)
     runtime = _MockRuntimeForRun(bus)
-    runtime._use_atomic_dispatch = True
     _bind_runtime_methods(runtime)
 
     async def _handle_message(_msg, on_progress=None):

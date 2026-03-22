@@ -1,8 +1,7 @@
 """测试 runtime 与 coordinator 的集成。"""
 
 import pytest
-import asyncio
-from unittest.mock import MagicMock, AsyncMock
+from unittest.mock import MagicMock
 
 from xbot.agent.runtime import AgentRuntime, SessionPhase
 
@@ -14,11 +13,6 @@ class TestRuntimeCoordinatorIntegration:
         """测试 runtime 有 coordinator"""
         assert hasattr(mock_runtime_with_coordinator, "_state_coordinator")
         assert mock_runtime_with_coordinator._state_coordinator is not None
-
-    def test_coordinator_shadow_mode_enabled(self, mock_runtime_with_coordinator):
-        """测试 coordinator 默认在 shadow mode"""
-        assert mock_runtime_with_coordinator._coordinator_shadow_mode is True
-        assert mock_runtime_with_coordinator._state_coordinator.is_shadow_mode is True
 
     def test_get_session_state_returns_string(self, mock_runtime_with_coordinator):
         """测试 get_session_state 返回字符串"""
@@ -51,18 +45,6 @@ class TestRuntimeCoordinatorIntegration:
 
         stats = mock_runtime_with_coordinator._state_coordinator.get_stats()
         assert stats.phase_reads == 2
-
-
-class TestCoordinatorFeatureFlag:
-    """测试 Coordinator 功能开关"""
-
-    def test_shadow_mode_can_be_disabled(self, mock_runtime_with_coordinator):
-        """测试可以禁用 shadow mode"""
-        mock_runtime_with_coordinator._state_coordinator.disable_shadow_mode()
-        assert mock_runtime_with_coordinator._state_coordinator.is_shadow_mode is False
-
-        mock_runtime_with_coordinator._state_coordinator.enable_shadow_mode()
-        assert mock_runtime_with_coordinator._state_coordinator.is_shadow_mode is True
 
 
 # === Fixtures ===
@@ -116,8 +98,6 @@ def mock_runtime_with_coordinator():
 
     # State coordinator
     runtime._state_coordinator = SessionStateCoordinator(runtime)
-    runtime._coordinator_shadow_mode = True
-    runtime._state_coordinator.enable_shadow_mode()
 
     # 绑定方法
     runtime.get_session_state = AgentRuntime.get_session_state.__get__(runtime, AgentRuntime)

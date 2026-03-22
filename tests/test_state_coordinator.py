@@ -2,10 +2,10 @@
 
 import pytest
 import asyncio
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock
 
 from xbot.agent.state_coordinator import SessionStateCoordinator, CoordinatorStats
-from xbot.agent.runtime import SessionPhase
+from xbot.agent.runtime import SessionPhase, SessionStateMachine
 
 
 class TestCoordinatorStats:
@@ -21,8 +21,6 @@ class TestCoordinatorStats:
         assert stats.tasks_completed == 0
         assert stats.locks_created == 0
         assert stats.locks_released == 0
-        assert stats.shadow_inconsistencies == 0
-        assert stats.shadow_operations == 0
 
     def test_create_with_values(self):
         """测试用值创建"""
@@ -47,20 +45,7 @@ class TestSessionStateCoordinatorInit:
         coordinator = SessionStateCoordinator(mock_runtime)
 
         assert coordinator._runtime is mock_runtime
-        assert coordinator._shadow_mode is False
         assert isinstance(coordinator._stats, CoordinatorStats)
-
-    def test_shadow_mode_property(self, mock_runtime):
-        """测试 Shadow Mode 属性"""
-        coordinator = SessionStateCoordinator(mock_runtime)
-
-        assert coordinator.is_shadow_mode is False
-
-        coordinator.enable_shadow_mode()
-        assert coordinator.is_shadow_mode is True
-
-        coordinator.disable_shadow_mode()
-        assert coordinator.is_shadow_mode is False
 
 
 class TestSessionStateCoordinatorPhaseRead:
@@ -68,8 +53,6 @@ class TestSessionStateCoordinatorPhaseRead:
 
     def test_get_phase(self, mock_runtime):
         """测试获取阶段"""
-        from xbot.agent.runtime import SessionPhase
-
         mock_runtime._state_machine.get_phase.return_value = SessionPhase.IDLE
 
         coordinator = SessionStateCoordinator(mock_runtime)
@@ -80,8 +63,6 @@ class TestSessionStateCoordinatorPhaseRead:
 
     def test_get_phase_multiple(self, mock_runtime):
         """测试多次获取阶段"""
-        from xbot.agent.runtime import SessionPhase
-
         mock_runtime._state_machine.get_phase.return_value = SessionPhase.RUNNING
 
         coordinator = SessionStateCoordinator(mock_runtime)
@@ -120,8 +101,6 @@ class TestSessionStateCoordinatorTransition:
 
     def test_transition_success(self, mock_runtime):
         """测试成功转换"""
-        from xbot.agent.runtime import SessionPhase
-
         mock_runtime._state_machine.get_phase.return_value = SessionPhase.IDLE
         mock_runtime._state_machine.transition.return_value = True
 
@@ -136,8 +115,6 @@ class TestSessionStateCoordinatorTransition:
 
     def test_transition_failure(self, mock_runtime):
         """测试转换失败"""
-        from xbot.agent.runtime import SessionPhase
-
         mock_runtime._state_machine.get_phase.return_value = SessionPhase.IDLE
         mock_runtime._state_machine.transition.return_value = False
 
@@ -151,8 +128,6 @@ class TestSessionStateCoordinatorTransition:
 
     def test_force_transition(self, mock_runtime):
         """测试强制转换"""
-        from xbot.agent.runtime import SessionPhase
-
         mock_runtime._state_machine.get_phase.return_value = SessionPhase.ERROR
         mock_runtime._state_machine.force_transition.return_value = True
 
@@ -174,7 +149,6 @@ class TestSessionStateCoordinatorTasks:
 
         coordinator = SessionStateCoordinator(mock_runtime)
 
-        # 创建一个模拟任务
         task = MagicMock(spec=asyncio.Task)
         task.get_name.return_value = "test-task"
 
@@ -287,7 +261,6 @@ class TestSessionStateCoordinatorLocks:
         lock = coordinator.get_lock("test:1")
 
         assert lock is existing_lock
-        # 已存在的锁不应该增加计数
         assert coordinator._stats.locks_created == 0
 
     def test_release_lock(self, mock_runtime):
@@ -330,9 +303,6 @@ class TestSessionStateCoordinatorCleanup:
 
     def test_cleanup_session(self, mock_runtime):
         """测试清理会话"""
-        from xbot.agent.runtime import SessionPhase
-
-        # 设置一些状态
         mock_runtime._state_machine._states = {"test:1": MagicMock()}
 
         task = MagicMock(spec=asyncio.Task)
@@ -404,19 +374,6 @@ class TestSessionStateCoordinatorConsistency:
         assert is_consistent is False
         assert issues == ["Issue 1", "Issue 2"]
 
-    def test_check_consistency_shadow_mode(self, mock_runtime):
-        """测试一致性检查 - Shadow Mode"""
-        snapshot = MagicMock()
-        snapshot.is_consistent.return_value = False
-        snapshot.inconsistencies = ["Issue"]
-        mock_runtime._state_checker.check_session.return_value = snapshot
-
-        coordinator = SessionStateCoordinator(mock_runtime)
-        coordinator.enable_shadow_mode()
-        coordinator.check_consistency("test:1")
-
-        assert coordinator._stats.shadow_inconsistencies == 1
-
 
 class TestSessionStateCoordinatorExport:
     """测试导出功能"""
@@ -433,38 +390,6 @@ class TestSessionStateCoordinatorExport:
         assert result == {"phase": "idle"}
 
 
-class TestSessionStateCoordinatorShadowMode:
-    """测试 Shadow Mode 功能"""
-
-    def test_shadow_mode_logs_phase_reads(self, mock_runtime):
-        """测试 Shadow Mode 记录阶段读取"""
-        from xbot.agent.runtime import SessionPhase
-
-        mock_runtime._state_machine.get_phase.return_value = SessionPhase.IDLE
-
-        coordinator = SessionStateCoordinator(mock_runtime)
-        coordinator.enable_shadow_mode()
-
-        # 这个调用应该记录日志（虽然我们无法直接验证日志）
-        coordinator.get_phase("test:1")
-
-        assert coordinator._stats.phase_reads == 1
-
-    def test_shadow_mode_logs_transitions(self, mock_runtime):
-        """测试 Shadow Mode 记录转换"""
-        from xbot.agent.runtime import SessionPhase
-
-        mock_runtime._state_machine.get_phase.return_value = SessionPhase.IDLE
-        mock_runtime._state_machine.transition.return_value = True
-
-        coordinator = SessionStateCoordinator(mock_runtime)
-        coordinator.enable_shadow_mode()
-
-        coordinator.transition("test:1", SessionPhase.RUNNING, reason="test")
-
-        assert coordinator._stats.phase_transitions == 1
-
-
 # === Fixtures ===
 
 @pytest.fixture
@@ -472,7 +397,6 @@ def mock_runtime():
     """创建模拟的 AgentRuntime"""
     runtime = MagicMock()
 
-    # State machine
     state_machine = MagicMock()
     state_machine._states = {}
     state_machine.get_phase = MagicMock()
@@ -481,13 +405,9 @@ def mock_runtime():
     state_machine.force_transition = MagicMock()
     runtime._state_machine = state_machine
 
-    # Active tasks
     runtime._active_tasks = {}
-
-    # Session locks
     runtime._session_locks = {}
 
-    # State checker
     state_checker = MagicMock()
     state_checker.check_session = MagicMock()
     runtime._state_checker = state_checker
@@ -501,8 +421,6 @@ class TestSessionStateCoordinatorAtomicOps:
     @pytest.mark.asyncio
     async def test_atomic_start_dispatch(self, mock_runtime_with_state_machine):
         """测试原子性开始 dispatch"""
-        from xbot.agent.runtime import SessionPhase
-
         coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
 
         task = MagicMock(spec=asyncio.Task)
@@ -511,15 +429,12 @@ class TestSessionStateCoordinatorAtomicOps:
         result = await coordinator.atomic_start_dispatch("test:1", task)
 
         assert result is True
-        # 验证状态已变更
         phase = coordinator.get_phase("test:1")
         assert phase == SessionPhase.RUNNING
 
     @pytest.mark.asyncio
     async def test_atomic_end_dispatch(self, mock_runtime_with_state_machine):
         """测试原子性结束 dispatch"""
-        from xbot.agent.runtime import SessionPhase
-
         coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
 
         task = MagicMock(spec=asyncio.Task)
@@ -533,11 +448,8 @@ class TestSessionStateCoordinatorAtomicOps:
     @pytest.mark.asyncio
     async def test_atomic_cleanup_session(self, mock_runtime_with_state_machine):
         """测试原子性清理会话"""
-        from xbot.agent.runtime import SessionPhase
-
         coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
 
-        # 先设置一些状态
         coordinator.force_transition("test:1", SessionPhase.RUNNING, reason="test")
         coordinator.get_lock("test:1")
 
@@ -549,8 +461,6 @@ class TestSessionStateCoordinatorAtomicOps:
     @pytest.mark.asyncio
     async def test_atomic_wait_permission(self, mock_runtime_with_state_machine):
         """测试原子性等待权限"""
-        from xbot.agent.runtime import SessionPhase
-
         coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
 
         result = await coordinator.atomic_wait_permission("test:1", "perm-123")
@@ -561,8 +471,6 @@ class TestSessionStateCoordinatorAtomicOps:
     @pytest.mark.asyncio
     async def test_atomic_wait_interaction(self, mock_runtime_with_state_machine):
         """测试原子性等待交互"""
-        from xbot.agent.runtime import SessionPhase
-
         coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
 
         result = await coordinator.atomic_wait_interaction("test:1", "inter-456")
@@ -573,11 +481,8 @@ class TestSessionStateCoordinatorAtomicOps:
     @pytest.mark.asyncio
     async def test_atomic_resume_from_wait(self, mock_runtime_with_state_machine):
         """测试原子性从等待恢复"""
-        from xbot.agent.runtime import SessionPhase
-
         coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
 
-        # 先进入等待状态
         coordinator.force_transition("test:1", SessionPhase.WAITING_PERMISSION, reason="test")
 
         result = await coordinator.atomic_resume_from_wait("test:1")
@@ -591,20 +496,12 @@ class TestSessionStateCoordinatorAtomicOps:
 @pytest.fixture
 def mock_runtime_with_state_machine():
     """创建带有真实状态机的 mock runtime"""
-    from xbot.agent.runtime import SessionStateMachine
-
     runtime = MagicMock()
 
-    # 使用真实状态机
     runtime._state_machine = SessionStateMachine()
-
-    # Active tasks
     runtime._active_tasks = {}
-
-    # Session locks
     runtime._session_locks = {}
 
-    # State checker
     state_checker = MagicMock()
     snapshot = MagicMock()
     snapshot.is_consistent.return_value = True
@@ -613,101 +510,3 @@ def mock_runtime_with_state_machine():
     runtime._state_checker = state_checker
 
     return runtime
-
-
-class TestSessionStateCoordinatorDiscrepancy:
-    """测试差异监控"""
-
-    def test_record_discrepancy(self, mock_runtime_with_state_machine):
-        """测试记录差异"""
-        from xbot.agent.state_coordinator import DiscrepancyRecord
-
-        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
-
-        record = coordinator._record_discrepancy(
-            "test:1", "phase_mismatch", "running", "idle"
-        )
-
-        assert record.session_key == "test:1"
-        assert record.operation == "phase_mismatch"
-        assert record.expected == "running"
-        assert record.actual == "idle"
-        assert coordinator._stats.shadow_discrepancies == 1
-
-    def test_discrepancy_callback(self, mock_runtime_with_state_machine):
-        """测试差异回调"""
-        from xbot.agent.state_coordinator import DiscrepancyRecord
-
-        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
-
-        callback_records = []
-
-        def on_discrepancy(record):
-            callback_records.append(record)
-
-        coordinator.set_discrepancy_callback(on_discrepancy)
-        coordinator._record_discrepancy("test:1", "test_op", "expected", "actual")
-
-        assert len(callback_records) == 1
-        assert callback_records[0].operation == "test_op"
-
-    def test_verify_state_integrity_match(self, mock_runtime_with_state_machine):
-        """测试状态完整性验证 - 匹配"""
-        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
-
-        # 设置一致状态
-        coordinator.force_transition("test:1", SessionPhase.IDLE, reason="test")
-
-        is_valid, discrepancies = coordinator.verify_state_integrity("test:1")
-
-        assert is_valid is True
-        assert len(discrepancies) == 0
-
-    def test_verify_state_integrity_phase_mismatch(self, mock_runtime_with_state_machine):
-        """测试状态完整性验证 - 阶段不匹配"""
-        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
-
-        # 只在 runtime 状态机中设置，coordinator 看到的应该一致
-        # 因为 coordinator 直接操作 runtime 的状态机
-        coordinator.force_transition("test:1", SessionPhase.RUNNING, reason="test")
-
-        is_valid, discrepancies = coordinator.verify_state_integrity("test:1")
-
-        # 应该一致（因为 coordinator 直接操作状态机）
-        assert is_valid is True
-
-    def test_get_discrepancy_stats(self, mock_runtime_with_state_machine):
-        """测试获取差异统计"""
-        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
-
-        coordinator._record_discrepancy("test:1", "phase_mismatch", "running", "idle")
-        coordinator._record_discrepancy("test:2", "lock_mismatch", "True", "False")
-
-        stats = coordinator.get_discrepancy_stats()
-
-        assert stats["total_discrepancies"] == 2
-        assert stats["recent_count"] == 2
-        assert "phase_mismatch" in stats["recent_operations"]
-        assert "lock_mismatch" in stats["recent_operations"]
-
-    def test_clear_discrepancy_history(self, mock_runtime_with_state_machine):
-        """测试清除差异历史"""
-        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
-
-        coordinator._record_discrepancy("test:1", "test", "a", "b")
-        assert len(coordinator._stats.recent_discrepancies) == 1
-
-        coordinator.clear_discrepancy_history()
-
-        assert len(coordinator._stats.recent_discrepancies) == 0
-
-    def test_discrepancy_record_limit(self, mock_runtime_with_state_machine):
-        """测试差异记录数量限制"""
-        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
-        coordinator._max_discrepancy_records = 10
-
-        # 添加超过限制的记录
-        for i in range(20):
-            coordinator._record_discrepancy(f"test:{i}", "test", "a", "b")
-
-        assert len(coordinator._stats.recent_discrepancies) == 10

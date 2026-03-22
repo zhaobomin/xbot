@@ -5,14 +5,12 @@
 
 import pytest
 import asyncio
-from unittest.mock import MagicMock, AsyncMock, patch
+from unittest.mock import MagicMock
 
 from xbot.agent.runtime import AgentRuntime, SessionPhase, SessionStateMachine
 from xbot.agent.state_checker import StateConsistencyChecker, CONSISTENCY_RULES
-from xbot.agent.state_snapshot import StateSnapshot
-from xbot.agent.state_metrics import StateMetricsCollector, StateMetrics
+from xbot.agent.state_metrics import StateMetricsCollector
 from xbot.agent.state_coordinator import SessionStateCoordinator
-from xbot.agent.state_transaction import StateTransaction, TransactionState
 
 
 class TestStateManagementIntegration:
@@ -24,9 +22,6 @@ class TestStateManagementIntegration:
         assert hasattr(real_runtime, "_state_machine")
         assert hasattr(real_runtime, "_state_checker")
         assert hasattr(real_runtime, "_state_coordinator")
-
-        # Coordinator 在 shadow mode
-        assert real_runtime._state_coordinator.is_shadow_mode is True
 
     def test_state_flow_through_components(self, real_runtime):
         """测试状态流经各组件"""
@@ -293,38 +288,6 @@ class TestMetricsExport:
         assert "collected_at" in d
 
 
-class TestShadowModeBehavior:
-    """测试 Shadow Mode 行为"""
-
-    def test_shadow_mode_logs_but_doesnt_change(self, real_runtime):
-        """测试 Shadow Mode 只记录不改变行为"""
-        session_key = "test:shadow:1"
-
-        # Coordinator 在 shadow mode
-        assert real_runtime._state_coordinator.is_shadow_mode is True
-
-        # 操作应该正常执行（shadow mode 只记录日志）
-        real_runtime._state_coordinator.force_transition(
-            session_key, SessionPhase.RUNNING, reason="test"
-        )
-
-        # 状态应该已更改
-        phase = real_runtime._state_coordinator.get_phase(session_key)
-        assert phase == SessionPhase.RUNNING
-
-        # 统计应该记录
-        stats = real_runtime._state_coordinator.get_stats()
-        assert stats.phase_transitions >= 1
-
-    def test_shadow_mode_can_be_disabled(self, real_runtime):
-        """测试可以禁用 Shadow Mode"""
-        real_runtime._state_coordinator.disable_shadow_mode()
-        assert real_runtime._state_coordinator.is_shadow_mode is False
-
-        real_runtime._state_coordinator.enable_shadow_mode()
-        assert real_runtime._state_coordinator.is_shadow_mode is True
-
-
 class TestEndToEndScenarios:
     """端到端场景测试"""
 
@@ -405,8 +368,6 @@ class TestEndToEndScenarios:
 @pytest.fixture
 def real_runtime():
     """创建真实的 AgentRuntime 组件（不依赖完整 runtime）"""
-    from unittest.mock import MagicMock
-
     # 创建一个最小化的 runtime 对象
     runtime = MagicMock(spec=AgentRuntime)
 
@@ -450,7 +411,6 @@ def real_runtime():
 
     # State coordinator
     runtime._state_coordinator = SessionStateCoordinator(runtime)
-    runtime._state_coordinator.enable_shadow_mode()
 
     # 绑定方法
     runtime.get_session_state = AgentRuntime.get_session_state.__get__(runtime, AgentRuntime)

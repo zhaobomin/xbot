@@ -19,13 +19,22 @@ class TestRuntimePermissionResponse:
     @pytest.fixture
     def mock_runtime(self, bus):
         """Create a mock runtime with just the parts needed for testing."""
-        from xbot.agent.runtime import AgentRuntime
+        from xbot.agent.runtime import AgentRuntime, SessionStateMachine
+        from xbot.agent.state_coordinator import SessionStateCoordinator
+        from xbot.agent.state_checker import StateConsistencyChecker
         from xbot.config.schema import Config
 
         config = Config()
         runtime = MagicMock(spec=AgentRuntime)
         runtime.bus = bus
-        runtime._use_coordinator_transitions = False  # Feature flag for coordinator transitions
+
+        # Add state components needed for coordinator transactions
+        runtime._state_machine = SessionStateMachine()
+        runtime._active_tasks = {}
+        runtime._session_locks = {}
+        runtime._state_checker = StateConsistencyChecker(runtime)
+        runtime._state_coordinator = SessionStateCoordinator(runtime)
+
         runtime._handle_permission_response = AgentRuntime._handle_permission_response.__get__(runtime, AgentRuntime)
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
         return runtime
@@ -264,13 +273,18 @@ class TestRuntimePermissionResponse:
 
     @pytest.mark.asyncio
     async def test_generic_interaction_response_is_captured(self, bus):
-        from xbot.agent.runtime import AgentRuntime
-        from xbot.config.schema import Config
+        from xbot.agent.runtime import AgentRuntime, SessionStateMachine
+        from xbot.agent.state_coordinator import SessionStateCoordinator
+        from xbot.agent.state_checker import StateConsistencyChecker
 
         runtime = MagicMock(spec=AgentRuntime)
         runtime.bus = bus
         runtime._is_local_runtime_command = AgentRuntime._is_local_runtime_command
-        runtime._use_coordinator_transitions = False
+        runtime._state_machine = SessionStateMachine()
+        runtime._active_tasks = {}
+        runtime._session_locks = {}
+        runtime._state_checker = StateConsistencyChecker(runtime)
+        runtime._state_coordinator = SessionStateCoordinator(runtime)
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
 
         await bus.publish_interaction_request(
@@ -301,12 +315,18 @@ class TestRuntimePermissionResponse:
 
     @pytest.mark.asyncio
     async def test_runtime_command_not_consumed_as_interaction_reply(self, bus):
-        from xbot.agent.runtime import AgentRuntime
+        from xbot.agent.runtime import AgentRuntime, SessionStateMachine
+        from xbot.agent.state_coordinator import SessionStateCoordinator
+        from xbot.agent.state_checker import StateConsistencyChecker
 
         runtime = MagicMock(spec=AgentRuntime)
         runtime.bus = bus
         runtime._is_local_runtime_command = AgentRuntime._is_local_runtime_command
-        runtime._use_coordinator_transitions = False
+        runtime._state_machine = SessionStateMachine()
+        runtime._active_tasks = {}
+        runtime._session_locks = {}
+        runtime._state_checker = StateConsistencyChecker(runtime)
+        runtime._state_coordinator = SessionStateCoordinator(runtime)
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
 
         await bus.publish_interaction_request(
@@ -333,12 +353,18 @@ class TestRuntimePermissionResponse:
 
     @pytest.mark.asyncio
     async def test_permission_response_takes_priority_over_interaction(self, bus):
-        from xbot.agent.runtime import AgentRuntime
+        from xbot.agent.runtime import AgentRuntime, SessionStateMachine
+        from xbot.agent.state_coordinator import SessionStateCoordinator
+        from xbot.agent.state_checker import StateConsistencyChecker
 
         runtime = MagicMock(spec=AgentRuntime)
         runtime.bus = bus
         runtime._is_local_runtime_command = AgentRuntime._is_local_runtime_command
-        runtime._use_coordinator_transitions = False
+        runtime._state_machine = SessionStateMachine()
+        runtime._active_tasks = {}
+        runtime._session_locks = {}
+        runtime._state_checker = StateConsistencyChecker(runtime)
+        runtime._state_coordinator = SessionStateCoordinator(runtime)
         runtime._handle_permission_response = AgentRuntime._handle_permission_response.__get__(runtime, AgentRuntime)
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
 
@@ -377,12 +403,18 @@ class TestRuntimePermissionResponse:
 
     @pytest.mark.asyncio
     async def test_confirmation_interaction_free_text_is_consumed(self, bus):
-        from xbot.agent.runtime import AgentRuntime
+        from xbot.agent.runtime import AgentRuntime, SessionStateMachine
+        from xbot.agent.state_coordinator import SessionStateCoordinator
+        from xbot.agent.state_checker import StateConsistencyChecker
 
         runtime = MagicMock(spec=AgentRuntime)
         runtime.bus = bus
         runtime._is_local_runtime_command = AgentRuntime._is_local_runtime_command
-        runtime._use_coordinator_transitions = False
+        runtime._state_machine = SessionStateMachine()
+        runtime._active_tasks = {}
+        runtime._session_locks = {}
+        runtime._state_checker = StateConsistencyChecker(runtime)
+        runtime._state_coordinator = SessionStateCoordinator(runtime)
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
 
         await bus.publish_interaction_request(
@@ -415,12 +447,18 @@ class TestRuntimePermissionResponse:
 
     @pytest.mark.asyncio
     async def test_approval_interaction_free_text_is_consumed(self, bus):
-        from xbot.agent.runtime import AgentRuntime
+        from xbot.agent.runtime import AgentRuntime, SessionStateMachine
+        from xbot.agent.state_coordinator import SessionStateCoordinator
+        from xbot.agent.state_checker import StateConsistencyChecker
 
         runtime = MagicMock(spec=AgentRuntime)
         runtime.bus = bus
         runtime._is_local_runtime_command = AgentRuntime._is_local_runtime_command
-        runtime._use_coordinator_transitions = False
+        runtime._state_machine = SessionStateMachine()
+        runtime._active_tasks = {}
+        runtime._session_locks = {}
+        runtime._state_checker = StateConsistencyChecker(runtime)
+        runtime._state_coordinator = SessionStateCoordinator(runtime)
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
 
         await bus.publish_interaction_request(

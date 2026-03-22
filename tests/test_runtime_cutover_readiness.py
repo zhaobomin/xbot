@@ -1,4 +1,4 @@
-"""Cutover readiness tests for runtime state management under concurrency/races."""
+"""Tests for runtime state management under concurrency/races."""
 
 from __future__ import annotations
 
@@ -75,10 +75,6 @@ class _RuntimeHarness:
         self._session_locks: dict[str, asyncio.Lock] = {}
         self._state_machine = SessionStateMachine()
         self._state_check_enabled = False
-        self._use_atomic_dispatch = False
-        self._use_atomic_terminate = False
-        self._use_coordinator_transitions = False
-        self._coordinator_shadow_mode = True
         self.sessions = None
         self.channels_config = None
         self.shared_resources = {}
@@ -89,7 +85,6 @@ class _RuntimeHarness:
         self.router.backend = self.router._backend
         self._state_checker = StateConsistencyChecker(self)
         self._state_coordinator = SessionStateCoordinator(self)
-        self._state_coordinator.enable_shadow_mode()
 
     async def initialize(self) -> None:
         return None
@@ -105,17 +100,10 @@ class _RuntimeHarness:
 def _bind(runtime: _RuntimeHarness) -> None:
     runtime.run = AgentRuntime.run.__get__(runtime, _RuntimeHarness)
     runtime._dispatch = AgentRuntime._dispatch.__get__(runtime, _RuntimeHarness)
-    runtime._atomic_dispatch = AgentRuntime._atomic_dispatch.__get__(runtime, _RuntimeHarness)
     runtime._handle_permission_response = AgentRuntime._handle_permission_response.__get__(
         runtime, _RuntimeHarness
     )
-    runtime._atomic_handle_permission_response = AgentRuntime._atomic_handle_permission_response.__get__(
-        runtime, _RuntimeHarness
-    )
     runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(
-        runtime, _RuntimeHarness
-    )
-    runtime._atomic_handle_interaction_response = AgentRuntime._atomic_handle_interaction_response.__get__(
         runtime, _RuntimeHarness
     )
     runtime._make_task_done_callback = AgentRuntime._make_task_done_callback.__get__(
@@ -127,16 +115,7 @@ def _bind(runtime: _RuntimeHarness) -> None:
     runtime._bus_progress = AgentRuntime._bus_progress.__get__(runtime, _RuntimeHarness)
     runtime.get_session_phase = AgentRuntime.get_session_phase.__get__(runtime, _RuntimeHarness)
     runtime._terminate_session = AgentRuntime._terminate_session.__get__(runtime, _RuntimeHarness)
-    runtime._atomic_terminate_session = AgentRuntime._atomic_terminate_session.__get__(
-        runtime, _RuntimeHarness
-    )
     runtime._on_backend_client_cleanup = AgentRuntime._on_backend_client_cleanup.__get__(
-        runtime, _RuntimeHarness
-    )
-    runtime.enable_full_coordinator_mode = AgentRuntime.enable_full_coordinator_mode.__get__(
-        runtime, _RuntimeHarness
-    )
-    runtime.disable_full_coordinator_mode = AgentRuntime.disable_full_coordinator_mode.__get__(
         runtime, _RuntimeHarness
     )
     runtime.get_session_state = AgentRuntime.get_session_state.__get__(runtime, _RuntimeHarness)
@@ -158,7 +137,7 @@ async def _run_until_quiet(runtime: _RuntimeHarness, session_keys: set[str], tim
 
 
 @pytest.mark.asyncio
-async def test_run_concurrent_same_session_legacy_converges_idle() -> None:
+async def test_run_concurrent_same_session_converges_idle() -> None:
     msg1 = InboundMessage(channel="test", sender_id="u", chat_id="same", content="m1")
     msg2 = InboundMessage(channel="test", sender_id="u", chat_id="same", content="m2")
     bus = _QueueBus([msg1, msg2])
@@ -177,12 +156,11 @@ async def test_run_concurrent_same_session_legacy_converges_idle() -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_concurrent_multi_session_atomic_converges_idle() -> None:
+async def test_run_concurrent_multi_session_converges_idle() -> None:
     msg1 = InboundMessage(channel="test", sender_id="u", chat_id="a", content="m1")
     msg2 = InboundMessage(channel="test", sender_id="u", chat_id="b", content="m2")
     bus = _QueueBus([msg1, msg2])
     runtime = _RuntimeHarness(bus)
-    runtime._use_atomic_dispatch = True
     _bind(runtime)
 
     async def _handle_message(msg, on_progress=None):
@@ -199,7 +177,7 @@ async def test_run_concurrent_multi_session_atomic_converges_idle() -> None:
 
 
 @pytest.mark.asyncio
-async def test_terminate_race_with_running_dispatch_legacy_recovers_idle() -> None:
+async def test_terminate_race_with_running_dispatch_recovers_idle() -> None:
     msg = InboundMessage(channel="test", sender_id="u", chat_id="race1", content="m")
     bus = _QueueBus([])
     runtime = _RuntimeHarness(bus)
@@ -229,56 +207,8 @@ async def test_terminate_race_with_running_dispatch_legacy_recovers_idle() -> No
 
 
 @pytest.mark.asyncio
-async def test_terminate_race_with_running_dispatch_atomic_recovers_idle() -> None:
-    msg = InboundMessage(channel="test", sender_id="u", chat_id="race2", content="m")
-    bus = _QueueBus([])
-    runtime = _RuntimeHarness(bus)
-    runtime._use_atomic_dispatch = True
-    _bind(runtime)
-
-    gate = asyncio.Event()
-
-    async def _handle_message(_msg, on_progress=None):
-        await gate.wait()
-        return OutboundMessage(channel=_msg.channel, chat_id=_msg.chat_id, content="ok")
-
-    runtime._handle_message = _handle_message
-
-    task = asyncio.create_task(runtime._atomic_dispatch(msg))
-    runtime._active_tasks.setdefault(msg.session_key, []).append(task)
-    task.add_done_callback(runtime._make_task_done_callback(msg.session_key))
-
-    await asyncio.sleep(0.05)
-    state = await runtime._atomic_terminate_session(msg.session_key, hard_reset=False)
-    gate.set()
-    await asyncio.sleep(0)
-
-    assert state["cancelled"] >= 1
-    assert runtime.get_session_phase(msg.session_key) == SessionPhase.IDLE
-    assert runtime._active_tasks.get(msg.session_key) in (None, [])
-
-
-@pytest.mark.asyncio
-async def test_atomic_hard_reset_clears_state_and_lock() -> None:
-    session_key = "test:hard-reset-atomic"
-    bus = _QueueBus([])
-    runtime = _RuntimeHarness(bus)
-    _bind(runtime)
-
-    runtime._state_machine.force_transition(session_key, SessionPhase.RUNNING, reason="seed")
-    runtime._session_locks[session_key] = asyncio.Lock()
-    runtime._active_tasks[session_key] = []
-
-    result = await runtime._atomic_terminate_session(session_key, hard_reset=True)
-
-    assert result["backend_cancelled"] == 0
-    assert session_key not in runtime._state_machine._states
-    assert session_key not in runtime._session_locks
-
-
-@pytest.mark.asyncio
-async def test_legacy_hard_reset_clears_state_and_lock() -> None:
-    session_key = "test:hard-reset-legacy"
+async def test_hard_reset_clears_state_and_lock() -> None:
+    session_key = "test:hard-reset"
     bus = _QueueBus([])
     runtime = _RuntimeHarness(bus)
     _bind(runtime)
@@ -330,96 +260,14 @@ def test_backend_client_cleanup_idle_session_noop() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mode_toggle_during_active_dispatch_still_converges_idle() -> None:
-    msg = InboundMessage(channel="test", sender_id="u", chat_id="toggle-race", content="m")
-    bus = _QueueBus([])
-    runtime = _RuntimeHarness(bus)
-    _bind(runtime)
-
-    gate = asyncio.Event()
-
-    async def _handle_message(_msg, on_progress=None):
-        await gate.wait()
-        return OutboundMessage(channel=_msg.channel, chat_id=_msg.chat_id, content="ok")
-
-    runtime._handle_message = _handle_message
-
-    task = asyncio.create_task(runtime._dispatch(msg))
-    runtime._active_tasks.setdefault(msg.session_key, []).append(task)
-    runtime._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="dispatch_started")
-    task.add_done_callback(runtime._make_task_done_callback(msg.session_key))
-
-    await asyncio.sleep(0.05)
-    runtime.enable_full_coordinator_mode()
-    runtime.disable_full_coordinator_mode()
-    gate.set()
-    await task
-    await asyncio.sleep(0)
-
-    assert runtime.get_session_phase(msg.session_key) == SessionPhase.IDLE
-    assert runtime._active_tasks.get(msg.session_key) in (None, [])
-
-
-@pytest.mark.asyncio
-async def test_run_burst_same_session_legacy_converges_idle() -> None:
+async def test_run_burst_same_session_converges_idle() -> None:
     messages = [
-        InboundMessage(channel="test", sender_id="u", chat_id="burst-legacy", content=f"m{i}")
+        InboundMessage(channel="test", sender_id="u", chat_id="burst", content=f"m{i}")
         for i in range(10)
     ]
     bus = _QueueBus(messages)
     runtime = _RuntimeHarness(bus)
     _bind(runtime)
-
-    async def _handle_message(msg, on_progress=None):
-        await asyncio.sleep(0.01)
-        return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="ok")
-
-    runtime._handle_message = _handle_message
-    session_key = messages[0].session_key
-    await _run_until_quiet(runtime, {session_key}, timeout_s=6.0)
-
-    assert runtime.get_session_phase(session_key) == SessionPhase.IDLE
-    assert runtime._active_tasks.get(session_key) in (None, [])
-
-
-@pytest.mark.asyncio
-async def test_run_burst_same_session_atomic_converges_idle() -> None:
-    messages = [
-        InboundMessage(channel="test", sender_id="u", chat_id="burst-atomic", content=f"m{i}")
-        for i in range(10)
-    ]
-    bus = _QueueBus(messages)
-    runtime = _RuntimeHarness(bus)
-    runtime._use_atomic_dispatch = True
-    _bind(runtime)
-
-    async def _handle_message(msg, on_progress=None):
-        await asyncio.sleep(0.01)
-        return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="ok")
-
-    runtime._handle_message = _handle_message
-    session_key = messages[0].session_key
-    await _run_until_quiet(runtime, {session_key}, timeout_s=6.0)
-
-    assert runtime.get_session_phase(session_key) == SessionPhase.IDLE
-    assert runtime._active_tasks.get(session_key) in (None, [])
-
-
-@pytest.mark.asyncio
-async def test_run_after_full_mode_toggle_atomic_path_stays_stable() -> None:
-    messages = [
-        InboundMessage(channel="test", sender_id="u", chat_id="toggle-stable", content=f"m{i}")
-        for i in range(6)
-    ]
-    bus = _QueueBus(messages)
-    runtime = _RuntimeHarness(bus)
-    _bind(runtime)
-
-    runtime.enable_full_coordinator_mode()
-    assert runtime._use_atomic_dispatch is True
-    assert runtime._use_atomic_terminate is True
-    assert runtime._use_coordinator_transitions is True
-    assert runtime._coordinator_shadow_mode is False
 
     async def _handle_message(msg, on_progress=None):
         await asyncio.sleep(0.01)

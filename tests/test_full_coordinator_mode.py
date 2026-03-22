@@ -1,4 +1,4 @@
-"""测试完全协调器模式。"""
+"""测试协调器模式。"""
 
 import pytest
 import asyncio
@@ -10,47 +10,15 @@ from xbot.agent.state_checker import StateConsistencyChecker
 from xbot.bus.events import InboundMessage, OutboundMessage
 
 
-class TestFullCoordinatorModeToggle:
-    """测试完全协调器模式开关"""
+class TestCoordinatorMode:
+    """测试协调器模式"""
 
-    def test_default_disabled(self, runtime_with_coordinator):
-        """测试默认禁用"""
-        assert runtime_with_coordinator._use_atomic_dispatch is False
-        assert runtime_with_coordinator._use_atomic_terminate is False
-        assert runtime_with_coordinator._use_coordinator_transitions is False
-        assert runtime_with_coordinator._coordinator_shadow_mode is True
+    def test_coordinator_initialized(self, runtime_with_coordinator):
+        """测试协调器初始化"""
+        assert runtime_with_coordinator._state_coordinator is not None
 
-    def test_enable(self, runtime_with_coordinator):
-        """测试启用"""
-        runtime_with_coordinator.enable_full_coordinator_mode()
-        assert runtime_with_coordinator._use_atomic_dispatch is True
-        assert runtime_with_coordinator._use_atomic_terminate is True
-        assert runtime_with_coordinator._use_coordinator_transitions is True
-        assert runtime_with_coordinator._coordinator_shadow_mode is False
-
-    def test_disable(self, runtime_with_coordinator):
-        """测试禁用"""
-        runtime_with_coordinator.enable_full_coordinator_mode()
-        runtime_with_coordinator.disable_full_coordinator_mode()
-        assert runtime_with_coordinator._use_atomic_dispatch is False
-        assert runtime_with_coordinator._use_atomic_terminate is False
-        assert runtime_with_coordinator._use_coordinator_transitions is False
-        assert runtime_with_coordinator._coordinator_shadow_mode is True
-
-    def test_shadow_mode_disabled(self, runtime_with_coordinator):
-        """测试 Shadow Mode 被禁用"""
-        runtime_with_coordinator.enable_full_coordinator_mode()
-        assert runtime_with_coordinator._state_coordinator._shadow_mode is False
-
-
-class TestFullCoordinatorModeIntegration:
-    """测试完全协调器模式集成"""
-
-    @pytest.mark.asyncio
-    async def test_dispatch_uses_coordinator(self, runtime_with_coordinator):
+    def test_dispatch_uses_coordinator(self, runtime_with_coordinator):
         """测试 dispatch 使用协调器"""
-        runtime_with_coordinator.enable_full_coordinator_mode()
-
         msg = InboundMessage(
             channel="test", sender_id="user1", chat_id="chat1", content="hello"
         )
@@ -60,17 +28,15 @@ class TestFullCoordinatorModeIntegration:
 
         runtime_with_coordinator._handle_message = mock_handle
 
-        await runtime_with_coordinator._atomic_dispatch(msg)
+        async def run_test():
+            await runtime_with_coordinator._dispatch(msg)
+            state = runtime_with_coordinator._state_coordinator.get_state(msg.session_key)
+            assert state is not None
 
-        # Verify state was changed through coordinator
-        state = runtime_with_coordinator._state_coordinator.get_state(msg.session_key)
-        assert state is not None
+        asyncio.get_event_loop().run_until_complete(run_test())
 
-    @pytest.mark.asyncio
-    async def test_terminate_uses_coordinator(self, runtime_with_coordinator):
+    def test_terminate_uses_coordinator(self, runtime_with_coordinator):
         """测试 terminate 使用协调器"""
-        runtime_with_coordinator.enable_full_coordinator_mode()
-
         session_key = "test:chat1"
 
         # Initialize session state
@@ -82,35 +48,28 @@ class TestFullCoordinatorModeIntegration:
         initial_phase = runtime_with_coordinator._state_coordinator.get_phase(session_key)
         assert initial_phase == SessionPhase.RUNNING
 
-        # Note: Full terminate test requires complex backend mocking
-        # Here we just verify the coordinator integration works
-
-    @pytest.mark.asyncio
-    async def test_permission_response_uses_coordinator(self, runtime_with_coordinator):
+    def test_permission_response_uses_coordinator(self, runtime_with_coordinator):
         """测试权限响应使用协调器"""
-        runtime_with_coordinator.enable_full_coordinator_mode()
-
         msg = InboundMessage(
             channel="test", sender_id="user1", chat_id="chat1", content="允许"
         )
 
-        # Set up pending permission request
-        runtime_with_coordinator.bus._session_pending_permission_requests[msg.session_key] = "perm-1"
-        runtime_with_coordinator.bus._pending_permission_responses["perm-1"] = asyncio.Event()
+        async def run_test():
+            # Set up pending permission request
+            runtime_with_coordinator.bus._session_pending_permission_requests[msg.session_key] = "perm-1"
+            runtime_with_coordinator.bus._pending_permission_responses["perm-1"] = asyncio.Event()
 
-        result = await runtime_with_coordinator._atomic_handle_permission_response(msg)
+            result = await runtime_with_coordinator._handle_permission_response(msg)
+            assert result is True
 
-        assert result is True
+        asyncio.get_event_loop().run_until_complete(run_test())
 
 
-class TestFullCoordinatorModeConsistency:
-    """测试完全协调器模式一致性"""
+class TestCoordinatorConsistency:
+    """测试协调器一致性"""
 
-    @pytest.mark.asyncio
-    async def test_state_consistency_after_operations(self, runtime_with_coordinator):
+    def test_state_consistency_after_operations(self, runtime_with_coordinator):
         """测试操作后状态一致性"""
-        runtime_with_coordinator.enable_full_coordinator_mode()
-
         msg = InboundMessage(
             channel="test", sender_id="user1", chat_id="chat1", content="hello"
         )
@@ -120,23 +79,26 @@ class TestFullCoordinatorModeConsistency:
 
         runtime_with_coordinator._handle_message = mock_handle
 
-        # Initial state check
-        initial_phase = runtime_with_coordinator._state_coordinator.get_phase(msg.session_key)
-        assert initial_phase == SessionPhase.IDLE
+        async def run_test():
+            # Initial state check
+            initial_phase = runtime_with_coordinator._state_coordinator.get_phase(msg.session_key)
+            assert initial_phase == SessionPhase.IDLE
 
-        # Run dispatch
-        await runtime_with_coordinator._atomic_dispatch(msg)
+            # Run dispatch
+            await runtime_with_coordinator._dispatch(msg)
 
-        # Check consistency
-        is_consistent, issues = runtime_with_coordinator._state_coordinator.check_consistency(
-            msg.session_key
-        )
-        # After successful dispatch, should be consistent (IDLE)
-        assert is_consistent or len(issues) == 0 or all("no backend" in i for i in issues)
+            # Check consistency
+            is_consistent, issues = runtime_with_coordinator._state_coordinator.check_consistency(
+                msg.session_key
+            )
+            # After successful dispatch, should be consistent (IDLE)
+            assert is_consistent or len(issues) == 0 or all("no backend" in i for i in issues)
+
+        asyncio.get_event_loop().run_until_complete(run_test())
 
 
-class TestCoordinatorStatusText:
-    """测试协调器状态文本。"""
+class TestCoordinatorStats:
+    """测试协调器统计。"""
 
     def test_coord_status_text_includes_stats(self, runtime_with_coordinator):
         """测试 !coord 状态文本包含统计字段且不会抛异常。"""
@@ -146,7 +108,7 @@ class TestCoordinatorStatusText:
 
         text = runtime_with_coordinator._coord_status_text()
 
-        assert "Coordinator Mode" in text
+        assert "State Coordinator" in text
         assert "phase_transitions: 3" in text
         assert "locks_created: 2" in text
         assert "tasks_created: 4" in text
@@ -162,10 +124,6 @@ class MockRuntimeForCoordinator:
         self._active_tasks = {}
         self._session_locks = {}
         self._state_check_enabled = True
-        self._use_atomic_dispatch = False
-        self._use_atomic_terminate = False
-        self._use_coordinator_transitions = False
-        self._coordinator_shadow_mode = True
         self.sessions = None
         self.router = None
         self.bus = None
@@ -241,19 +199,15 @@ def runtime_with_coordinator():
 
     # State coordinator
     runtime._state_coordinator = SessionStateCoordinator(runtime)
-    runtime._state_coordinator.enable_shadow_mode()
 
     # Bind methods from AgentRuntime
     runtime._bus_progress = AgentRuntime._bus_progress.__get__(runtime, MockRuntimeForCoordinator)
     runtime.get_session_phase = AgentRuntime.get_session_phase.__get__(runtime, MockRuntimeForCoordinator)
     runtime.get_session_state = AgentRuntime.get_session_state.__get__(runtime, MockRuntimeForCoordinator)
     runtime._log_state_snapshot = AgentRuntime._log_state_snapshot.__get__(runtime, MockRuntimeForCoordinator)
-    runtime._atomic_dispatch = AgentRuntime._atomic_dispatch.__get__(runtime, MockRuntimeForCoordinator)
-    runtime._atomic_terminate_session = AgentRuntime._atomic_terminate_session.__get__(runtime, MockRuntimeForCoordinator)
-    runtime._atomic_handle_permission_response = AgentRuntime._atomic_handle_permission_response.__get__(runtime, MockRuntimeForCoordinator)
-    runtime.enable_full_coordinator_mode = AgentRuntime.enable_full_coordinator_mode.__get__(runtime, MockRuntimeForCoordinator)
-    runtime.disable_full_coordinator_mode = AgentRuntime.disable_full_coordinator_mode.__get__(runtime, MockRuntimeForCoordinator)
+    runtime._dispatch = AgentRuntime._dispatch.__get__(runtime, MockRuntimeForCoordinator)
+    runtime._terminate_session = AgentRuntime._terminate_session.__get__(runtime, MockRuntimeForCoordinator)
+    runtime._handle_permission_response = AgentRuntime._handle_permission_response.__get__(runtime, MockRuntimeForCoordinator)
     runtime._coord_status_text = AgentRuntime._coord_status_text.__get__(runtime, MockRuntimeForCoordinator)
-    runtime.is_full_coordinator_mode_enabled = False
 
     return runtime
