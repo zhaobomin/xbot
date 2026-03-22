@@ -255,6 +255,9 @@ class AgentRuntime:
         if self._coordinator_shadow_mode:
             self._state_coordinator.enable_shadow_mode()
 
+        # Feature flag for atomic dispatch (uses coordinator transactions)
+        self._use_atomic_dispatch = False  # Off by default, enable after validation
+
         # Register backend state sync callbacks
         self.shared_resources["on_backend_client_cleanup"] = self._on_backend_client_cleanup
 
@@ -268,6 +271,28 @@ class AgentRuntime:
         if backend is None:
             return None
         return getattr(backend, "tools", None)
+
+    def enable_atomic_dispatch(self) -> None:
+        """Enable atomic dispatch mode.
+
+        When enabled, dispatch uses coordinator transactions for state changes.
+        This provides atomicity guarantees for state updates.
+        """
+        self._use_atomic_dispatch = True
+        logger.info("Atomic dispatch enabled")
+
+    def disable_atomic_dispatch(self) -> None:
+        """Disable atomic dispatch mode.
+
+        Reverts to legacy dispatch behavior.
+        """
+        self._use_atomic_dispatch = False
+        logger.info("Atomic dispatch disabled")
+
+    @property
+    def is_atomic_dispatch_enabled(self) -> bool:
+        """Check if atomic dispatch is enabled."""
+        return self._use_atomic_dispatch
 
     async def initialize(self) -> None:
         await self.router.initialize()
@@ -302,10 +327,19 @@ class AgentRuntime:
                     await self.bus.publish_outbound(response)
                 continue
 
-            task = asyncio.create_task(self._dispatch(msg))
-            self._active_tasks.setdefault(msg.session_key, []).append(task)
-            self._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="dispatch_started")
-            task.add_done_callback(self._make_task_done_callback(msg.session_key))
+            # Choose dispatch method based on feature flag
+            if self._use_atomic_dispatch:
+                # Atomic dispatch: state management handled internally via transactions
+                task = asyncio.create_task(self._atomic_dispatch(msg))
+                self._active_tasks.setdefault(msg.session_key, []).append(task)
+                # Note: phase is set inside _atomic_dispatch via transaction
+                task.add_done_callback(self._make_task_done_callback(msg.session_key))
+            else:
+                # Legacy dispatch: state management in run() callback
+                task = asyncio.create_task(self._dispatch(msg))
+                self._active_tasks.setdefault(msg.session_key, []).append(task)
+                self._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="dispatch_started")
+                task.add_done_callback(self._make_task_done_callback(msg.session_key))
 
     async def _handle_permission_response(self, msg: InboundMessage) -> bool:
         """Check if the message is a permission response and handle it.
@@ -410,6 +444,100 @@ class AgentRuntime:
                 )
         finally:
             self._sync_session_phase(msg.session_key)
+            # Log state snapshot at dispatch end
+            self._log_state_snapshot(msg.session_key, "dispatch_end")
+
+    async def _atomic_dispatch(self, msg: InboundMessage) -> None:
+        """Dispatch with transaction-based state management.
+
+        This is an alternative to _dispatch that uses the coordinator's
+        atomic operations for state changes. Enabled via _use_atomic_dispatch flag.
+
+        The key difference from _dispatch:
+        - Uses coordinator transactions for atomic state updates
+        - Lock acquisition is part of the transaction
+        - Phase transitions are atomic with task registration
+        """
+        # Log state snapshot at dispatch start
+        self._log_state_snapshot(msg.session_key, "dispatch_start")
+
+        try:
+            # Start atomic dispatch session
+            async with self._state_coordinator.transaction(
+                msg.session_key, validate_on_commit=False
+            ) as tx:
+                tx.set_phase(SessionPhase.RUNNING, reason="dispatch_start")
+                tx.acquire_lock()
+
+            # Get the lock (should exist after transaction)
+            lock = self._session_locks.get(msg.session_key)
+            if lock is None:
+                # Fallback if transaction didn't create lock
+                lock = self._session_locks.setdefault(msg.session_key, asyncio.Lock())
+
+            # Execute message handling
+            async with lock:
+                response = await self._handle_message(
+                    msg, on_progress=self._bus_progress(msg)
+                )
+
+            if response is not None and self.bus is not None:
+                await self.bus.publish_outbound(response)
+
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            # Atomic error handling with transaction
+            async with self._state_coordinator.transaction(
+                msg.session_key, validate_on_commit=False
+            ) as tx:
+                tx.set_phase(SessionPhase.ERROR, reason="dispatch_error")
+
+            logger.exception("Error processing message for session {}", msg.session_key)
+            append_session_trace(
+                self.sessions,
+                msg.session_key,
+                "error",
+                {"backend": self.router.backend_type, "message": "processing_error"},
+            )
+            if self.bus is not None:
+                await self.bus.publish_outbound(
+                    OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content="Sorry, I encountered an error.",
+                    )
+                )
+        finally:
+            # Atomic cleanup
+            async with self._state_coordinator.transaction(
+                msg.session_key, validate_on_commit=False
+            ) as tx:
+                # Check for pending requests
+                has_pending_permission = False
+                has_pending_interaction = False
+                if self.bus is not None:
+                    has_pending_permission = bool(
+                        self.bus.get_pending_request_for_session(msg.session_key)
+                    )
+                    has_pending_interaction = bool(
+                        self.bus.get_pending_interaction_for_session(msg.session_key)
+                    )
+
+                if has_pending_permission:
+                    tx.set_phase(SessionPhase.WAITING_PERMISSION, reason="pending_permission")
+                elif has_pending_interaction:
+                    tx.set_phase(SessionPhase.WAITING_INTERACTION, reason="pending_interaction")
+                else:
+                    # Check for active tasks
+                    remaining_tasks = [
+                        t
+                        for t in self._active_tasks.get(msg.session_key, [])
+                        if not t.done()
+                    ]
+                    if not remaining_tasks:
+                        tx.set_phase(SessionPhase.IDLE, reason="dispatch_end")
+
             # Log state snapshot at dispatch end
             self._log_state_snapshot(msg.session_key, "dispatch_end")
 
