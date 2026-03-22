@@ -472,3 +472,153 @@ class SessionStateCoordinator:
             on_commit=on_commit,
             on_rollback=on_rollback,
         )
+
+    # === 原子操作 ===
+
+    async def atomic_start_dispatch(
+        self,
+        session_key: str,
+        task: asyncio.Task,
+    ) -> bool:
+        """原子性地开始 dispatch。
+
+        在单个事务中设置 RUNNING 状态并注册任务。
+
+        Args:
+            session_key: 会话标识
+            task: 要注册的任务
+
+        Returns:
+            操作是否成功
+        """
+        async with self.transaction(session_key, validate_on_commit=False) as tx:
+            tx.set_phase(
+                self._runtime._state_machine.get_phase(session_key).__class__.RUNNING,
+                reason="dispatch_start",
+            )
+            tx.register_task(task)
+            tx.acquire_lock()
+
+        return True
+
+    async def atomic_end_dispatch(
+        self,
+        session_key: str,
+        task: asyncio.Task,
+        success: bool = True,
+    ) -> bool:
+        """原子性地结束 dispatch。
+
+        在单个事务中注销任务并设置最终状态。
+
+        Args:
+            session_key: 会话标识
+            task: 要注销的任务
+            success: dispatch 是否成功
+
+        Returns:
+            操作是否成功
+        """
+        SessionPhase = self._runtime._state_machine.get_phase(session_key).__class__
+
+        async with self.transaction(session_key, validate_on_commit=False) as tx:
+            tx.unregister_task(task)
+            # 检查是否还有活跃任务
+            remaining = [t for t in self._runtime._active_tasks.get(session_key, []) if not t.done()]
+            if not remaining:
+                tx.set_phase(SessionPhase.IDLE, reason="dispatch_end")
+
+        return True
+
+    async def atomic_cleanup_session(
+        self,
+        session_key: str,
+        cancel_tasks: bool = True,
+    ) -> dict[str, Any]:
+        """原子性地清理会话状态。
+
+        在单个事务中清理所有会话相关的状态。
+
+        Args:
+            session_key: 会话标识
+            cancel_tasks: 是否取消活跃任务
+
+        Returns:
+            清理结果
+        """
+        from xbot.agent.runtime import SessionPhase
+
+        cancelled = 0
+        if cancel_tasks:
+            cancelled = self.cancel_active_tasks(session_key)
+
+        async with self.transaction(session_key, validate_on_commit=False) as tx:
+            tx.set_phase(SessionPhase.IDLE, reason="cleanup")
+            if self.has_lock(session_key):
+                tx.release_lock()
+
+        return {
+            "tasks_cancelled": cancelled,
+            "lock_released": not self.has_lock(session_key),
+        }
+
+    async def atomic_wait_permission(
+        self,
+        session_key: str,
+        permission_id: str,
+    ) -> bool:
+        """原子性地进入等待权限状态。
+
+        Args:
+            session_key: 会话标识
+            permission_id: 权限请求 ID
+
+        Returns:
+            操作是否成功
+        """
+        from xbot.agent.runtime import SessionPhase
+
+        async with self.transaction(session_key, validate_on_commit=False) as tx:
+            tx.set_phase(SessionPhase.WAITING_PERMISSION, reason=f"awaiting:{permission_id}")
+
+        return True
+
+    async def atomic_wait_interaction(
+        self,
+        session_key: str,
+        interaction_id: str,
+    ) -> bool:
+        """原子性地进入等待交互状态。
+
+        Args:
+            session_key: 会话标识
+            interaction_id: 交互请求 ID
+
+        Returns:
+            操作是否成功
+        """
+        from xbot.agent.runtime import SessionPhase
+
+        async with self.transaction(session_key, validate_on_commit=False) as tx:
+            tx.set_phase(SessionPhase.WAITING_INTERACTION, reason=f"awaiting:{interaction_id}")
+
+        return True
+
+    async def atomic_resume_from_wait(
+        self,
+        session_key: str,
+    ) -> bool:
+        """原子性地从等待状态恢复到运行。
+
+        Args:
+            session_key: 会话标识
+
+        Returns:
+            操作是否成功
+        """
+        from xbot.agent.runtime import SessionPhase
+
+        async with self.transaction(session_key, validate_on_commit=False) as tx:
+            tx.set_phase(SessionPhase.RUNNING, reason="resume_from_wait")
+
+        return True

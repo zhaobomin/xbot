@@ -492,3 +492,123 @@ def mock_runtime():
     runtime._state_checker = state_checker
 
     return runtime
+
+
+class TestSessionStateCoordinatorAtomicOps:
+    """测试原子操作"""
+
+    @pytest.mark.asyncio
+    async def test_atomic_start_dispatch(self, mock_runtime_with_state_machine):
+        """测试原子性开始 dispatch"""
+        from xbot.agent.runtime import SessionPhase
+
+        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
+
+        task = MagicMock(spec=asyncio.Task)
+        task.get_name.return_value = "test-task"
+
+        result = await coordinator.atomic_start_dispatch("test:1", task)
+
+        assert result is True
+        # 验证状态已变更
+        phase = coordinator.get_phase("test:1")
+        assert phase == SessionPhase.RUNNING
+
+    @pytest.mark.asyncio
+    async def test_atomic_end_dispatch(self, mock_runtime_with_state_machine):
+        """测试原子性结束 dispatch"""
+        from xbot.agent.runtime import SessionPhase
+
+        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
+
+        task = MagicMock(spec=asyncio.Task)
+        task.get_name.return_value = "test-task"
+        task.done.return_value = True
+
+        result = await coordinator.atomic_end_dispatch("test:1", task)
+
+        assert result is True
+
+    @pytest.mark.asyncio
+    async def test_atomic_cleanup_session(self, mock_runtime_with_state_machine):
+        """测试原子性清理会话"""
+        from xbot.agent.runtime import SessionPhase
+
+        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
+
+        # 先设置一些状态
+        coordinator.force_transition("test:1", SessionPhase.RUNNING, reason="test")
+        coordinator.get_lock("test:1")
+
+        result = await coordinator.atomic_cleanup_session("test:1")
+
+        assert result["lock_released"] is True
+        assert coordinator.get_phase("test:1") == SessionPhase.IDLE
+
+    @pytest.mark.asyncio
+    async def test_atomic_wait_permission(self, mock_runtime_with_state_machine):
+        """测试原子性等待权限"""
+        from xbot.agent.runtime import SessionPhase
+
+        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
+
+        result = await coordinator.atomic_wait_permission("test:1", "perm-123")
+
+        assert result is True
+        assert coordinator.get_phase("test:1") == SessionPhase.WAITING_PERMISSION
+
+    @pytest.mark.asyncio
+    async def test_atomic_wait_interaction(self, mock_runtime_with_state_machine):
+        """测试原子性等待交互"""
+        from xbot.agent.runtime import SessionPhase
+
+        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
+
+        result = await coordinator.atomic_wait_interaction("test:1", "inter-456")
+
+        assert result is True
+        assert coordinator.get_phase("test:1") == SessionPhase.WAITING_INTERACTION
+
+    @pytest.mark.asyncio
+    async def test_atomic_resume_from_wait(self, mock_runtime_with_state_machine):
+        """测试原子性从等待恢复"""
+        from xbot.agent.runtime import SessionPhase
+
+        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
+
+        # 先进入等待状态
+        coordinator.force_transition("test:1", SessionPhase.WAITING_PERMISSION, reason="test")
+
+        result = await coordinator.atomic_resume_from_wait("test:1")
+
+        assert result is True
+        assert coordinator.get_phase("test:1") == SessionPhase.RUNNING
+
+
+# === Additional Fixtures ===
+
+@pytest.fixture
+def mock_runtime_with_state_machine():
+    """创建带有真实状态机的 mock runtime"""
+    from xbot.agent.runtime import SessionStateMachine
+
+    runtime = MagicMock()
+
+    # 使用真实状态机
+    runtime._state_machine = SessionStateMachine()
+
+    # Active tasks
+    runtime._active_tasks = {}
+
+    # Session locks
+    runtime._session_locks = {}
+
+    # State checker
+    state_checker = MagicMock()
+    snapshot = MagicMock()
+    snapshot.is_consistent.return_value = True
+    snapshot.inconsistencies = []
+    state_checker.check_session.return_value = snapshot
+    runtime._state_checker = state_checker
+
+    return runtime
