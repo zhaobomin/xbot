@@ -22,7 +22,7 @@ from xbot.bus.events import InboundMessage, OutboundMessage
 
 class AgentRuntime:
     """Single runtime entrypoint for gateway and CLI."""
-    LOCAL_RUNTIME_COMMANDS = {"!help", "!restart", "!stop", "/help", "/restart", "/stop"}
+    LOCAL_RUNTIME_COMMANDS = {"!help", "!restart", "!stop", "!reset", "/help", "/restart", "/stop", "/reset"}
     COMMAND_ALIASES: dict[str, str] = {}
     SDK_HELP_FALLBACK_COMMANDS = ["/help", "/clear", "/compact"]
 
@@ -273,6 +273,43 @@ class AgentRuntime:
                     )
 
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(content_parts))
+        if cmd in {"!reset", "/reset"}:
+            await self.initialize()
+            tasks = self._active_tasks.pop(msg.session_key, [])
+            cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
+            for task in tasks:
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            backend_cancelled = await self.router.backend.cancel_session(msg.session_key)
+            backend_task_stopped = await self.router.backend.stop_active_task(msg.session_key)
+            interrupt_result = await self.router.backend.interrupt_session(msg.session_key)
+            await self.router.backend.reset_session(msg.session_key)
+
+            cleared_requests = {"permission": False, "interaction": False}
+            if self.bus is not None and hasattr(self.bus, "clear_session_requests"):
+                cleared_requests = self.bus.clear_session_requests(msg.session_key)
+
+            parts = ["♻️ Session reset completed."]
+            details = []
+            if cancelled:
+                details.append(f"{cancelled} runtime task(s)")
+            if backend_cancelled:
+                details.append(f"{backend_cancelled} subagent(s)")
+            if backend_task_stopped:
+                details.append("SDK task")
+            if interrupt_result.get("interrupted"):
+                details.append("LLM request")
+            if cleared_requests.get("permission"):
+                details.append("pending permission")
+            if cleared_requests.get("interaction"):
+                details.append("pending interaction")
+            if details:
+                parts.append(f"Cleared: {', '.join(details)}.")
+
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(parts))
 
         # Check for workspace command
         command_prefix = ""
@@ -542,6 +579,7 @@ class AgentRuntime:
             "Runtime controls:",
             "!help or /help — Show available commands",
             "!stop or /stop — Stop the current task",
+            "!reset or /reset — Hard reset current session state",
             "!restart or /restart — Restart the bot process",
         ]
 

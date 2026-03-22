@@ -134,6 +134,23 @@ class MessageBus:
     async def publish_interaction_request(self, req: InteractionRequest) -> None:
         """发布通用交互请求并通知用户。"""
         async with self._interaction_lock:
+            previous_request_id = self._session_pending_interactions.get(req.session_key)
+            if previous_request_id and previous_request_id != req.request_id:
+                # Cancel stale interaction for the same session to avoid dangling waiters.
+                prev_event = self._pending_interaction_responses.get(previous_request_id)
+                if prev_event is not None and not prev_event.is_set():
+                    self._interaction_results[previous_request_id] = InteractionResponse(
+                        request_id=previous_request_id,
+                        session_key=req.session_key,
+                        action="cancel",
+                        content="Superseded by a newer interaction request",
+                    )
+                    prev_event.set()
+                else:
+                    self._interaction_requests.pop(previous_request_id, None)
+                    self._pending_interaction_responses.pop(previous_request_id, None)
+                    self._interaction_results.pop(previous_request_id, None)
+
             self._session_pending_interactions[req.session_key] = req.request_id
             self._interaction_requests[req.request_id] = req
 
@@ -312,6 +329,26 @@ class MessageBus:
         to_remove = [k for k, v in self._session_pending_interactions.items() if v == request_id]
         for k in to_remove:
             del self._session_pending_interactions[k]
+
+    def clear_session_requests(self, session_key: str) -> dict[str, bool]:
+        """清理指定会话下挂起的权限与交互请求。"""
+        cleared_permission = False
+        cleared_interaction = False
+
+        request_id = self._session_pending_requests.get(session_key)
+        if request_id:
+            self.clear_permission_request(request_id)
+            cleared_permission = True
+
+        interaction_id = self._session_pending_interactions.get(session_key)
+        if interaction_id:
+            self.clear_interaction_request(interaction_id)
+            cleared_interaction = True
+
+        return {
+            "permission": cleared_permission,
+            "interaction": cleared_interaction,
+        }
 
     # =========================================================================
     # Properties

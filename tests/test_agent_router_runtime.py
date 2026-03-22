@@ -9,6 +9,8 @@ from xbot.agent.protocol import AgentContext, AgentResponse
 from xbot.agent.router import AgentRouter
 from xbot.bus.events import OutboundMessage
 from xbot.bus.events import InboundMessage
+from xbot.bus.queue import InteractionRequest
+from xbot.bus.queue import PermissionRequest
 from xbot.config.schema import Config
 from xbot.session.manager import SessionManager
 
@@ -110,6 +112,8 @@ async def test_router_runtime_help_includes_dynamic_sdk_commands(tmp_path) -> No
 
     assert "!restart" in response
     assert "/restart" in response
+    assert "!reset" in response
+    assert "/reset" in response
     assert "/compact" in response
     assert "Claude SDK slash commands" in response
     assert backend.initialized is True
@@ -308,6 +312,111 @@ async def test_router_runtime_stop_includes_sdk_task_when_stopped(tmp_path) -> N
     response = await runtime.process_direct("!stop")
 
     assert "SDK task" in response
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_reset_performs_hard_session_cleanup(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+    calls: list[tuple[str, str]] = []
+
+    async def _cancel_session(session_key: str) -> int:
+        calls.append(("cancel_session", session_key))
+        return 1
+
+    async def _stop_active_task(session_key: str) -> bool:
+        calls.append(("stop_active_task", session_key))
+        return True
+
+    async def _interrupt_session(session_key: str) -> dict[str, Any]:
+        calls.append(("interrupt_session", session_key))
+        return {"interrupted": True, "usage": None}
+
+    async def _reset_session(session_key: str) -> None:
+        calls.append(("reset_session", session_key))
+
+    backend.cancel_session = _cancel_session  # type: ignore[method-assign]
+    backend.stop_active_task = _stop_active_task  # type: ignore[method-assign]
+    backend.interrupt_session = _interrupt_session  # type: ignore[method-assign]
+    backend.reset_session = _reset_session  # type: ignore[method-assign]
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("!reset")
+
+    assert "reset" in response.lower()
+    assert calls == [
+        ("cancel_session", "cli:direct"),
+        ("stop_active_task", "cli:direct"),
+        ("interrupt_session", "cli:direct"),
+        ("reset_session", "cli:direct"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_reset_clears_pending_bus_requests_for_session(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    AgentRouter._backends = {"claude_sdk": _FakeBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    bus = MessageBus()
+
+    await bus.publish_permission_request(
+        PermissionRequest(
+            request_id="perm-1",
+            session_key="cli:direct",
+            channel="cli",
+            chat_id="direct",
+            tool_name="exec_command",
+            tool_input={"cmd": "echo hi"},
+            message="allow?",
+        )
+    )
+    await bus.publish_interaction_request(
+        InteractionRequest(
+            request_id="int-1",
+            session_key="cli:direct",
+            channel="cli",
+            chat_id="direct",
+            kind="question",
+            prompt="continue?",
+        )
+    )
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": bus,
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    await runtime.process_direct("/reset")
+
+    assert bus.get_pending_request_for_session("cli:direct") is None
+    assert bus.get_pending_interaction_for_session("cli:direct") is None
 
 
 @pytest.mark.asyncio

@@ -306,3 +306,35 @@ class TestMessageBusPermission:
         resp = await waiter
         assert resp.content == "继续"
         assert bus.get_pending_interaction_for_session("slack:C1:thread:1") is None
+
+    @pytest.mark.asyncio
+    async def test_publish_interaction_request_supersedes_previous_session_request(self, bus):
+        req1 = InteractionRequest(
+            request_id="ir-old",
+            session_key="telegram:456",
+            channel="telegram",
+            chat_id="456",
+            kind="question",
+            prompt="old",
+        )
+        await bus.publish_interaction_request(req1)
+        _ = await bus.consume_outbound()
+
+        waiter = asyncio.create_task(bus.wait_interaction_response("ir-old", timeout=1.0))
+        await asyncio.sleep(0.05)
+
+        req2 = InteractionRequest(
+            request_id="ir-new",
+            session_key="telegram:456",
+            channel="telegram",
+            chat_id="456",
+            kind="question",
+            prompt="new",
+        )
+        await bus.publish_interaction_request(req2)
+        _ = await bus.consume_outbound()
+
+        old_resp = await waiter
+        assert old_resp.action == "cancel"
+        assert "Superseded" in old_resp.content
+        assert bus.get_pending_interaction_for_session("telegram:456") == "ir-new"

@@ -1112,6 +1112,7 @@ class ClaudeSDKBackend(AgentBackend):
 
             first_sdk_message_logged = False
             async for message in client.receive_response():
+                is_terminal_result = isinstance(message, ResultMessage)
                 if not first_sdk_message_logged:
                     first_sdk_message_logged = True
                     append_session_trace(
@@ -1146,7 +1147,13 @@ class ClaudeSDKBackend(AgentBackend):
                             user_input,
                             session_id=self._query_session_id(context.session_key, session),
                         )
-                if isinstance(message, ResultMessage):
+                    else:
+                        # User cancelled or no actionable input: end current turn to avoid
+                        # holding the session lock while the SDK waits for further input.
+                        # Also reset client/task state to avoid dirty carry-over into next turn.
+                        await self._reset_session_client_state(context.session_key)
+                        break
+                if is_terminal_result:
                     self._active_task_ids.pop(context.session_key, None)
                     if session is not None and message.session_id:
                         session.metadata["sdk_session_id"] = message.session_id
@@ -1164,6 +1171,8 @@ class ClaudeSDKBackend(AgentBackend):
                     elif response.content:
                         final_content = response.content
                     yield response
+                if is_terminal_result:
+                    break
 
             if session is not None and final_content:
                 session.add_message("assistant", final_content)
@@ -1217,6 +1226,7 @@ class ClaudeSDKBackend(AgentBackend):
                             session_id=self._query_session_id(context.session_key, session),
                         )
                         async for message in fallback_client.receive_response():
+                            is_terminal_result = isinstance(message, ResultMessage)
                             if isinstance(message, SystemMessage) and message.subtype == "init":
                                 commands = self._extract_slash_commands(message.data)
                                 logger.info(f"SDK init message (fallback) for session {context.session_key}, discovered {len(commands)} commands: {commands}")
@@ -1228,7 +1238,7 @@ class ClaudeSDKBackend(AgentBackend):
                                 and message.status in {"completed", "failed", "stopped"}
                             ):
                                 self._active_task_ids.pop(context.session_key, None)
-                            if isinstance(message, ResultMessage):
+                            if is_terminal_result:
                                 self._active_task_ids.pop(context.session_key, None)
                                 if session is not None and message.session_id:
                                     session.metadata["sdk_session_id"] = message.session_id
@@ -1246,6 +1256,8 @@ class ClaudeSDKBackend(AgentBackend):
                                 elif response.content:
                                     final_content = response.content
                                 yield response
+                            if is_terminal_result:
+                                break
                     finally:
                         await fallback_client.disconnect()
 
@@ -1512,7 +1524,22 @@ class ClaudeSDKBackend(AgentBackend):
             session_id=self._query_session_id(session_key, session),
         )
 
-        async for message in client.receive_response():
+        saw_boundary = False
+        stream = client.receive_response().__aiter__()
+        while True:
+            timeout_s = 0.35 if saw_result else 10.0
+            try:
+                async with asyncio.timeout(timeout_s):
+                    message = await anext(stream)
+            except StopAsyncIteration:
+                break
+            except asyncio.TimeoutError:
+                # After ResultMessage, give boundary events a short grace window only.
+                if saw_result:
+                    break
+                # No result in a long window: stop waiting and mark failure below.
+                break
+
             if isinstance(message, ResultMessage):
                 saw_result = True
                 if session is not None and message.session_id:
@@ -1521,6 +1548,7 @@ class ClaudeSDKBackend(AgentBackend):
                 if message.is_error:
                     compact_stats["success"] = False
                     compact_stats["message"] = message.result or "SDK compact request failed"
+
             if isinstance(message, SystemMessage) and message.subtype == "compact_boundary":
                 metadata = message.data.get("compact_metadata", {}) if isinstance(message.data, dict) else {}
                 pre_tokens = metadata.get("pre_tokens")
@@ -1529,12 +1557,32 @@ class ClaudeSDKBackend(AgentBackend):
                     compact_stats["tokens_before"] = pre_tokens
                 if isinstance(post_tokens, int):
                     compact_stats["tokens_after"] = post_tokens
+                saw_boundary = True
+
+            if saw_result and saw_boundary:
+                break
 
         if not saw_result:
             compact_stats["success"] = False
             compact_stats["message"] = "SDK compact request did not return a result"
 
         return compact_stats
+
+    async def _reset_session_client_state(self, session_key: str) -> None:
+        """Reset SDK client/task state for a session after incomplete interaction."""
+        task_id = self._active_task_ids.get(session_key)
+        client = self._clients.pop(session_key, None)
+        if client is not None and task_id:
+            try:
+                await client.stop_task(task_id)
+            except Exception:
+                logger.debug("Failed to stop active task while resetting session state")
+        if client is not None:
+            try:
+                await client.disconnect()
+            except Exception:
+                logger.debug("Failed to disconnect client while resetting session state")
+        self._active_task_ids.pop(session_key, None)
 
     def get_tools_summary(self) -> str:
         """Get a summary of available tools and capabilities."""

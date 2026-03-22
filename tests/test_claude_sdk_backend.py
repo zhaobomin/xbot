@@ -976,6 +976,40 @@ class TestStopActiveTask:
 
         assert "test_session" not in backend._active_task_ids
 
+    @pytest.mark.asyncio
+    async def test_process_stops_stream_after_result_message(self):
+        from claude_agent_sdk.types import ResultMessage
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.protocol import AgentContext
+
+        backend = ClaudeSDKBackend()
+        backend.sessions = None
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
+
+        async def _receive():
+            yield ResultMessage(
+                subtype="success",
+                duration_ms=1,
+                duration_api_ms=1,
+                is_error=False,
+                num_turns=1,
+                session_id="s1",
+                result="done",
+            )
+            # Must never be reached once ResultMessage is handled.
+            raise AssertionError("receive_response should stop after ResultMessage")
+
+        mock_client.receive_response = _receive
+        backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
+
+        context = AgentContext(session_key="test_session", prompt="hello")
+        responses = [msg async for msg in backend.process(context)]
+
+        # Backend should stop reading stream after ResultMessage and not hit sentinel error.
+        assert responses == []
+
 
 class TestSessionCommands:
     """Tests for SDK slash command discovery/cache."""
@@ -1143,6 +1177,139 @@ class TestCompactSession:
 
         assert result["success"] is False
         assert result["message"] == "compact failed"
+
+    @pytest.mark.asyncio
+    async def test_compact_session_collects_boundary_after_result_message(self):
+        from claude_agent_sdk.types import ResultMessage, SystemMessage
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        backend = ClaudeSDKBackend()
+        backend.sessions = None
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
+
+        async def _receive():
+            yield ResultMessage(
+                subtype="success",
+                duration_ms=1,
+                duration_api_ms=1,
+                is_error=False,
+                num_turns=1,
+                session_id="s2",
+            )
+            # Boundary may arrive after result; stats should still capture it.
+            yield SystemMessage(
+                subtype="compact_boundary",
+                data={"compact_metadata": {"pre_tokens": 2000, "post_tokens": 800}},
+            )
+
+        mock_client.receive_response = _receive
+        backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
+
+        result = await backend.compact_session("test_session")
+
+        assert result["success"] is True
+        assert result["tokens_before"] == 2000
+        assert result["tokens_after"] == 800
+
+
+class TestSessionStateReset:
+    @pytest.mark.asyncio
+    async def test_reset_session_client_state_stops_task_and_disconnects(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        backend = ClaudeSDKBackend()
+        mock_client = MagicMock()
+        mock_client.stop_task = AsyncMock(return_value=None)
+        mock_client.disconnect = AsyncMock(return_value=None)
+
+        backend._clients = {"s1": mock_client}
+        backend._active_task_ids = {"s1": "task-1"}
+
+        await backend._reset_session_client_state("s1")
+
+        mock_client.stop_task.assert_awaited_once_with("task-1")
+        mock_client.disconnect.assert_awaited_once()
+        assert "s1" not in backend._clients
+        assert "s1" not in backend._active_task_ids
+
+
+class TestInputRequiredRecoveryFlow:
+    @pytest.mark.asyncio
+    async def test_new_turn_can_continue_after_input_required_without_user_reply(self):
+        from claude_agent_sdk.types import ResultMessage, TaskNotificationMessage, TaskStartedMessage
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.protocol import AgentContext
+
+        backend = ClaudeSDKBackend()
+        backend.sessions = None
+        backend._message_converter = None
+        backend._permission_handler = MagicMock()
+        backend._permission_handler.clear_session_context = MagicMock()
+        backend._wait_for_user_input = AsyncMock(return_value=None)  # simulate user did not reply
+
+        client1 = MagicMock()
+        client1.query = AsyncMock(return_value=None)
+        client1.stop_task = AsyncMock(return_value=None)
+        client1.disconnect = AsyncMock(return_value=None)
+
+        async def _receive_1():
+            yield TaskStartedMessage(
+                subtype="task_started",
+                data={},
+                task_id="task-stuck",
+                description="long task",
+                uuid="u1",
+                session_id="s1",
+            )
+            yield TaskNotificationMessage(
+                subtype="task_notification",
+                data={},
+                task_id="task-stuck",
+                status="input_required",
+                output_file="",
+                summary="need user input",
+                uuid="u2",
+                session_id="s1",
+            )
+
+        client1.receive_response = _receive_1
+        backend._clients["telegram:456"] = client1
+
+        client2 = MagicMock()
+        client2.query = AsyncMock(return_value=None)
+        client2.stop_task = AsyncMock(return_value=None)
+        client2.disconnect = AsyncMock(return_value=None)
+
+        async def _receive_2():
+            yield ResultMessage(
+                subtype="success",
+                duration_ms=1,
+                duration_api_ms=1,
+                is_error=False,
+                num_turns=1,
+                session_id="s2",
+                result="next task done",
+            )
+
+        client2.receive_response = _receive_2
+
+        backend._get_or_create_client = AsyncMock(side_effect=[client1, client2])  # type: ignore[method-assign]
+
+        context = AgentContext(session_key="telegram:456", prompt="first task")
+        _ = [msg async for msg in backend.process(context)]
+
+        # first round should be cleaned up, not leave stale active task/client
+        client1.stop_task.assert_awaited_once_with("task-stuck")
+        client1.disconnect.assert_awaited_once()
+        assert "telegram:456" not in backend._active_task_ids
+
+        context2 = AgentContext(session_key="telegram:456", prompt="second task")
+        _ = [msg async for msg in backend.process(context2)]
+
+        assert backend._get_or_create_client.await_count == 2
+        client2.query.assert_awaited_once()
 
 
 class TestMessageConverterEnhancements:
