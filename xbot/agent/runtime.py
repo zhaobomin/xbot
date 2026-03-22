@@ -422,101 +422,18 @@ class AgentRuntime:
                     await self.bus.publish_outbound(response)
                 continue
 
-            # Choose dispatch method based on feature flag
-            if self._use_atomic_dispatch:
-                # Atomic dispatch: state management handled internally via transactions
-                task = asyncio.create_task(self._atomic_dispatch(msg))
-                self._active_tasks.setdefault(msg.session_key, []).append(task)
-                # Note: phase is set inside _atomic_dispatch via transaction
-                task.add_done_callback(self._make_task_done_callback(msg.session_key))
-            else:
-                # Legacy dispatch: state management in run() callback
-                task = asyncio.create_task(self._dispatch(msg))
-                self._active_tasks.setdefault(msg.session_key, []).append(task)
-                self._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="dispatch_started")
-                task.add_done_callback(self._make_task_done_callback(msg.session_key))
+            # Dispatch message with atomic state management
+            task = asyncio.create_task(self._dispatch(msg))
+            self._active_tasks.setdefault(msg.session_key, []).append(task)
+            task.add_done_callback(self._make_task_done_callback(msg.session_key))
 
     async def _handle_permission_response(self, msg: InboundMessage) -> bool:
         """Check if the message is a permission response and handle it.
 
+        Uses coordinator transactions for state changes.
+
         Returns:
             True if the message was handled as a permission response, False otherwise
-        """
-        # Use atomic version if coordinator transitions are enabled
-        if self._use_coordinator_transitions:
-            return await self._atomic_handle_permission_response(msg)
-
-        if self.bus is None:
-            return False
-
-        # Parse the user's response first
-        content = msg.content.strip().lower()
-        decision = None
-        reason = ""
-
-        # Allow variations: "允许", "allow", "yes", "y", "是", "ok"
-        allow_variations = {"允许", "allow", "yes", "y", "是", "ok", "同意", "确认"}
-        # Deny variations: "拒绝", "deny", "no", "n", "否"
-        deny_variations = {"拒绝", "deny", "no", "n", "否", "取消"}
-
-        is_permission_keyword = content in allow_variations or content in deny_variations
-
-        if content in allow_variations:
-            decision = "allow"
-        elif content in deny_variations:
-            decision = "deny"
-            reason = "User denied"
-        else:
-            # Not a clear permission response, treat as normal message
-            return False
-
-        # Check if there's a pending permission request for this session
-        request_id = self.bus.get_pending_request_for_session(msg.session_key)
-        if not request_id:
-            # User sent a permission keyword but no pending request exists
-            # This could be a stale response after timeout - inform the user
-            if is_permission_keyword:
-                await self.bus.publish_outbound(
-                    OutboundMessage(
-                        channel=msg.channel,
-                        chat_id=msg.chat_id,
-                        content="⚠️ 没有待处理的权限请求，可能已超时过期。请重新发起操作。",
-                    )
-                )
-                return True  # Consume the message to avoid re-processing
-            return False
-
-        self._set_session_phase(msg.session_key, SessionPhase.WAITING_PERMISSION, reason="pending_permission_detected")
-
-        # Submit the response
-        from xbot.bus.queue import PermissionResponse
-        response = PermissionResponse(
-            request_id=request_id,
-            session_key=msg.session_key,
-            decision=decision,
-            reason=reason,
-        )
-        submitted = await self.bus.submit_permission_response(response)
-        if not submitted:
-            logger.warning(f"Permission response no longer pending: request={request_id}")
-            # Request was removed between check and submit - inform user
-            await self.bus.publish_outbound(
-                OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content="⚠️ 权限请求已过期或被取消，请重新发起操作。",
-                )
-            )
-            return True  # Consume the message
-        logger.info(f"Permission response submitted: {decision} for request {request_id}")
-        self._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="permission_response_submitted")
-        return True
-
-    async def _atomic_handle_permission_response(self, msg: InboundMessage) -> bool:
-        """Handle permission response with transaction-based state management.
-
-        This is an alternative to _handle_permission_response that uses
-        coordinator transactions for state changes.
         """
         if self.bus is None:
             return False
@@ -588,49 +505,9 @@ class AgentRuntime:
         return True
 
     async def _dispatch(self, msg: InboundMessage) -> None:
-        # Log state snapshot at dispatch start
-        self._log_state_snapshot(msg.session_key, "dispatch_start")
+        """Dispatch message with transaction-based state management.
 
-        lock = self._session_locks.setdefault(msg.session_key, asyncio.Lock())
-        try:
-            async with lock:
-                response = await self._handle_message(msg, on_progress=self._bus_progress(msg))
-            if response is not None and self.bus is not None:
-                await self.bus.publish_outbound(response)
-        except asyncio.CancelledError:
-            raise
-        except Exception:
-            self._set_session_phase(msg.session_key, SessionPhase.ERROR, reason="dispatch_error")
-            logger.exception("Error processing message for session {}", msg.session_key)
-            append_session_trace(
-                self.sessions,
-                msg.session_key,
-                "error",
-                {"backend": self.router.backend_type, "message": "processing_error"},
-            )
-            if self.bus is not None:
-                await self.bus.publish_outbound(
-                    OutboundMessage(
-                        channel=msg.channel,
-                        chat_id=msg.chat_id,
-                        content="Sorry, I encountered an error.",
-                    )
-                )
-        finally:
-            self._sync_session_phase(msg.session_key)
-            # Log state snapshot at dispatch end
-            self._log_state_snapshot(msg.session_key, "dispatch_end")
-
-    async def _atomic_dispatch(self, msg: InboundMessage) -> None:
-        """Dispatch with transaction-based state management.
-
-        This is an alternative to _dispatch that uses the coordinator's
-        atomic operations for state changes. Enabled via _use_atomic_dispatch flag.
-
-        The key difference from _dispatch:
-        - Uses coordinator transactions for atomic state updates
-        - Lock acquisition is part of the transaction
-        - Phase transitions are atomic with task registration
+        Uses coordinator transactions for atomic state changes.
         """
         # Log state snapshot at dispatch start
         self._log_state_snapshot(msg.session_key, "dispatch_start")
@@ -716,95 +593,9 @@ class AgentRuntime:
             self._log_state_snapshot(msg.session_key, "dispatch_end")
 
     async def _handle_interaction_response(self, msg: InboundMessage) -> bool:
-        """Handle pending generic interaction replies for a session."""
-        # Use atomic version if coordinator transitions are enabled
-        if self._use_coordinator_transitions:
-            return await self._atomic_handle_interaction_response(msg)
+        """Handle pending generic interaction replies for a session.
 
-        if self.bus is None:
-            return False
-
-        if self._is_local_runtime_command(msg.content):
-            return False
-
-        content = msg.content.strip()
-        normalized = content.lower()
-
-        # Check if this looks like a confirmation/approval keyword
-        allow_variations = {"允许", "allow", "yes", "y", "是", "ok", "同意", "确认"}
-        deny_variations = {"拒绝", "deny", "no", "n", "否", "取消"}
-        is_interaction_keyword = normalized in allow_variations or normalized in deny_variations
-
-        request_id = self.bus.get_pending_interaction_for_session(msg.session_key)
-        if not request_id:
-            # User sent an interaction keyword but no pending request exists
-            if is_interaction_keyword:
-                await self.bus.publish_outbound(
-                    OutboundMessage(
-                        channel=msg.channel,
-                        chat_id=msg.chat_id,
-                        content="⚠️ 没有待处理的交互请求，可能已超时过期。请重新发起操作。",
-                    )
-                )
-                return True  # Consume the message
-            return False
-
-        self._set_session_phase(msg.session_key, SessionPhase.WAITING_INTERACTION, reason="pending_interaction_detected")
-
-        req = self.bus.get_interaction_request(request_id)
-        if req is None:
-            # Request was removed between check and get
-            await self.bus.publish_outbound(
-                OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content="⚠️ 交互请求已过期或被取消，请重新发起操作。",
-                )
-            )
-            return True  # Consume the message
-
-        action = "reply"
-
-        if req.kind in {"confirmation", "approval"}:
-            if normalized in allow_variations:
-                action = "confirm" if req.kind == "confirmation" else "allow"
-            elif normalized in deny_variations:
-                action = "cancel" if req.kind == "confirmation" else "deny"
-            else:
-                # Confirmation/approval also allows free-text replies.
-                action = "reply"
-
-        from xbot.bus.queue import InteractionResponse
-
-        submitted = await self.bus.submit_interaction_response(
-            InteractionResponse(
-                request_id=request_id,
-                session_key=msg.session_key,
-                action=action,
-                content=content,
-            )
-        )
-        if not submitted:
-            logger.warning(f"Interaction response no longer pending: request={request_id}")
-            # Request was removed between check and submit - inform user
-            await self.bus.publish_outbound(
-                OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content="⚠️ 交互请求已过期或被取消，请重新发起操作。",
-                )
-            )
-            return True  # Consume the message
-
-        logger.info(f"Interaction response submitted: action={action}, request={request_id}")
-        self._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="interaction_response_submitted")
-        return True
-
-    async def _atomic_handle_interaction_response(self, msg: InboundMessage) -> bool:
-        """Handle interaction response with transaction-based state management.
-
-        This is an alternative to _handle_interaction_response that uses
-        coordinator transactions for state changes.
+        Uses coordinator transactions for state changes.
         """
         if self.bus is None:
             return False
@@ -905,10 +696,7 @@ class AgentRuntime:
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="Restarting...")
         if cmd in {"!stop", "/stop"}:
             await self.initialize()
-            if self._use_atomic_terminate:
-                state = await self._atomic_terminate_session(msg.session_key, hard_reset=False)
-            else:
-                state = await self._terminate_session(msg.session_key, hard_reset=False)
+            state = await self._terminate_session(msg.session_key, hard_reset=False)
 
             parts = []
             if state["cancelled"]:
@@ -945,10 +733,7 @@ class AgentRuntime:
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(content_parts))
         if cmd in {"!reset", "/reset"}:
             await self.initialize()
-            if self._use_atomic_terminate:
-                state = await self._atomic_terminate_session(msg.session_key, hard_reset=True)
-            else:
-                state = await self._terminate_session(msg.session_key, hard_reset=True)
+            state = await self._terminate_session(msg.session_key, hard_reset=True)
 
             parts = ["♻️ Session reset completed."]
             details = []
@@ -1124,60 +909,9 @@ class AgentRuntime:
         )
 
     async def _terminate_session(self, session_key: str, *, hard_reset: bool) -> dict[str, Any]:
-        """Cancel runtime/backend activity and clear pending requests for a session."""
-        self._set_session_phase(
-            session_key,
-            SessionPhase.RESETTING if hard_reset else SessionPhase.STOPPING,
-            reason="terminate_session",
-        )
-        tasks = self._active_tasks.pop(session_key, [])
-        cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
-        for task in tasks:
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
+        """Cancel runtime/backend activity and clear pending requests for a session.
 
-        backend_cancelled = await self.router.backend.cancel_session(session_key)
-        backend_task_stopped = await self.router.backend.stop_active_task(session_key)
-        interrupt_result = await self.router.backend.interrupt_session(session_key)
-        if hard_reset:
-            await self.router.backend.reset_session(session_key)
-
-        cleared_requests = {"permission": False, "interaction": False}
-        if self.bus is not None and hasattr(self.bus, "clear_session_requests"):
-            cleared_requests = self.bus.clear_session_requests(session_key)
-
-        # Clean up session lock to prevent memory leak
-        self._session_locks.pop(session_key, None)
-
-        # Clear state machine state for hard reset, otherwise transition to IDLE
-        if hard_reset:
-            self._state_machine.clear(session_key)
-        else:
-            self._set_session_phase(session_key, SessionPhase.IDLE, reason="terminate_session_completed")
-
-        return {
-            "cancelled": cancelled,
-            "backend_cancelled": backend_cancelled,
-            "backend_task_stopped": backend_task_stopped,
-            "interrupted": bool(interrupt_result.get("interrupted")),
-            "usage": interrupt_result.get("usage"),
-            "cleared_requests": cleared_requests,
-        }
-
-    async def _atomic_terminate_session(
-        self, session_key: str, *, hard_reset: bool
-    ) -> dict[str, Any]:
-        """Terminate session with transaction-based state management.
-
-        This is an alternative to _terminate_session that uses the coordinator's
-        atomic operations for state changes. Enabled via _use_atomic_terminate flag.
-
-        The key difference from _terminate_session:
-        - Uses coordinator transactions for atomic state updates
-        - Lock and task cleanup are part of the transaction
-        - Phase transitions are atomic with cleanup operations
+        Uses coordinator transactions for atomic state changes.
         """
         # Start atomic terminate session
         async with self._state_coordinator.transaction(
@@ -1185,7 +919,7 @@ class AgentRuntime:
         ) as tx:
             tx.set_phase(
                 SessionPhase.RESETTING if hard_reset else SessionPhase.STOPPING,
-                reason="atomic_terminate_session",
+                reason="terminate_session",
             )
 
         # Cancel and wait for tasks (outside transaction as it's async I/O)
@@ -1217,11 +951,7 @@ class AgentRuntime:
             tx.release_lock()
 
             # Set final phase
-            if hard_reset:
-                # For hard reset, we need to clear the state entirely
-                # This is done after the transaction
-                pass
-            else:
+            if not hard_reset:
                 tx.set_phase(SessionPhase.IDLE, reason="terminate_session_completed")
 
         # Remove lock from dict (coordinator handles state)
