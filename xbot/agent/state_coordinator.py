@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
@@ -433,3 +433,42 @@ class SessionStateCoordinator:
         """
         snapshot = self._runtime._state_checker.check_session(session_key)
         return snapshot.to_dict()
+
+    # === 事务支持 ===
+
+    def transaction(
+        self,
+        session_key: str,
+        *,
+        validate_on_commit: bool = True,
+        on_commit: Callable[[], None] | None = None,
+        on_rollback: Callable[[], None] | None = None,
+    ) -> StateTransaction:
+        """创建状态事务。
+
+        用于原子性地更新多个状态组件。
+
+        Args:
+            session_key: 会话标识
+            validate_on_commit: 提交时是否验证一致性
+            on_commit: 提交回调
+            on_rollback: 回滚回调
+
+        Returns:
+            StateTransaction 实例
+
+        Example:
+            async with coordinator.transaction("session:1") as tx:
+                tx.set_phase(SessionPhase.RUNNING)
+                tx.register_task(task)
+                tx.acquire_lock()
+        """
+        from xbot.agent.state_transaction import StateTransaction
+
+        return StateTransaction(
+            coordinator=self,
+            session_key=session_key,
+            validate_on_commit=validate_on_commit,
+            on_commit=on_commit,
+            on_rollback=on_rollback,
+        )
