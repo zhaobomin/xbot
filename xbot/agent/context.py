@@ -73,8 +73,21 @@ class ContextBuilder:
         """Check if using ReMe backend."""
         return self._using_reme
 
-    def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
-        """Build the system prompt from identity, bootstrap files, memory, and skills."""
+    def build_system_prompt(
+        self,
+        skill_names: list[str] | None = None,
+        user_message: str = "",
+        code_context: str = "",
+        file_paths: list[str] | None = None,
+    ) -> str:
+        """Build the system prompt from identity, bootstrap files, memory, and skills.
+
+        Args:
+            skill_names: Explicitly requested skill names
+            user_message: User's message for skill triggering
+            code_context: Current code context for skill triggering
+            file_paths: List of file paths being accessed for skill triggering
+        """
         parts = [self._get_identity()]
 
         bootstrap = self._load_bootstrap_files()
@@ -85,11 +98,26 @@ class ContextBuilder:
         if memory:
             parts.append(f"# Memory\n\n{memory}")
 
-        always_skills = self.skills.get_always_skills()
-        if always_skills:
-            always_content = self.skills.load_skills_for_context(always_skills)
-            if always_content:
-                parts.append(f"# Active Skills\n\n{always_content}")
+        # Collect active skills: always_skills + triggered_skills + explicit skill_names
+        active_skills = set(self.skills.get_always_skills())
+
+        # Add triggered skills based on context
+        if user_message or code_context:
+            triggered = self.skills.get_triggered_skills(
+                user_message=user_message,
+                code_context=code_context,
+                file_paths=file_paths,
+            )
+            active_skills.update(triggered)
+
+        # Add explicitly requested skills
+        if skill_names:
+            active_skills.update(skill_names)
+
+        if active_skills:
+            active_content = self.skills.load_skills_for_context(list(active_skills))
+            if active_content:
+                parts.append(f"# Active Skills\n\n{active_content}")
 
         skills_summary = self.skills.build_skills_summary()
         if skills_summary:
@@ -175,8 +203,22 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         channel: str | None = None,
         chat_id: str | None = None,
         current_role: str = "user",
+        code_context: str = "",
+        file_paths: list[str] | None = None,
     ) -> list[dict[str, Any]]:
-        """Build the complete message list for an LLM call."""
+        """Build the complete message list for an LLM call.
+
+        Args:
+            history: Conversation history
+            current_message: User's current message
+            skill_names: Explicitly requested skill names
+            media: List of media file paths
+            channel: Channel name (e.g., 'telegram', 'feishu')
+            chat_id: Chat identifier
+            current_role: Role for current message ('user' or 'assistant')
+            code_context: Current code context for skill triggering
+            file_paths: List of file paths being accessed for skill triggering
+        """
         runtime_ctx = self._build_runtime_context(channel, chat_id)
         user_content = self._build_user_content(current_message, media)
 
@@ -188,7 +230,12 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
             merged = [{"type": "text", "text": runtime_ctx}] + user_content
 
         return [
-            {"role": "system", "content": self.build_system_prompt(skill_names)},
+            {"role": "system", "content": self.build_system_prompt(
+                skill_names,
+                user_message=current_message,
+                code_context=code_context,
+                file_paths=file_paths,
+            )},
             *history,
             {"role": current_role, "content": merged},
         ]

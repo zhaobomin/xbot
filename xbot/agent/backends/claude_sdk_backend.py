@@ -1001,6 +1001,20 @@ class ClaudeSDKBackend(AgentBackend):
             if hasattr(self._permission_handler, "set_current_session"):
                 self._permission_handler.set_current_session(context.session_key)
 
+        # Detect triggered skills based on user message
+        triggered_skills_prefix = ""
+        if self._context_builder:
+            triggered_skills = self._context_builder.skills.get_triggered_skills(
+                user_message=context.prompt,
+                code_context="",  # Could be enhanced to include file content
+                file_paths=None,
+            )
+            if triggered_skills:
+                triggered_content = self._context_builder.skills.load_skills_for_context(triggered_skills)
+                if triggered_content:
+                    triggered_skills_prefix = f"[Triggered Skills]\n\n{triggered_content}\n\n---\n\n"
+                    logger.info(f"Triggered skills for session {context.session_key}: {triggered_skills}")
+
         session = self.sessions.get_or_create(context.session_key) if self.sessions else None
         if session is not None:
             session.add_message("user", context.prompt)
@@ -1016,8 +1030,8 @@ class ClaudeSDKBackend(AgentBackend):
         try:
             final_content = ""
             decision = None
-            prompt = context.prompt
-            
+            prompt = f"{triggered_skills_prefix}{context.prompt}" if triggered_skills_prefix else context.prompt
+
             if self._handoff_policy and self._handoff_policy.has_agents():
                 decision = self._handoff_policy.decide(context.prompt)
                 

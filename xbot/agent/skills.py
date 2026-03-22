@@ -4,10 +4,38 @@ import json
 import os
 import re
 import shutil
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
+
+
+@dataclass
+class TriggerCondition:
+    """A single trigger condition for a skill.
+
+    Attributes:
+        kind: Type of trigger - 'code_contains', 'user_requests', 'file_pattern'
+        patterns: List of patterns to match (strings or regex patterns)
+        exclude: If True, this is an exclusion condition
+    """
+    kind: str
+    patterns: list[str] = field(default_factory=list)
+    exclude: bool = False
+
+
+@dataclass
+class SkillTriggers:
+    """Trigger configuration for a skill.
+
+    Attributes:
+        triggers: List of TriggerCondition that activate this skill
+        excludes: List of TriggerCondition that prevent activation
+    """
+    triggers: list[TriggerCondition] = field(default_factory=list)
+    excludes: list[TriggerCondition] = field(default_factory=list)
 
 
 class SkillsLoader:
@@ -248,4 +276,266 @@ class SkillsLoader:
             return value
         if isinstance(value, str):
             return value.strip().lower() in {"true", "1", "yes", "on"}
+        return False
+
+    def get_skill_triggers(self, name: str) -> SkillTriggers:
+        """Get trigger configuration for a skill.
+
+        Parses the 'triggers' and 'excludes' sections from frontmatter.
+
+        Example frontmatter:
+        ---
+        name: simplify
+        description: "Review code for quality"
+        triggers:
+          - when: code_contains
+            patterns: ["anthropic", "claude_agent_sdk"]
+        excludes:
+          - when: user_requests
+            patterns: ["skip review"]
+        ---
+        """
+        meta = self._get_full_metadata(name)
+        if not meta:
+            return SkillTriggers()
+
+        triggers = self._parse_trigger_list(meta.get("triggers", []))
+        excludes = self._parse_trigger_list(meta.get("excludes", []))
+
+        return SkillTriggers(triggers=triggers, excludes=excludes)
+
+    def _parse_trigger_list(self, raw_list: Any) -> list[TriggerCondition]:
+        """Parse a list of trigger definitions into TriggerCondition objects."""
+        if not isinstance(raw_list, list):
+            return []
+
+        conditions = []
+        for item in raw_list:
+            if not isinstance(item, dict):
+                continue
+
+            when = item.get("when", "")
+            patterns = item.get("patterns", [])
+
+            if isinstance(patterns, str):
+                patterns = [patterns]
+
+            if when and patterns:
+                conditions.append(TriggerCondition(
+                    kind=when,
+                    patterns=list(patterns),
+                    exclude=False
+                ))
+
+        return conditions
+
+    def _get_full_metadata(self, name: str) -> dict[str, Any]:
+        """Get full metadata including nested structures using YAML parsing."""
+        content = self.load_skill(name)
+        if not content:
+            return {}
+
+        if not content.startswith("---"):
+            return {}
+
+        match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
+        if not match:
+            return {}
+
+        yaml_content = match.group(1)
+
+        # Try to use PyYAML if available
+        try:
+            import yaml
+            return yaml.safe_load(yaml_content) or {}
+        except ImportError:
+            pass
+
+        # Fallback: simple nested parsing for triggers/excludes
+        return self._parse_yaml_simple(yaml_content)
+
+    def _parse_yaml_simple(self, yaml_content: str) -> dict[str, Any]:
+        """Simple YAML parser for basic nested structures.
+
+        Handles:
+        - key: value
+        - key: [list, of, values]
+        - nested:
+            - key: value
+        """
+        result: dict[str, Any] = {}
+        lines = yaml_content.split("\n")
+
+        current_key = None
+        current_list: list[Any] = []
+        in_list = False
+        in_nested_list = False
+        nested_item: dict[str, Any] = {}
+
+        for line in lines:
+            stripped = line.rstrip()
+
+            # Skip empty lines
+            if not stripped:
+                continue
+
+            # Check for list item (- something)
+            list_match = re.match(r"^(\s*)-\s+(.+)$", stripped)
+
+            if list_match:
+                indent = len(list_match.group(1))
+                value = list_match.group(2).strip()
+
+                if indent == 0:
+                    # Top-level list item
+                    if current_key and in_list:
+                        if ":" in value:
+                            # It's a nested dict in a list
+                            nested_item = {}
+                            sub_key, sub_val = value.split(":", 1)
+                            nested_item[sub_key.strip()] = self._parse_yaml_value(sub_val.strip())
+                            current_list.append(nested_item)
+                            in_nested_list = True
+                        else:
+                            current_list.append(self._parse_yaml_value(value))
+                            in_nested_list = False
+                elif in_nested_list and nested_item:
+                    # Continue parsing nested dict
+                    if ":" in value:
+                        sub_key, sub_val = value.split(":", 1)
+                        nested_item[sub_key.strip()] = self._parse_yaml_value(sub_val.strip())
+                continue
+
+            # Check for key: value
+            if ":" in stripped:
+                # Save previous key's list if we were building one
+                if current_key and in_list:
+                    result[current_key] = current_list
+                    current_list = []
+                    in_list = False
+                    in_nested_list = False
+
+                key, value = stripped.split(":", 1)
+                key = key.strip()
+                value = value.strip()
+
+                if value.startswith("[") and value.endswith("]"):
+                    # Inline list: [a, b, c]
+                    result[key] = self._parse_inline_list(value)
+                elif value:
+                    result[key] = self._parse_yaml_value(value)
+                else:
+                    # Key with no value - might be a list following
+                    current_key = key
+                    current_list = []
+                    in_list = True
+
+        # Don't forget the last list
+        if current_key and in_list:
+            result[current_key] = current_list
+
+        return result
+
+    def _parse_yaml_value(self, value: str) -> Any:
+        """Parse a YAML value into appropriate Python type."""
+        if not value:
+            return ""
+
+        # Remove quotes
+        if (value.startswith('"') and value.endswith('"')) or \
+           (value.startswith("'") and value.endswith("'")):
+            return value[1:-1]
+
+        # Boolean
+        if value.lower() in ("true", "yes", "on"):
+            return True
+        if value.lower() in ("false", "no", "off"):
+            return False
+
+        # Number
+        try:
+            if "." in value:
+                return float(value)
+            return int(value)
+        except ValueError:
+            pass
+
+        return value
+
+    def _parse_inline_list(self, value: str) -> list[str]:
+        """Parse an inline YAML list like [a, b, c]."""
+        inner = value[1:-1].strip()
+        if not inner:
+            return []
+        items = [item.strip().strip('"\'') for item in inner.split(",")]
+        return [item for item in items if item]
+
+    def get_triggered_skills(
+        self,
+        user_message: str = "",
+        code_context: str = "",
+        file_paths: list[str] | None = None,
+    ) -> list[str]:
+        """Get skills that should be activated based on context.
+
+        Args:
+            user_message: The user's message/prompt
+            code_context: Current code being worked on (imports, file contents)
+            file_paths: List of file paths being accessed
+
+        Returns:
+            List of skill names that should be triggered
+        """
+        triggered = []
+
+        for skill_info in self.list_skills(filter_unavailable=True):
+            name = skill_info["name"]
+            triggers = self.get_skill_triggers(name)
+
+            # Check exclusions first
+            excluded = False
+            for exclude_cond in triggers.excludes:
+                if self._check_trigger(exclude_cond, user_message, code_context, file_paths):
+                    excluded = True
+                    break
+
+            if excluded:
+                continue
+
+            # Check activation triggers
+            for trigger_cond in triggers.triggers:
+                if self._check_trigger(trigger_cond, user_message, code_context, file_paths):
+                    triggered.append(name)
+                    break  # Only add once per skill
+
+        return triggered
+
+    def _check_trigger(
+        self,
+        condition: TriggerCondition,
+        user_message: str,
+        code_context: str,
+        file_paths: list[str] | None,
+    ) -> bool:
+        """Check if a single trigger condition is met."""
+        if condition.kind == "code_contains":
+            return self._match_patterns(condition.patterns, code_context)
+
+        if condition.kind == "user_requests":
+            return self._match_patterns(condition.patterns, user_message)
+
+        if condition.kind == "file_pattern":
+            if not file_paths:
+                return False
+            combined_paths = " ".join(file_paths)
+            return self._match_patterns(condition.patterns, combined_paths)
+
+        return False
+
+    def _match_patterns(self, patterns: list[str], text: str) -> bool:
+        """Check if any pattern matches the text (case-insensitive substring)."""
+        text_lower = text.lower()
+        for pattern in patterns:
+            if pattern.lower() in text_lower:
+                return True
         return False
