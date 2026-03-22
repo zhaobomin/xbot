@@ -1034,6 +1034,50 @@ class ClaudeSDKBackend(AgentBackend):
             return 0
         return await manager.cancel_by_session(session_key)
 
+    async def interrupt_session(self, session_key: str) -> bool:
+        """Interrupt the SDK client for a session.
+
+        This immediately stops any ongoing LLM request.
+
+        Args:
+            session_key: Session identifier
+
+        Returns:
+            True if a client was interrupted, False otherwise
+        """
+        client = self._clients.get(session_key)
+        if client is None:
+            return False
+        try:
+            client.interrupt()
+            logger.info(f"Interrupted SDK client for session {session_key}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to interrupt SDK client: {e}")
+            return False
+
+    async def compact_session(self, session_key: str) -> dict[str, Any]:
+        """Force context compaction for a session.
+
+        Args:
+            session_key: Session identifier
+
+        Returns:
+            Dict with compaction stats
+        """
+        if not self.sessions or not self.memory_consolidator:
+            return {
+                "messages_consolidated": 0,
+                "tokens_before": 0,
+                "tokens_after": 0,
+                "success": True,
+                "message": "Compaction not available",
+            }
+
+        session = self.sessions.get_or_create(session_key)
+        result = await self.memory_consolidator.force_consolidate(session)
+        return result
+
     def get_tools_summary(self) -> str:
         """Get a summary of available tools and capabilities."""
         config = self._shared_resources.get("config")

@@ -35,6 +35,12 @@ class _FakeBackend:
     async def cancel_session(self, session_key: str) -> int:
         return 0
 
+    async def interrupt_session(self, session_key: str) -> bool:
+        return False
+
+    async def compact_session(self, session_key: str) -> dict[str, Any]:
+        return {"messages_consolidated": 0, "tokens_before": 0, "tokens_after": 0, "success": True}
+
 
 @pytest.mark.asyncio
 async def test_router_runtime_process_direct_routes_through_selected_backend(tmp_path) -> None:

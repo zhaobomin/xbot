@@ -1,18 +1,8 @@
 """Agent backend implementations.
 
-This package contains different Agent backend implementations:
-- LiteLLMBackend: Uses the existing AgentLoop with LiteLLM
-- ClaudeSDKBackend: Uses the Claude Agent SDK
+This package contains the Claude SDK Agent backend.
 """
 
-from xbot.agent.backends.litellm_backend import LiteLLMBackend
+from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 
-__all__ = ["LiteLLMBackend"]
-
-# Claude SDK backend is optional
-try:
-    from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-
-    __all__.append("ClaudeSDKBackend")
-except ImportError:
-    pass
+__all__ = ["ClaudeSDKBackend"]

@@ -150,18 +150,7 @@ def register_default_backends() -> None:
     This function should be called at module import time
     to ensure all backends are registered.
     """
-    # Import here to avoid circular imports
-    from xbot.agent.backends.litellm_backend import LiteLLMBackend
+    # Claude SDK backend is the only supported backend
+    from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 
-    AgentRouter.register_backend("litellm", LiteLLMBackend)
-
-    # Claude SDK backend is optional - only register if SDK is available
-    try:
-        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-
-        AgentRouter.register_backend("claude_sdk", ClaudeSDKBackend)
-    except ImportError:
-        logger.warning(
-            "Claude SDK backend not available. "
-            "Install claude-agent-sdk to enable it."
-        )
+    AgentRouter.register_backend("claude_sdk", ClaudeSDKBackend)

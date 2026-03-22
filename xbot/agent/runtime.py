@@ -70,7 +70,7 @@ class AgentRuntime:
             if await self._handle_permission_response(msg):
                 continue
 
-            if msg.content.strip().lower() in {"/help", "/restart", "/stop", "/new"}:
+            if msg.content.strip().lower() in {"/help", "/restart", "/stop", "/new", "/compact"}:
                 response = await self._handle_message(msg)
                 if response is not None:
                     await self.bus.publish_outbound(response)
@@ -176,17 +176,35 @@ class AgentRuntime:
                 except (asyncio.CancelledError, Exception):
                     pass
             backend_cancelled = await self.router.backend.cancel_session(msg.session_key)
+            interrupted = await self.router.backend.interrupt_session(msg.session_key)
             parts = []
             if cancelled:
                 parts.append(f"{cancelled} task(s)")
             if backend_cancelled:
                 parts.append(f"{backend_cancelled} subagent(s)")
-            content = f"Stopped {' and '.join(parts)}." if parts else "No active task to stop."
+            if interrupted:
+                parts.append("LLM request")
+            content = f"🛑 Stopped {' and '.join(parts)}." if parts else "No active task to stop."
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=content)
         if cmd == "/new":
             await self.initialize()
             await self.router.backend.reset_session(msg.session_key)
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="New session started.")
+        if cmd == "/compact":
+            await self.initialize()
+            result = await self.router.backend.compact_session(msg.session_key)
+            if result.get("messages_consolidated", 0) == 0:
+                content = "✅ No messages to compact (session already optimized)."
+            elif result.get("success"):
+                tokens_saved = result.get("tokens_before", 0) - result.get("tokens_after", 0)
+                content = (
+                    f"🔄 Compacted {result['messages_consolidated']} messages.\n"
+                    f"Tokens: {result['tokens_before']:,} → {result['tokens_after']:,} "
+                    f"(saved ~{tokens_saved:,})"
+                )
+            else:
+                content = "⚠️ Compaction failed. Check logs for details."
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=content)
 
         context = AgentContext(
             session_key=msg.session_key,
@@ -280,7 +298,7 @@ class AgentRuntime:
             content=content,
             session_key_override=session_key,
         )
-        if content.strip().lower() not in {"/help", "/restart", "/stop", "/new"}:
+        if content.strip().lower() not in {"/help", "/restart", "/stop", "/new", "/compact"}:
             await self.initialize()
         response = await self._handle_message(msg, on_progress=on_progress)
         return response.content if response else ""
@@ -326,6 +344,7 @@ class AgentRuntime:
             [
                 "🐈 xbot commands:",
                 "/new — Start a new conversation",
+                "/compact — Compact context to save tokens",
                 "/stop — Stop the current task",
                 "/restart — Restart the bot",
                 "/help — Show available commands",

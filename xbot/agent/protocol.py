@@ -108,6 +108,28 @@ class AgentBackend(ABC):
         """Cancel active backend-managed work for one session (optional)."""
         return 0
 
+    async def interrupt_session(self, session_key: str) -> bool:
+        """Interrupt any ongoing LLM request for a session (optional).
+
+        Returns:
+            True if interrupted, False otherwise
+        """
+        return False
+
+    async def compact_session(self, session_key: str) -> dict[str, Any]:
+        """Force context compaction for a session (optional).
+
+        Returns:
+            Dict with compaction stats
+        """
+        return {
+            "messages_consolidated": 0,
+            "tokens_before": 0,
+            "tokens_after": 0,
+            "success": True,
+            "message": "Compaction not supported",
+        }
+
     def get_tools_summary(self) -> str:
         """Get a summary of available tools (optional).
 

@@ -60,7 +60,7 @@ class TestLoadConfig:
         
         assert isinstance(config, Config)
         # Should have default values
-        assert config.agents.type == "litellm"  # Default agent type
+        assert config.agents.type == "claude_sdk"  # Default agent type
 
     def test_load_config_from_file(self, tmp_path):
         """Test loading config from existing file."""
@@ -184,7 +184,7 @@ class TestMigrateConfig:
         """Test that migration preserves other config fields."""
         config = {
             "agents": {
-                "type": "litellm"
+                "type": "claude_sdk"
             },
             "tools": {
                 "exec": {
@@ -192,8 +192,8 @@ class TestMigrateConfig:
                 }
             }
         }
-        
+
         result = _migrate_config(config)
-        
-        assert result["agents"]["type"] == "litellm"
+
+        assert result["agents"]["type"] == "claude_sdk"
         assert result["tools"]["exec"]["timeout"] == 120
