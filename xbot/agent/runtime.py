@@ -251,12 +251,6 @@ class AgentRuntime:
 
         # Session state coordinator (unified state management)
         self._state_coordinator = SessionStateCoordinator(self)
-        self._coordinator_shadow_mode = False  # Shadow mode disabled - coordinator is now default
-
-        # Coordinator mode is now the default (atomic operations enabled)
-        self._use_atomic_dispatch = True  # Atomic dispatch enabled by default
-        self._use_atomic_terminate = True  # Atomic terminate enabled by default
-        self._use_coordinator_transitions = True  # Coordinator transitions enabled by default
 
         # Register backend state sync callbacks
         self.shared_resources["on_backend_client_cleanup"] = self._on_backend_client_cleanup
@@ -271,123 +265,6 @@ class AgentRuntime:
         if backend is None:
             return None
         return getattr(backend, "tools", None)
-
-    def enable_atomic_dispatch(self) -> None:
-        """Enable atomic dispatch mode.
-
-        When enabled, dispatch uses coordinator transactions for state changes.
-        This provides atomicity guarantees for state updates.
-        """
-        self._use_atomic_dispatch = True
-        logger.info("Atomic dispatch enabled")
-
-    def disable_atomic_dispatch(self) -> None:
-        """Disable atomic dispatch mode.
-
-        Reverts to legacy dispatch behavior.
-        """
-        self._use_atomic_dispatch = False
-        logger.info("Atomic dispatch disabled")
-
-    @property
-    def is_atomic_dispatch_enabled(self) -> bool:
-        """Check if atomic dispatch is enabled."""
-        return self._use_atomic_dispatch
-
-    def enable_atomic_terminate(self) -> None:
-        """Enable atomic terminate mode.
-
-        When enabled, terminate_session uses coordinator transactions for state changes.
-        This provides atomicity guarantees for state cleanup.
-        """
-        self._use_atomic_terminate = True
-        logger.info("Atomic terminate enabled")
-
-    def disable_atomic_terminate(self) -> None:
-        """Disable atomic terminate mode.
-
-        Reverts to legacy terminate behavior.
-        """
-        self._use_atomic_terminate = False
-        logger.info("Atomic terminate disabled")
-
-    @property
-    def is_atomic_terminate_enabled(self) -> bool:
-        """Check if atomic terminate is enabled."""
-        return self._use_atomic_terminate
-
-    def enable_coordinator_transitions(self) -> None:
-        """Enable coordinator-based state transitions.
-
-        When enabled, permission/interaction state transitions use the coordinator.
-        This provides better observability and consistency tracking.
-        """
-        self._use_coordinator_transitions = True
-        logger.info("Coordinator transitions enabled")
-
-    def disable_coordinator_transitions(self) -> None:
-        """Disable coordinator-based state transitions."""
-        self._use_coordinator_transitions = False
-        logger.info("Coordinator transitions disabled")
-
-    @property
-    def is_coordinator_transitions_enabled(self) -> bool:
-        """Check if coordinator transitions are enabled."""
-        return self._use_coordinator_transitions
-
-    # === Full Migration Mode ===
-
-    def enable_full_coordinator_mode(self) -> None:
-        """Enable full coordinator mode.
-
-        This enables all atomic operations and disables shadow mode.
-        The runtime will fully use the coordinator for all state management.
-
-        WARNING: This is a major behavior change. Ensure all tests pass
-        before enabling in production.
-        """
-        # Enable all atomic operations
-        self._use_atomic_dispatch = True
-        self._use_atomic_terminate = True
-        self._use_coordinator_transitions = True
-
-        # Disable shadow mode
-        self._coordinator_shadow_mode = False
-        self._state_coordinator.disable_shadow_mode()
-
-        logger.info(
-            "Full coordinator mode enabled: "
-            f"dispatch={self._use_atomic_dispatch}, "
-            f"terminate={self._use_atomic_terminate}, "
-            f"transitions={self._use_coordinator_transitions}, "
-            f"shadow_mode={self._coordinator_shadow_mode}"
-        )
-
-    def disable_full_coordinator_mode(self) -> None:
-        """Disable full coordinator mode.
-
-        Reverts to legacy behavior with shadow mode enabled.
-        """
-        # Disable all atomic operations
-        self._use_atomic_dispatch = False
-        self._use_atomic_terminate = False
-        self._use_coordinator_transitions = False
-
-        # Re-enable shadow mode
-        self._coordinator_shadow_mode = True
-        self._state_coordinator.enable_shadow_mode()
-
-        logger.info("Full coordinator mode disabled, reverted to legacy behavior")
-
-    @property
-    def is_full_coordinator_mode_enabled(self) -> bool:
-        """Check if full coordinator mode is enabled."""
-        return (
-            self._use_atomic_dispatch
-            and self._use_atomic_terminate
-            and self._use_coordinator_transitions
-            and not self._coordinator_shadow_mode
-        )
 
     async def initialize(self) -> None:
         await self.router.initialize()
@@ -767,22 +644,6 @@ class AgentRuntime:
                 content=self._coord_status_text(),
                 metadata=msg.metadata or {},
             )
-        if cmd in {"!coord on", "/coord on"}:
-            self.enable_full_coordinator_mode()
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content="✅ Coordinator mode enabled.\n\nAll state operations now use atomic transactions.",
-                metadata=msg.metadata or {},
-            )
-        if cmd in {"!coord off", "/coord off"}:
-            self.disable_full_coordinator_mode()
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content="⏹️ Coordinator mode disabled.\n\nReverted to legacy state management.",
-                metadata=msg.metadata or {},
-            )
 
         # Check for workspace command
         command_prefix = ""
@@ -1130,26 +991,15 @@ class AgentRuntime:
         return "\n".join(lines)
 
     def _coord_status_text(self) -> str:
-        """Generate coordinator mode status text."""
-        mode = "Full Coordinator" if self.is_full_coordinator_mode_enabled else "Legacy"
-
+        """Generate coordinator status text with statistics."""
         lines = [
-            f"🔧 Coordinator Mode: {mode}",
+            "🔧 State Coordinator",
             "",
-            f"  atomic_dispatch: {'✅' if self._use_atomic_dispatch else '⬜'}",
-            f"  atomic_terminate: {'✅' if self._use_atomic_terminate else '⬜'}",
-            f"  coord_transitions: {'✅' if self._use_coordinator_transitions else '⬜'}",
-            f"  shadow_mode: {'✅' if self._coordinator_shadow_mode else '⬜'}",
-            "",
-            "Commands:",
-            "  !coord on  - Enable full coordinator mode",
-            "  !coord off - Disable (revert to legacy)",
         ]
 
         # Add stats if coordinator has any
         if hasattr(self._state_coordinator, '_stats'):
             stats = self._state_coordinator._stats
-            lines.append("")
             lines.append("Stats:")
             lines.append(f"  phase_transitions: {stats.phase_transitions}")
             lines.append(f"  locks_created: {stats.locks_created}")
