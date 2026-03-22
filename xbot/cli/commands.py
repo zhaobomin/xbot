@@ -431,61 +431,28 @@ def _onboard_plugins(config_path: Path) -> None:
 
 
 def _make_provider(config: Config):
-    """Create the appropriate LLM provider from config."""
+    """Create a LiteLLM provider for memory consolidation.
+
+    In SDK mode, the actual LLM calls are handled by the SDK backend.
+    This provider is only used for memory consolidation (summarization).
+    """
     from xbot.providers.base import GenerationSettings
-    from xbot.providers.openai_codex_provider import OpenAICodexProvider
-    from xbot.providers.azure_openai_provider import AzureOpenAIProvider
+    from xbot.providers.litellm_provider import LiteLLMProvider
     from xbot.config.sdk_resolver import resolve_sdk_provider_and_model
 
     model = config.agents.defaults.model
-    sdk_compatible = {"auto", "anthropic", "aliyun_coding_plan", "alrun"}
-    if config.agents.type == "claude_sdk" and config.agents.defaults.provider in sdk_compatible:
-        provider_name, model = resolve_sdk_provider_and_model(config)
-        provider_attr = provider_name.replace("-", "_")
-        p = getattr(config.providers, provider_attr, None)
-    else:
-        provider_name = config.get_provider_name(model)
-        p = config.get_provider(model)
+    provider_name, model = resolve_sdk_provider_and_model(config)
+    provider_attr = provider_name.replace("-", "_")
+    p = getattr(config.providers, provider_attr, None)
 
-    # OpenAI Codex (OAuth)
-    if provider_name == "openai_codex" or model.startswith("openai-codex/"):
-        provider = OpenAICodexProvider(default_model=model)
-    # Custom: direct OpenAI-compatible endpoint, bypasses LiteLLM
-    elif provider_name == "custom":
-        from xbot.providers.custom_provider import CustomProvider
-        provider = CustomProvider(
-            api_key=p.api_key if p else "no-key",
-            api_base=config.get_api_base(model) or "http://localhost:8000/v1",
-            default_model=model,
-            extra_headers=p.extra_headers if p else None,
-        )
-    # Azure OpenAI: direct Azure OpenAI endpoint with deployment name
-    elif provider_name == "azure_openai":
-        if not p or not p.api_key or not p.api_base:
-            console.print("[red]Error: Azure OpenAI requires api_key and api_base.[/red]")
-            console.print("Set them in ~/.xbot/config.json under providers.azure_openai section")
-            console.print("Use the model field to specify the deployment name.")
-            raise typer.Exit(1)
-        provider = AzureOpenAIProvider(
-            api_key=p.api_key,
-            api_base=p.api_base,
-            default_model=model,
-        )
-    else:
-        from xbot.providers.litellm_provider import LiteLLMProvider
-        from xbot.providers.registry import find_by_name
-        spec = find_by_name(provider_name)
-        if not model.startswith("bedrock/") and not (p and p.api_key) and not (spec and (spec.is_oauth or spec.is_local)):
-            console.print("[red]Error: No API key configured.[/red]")
-            console.print("Set one in ~/.xbot/config.json under providers section")
-            raise typer.Exit(1)
-        provider = LiteLLMProvider(
-            api_key=p.api_key if p else None,
-            api_base=config.get_api_base(model),
-            default_model=model,
-            extra_headers=p.extra_headers if p else None,
-            provider_name=provider_name,
-        )
+    # Create LiteLLMProvider for memory consolidation
+    provider = LiteLLMProvider(
+        api_key=p.api_key if p else None,
+        api_base=config.get_api_base(model),
+        default_model=model,
+        extra_headers=p.extra_headers if p else None,
+        provider_name=provider_name,
+    )
 
     defaults = config.agents.defaults
     provider.generation = GenerationSettings(

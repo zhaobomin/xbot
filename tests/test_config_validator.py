@@ -61,17 +61,16 @@ class TestValidateConfig:
         assert "Unknown provider" in str(exc_info.value)
 
     def test_validate_config_sdk_incompatible_provider(self):
-        """Test validation fails for SDK-incompatible provider."""
+        """Test validation fails for unknown provider (removed providers are unknown)."""
         config = Config()
         config.agents.type = "claude_sdk"
-        config.agents.defaults.provider = "openrouter"
+        config.agents.defaults.provider = "openrouter"  # No longer in registry
         config.providers.openrouter.api_key = "test_key"
-        
+
         with pytest.raises(ConfigurationError) as exc_info:
             validate_config(config)
-        
-        assert "not compatible" in str(exc_info.value)
-        assert "Claude SDK" in str(exc_info.value)
+
+        assert "Unknown provider" in str(exc_info.value)
 
     def test_validate_config_missing_api_key(self):
         """Test validation fails for missing API key."""
@@ -129,17 +128,17 @@ class TestValidateProviderForAgent:
         validate_provider_for_agent("alrun", "claude_sdk")
 
     def test_validate_sdk_incompatible_provider(self):
-        """Test SDK-incompatible provider fails for claude_sdk."""
+        """Test unknown provider fails for claude_sdk."""
         with pytest.raises(ConfigurationError) as exc_info:
-            validate_provider_for_agent("openrouter", "claude_sdk")
-        
-        assert "not compatible" in str(exc_info.value)
+            validate_provider_for_agent("openrouter", "claude_sdk")  # No longer in registry
 
-    def test_validate_litellm_agent_accepts_all_providers(self):
-        """Test that litellm agent accepts all providers."""
-        # litellm should accept any provider
-        validate_provider_for_agent("openrouter", "litellm")
+        assert "Unknown provider" in str(exc_info.value)
+
+    def test_validate_litellm_agent_accepts_sdk_providers(self):
+        """Test that litellm agent accepts SDK-compatible providers."""
+        # litellm should accept SDK-compatible providers
         validate_provider_for_agent("anthropic", "litellm")
+        validate_provider_for_agent("aliyun_coding_plan", "litellm")
 
 
 class TestGetAllProviderNamesSafe:
@@ -154,10 +153,11 @@ class TestGetAllProviderNamesSafe:
     def test_includes_known_providers(self):
         """Test that known providers are included."""
         result = get_all_provider_names_safe()
-        
-        # Should include at least these providers
+
+        # Should include SDK-compatible providers
         assert "anthropic" in result
-        assert "openrouter" in result
+        assert "aliyun_coding_plan" in result
+        assert "alrun" in result
 
     def test_all_items_are_strings(self):
         """Test that all items are strings."""

@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
@@ -35,23 +35,34 @@ class CompactHookHandler:
     """Handler for PreCompact hook events.
 
     When the SDK decides to compact the context, this hook is triggered.
-    It logs the event and returns a notification message that will be
-    displayed to the user via progress_texts.
+    It sends a notification to the user via the provided callback.
+
+    Note: The systemMessage returned by this hook is only displayed in the CLI
+    and does not appear in the SDK message stream. To notify users on external
+    channels (Telegram, Feishu, etc.), we use the message_callback.
 
     Usage:
-        handler = CompactHookHandler()
+        handler = CompactHookHandler(message_callback=my_callback)
         hooks = {
             "PreCompact": [{"hooks": [handler]}]
         }
     """
 
-    def __init__(self, enabled: bool = True):
+    def __init__(
+        self,
+        enabled: bool = True,
+        message_callback: Callable[[str, str], None] | None = None,
+    ):
         """Initialize the compact hook handler.
 
         Args:
             enabled: Whether to send notifications (default True)
+            message_callback: Optional async callback(session_id, message) to send
+                             notification to the user's channel. The callback receives
+                             the session_id and the notification message.
         """
         self.enabled = enabled
+        self.message_callback = message_callback
         self._recent_events: list[CompactEvent] = []
 
     async def __call__(
@@ -68,7 +79,7 @@ class CompactHookHandler:
             context: Hook context with session info
 
         Returns:
-            Hook output dict with systemMessage to display to user, or None if disabled
+            Hook output dict with systemMessage for CLI display, or None if disabled
         """
         if not self.enabled:
             return None
@@ -97,10 +108,21 @@ class CompactHookHandler:
             event.trigger,
         )
 
-        # Return notification message as systemMessage
+        # Build notification message
         trigger_text = f" ({trigger})" if trigger else ""
+        notification_msg = f"🔄 Compressing context{trigger_text}..."
+
+        # Send notification to user's channel via callback
+        if self.message_callback:
+            try:
+                self.message_callback(str(session_key), notification_msg)
+                logger.debug(f"Sent compact notification for session {session_key}")
+            except Exception as e:
+                logger.warning(f"Failed to send compact notification: {e}")
+
+        # Return notification message as systemMessage for CLI
         return {
-            "systemMessage": f"🔄 Compressing context{trigger_text}..."
+            "systemMessage": notification_msg
         }
 
     def get_recent_events(self, limit: int = 10) -> list[dict[str, Any]]:
