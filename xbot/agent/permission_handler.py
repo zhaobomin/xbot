@@ -21,6 +21,7 @@ from __future__ import annotations
 import asyncio
 from contextvars import ContextVar
 import json
+import time
 import uuid
 from contextlib import nullcontext
 from typing import Any, Literal
@@ -185,6 +186,9 @@ class PermissionRequestHandler(BasePermissionHandler):
             "permission_current_session_key",
             default=None,
         )
+        # Context TTL cleanup
+        self._context_timestamps: dict[str, float] = {}
+        self._context_ttl = 3600  # 1 hour TTL for session contexts
 
     def set_session_context(
         self,
@@ -199,12 +203,31 @@ class PermissionRequestHandler(BasePermissionHandler):
             "chat_id": chat_id,
             "metadata": dict(metadata or {}),
         }
+        self._context_timestamps[session_key] = time.time()
+
+        # Periodic cleanup of expired contexts
+        self._cleanup_expired_contexts()
 
     def clear_session_context(self, session_key: str) -> None:
         """清除会话上下文。"""
         self._session_context.pop(session_key, None)
+        self._context_timestamps.pop(session_key, None)
         if self._current_session_key.get() == session_key:
             self._current_session_key.set(None)
+
+    def _cleanup_expired_contexts(self) -> None:
+        """清理过期的 session context (TTL-based)."""
+        now = time.time()
+        expired = [
+            key for key, ts in self._context_timestamps.items()
+            if now - ts > self._context_ttl
+        ]
+        for key in expired:
+            self._session_context.pop(key, None)
+            self._context_timestamps.pop(key, None)
+
+        if expired:
+            logger.debug(f"Cleaned up {len(expired)} expired permission contexts")
 
     def set_current_session(self, session_key: str) -> None:
         """设置当前正在处理的会话。"""

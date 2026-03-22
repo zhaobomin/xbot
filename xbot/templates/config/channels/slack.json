@@ -1,0 +1,19 @@
+{
+  "enabled": false,
+  "mode": "socket",
+  "webhook_path": "/slack/events",
+  "bot_token": "xoxb-your-bot-token",
+  "app_token": "xapp-your-app-token",
+  "user_token_read_only": true,
+  "reply_in_thread": true,
+  "react_emoji": "eyes",
+  "done_emoji": "white_check_mark",
+  "allow_from": [],
+  "group_policy": "mention",
+  "group_allow_from": [],
+  "dm": {
+    "enabled": true,
+    "policy": "open",
+    "allow_from": []
+  }
+}

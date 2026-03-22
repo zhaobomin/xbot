@@ -79,6 +79,7 @@ class HeartbeatService:
         self.enabled = enabled
         self._running = False
         self._task: asyncio.Task | None = None
+        self._running_tick: asyncio.Task | None = None  # Track current tick task
 
     @property
     def heartbeat_file(self) -> Path:
@@ -148,12 +149,20 @@ class HeartbeatService:
             self._task = None
 
     async def _run_loop(self) -> None:
-        """Main heartbeat loop."""
+        """Main heartbeat loop with task skip mechanism."""
         while self._running:
             try:
                 await asyncio.sleep(self.interval_s)
-                if self._running:
-                    await self._tick()
+                if not self._running:
+                    break
+
+                # 检查上一个任务是否仍在运行
+                if self._running_tick is not None and not self._running_tick.done():
+                    logger.warning("Heartbeat task still running, skipping this iteration")
+                    continue
+
+                # 创建新的 tick 任务
+                self._running_tick = asyncio.create_task(self._tick())
             except asyncio.CancelledError:
                 break
             except Exception as e:

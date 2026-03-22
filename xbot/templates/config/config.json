@@ -1,0 +1,8 @@
+{
+  "agents": {
+    "defaults": {
+      "model": "glm-5",
+      "workspace": "~/.xbot/workspace"
+    }
+  }
+}

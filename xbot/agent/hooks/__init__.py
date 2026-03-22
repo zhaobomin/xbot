@@ -146,19 +146,29 @@ class CompactHookHandler:
         ]
 
 
-def build_compact_hook(enabled: bool = True) -> dict[str, list]:
+def build_compact_hook(
+    enabled: bool = True,
+    message_callback: Callable[[str, str], None] | None = None,
+) -> dict[str, list]:
     """Build the PreCompact hook configuration.
 
     Args:
         enabled: Whether to enable compaction notifications
+        message_callback: Optional callback(session_key, message) to send
+                         notification to the user's channel.
 
     Returns:
         Hook configuration dict for ClaudeAgentOptions.hooks
+
+    Note:
+        Without message_callback, the notification will only appear in CLI
+        via systemMessage. To notify users on external channels (Telegram,
+        Feishu, etc.), provide a message_callback that publishes to the bus.
     """
     if not enabled:
         return {}
 
-    handler = CompactHookHandler(enabled=True)
+    handler = CompactHookHandler(enabled=True, message_callback=message_callback)
     return {
         "PreCompact": [{"hooks": [handler]}]
     }

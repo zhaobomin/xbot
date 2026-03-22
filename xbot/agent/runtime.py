@@ -132,6 +132,17 @@ class SessionStateMachine:
         if from_phase == to_phase and state.reason == reason:
             return True
 
+        # Same phase with different reason: allow update without transition validation
+        if from_phase == to_phase:
+            state.reason = reason
+            state.transition_count += 1
+            logger.debug(
+                f"Session state reason update: {session_key} {from_phase.value} (reason: {reason})"
+            )
+            if self._on_transition:
+                self._on_transition(session_key, from_phase, to_phase, reason)
+            return True
+
         # Validate transition
         if not force and from_phase not in VALID_TRANSITIONS.get(to_phase, set()):
             # Check reverse: can we go from current to target?
@@ -231,6 +242,9 @@ class AgentRuntime:
         self._state_machine = SessionStateMachine(
             on_transition=self._on_state_transition
         )
+
+        # Register backend state sync callbacks
+        self.shared_resources["on_backend_client_cleanup"] = self._on_backend_client_cleanup
 
     @property
     def backend(self):
@@ -695,7 +709,15 @@ class AgentRuntime:
         if self.bus is not None and hasattr(self.bus, "clear_session_requests"):
             cleared_requests = self.bus.clear_session_requests(session_key)
 
-        self._set_session_phase(session_key, SessionPhase.IDLE, reason="terminate_session_completed")
+        # Clean up session lock to prevent memory leak
+        self._session_locks.pop(session_key, None)
+
+        # Clear state machine state for hard reset, otherwise transition to IDLE
+        if hard_reset:
+            self._state_machine.clear(session_key)
+        else:
+            self._set_session_phase(session_key, SessionPhase.IDLE, reason="terminate_session_completed")
+
         return {
             "cancelled": cancelled,
             "backend_cancelled": backend_cancelled,
@@ -757,6 +779,27 @@ class AgentRuntime:
             self._state_machine.force_transition(session_key, SessionPhase.RUNNING, reason="sync_active_tasks")
         else:
             self._state_machine.force_transition(session_key, SessionPhase.IDLE, reason="sync_idle")
+
+    def _on_backend_client_cleanup(self, session_key: str) -> None:
+        """Callback when backend cleans up a client (TTL/LRU eviction).
+
+        This ensures runtime state is synchronized when backend resources
+        are cleaned up independently.
+
+        Args:
+            session_key: The session whose client was cleaned up
+        """
+        current_phase = self._state_machine.get_phase(session_key)
+
+        # Only update if session is active
+        if current_phase == SessionPhase.RUNNING:
+            logger.debug(f"Backend client cleaned up for active session: {session_key}")
+            self._state_machine.force_transition(
+                session_key, SessionPhase.IDLE, reason="backend_client_cleanup"
+            )
+            # Clean up related runtime state
+            self._active_tasks.pop(session_key, None)
+            self._session_locks.pop(session_key, None)
 
     def get_session_state(self, session_key: str) -> str:
         """Return current runtime session phase for diagnostics."""

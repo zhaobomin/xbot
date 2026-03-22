@@ -1,0 +1,7 @@
+{
+  "enabled": false,
+  "bot_id": "YOUR_BOT_ID",
+  "secret": "YOUR_SECRET",
+  "allow_from": [],
+  "welcome_message": ""
+}

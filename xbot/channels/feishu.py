@@ -280,6 +280,7 @@ class FeishuChannel(BaseChannel):
         self._ws_thread: threading.Thread | None = None
         self._ws_loop: asyncio.AbstractEventLoop | None = None  # WebSocket thread's loop
         self._main_loop: asyncio.AbstractEventLoop | None = None  # Main async loop
+        self._stop_event = threading.Event()  # Thread-safe stop signal
         self._processed_message_ids: OrderedDict[str, float] = OrderedDict()  # message_id -> timestamp
         self._message_dedup_ttl = 300  # 5 minutes TTL for dedup cache
         self._ws_reconnect_delay = 5  # seconds between reconnect attempts
@@ -304,6 +305,7 @@ class FeishuChannel(BaseChannel):
 
         import lark_oapi as lark
         self._running = True
+        self._stop_event.clear()  # Reset stop signal for new start
         self._main_loop = asyncio.get_running_loop()
         self._pending_messages = asyncio.Queue()
 
@@ -355,7 +357,7 @@ class FeishuChannel(BaseChannel):
             reconnect_delay = self._ws_reconnect_delay
 
             try:
-                while self._running:
+                while not self._stop_event.is_set():
                     try:
                         logger.info("Feishu WebSocket connecting...")
                         self._ws_client.start()
@@ -364,11 +366,14 @@ class FeishuChannel(BaseChannel):
                     except Exception as e:
                         logger.warning("Feishu WebSocket error: {}", e)
 
-                    if self._running:
+                    if not self._stop_event.is_set():
                         logger.info(
                             f"Feishu WebSocket disconnected, reconnecting in {reconnect_delay}s..."
                         )
-                        time.sleep(reconnect_delay)
+                        # Use wait with timeout for responsive stop
+                        if self._stop_event.wait(timeout=reconnect_delay):
+                            # Stop event was set during wait, exit loop
+                            break
                         # Exponential backoff with max
                         reconnect_delay = min(
                             reconnect_delay * 2,
@@ -398,6 +403,7 @@ class FeishuChannel(BaseChannel):
         Reference: https://github.com/larksuite/oapi-sdk-python/blob/v2_main/lark_oapi/ws/client.py#L86
         """
         self._running = False
+        self._stop_event.set()  # Signal WebSocket thread to stop
 
         # Wait for WebSocket thread to finish (with timeout)
         if self._ws_thread and self._ws_thread.is_alive():

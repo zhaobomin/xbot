@@ -463,15 +463,24 @@ class OptionsBuilder:
                         logger.warning(f"Failed to send compact notification to {channel}:{chat_id}: {e}")
 
                 # Schedule the send without blocking the hook
+                # Use ensure_future for better compatibility across contexts
                 try:
                     loop = asyncio.get_running_loop()
-                    loop.create_task(_send())
-                except RuntimeError as e:
-                    # No running event loop - this can happen if called from a sync context
-                    logger.warning(
-                        f"Cannot send compact notification for session {session_key}: "
-                        f"no running event loop. Error: {e}"
-                    )
+                    asyncio.ensure_future(_send(), loop=loop)
+                except RuntimeError:
+                    # No running event loop - try to get any loop
+                    try:
+                        loop = asyncio.get_event_loop()
+                        if loop.is_running():
+                            asyncio.ensure_future(_send(), loop=loop)
+                        else:
+                            # Loop exists but not running, run until complete
+                            loop.run_until_complete(_send())
+                    except Exception as e:
+                        logger.warning(
+                            f"Cannot send compact notification for session {session_key}: "
+                            f"no event loop available. Error: {e}"
+                        )
 
             compact_handler = CompactHookHandler(
                 enabled=True,
@@ -991,6 +1000,14 @@ class ClaudeSDKBackend(AgentBackend):
                 except Exception:
                     logger.debug(f"Ignoring error while disconnecting stale client for session {key}")
 
+            # Notify runtime to sync state
+            on_cleanup = self._shared_resources.get("on_backend_client_cleanup")
+            if on_cleanup:
+                try:
+                    on_cleanup(key)
+                except Exception as e:
+                    logger.debug(f"Error in backend client cleanup callback: {e}")
+
         if stale_keys:
             logger.info(f"Cleaned up {len(stale_keys)} stale client(s) (TTL={self.CLIENT_TTL_SECONDS}s)")
 
@@ -1018,6 +1035,14 @@ class ClaudeSDKBackend(AgentBackend):
                 logger.info(f"Evicted LRU client for session {lru_key} (pool at capacity)")
             except Exception:
                 logger.debug(f"Ignoring error while disconnecting evicted client for session {lru_key}")
+
+        # Notify runtime to sync state
+        on_cleanup = self._shared_resources.get("on_backend_client_cleanup")
+        if on_cleanup:
+            try:
+                on_cleanup(lru_key)
+            except Exception as e:
+                logger.debug(f"Error in backend client cleanup callback: {e}")
 
     async def _refresh_session_commands(self, session_key: str, client: "ClaudeSDKClient") -> None:
         """Refresh slash commands discovered from SDK init metadata."""
@@ -1183,6 +1208,26 @@ class ClaudeSDKBackend(AgentBackend):
                     logger.info(f"Triggered skills for session {context.session_key}: {triggered_skills}")
 
         session = self.sessions.get_or_create(context.session_key) if self.sessions else None
+
+        # Check for reconnect pending state from previous error
+        reconnect_hint = None
+        if session is not None and session.metadata.pop("_reconnect_pending", None):
+            # Session had a previous error, attempting recovery
+            last_error = session.metadata.pop("_last_error", "")
+            session.metadata.pop("_error_timestamp", None)
+            session.metadata.pop("_fallback_error", None)
+            self.sessions.save(session)
+
+            # Provide recovery hint to user
+            if session.metadata.get("sdk_session_id"):
+                reconnect_hint = "🔄 正在尝试恢复之前的会话上下文..."
+                logger.info(
+                    f"Session {context.session_key} reconnecting with existing sdk_session_id: "
+                    f"{session.metadata.get('sdk_session_id')}"
+                )
+            else:
+                logger.info(f"Session {context.session_key} reconnecting without sdk_session_id")
+
         if session is not None:
             session.add_message("user", context.prompt)
             self.sessions.save(session)
@@ -1198,6 +1243,13 @@ class ClaudeSDKBackend(AgentBackend):
             final_content = ""
             decision = None
             prompt = f"{triggered_skills_prefix}{context.prompt}" if triggered_skills_prefix else context.prompt
+
+            # Send reconnect hint if this is a recovery attempt
+            if reconnect_hint:
+                yield AgentResponse(
+                    content="",
+                    progress_texts=[reconnect_hint],
+                )
 
             if self._handoff_policy and self._handoff_policy.has_agents():
                 decision = self._handoff_policy.decide(context.prompt)
@@ -1312,9 +1364,12 @@ class ClaudeSDKBackend(AgentBackend):
                 except Exception:
                     logger.debug(f"Ignoring error while disconnecting failed Claude SDK session {context.session_key}")
 
-            # Clear sdk_session_id to prevent resume with invalid session
+            # Don't immediately clear sdk_session_id - preserve context for potential recovery
+            # Instead, mark the session as needing recovery
             if session is not None:
-                session.metadata.pop("sdk_session_id", None)
+                session.metadata["_reconnect_pending"] = True
+                session.metadata["_last_error"] = str(e)[:500]
+                session.metadata["_error_timestamp"] = datetime.now().isoformat()
                 self.sessions.save(session)
 
             logger.exception("Error in Claude SDK backend")
@@ -1391,14 +1446,22 @@ class ClaudeSDKBackend(AgentBackend):
                                 self.memory_consolidator.maybe_consolidate_by_tokens(session)
                             )
                     return
-                except Exception:
+                except Exception as fallback_error:
                     logger.exception("Claude SDK fallback to main agent failed")
-                    # Clear sdk_session_id on fallback failure too
+                    # Don't clear sdk_session_id - preserve context for potential recovery
                     if session is not None:
-                        session.metadata.pop("sdk_session_id", None)
+                        session.metadata["_fallback_error"] = str(fallback_error)[:500]
                         self.sessions.save(session)
+
+            # Provide a user-friendly error message
+            error_hint = "连接遇到问题，会话状态已保存。"
+            if session is not None and session.metadata.get("sdk_session_id"):
+                error_hint += " 请继续对话，我会尝试恢复上下文。"
+            else:
+                error_hint += " 请重新描述您的需求。"
+
             yield AgentResponse(
-                content=f"Error: {str(e)}",
+                content=f"⚠️ {error_hint}\n\n错误详情: {str(e)[:200]}",
                 finish_reason="error",
             )
         finally:

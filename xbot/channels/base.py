@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
@@ -35,6 +36,8 @@ class BaseChannel(ABC):
         self.config = config
         self.bus = bus
         self._running = False
+        self._background_tasks: set[asyncio.Task] = set()  # Track background tasks
+        self._stop_event = asyncio.Event()  # For coordinated stopping
 
     async def transcribe_audio(self, file_path: str | Path) -> str:
         """Transcribe an audio file via Groq Whisper. Returns empty string on failure."""
@@ -137,3 +140,46 @@ class BaseChannel(ABC):
     def is_running(self) -> bool:
         """Check if the channel is running."""
         return self._running
+
+    async def _default_stop(self) -> None:
+        """Default stop implementation that cancels tracked background tasks.
+
+        Subclasses should call this via `await super().stop()` or use the
+        task tracking helpers for proper cleanup.
+        """
+        self._running = False
+        self._stop_event.set()
+
+        # Cancel all tracked background tasks
+        for task in self._background_tasks:
+            if not task.done():
+                task.cancel()
+
+        # Wait for tasks to complete (with timeout)
+        if self._background_tasks:
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self._background_tasks, return_exceptions=True),
+                    timeout=5.0
+                )
+            except asyncio.TimeoutError:
+                logger.warning(f"{self.name}: some background tasks did not complete in time")
+            self._background_tasks.clear()
+
+        # Call subclass cleanup
+        await self._cleanup_resources()
+
+    async def _cleanup_resources(self) -> None:
+        """Override this method to clean up channel-specific resources."""
+        pass
+
+    def _track_task(self, task: asyncio.Task) -> None:
+        """Track a background task for cleanup on stop."""
+        self._background_tasks.add(task)
+        task.add_done_callback(self._background_tasks.discard)
+
+    def _create_tracked_task(self, coro, name: str | None = None) -> asyncio.Task:
+        """Create and track a background task."""
+        task = asyncio.create_task(coro, name=name)
+        self._track_task(task)
+        return task

@@ -1,0 +1,7 @@
+{
+  "enabled": false,
+  "app_id": "YOUR_APP_ID",
+  "secret": "YOUR_SECRET",
+  "allow_from": [],
+  "msg_format": "plain"
+}

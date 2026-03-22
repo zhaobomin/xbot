@@ -36,9 +36,13 @@ class TestRuntimePermissionResponse:
             chat_id="456",
             content="允许",
         )
-        # No pending request
+        # No pending request - should consume message and inform user
         result = await mock_runtime._handle_permission_response(msg)
-        assert result is False
+        # Returns True to consume the message and inform user about stale request
+        assert result is True
+        # Check that user was notified
+        notification = await bus.consume_outbound()
+        assert "没有待处理的权限请求" in notification.content
 
     @pytest.mark.asyncio
     async def test_allow_response(self, mock_runtime, bus):
@@ -237,7 +241,7 @@ class TestRuntimePermissionResponse:
 
     @pytest.mark.asyncio
     async def test_stale_pending_request_falls_back_to_normal_message(self, mock_runtime, bus):
-        """If request mapping exists but no waiter is alive, runtime should not swallow message."""
+        """If request mapping exists but no waiter is alive, runtime should inform user."""
         bus._session_pending_requests["telegram:456"] = "req-stale"
         # Intentionally do not create _pending_permission_responses["req-stale"]
 
@@ -249,7 +253,11 @@ class TestRuntimePermissionResponse:
         )
 
         result = await mock_runtime._handle_permission_response(msg)
-        assert result is False
+        # Returns True to consume the message and inform user about stale request
+        assert result is True
+        # User should be notified about the stale/expired request
+        notification = await bus.consume_outbound()
+        assert "权限请求已过期" in notification.content or "没有待处理" in notification.content
         assert "req-stale" not in bus._permission_results
 
     @pytest.mark.asyncio

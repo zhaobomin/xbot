@@ -1,0 +1,6 @@
+{
+  "enabled": false,
+  "bridge_url": "ws://localhost:3001",
+  "bridge_token": "",
+  "allow_from": []
+}

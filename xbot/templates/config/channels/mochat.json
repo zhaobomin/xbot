@@ -1,0 +1,17 @@
+{
+  "enabled": false,
+  "base_url": "https://mochat.io",
+  "socket_url": "",
+  "socket_path": "/socket.io",
+  "claw_token": "YOUR_CLAW_TOKEN",
+  "agent_user_id": "",
+  "sessions": [],
+  "panels": [],
+  "allow_from": [],
+  "mention": {
+    "require_in_groups": false
+  },
+  "groups": {},
+  "reply_delay_mode": "non-mention",
+  "reply_delay_ms": 120000
+}

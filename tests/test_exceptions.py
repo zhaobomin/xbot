@@ -49,7 +49,8 @@ class TestXbotError:
         """Test error with details."""
         error = XbotError("Error", details={"key": "value"})
         assert error.details == {"key": "value"}
-        assert "key=value" in str(error)
+        assert "details=" in str(error)
+        assert "'key': 'value'" in str(error)
 
     def test_error_with_cause(self):
         """Test error with cause."""

@@ -147,6 +147,9 @@ class ChannelManager:
                 continue
             except asyncio.CancelledError:
                 break
+            except Exception as e:
+                logger.exception("Unexpected error in outbound dispatcher: {}", e)
+                continue  # 继续运行，不退出
 
     async def _send_with_channel(self, msg: OutboundMessage, content: str | None = None) -> None:
         channel = self.channels.get(msg.channel)

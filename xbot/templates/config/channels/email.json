@@ -1,0 +1,17 @@
+{
+  "enabled": false,
+  "consent_granted": false,
+  "imap_host": "imap.example.com",
+  "imap_port": 993,
+  "imap_username": "your-email@example.com",
+  "imap_password": "YOUR_IMAP_PASSWORD",
+  "imap_mailbox": "INBOX",
+  "imap_use_ssl": true,
+  "smtp_host": "smtp.example.com",
+  "smtp_port": 587,
+  "smtp_username": "your-email@example.com",
+  "smtp_password": "YOUR_SMTP_PASSWORD",
+  "smtp_use_tls": true,
+  "smtp_use_ssl": false,
+  "from_address": "your-email@example.com"
+}

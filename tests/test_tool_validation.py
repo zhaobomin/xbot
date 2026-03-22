@@ -1,3 +1,4 @@
+import pytest
 from types import SimpleNamespace
 from typing import Any
 
@@ -84,10 +85,14 @@ def test_validate_params_ignores_unknown_fields() -> None:
 
 
 async def test_registry_returns_validation_error() -> None:
+    from xbot.exceptions import ToolExecutionError
+
     reg = ToolRegistry()
     reg.register(SampleTool())
-    result = await reg.execute("sample", {"query": "hi"})
-    assert "Invalid parameters" in result
+    with pytest.raises(ToolExecutionError) as exc_info:
+        await reg.execute("sample", {"query": "hi"})
+    assert "Invalid parameters" in str(exc_info.value)
+    assert "missing required count" in str(exc_info.value)
 
 
 def test_exec_extract_absolute_paths_keeps_full_windows_path() -> None:

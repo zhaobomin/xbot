@@ -1,0 +1,8 @@
+{
+  "host": "0.0.0.0",
+  "port": 18790,
+  "heartbeat": {
+    "enabled": true,
+    "interval_s": 1800
+  }
+}

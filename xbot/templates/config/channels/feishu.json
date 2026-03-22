@@ -1,0 +1,9 @@
+{
+  "enabled": false,
+  "app_id": "YOUR_APP_ID",
+  "app_secret": "YOUR_APP_SECRET",
+  "encrypt_key": "",
+  "verification_token": "",
+  "allow_from": ["*"],
+  "group_policy": "mention"
+}

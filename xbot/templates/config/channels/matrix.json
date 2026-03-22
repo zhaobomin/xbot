@@ -1,0 +1,14 @@
+{
+  "enabled": false,
+  "homeserver": "https://matrix.org",
+  "access_token": "YOUR_ACCESS_TOKEN",
+  "user_id": "@bot:matrix.org",
+  "device_id": "DEVICE_ID",
+  "e2ee_enabled": true,
+  "sync_stop_grace_seconds": 2,
+  "max_media_bytes": 20971520,
+  "allow_from": [],
+  "group_policy": "open",
+  "group_allow_from": [],
+  "allow_room_mentions": false
+}

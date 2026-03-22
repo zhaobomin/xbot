@@ -1,0 +1,8 @@
+{
+  "enabled": false,
+  "token": "YOUR_DISCORD_BOT_TOKEN",
+  "allow_from": [],
+  "gateway_url": "wss://gateway.discord.gg/?v=10&encoding=json",
+  "intents": 37377,
+  "group_policy": "mention"
+}
