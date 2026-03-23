@@ -994,6 +994,10 @@ class ClaudeSDKBackend(AgentBackend):
             self._client_last_used.pop(key, None)
             self._session_commands.pop(key, None)
             self._active_task_ids.pop(key, None)
+            # Clear session context for compact notifications
+            session_contexts = self._shared_resources.get("_session_contexts")
+            if session_contexts is not None:
+                session_contexts.pop(key, None)
             if client is not None:
                 try:
                     await client.disconnect()
@@ -1028,6 +1032,10 @@ class ClaudeSDKBackend(AgentBackend):
         self._client_last_used.pop(lru_key, None)
         self._session_commands.pop(lru_key, None)
         self._active_task_ids.pop(lru_key, None)
+        # Clear session context for compact notifications
+        session_contexts = self._shared_resources.get("_session_contexts")
+        if session_contexts is not None:
+            session_contexts.pop(lru_key, None)
 
         if client is not None:
             try:
