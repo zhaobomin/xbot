@@ -15,6 +15,7 @@ from xbot.agent.tools.web import WebSearchTool, WebFetchTool
 from xbot.agent.tools.message import MessageTool
 from xbot.agent.tools.cron import CronTool
 from xbot.agent.tools.memory import MemoryTool
+from xbot.agent.tools.skill_loader import LoadSkillContentTool
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +43,8 @@ class ToolAdapter:
         workspace: str,
         tools_config: Any = None,
         shared_resources: dict[str, Any] | None = None,
+        skills_loader: Any = None,
+        skill_progress_callback: Any = None,
     ):
         """Initialize the tool adapter.
 
@@ -49,10 +52,14 @@ class ToolAdapter:
             workspace: Workspace path
             tools_config: Tools configuration
             shared_resources: Shared resources for tools that need them
+            skills_loader: SkillsLoader instance for skill loading tool
+            skill_progress_callback: Optional callback for skill loading progress
         """
         self.workspace = Path(workspace)
         self.tools_config = tools_config
         self.shared_resources = shared_resources or {}
+        self.skills_loader = skills_loader
+        self.skill_progress_callback = skill_progress_callback
         self._tools: dict[str, Any] = {}
         self._tool_context: dict[str, Any] = {}
 
@@ -159,6 +166,13 @@ class ToolAdapter:
             workspace=self.workspace,
             memory_store=memory_store,
         )
+
+        # Skill loading tool - for on-demand skill content loading
+        if self.skills_loader:
+            self._tools["load_skill_content"] = LoadSkillContentTool(
+                skills_loader=self.skills_loader,
+                progress_callback=self.skill_progress_callback,
+            )
 
     def _adapt_tool(self, tool_name: str, tool_instance: Any) -> Any:
         """Adapt an xbot Tool to MCP format.

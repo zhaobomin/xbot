@@ -85,10 +85,10 @@ class ContextBuilder:
         """Build the system prompt from identity, bootstrap files, memory, and skills.
 
         Args:
-            skill_names: Explicitly requested skill names
-            user_message: User's message for skill triggering
-            code_context: Current code context for skill triggering
-            file_paths: List of file paths being accessed for skill triggering
+            skill_names: Explicitly requested skill names (not used in lazy loading mode)
+            user_message: User's message for skill triggering (not used in lazy loading mode)
+            code_context: Current code context for skill triggering (not used in lazy loading mode)
+            file_paths: List of file paths being accessed for skill triggering (not used in lazy loading mode)
         """
         parts = [self._get_identity()]
 
@@ -100,37 +100,60 @@ class ContextBuilder:
         if memory:
             parts.append(f"# Memory\n\n{memory}")
 
-        # Collect active skills: always_skills + triggered_skills + explicit skill_names
-        active_skills = set(self.skills.get_always_skills())
-
-        # Add triggered skills based on context
-        if user_message or code_context:
-            triggered = self.skills.get_triggered_skills(
-                user_message=user_message,
-                code_context=code_context,
-                file_paths=file_paths,
-            )
-            active_skills.update(triggered)
-
-        # Add explicitly requested skills
-        if skill_names:
-            active_skills.update(skill_names)
-
-        if active_skills:
-            active_content = self.skills.load_skills_for_context(list(active_skills))
-            if active_content:
-                parts.append(f"# Active Skills\n\n{active_content}")
-
-        skills_summary = self.skills.build_skills_summary()
-        if skills_summary:
-            parts.append(f"""# Skills
-
-The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.
-Skills with available="false" need dependencies installed first - you can try installing them with apt/brew.
-
-{skills_summary}""")
+        # Build lightweight Skills Catalog (Claude Code Level 1)
+        # Full skill content is loaded on-demand via load_skill_content tool (Level 2)
+        skills_catalog = self._build_skills_catalog()
+        if skills_catalog:
+            parts.append(skills_catalog)
 
         return "\n\n---\n\n".join(parts)
+
+    def _build_skills_catalog(self) -> str:
+        """Build lightweight Skills Catalog with descriptions only.
+
+        This implements Claude Code's Level 1 lazy loading:
+        - Only skill names and descriptions are included in the system prompt
+        - Full content is loaded on-demand via load_skill_content tool
+        - Supporting files are loaded via read_file tool (Level 3)
+        """
+        skills = self.skills.list_available_skills()
+        if not skills:
+            return ""
+
+        lines = [
+            "# Active Skills",
+            "",
+            "The following skills are available for use with the Skill tool.",
+            "",
+            "<skills>",
+        ]
+
+        for skill in skills:
+            available = skill.get("available", True)
+            status = "true" if available else "false"
+            name = skill["name"]
+            desc = skill.get("description", name)
+            location = self.skills.list_skills(filter_unavailable=False)
+            # Find location for this skill
+            loc = next((s["path"] for s in location if s["name"] == name), "")
+
+            lines.append(f'  <skill available="{status}">')
+            lines.append(f"    <name>{name}</name>")
+            lines.append(f"    <description>{desc}</description>")
+            lines.append(f"    <location>{loc}</location>")
+
+            # Show missing requirements for unavailable skills
+            if not available and skill.get("requires"):
+                lines.append(f"    <requires>{skill['requires']}</requires>")
+
+            lines.append("  </skill>")
+
+        lines.append("</skills>")
+        lines.append("")
+        lines.append("Use the `load_skill_content` tool to load detailed instructions for a skill when needed.")
+        lines.append("Skills with available=\"false\" need dependencies installed first - you can try installing them with apt/brew.")
+
+        return "\n".join(lines)
 
     def _get_identity(self) -> str:
         """Get the core identity section."""

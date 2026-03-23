@@ -843,10 +843,16 @@ class ClaudeSDKBackend(AgentBackend):
             tools_config = shared_resources.get("tools_config")
             # Pass memory_store from ContextBuilder to ToolAdapter
             memory_store = self._context_builder.memory if self._context_builder else None
+
+            # Create skill loading progress callback for CLI/Channel visibility
+            skill_progress_callback = self._create_skill_progress_callback(shared_resources)
+
             self._tool_adapter = ToolAdapter(
                 workspace=shared_resources.get("workspace", config.defaults.workspace),
                 tools_config=tools_config,
                 shared_resources={**shared_resources, "model": config.defaults.model, "memory_store": memory_store},
+                skills_loader=self._context_builder.skills if self._context_builder else None,
+                skill_progress_callback=skill_progress_callback,
             )
             self.tools = self._tool_adapter
         except ImportError:
@@ -913,6 +919,74 @@ class ClaudeSDKBackend(AgentBackend):
 
         logger.info(f"Claude SDK backend initialized with provider: {provider_name}")
         logger.info(f"Claude SDK capabilities: {self.get_tools_summary()}")
+
+    def _create_skill_progress_callback(self, shared_resources: dict[str, Any]) -> Any:
+        """Create a callback for skill loading progress notifications.
+
+        This callback is used to notify users (CLI/Channel) when a skill is being loaded,
+        making the lazy loading process visible and transparent.
+
+        Args:
+            shared_resources: Shared resources containing bus and session context
+
+        Returns:
+            Async callback function(skill_name: str, status: str)
+        """
+        bus = shared_resources.get("bus")
+        session_contexts = shared_resources.get("_session_contexts", {})
+
+        async def skill_progress_callback(skill_name: str, status: str) -> None:
+            """Send skill loading progress notification.
+
+            Args:
+                skill_name: Name of the skill being loaded
+                status: Loading status ('loading', 'loaded', 'not_found')
+            """
+            # Log for debugging
+            logger.debug(f"Skill loading: {skill_name} - {status}")
+
+            # For Channel mode, send progress notification via bus
+            if bus is None:
+                return
+
+            # Get current session context (channel, chat_id)
+            # Use the last session context or return if not available
+            if not session_contexts:
+                return
+
+            # Get the most recent session context
+            # This is a simplification - ideally we'd track the current session
+            last_context = list(session_contexts.values())[-1] if session_contexts else None
+            if not last_context:
+                return
+
+            channel, chat_id = last_context
+
+            # Build progress message based on status
+            if status == "loading":
+                message = f"📚 Loading skill: {skill_name}..."
+            elif status == "loaded":
+                message = f"✅ Skill loaded: {skill_name}"
+            elif status == "not_found":
+                message = f"❌ Skill not found: {skill_name}"
+            else:
+                message = f"📦 Skill {skill_name}: {status}"
+
+            # Send notification
+            try:
+                from xbot.bus.events import OutboundMessage
+                await bus.publish_outbound(
+                    OutboundMessage(
+                        channel=channel,
+                        chat_id=chat_id,
+                        content=message,
+                        metadata={"_progress": True, "_event_type": "skill_load"},
+                    )
+                )
+            except Exception as e:
+                logger.warning(f"Failed to send skill progress notification: {e}")
+
+        return skill_progress_callback
 
     def _get_session(self, session_key: str):
         if not self.sessions:

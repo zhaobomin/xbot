@@ -539,3 +539,40 @@ class SkillsLoader:
             if pattern.lower() in text_lower:
                 return True
         return False
+
+    def list_available_skills(self) -> list[dict[str, Any]]:
+        """List all available skills with lightweight metadata.
+
+        This returns only essential information (name, description, availability)
+        for the Skills Catalog, without loading full skill content.
+
+        Returns:
+            List of skill info dicts with:
+            - name: Skill name
+            - description: Skill description from frontmatter
+            - available: Whether requirements are met
+            - source: Source directory (workspace, scoped_workspace, builtin)
+            - requires: Missing requirements (if unavailable)
+        """
+        all_skills = self.list_skills(filter_unavailable=False)
+        result = []
+
+        for s in all_skills:
+            name = s["name"]
+            skill_meta = self._get_skill_meta(name)
+            available = self._check_requirements(skill_meta)
+
+            skill_info = {
+                "name": name,
+                "description": self._get_skill_description(name),
+                "available": available,
+                "source": s["source"],
+            }
+
+            # Add missing requirements for unavailable skills
+            if not available:
+                skill_info["requires"] = self._get_missing_requirements(skill_meta)
+
+            result.append(skill_info)
+
+        return result
