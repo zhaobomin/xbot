@@ -37,11 +37,14 @@ if TYPE_CHECKING:
 # - requirement: 一致性要求（必须满足）
 # - message: 不一致时的错误消息
 CONSISTENCY_RULES: list[dict] = [
+    # Note: running_requires_client 规则已移除
+    # 原因：backend client 是懒加载的，RUNNING 状态可能还没有 client
+    # 只有在有 backend_task_id 时才需要检查 client 是否存在
     {
-        "id": "running_requires_client",
-        "condition": lambda s: s.runtime_phase == "running",
+        "id": "task_without_client",
+        "condition": lambda s: s.backend_task_id is not None,
         "requirement": lambda s: s.backend_has_client,
-        "message": "RUNNING but no backend client",
+        "message": "Has backend task_id but no client",
     },
     {
         "id": "waiting_permission_requires_request",
