@@ -225,8 +225,8 @@ class SessionStateMachine:
 class AgentRuntime:
     """Single runtime entrypoint for gateway and CLI."""
     LOCAL_RUNTIME_COMMANDS = {
-        "!help", "!restart", "!stop", "!reset", "!state",
-        "/help", "/restart", "/stop", "/reset", "/state",
+        "!help", "!restart", "!stop", "!reset", "!state", "!coord",
+        "/help", "/restart", "/stop", "/reset", "/state", "/coord",
     }
     COMMAND_ALIASES: dict[str, str] = {}
     SDK_HELP_FALLBACK_COMMANDS = ["/help", "/clear", "/compact"]
@@ -469,10 +469,16 @@ class AgentRuntime:
                     )
                 )
         finally:
-            # Check current state - don't override ERROR state
+            # Check current state - don't override protected states
+            # ERROR: should be explicitly cleared
+            # STOPPING/RESETTING: in progress by _terminate_session
             current_phase = self._state_coordinator.get_phase(msg.session_key)
-            if current_phase == SessionPhase.ERROR:
-                # Error occurred, don't override ERROR state
+            protected_phases = {
+                SessionPhase.ERROR,
+                SessionPhase.STOPPING,
+                SessionPhase.RESETTING,
+            }
+            if current_phase in protected_phases:
                 # Just log state snapshot and return
                 self._log_state_snapshot(msg.session_key, "dispatch_end")
                 return
