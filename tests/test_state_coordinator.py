@@ -419,20 +419,6 @@ class TestSessionStateCoordinatorAtomicOps:
     """测试原子操作"""
 
     @pytest.mark.asyncio
-    async def test_atomic_start_dispatch(self, mock_runtime_with_state_machine):
-        """测试原子性开始 dispatch"""
-        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
-
-        task = MagicMock(spec=asyncio.Task)
-        task.get_name.return_value = "test-task"
-
-        result = await coordinator.atomic_start_dispatch("test:1", task)
-
-        assert result is True
-        phase = coordinator.get_phase("test:1")
-        assert phase == SessionPhase.RUNNING
-
-    @pytest.mark.asyncio
     async def test_atomic_end_dispatch(self, mock_runtime_with_state_machine):
         """测试原子性结束 dispatch"""
         coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)

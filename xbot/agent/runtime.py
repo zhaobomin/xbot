@@ -900,14 +900,11 @@ class AgentRuntime:
         async with self._state_coordinator.transaction(
             session_key, validate_on_commit=False
         ) as tx:
-            # Release lock
+            # Release lock (coordinator handles _session_locks deletion)
             tx.release_lock()
 
             # Set final phase (always IDLE, even for hard_reset)
             tx.set_phase(SessionPhase.IDLE, reason="terminate_session_completed")
-
-        # Remove lock from dict (coordinator handles state)
-        self._session_locks.pop(session_key, None)
 
         # For hard_reset, reset state to fresh IDLE (instead of clear which deletes)
         if hard_reset:

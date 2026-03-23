@@ -396,32 +396,6 @@ class SessionStateCoordinator:
 
     # === 原子操作 ===
 
-    async def atomic_start_dispatch(
-        self,
-        session_key: str,
-        task: asyncio.Task,
-    ) -> bool:
-        """原子性地开始 dispatch。
-
-        在单个事务中设置 RUNNING 状态并注册任务。
-
-        Args:
-            session_key: 会话标识
-            task: 要注册的任务
-
-        Returns:
-            操作是否成功
-        """
-        async with self.transaction(session_key, validate_on_commit=False) as tx:
-            tx.set_phase(
-                self._runtime._state_machine.get_phase(session_key).__class__.RUNNING,
-                reason="dispatch_start",
-            )
-            tx.register_task(task)
-            tx.acquire_lock()
-
-        return True
-
     async def end_dispatch(
         self,
         session_key: str,
