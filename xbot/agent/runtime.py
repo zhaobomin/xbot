@@ -228,7 +228,6 @@ class AgentRuntime:
     LOCAL_RUNTIME_COMMANDS = {
         "!help", "!restart", "!stop", "!reset", "!state", "!coord",
         "/help", "/restart", "/stop", "/reset", "/state", "/coord",
-        "/clear", "/new",  # SDK aliases for reset
     }
     # 前缀匹配的命令（支持参数）
     LOCAL_RUNTIME_COMMAND_PREFIXES = ("!model",)
@@ -696,7 +695,7 @@ class AgentRuntime:
                     )
 
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(content_parts))
-        if cmd in {"!reset", "/reset", "/clear", "/new"}:
+        if cmd in {"!reset", "/reset"}:
             await self.initialize()
             state = await self._terminate_session(msg.session_key, hard_reset=True)
 
