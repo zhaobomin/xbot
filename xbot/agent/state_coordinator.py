@@ -442,9 +442,8 @@ class SessionStateCoordinator:
         """
         SessionPhase = self._runtime._state_machine.get_phase(session_key).__class__
 
-        # First unregister the task
+        # First unregister the task (this will increment tasks_completed)
         self.unregister_task(session_key, task)
-        self._stats.tasks_completed += 1
 
         # Then check remaining tasks (after unregistration)
         remaining = [t for t in self._runtime._active_tasks.get(session_key, []) if not t.done()]

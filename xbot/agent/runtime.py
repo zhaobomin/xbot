@@ -945,12 +945,13 @@ class AgentRuntime:
         Also syncs the session phase after task removal to ensure correct state.
         """
         def _on_task_done(task: asyncio.Task) -> None:
+            # Unregister via coordinator for accurate stats
+            self._state_coordinator.unregister_task(session_key, task)
+
+            # Clean up empty lists
             tasks = self._active_tasks.get(session_key)
-            if tasks and task in tasks:
-                tasks.remove(task)
-                # Clean up empty lists
-                if not tasks:
-                    self._active_tasks.pop(session_key, None)
+            if tasks and not tasks:
+                self._active_tasks.pop(session_key, None)
 
             # Sync phase after task is done to ensure correct state
             # This is critical: _sync_session_phase in _dispatch's finally runs

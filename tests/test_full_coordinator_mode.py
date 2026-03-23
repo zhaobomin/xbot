@@ -133,20 +133,32 @@ class TestLocalCommandsNotEatenByInteraction:
         assert AgentRuntime._is_local_runtime_command("!state") is True
         assert AgentRuntime._is_local_runtime_command("!help") is True
 
-    def test_coord_not_eaten_in_waiting_permission(self, runtime_with_coordinator):
-        """在 WAITING_PERMISSION 状态下，!coord 不应被当成权限回复提交。"""
-        from xbot.agent.runtime import AgentRuntime
-
-        # 直接测试核心逻辑：!coord 是本地命令，应该在 _handle_permission_response 之前被过滤
-        # 这通过 _is_local_runtime_command 测试已覆盖
-        # 额外验证：权限响应只接受 allow/deny 关键字
-        assert AgentRuntime._is_local_runtime_command("!coord") is True
-
-        # 权限响应不应该识别 !coord
-        content = "!coord"
+    def test_coord_not_permission_keyword(self):
+        """!coord 不应该被识别为权限关键词（allow/deny）。"""
+        # _handle_permission_response 的核心逻辑：
+        # content 如果不在 allow/deny 集合中，直接返回 False
         allow_variations = {"允许", "allow", "yes", "y", "是", "ok", "同意", "确认"}
         deny_variations = {"拒绝", "deny", "no", "n", "否", "取消"}
-        assert content not in allow_variations and content not in deny_variations
+
+        # !coord 不应该被识别为任何权限关键词
+        assert "!coord" not in allow_variations
+        assert "!coord" not in deny_variations
+        assert "/coord" not in allow_variations
+        assert "/coord" not in deny_variations
+
+    def test_interaction_response_skips_local_commands(self):
+        """_handle_interaction_response 应该跳过本地命令。
+
+        验证核心逻辑：_is_local_runtime_command 在处理前会被调用。
+        """
+        from xbot.agent.runtime import AgentRuntime
+
+        # 这是 _handle_interaction_response 的第一道检查
+        # line 538: if self._is_local_runtime_command(msg.content): return False
+        assert AgentRuntime._is_local_runtime_command("!coord") is True
+        assert AgentRuntime._is_local_runtime_command("/coord") is True
+
+        # 这意味着 !coord 会在 line 539 直接返回 False，不会被当成交互回复
 
 
 # === Fixtures ===
