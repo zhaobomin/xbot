@@ -1185,8 +1185,11 @@ class ClaudeSDKBackend(AgentBackend):
             AgentResponse objects
         """
         # Store session context for compact notifications
+        # Maps session_key to (channel, chat_id) tuple
+        # This ensures hooks can find the context when processing messages
         session_contexts = self._shared_resources.setdefault("_session_contexts", {})
-        session_contexts[context.session_key] = (context.channel, context.chat_id)
+        context_tuple = (context.channel, context.chat_id)
+        session_contexts[context.session_key] = context_tuple
 
         if self._tool_adapter:
             if not self._tool_adapter._tools:
@@ -1227,6 +1230,13 @@ class ClaudeSDKBackend(AgentBackend):
                     logger.info(f"Triggered skills for session {context.session_key}: {triggered_skills}")
 
         session = self.sessions.get_or_create(context.session_key) if self.sessions else None
+
+        # If SDK session ID already exists from previous turn, also map it
+        # This ensures hooks can find context when SDK returns the UUID instead of session_key
+        if session is not None:
+            existing_sdk_id = session.metadata.get("sdk_session_id")
+            if existing_sdk_id:
+                session_contexts[existing_sdk_id] = context_tuple
 
         # Check for reconnect pending state from previous error
         reconnect_hint = None
@@ -1348,6 +1358,12 @@ class ClaudeSDKBackend(AgentBackend):
                     if session is not None and message.session_id:
                         session.metadata["sdk_session_id"] = message.session_id
                         self.sessions.save(session)
+                        # Also update session_contexts mapping for SDK session ID
+                        # This ensures hooks can find context when SDK returns the UUID
+                        session_contexts = self._shared_resources.get("_session_contexts")
+                        if session_contexts is not None:
+                            context_tuple = (context.channel, context.chat_id)
+                            session_contexts[message.session_id] = context_tuple
 
                 if self._message_converter:
                     response = self._message_converter.convert(message)
@@ -1436,6 +1452,11 @@ class ClaudeSDKBackend(AgentBackend):
                                 if session is not None and message.session_id:
                                     session.metadata["sdk_session_id"] = message.session_id
                                     self.sessions.save(session)
+                                    # Also update session_contexts mapping for SDK session ID
+                                    session_contexts = self._shared_resources.get("_session_contexts")
+                                    if session_contexts is not None:
+                                        context_tuple = (context.channel, context.chat_id)
+                                        session_contexts[message.session_id] = context_tuple
                             
                             if self._message_converter:
                                 response = self._message_converter.convert(message)
