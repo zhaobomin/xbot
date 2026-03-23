@@ -1062,9 +1062,7 @@ class ClaudeSDKBackend(AgentBackend):
         commands = self._extract_slash_commands(info)
         if isinstance(info, dict):
             logger.debug(
-                "SDK server info keys for session %s: %s",
-                session_key,
-                sorted(info.keys()),
+                f"SDK server info keys for session {session_key}: {sorted(info.keys())}"
             )
         logger.info(f"Discovered {len(commands)} SDK slash commands for session {session_key}: {commands}")
         self._session_commands[session_key] = commands
@@ -1622,16 +1620,13 @@ class ClaudeSDKBackend(AgentBackend):
                 await self._refresh_session_commands(session_key, client)
             except Exception as e:
                 logger.warning(
-                    "Failed to discover SDK slash commands for session %s: %s",
-                    session_key,
-                    e,
+                    f"Failed to discover SDK slash commands for session {session_key}: {e}"
                 )
                 return []
         commands = list(self._session_commands.get(session_key, []))
         if not commands:
             logger.warning(
-                "SDK slash commands empty for session %s; /help will use fallback commands",
-                session_key,
+                f"SDK slash commands empty for session {session_key}; /help will use fallback commands"
             )
         return commands
 

@@ -890,8 +890,11 @@ class AgentRuntime:
                 await self.router.backend.reset_session(session_key)
 
             # Clear pending requests
-            if self.bus is not None and hasattr(self.bus, "aclear_session_requests"):
-                cleared_requests = await self.bus.aclear_session_requests(session_key)
+            if self.bus is not None:
+                if hasattr(self.bus, "aclear_session_requests"):
+                    cleared_requests = await self.bus.aclear_session_requests(session_key)
+                elif hasattr(self.bus, "clear_session_requests"):
+                    cleared_requests = self.bus.clear_session_requests(session_key)
         except Exception as e:
             logger.warning(f"Error during terminate_session cleanup: {e}")
             # Continue to final cleanup even if backend operations fail
@@ -1060,8 +1063,11 @@ class AgentRuntime:
             )
 
             # Clear pending requests if any (async with lock protection)
-            if self.bus is not None and hasattr(self.bus, "aclear_session_requests"):
-                await self.bus.aclear_session_requests(session_key)
+            if self.bus is not None:
+                if hasattr(self.bus, "aclear_session_requests"):
+                    await self.bus.aclear_session_requests(session_key)
+                elif hasattr(self.bus, "clear_session_requests"):
+                    self.bus.clear_session_requests(session_key)
 
             # Transition to IDLE
             self._state_coordinator.force_transition(
