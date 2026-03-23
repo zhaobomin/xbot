@@ -442,12 +442,14 @@ class SessionStateCoordinator:
         """
         SessionPhase = self._runtime._state_machine.get_phase(session_key).__class__
 
-        async with self.transaction(session_key, validate_on_commit=False) as tx:
-            tx.unregister_task(task)
-            # 检查是否还有活跃任务
-            remaining = [t for t in self._runtime._active_tasks.get(session_key, []) if not t.done()]
-            if not remaining:
-                tx.set_phase(SessionPhase.IDLE, reason="dispatch_end")
+        # First unregister the task
+        self.unregister_task(session_key, task)
+        self._stats.tasks_completed += 1
+
+        # Then check remaining tasks (after unregistration)
+        remaining = [t for t in self._runtime._active_tasks.get(session_key, []) if not t.done()]
+        if not remaining:
+            self.force_transition(session_key, SessionPhase.IDLE, reason="dispatch_end")
 
         return True
 

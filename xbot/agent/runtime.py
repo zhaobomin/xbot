@@ -310,7 +310,7 @@ class AgentRuntime:
 
             # Dispatch message with atomic state management
             task = asyncio.create_task(self._dispatch(msg))
-            self._active_tasks.setdefault(msg.session_key, []).append(task)
+            self._state_coordinator.register_task(msg.session_key, task)
             task.add_done_callback(self._make_task_done_callback(msg.session_key))
 
     async def _handle_permission_response(self, msg: InboundMessage) -> bool:
