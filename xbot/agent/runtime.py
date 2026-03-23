@@ -355,11 +355,26 @@ class AgentRuntime:
                 return True
             return False
 
-        # Atomic state transition: set WAITING_PERMISSION
-        async with self._state_coordinator.transaction(
-            msg.session_key, validate_on_commit=False
-        ) as tx:
-            tx.set_phase(SessionPhase.WAITING_PERMISSION, reason="pending_permission_detected")
+        # Check current state - only process if waiting for permission or idle/running
+        # (backend may already be processing the response)
+        current_phase = self._state_coordinator.get_phase(msg.session_key)
+        if current_phase not in {
+            SessionPhase.WAITING_PERMISSION,
+            SessionPhase.IDLE,
+            SessionPhase.RUNNING,
+        }:
+            # Session is in STOPPING/RESETTING/ERROR - ignore the response
+            logger.debug(
+                f"Ignoring permission response for session in {current_phase.value} state"
+            )
+            return True
+
+        # Atomic state transition: set WAITING_PERMISSION (if not already)
+        if current_phase != SessionPhase.WAITING_PERMISSION:
+            async with self._state_coordinator.transaction(
+                msg.session_key, validate_on_commit=False
+            ) as tx:
+                tx.set_phase(SessionPhase.WAITING_PERMISSION, reason="pending_permission_detected")
 
         from xbot.bus.queue import PermissionResponse
         response = PermissionResponse(
@@ -537,11 +552,25 @@ class AgentRuntime:
                 return True
             return False
 
-        # Atomic state transition: set WAITING_INTERACTION
-        async with self._state_coordinator.transaction(
-            msg.session_key, validate_on_commit=False
-        ) as tx:
-            tx.set_phase(SessionPhase.WAITING_INTERACTION, reason="pending_interaction_detected")
+        # Check current state - only process if waiting for interaction or idle/running
+        current_phase = self._state_coordinator.get_phase(msg.session_key)
+        if current_phase not in {
+            SessionPhase.WAITING_INTERACTION,
+            SessionPhase.IDLE,
+            SessionPhase.RUNNING,
+        }:
+            # Session is in STOPPING/RESETTING/ERROR - ignore the response
+            logger.debug(
+                f"Ignoring interaction response for session in {current_phase.value} state"
+            )
+            return True
+
+        # Atomic state transition: set WAITING_INTERACTION (if not already)
+        if current_phase != SessionPhase.WAITING_INTERACTION:
+            async with self._state_coordinator.transaction(
+                msg.session_key, validate_on_commit=False
+            ) as tx:
+                tx.set_phase(SessionPhase.WAITING_INTERACTION, reason="pending_interaction_detected")
 
         req = self.bus.get_interaction_request(request_id)
         if req is None:
@@ -930,9 +959,16 @@ class AgentRuntime:
 
     def _sync_session_phase(self, session_key: str) -> None:
         """Synchronize session phase based on current state using coordinator."""
-        # Don't override ERROR state - it should be explicitly cleared
+        # Don't override ERROR, STOPPING, or RESETTING states
+        # - ERROR should be explicitly cleared
+        # - STOPPING/RESETTING are in progress and will be finalized by _terminate_session
         current_phase = self._state_coordinator.get_phase(session_key)
-        if current_phase == SessionPhase.ERROR:
+        protected_phases = {
+            SessionPhase.ERROR,
+            SessionPhase.STOPPING,
+            SessionPhase.RESETTING,
+        }
+        if current_phase in protected_phases:
             return
 
         if self.bus is not None:
