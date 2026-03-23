@@ -78,7 +78,6 @@ VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
     },
     SessionPhase.ERROR: {
         SessionPhase.IDLE,
-        SessionPhase.RUNNING,
         SessionPhase.RESETTING,
     },
 }
@@ -372,6 +371,11 @@ class AgentRuntime:
         submitted = await self.bus.submit_permission_response(response)
         if not submitted:
             logger.warning(f"Permission response no longer pending: request={request_id}")
+            # Reset state to IDLE since response was not submitted
+            async with self._state_coordinator.transaction(
+                msg.session_key, validate_on_commit=False
+            ) as tx:
+                tx.set_phase(SessionPhase.IDLE, reason="permission_response_expired")
             await self.bus.publish_outbound(
                 OutboundMessage(
                     channel=msg.channel,
@@ -450,6 +454,14 @@ class AgentRuntime:
                     )
                 )
         finally:
+            # Check current state - don't override ERROR state
+            current_phase = self._state_coordinator.get_phase(msg.session_key)
+            if current_phase == SessionPhase.ERROR:
+                # Error occurred, don't override ERROR state
+                # Just log state snapshot and return
+                self._log_state_snapshot(msg.session_key, "dispatch_end")
+                return
+
             # Sync phase based on pending requests
             has_pending_permission = False
             has_pending_interaction = False
@@ -533,6 +545,11 @@ class AgentRuntime:
 
         req = self.bus.get_interaction_request(request_id)
         if req is None:
+            # Reset state to IDLE since request expired
+            async with self._state_coordinator.transaction(
+                msg.session_key, validate_on_commit=False
+            ) as tx:
+                tx.set_phase(SessionPhase.IDLE, reason="interaction_request_expired")
             await self.bus.publish_outbound(
                 OutboundMessage(
                     channel=msg.channel,
@@ -564,6 +581,11 @@ class AgentRuntime:
         )
         if not submitted:
             logger.warning(f"Interaction response no longer pending: request={request_id}")
+            # Reset state to IDLE since response was not submitted
+            async with self._state_coordinator.transaction(
+                msg.session_key, validate_on_commit=False
+            ) as tx:
+                tx.set_phase(SessionPhase.IDLE, reason="interaction_response_expired")
             await self.bus.publish_outbound(
                 OutboundMessage(
                     channel=msg.channel,
@@ -808,28 +830,38 @@ class AgentRuntime:
                 reason="terminate_session",
             )
 
-        # Cancel and wait for tasks (outside transaction as it's async I/O)
-        tasks = self._active_tasks.pop(session_key, [])
-        cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
-        for task in tasks:
-            try:
-                await task
-            except (asyncio.CancelledError, Exception):
-                pass
-
-        # Backend cleanup (async I/O)
-        backend_cancelled = await self.router.backend.cancel_session(session_key)
-        backend_task_stopped = await self.router.backend.stop_active_task(session_key)
-        interrupt_result = await self.router.backend.interrupt_session(session_key)
-        if hard_reset:
-            await self.router.backend.reset_session(session_key)
-
-        # Clear pending requests
+        # Initialize result variables
+        cancelled = 0
+        backend_cancelled = 0
+        backend_task_stopped = False
+        interrupt_result: dict[str, Any] = {"interrupted": False, "usage": None}
         cleared_requests = {"permission": False, "interaction": False}
-        if self.bus is not None and hasattr(self.bus, "clear_session_requests"):
-            cleared_requests = self.bus.clear_session_requests(session_key)
 
-        # Atomic cleanup transaction
+        try:
+            # Cancel and wait for tasks (outside transaction as it's async I/O)
+            tasks = self._active_tasks.pop(session_key, [])
+            cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
+            for task in tasks:
+                try:
+                    await task
+                except (asyncio.CancelledError, Exception):
+                    pass
+
+            # Backend cleanup (async I/O)
+            backend_cancelled = await self.router.backend.cancel_session(session_key)
+            backend_task_stopped = await self.router.backend.stop_active_task(session_key)
+            interrupt_result = await self.router.backend.interrupt_session(session_key)
+            if hard_reset:
+                await self.router.backend.reset_session(session_key)
+
+            # Clear pending requests
+            if self.bus is not None and hasattr(self.bus, "clear_session_requests"):
+                cleared_requests = self.bus.clear_session_requests(session_key)
+        except Exception as e:
+            logger.warning(f"Error during terminate_session cleanup: {e}")
+            # Continue to final cleanup even if backend operations fail
+
+        # Atomic cleanup transaction - always run, even if cleanup failed
         async with self._state_coordinator.transaction(
             session_key, validate_on_commit=False
         ) as tx:
@@ -898,6 +930,11 @@ class AgentRuntime:
 
     def _sync_session_phase(self, session_key: str) -> None:
         """Synchronize session phase based on current state using coordinator."""
+        # Don't override ERROR state - it should be explicitly cleared
+        current_phase = self._state_coordinator.get_phase(session_key)
+        if current_phase == SessionPhase.ERROR:
+            return
+
         if self.bus is not None:
             if self.bus.get_pending_request_for_session(session_key):
                 self._state_coordinator.force_transition(
