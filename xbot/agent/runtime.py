@@ -418,9 +418,6 @@ class AgentRuntime:
         # Note: Task registration happens in run() when creating the task.
         # When _dispatch is called directly (tests), there's no task registration.
 
-        # Log state snapshot at dispatch start
-        self._log_state_snapshot(msg.session_key, "dispatch_start")
-
         try:
             # Start atomic dispatch session
             async with self._state_coordinator.transaction(
@@ -428,6 +425,9 @@ class AgentRuntime:
             ) as tx:
                 tx.set_phase(SessionPhase.RUNNING, reason="dispatch_start")
                 tx.acquire_lock()
+
+            # Log state snapshot after state transition (avoids false "IDLE but has active tasks" warning)
+            self._log_state_snapshot(msg.session_key, "dispatch_start")
 
             # Get the lock (should exist after transaction)
             lock = self._session_locks.get(msg.session_key)
