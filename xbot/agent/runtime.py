@@ -225,9 +225,9 @@ class SessionStateMachine:
 
 class AgentRuntime:
     """Single runtime entrypoint for gateway and CLI."""
+    # Only intercept ! commands - all / commands go to SDK
     LOCAL_RUNTIME_COMMANDS = {
         "!help", "!restart", "!stop", "!reset", "!state", "!coord",
-        "/help", "/restart", "/stop", "/reset", "/state", "/coord",
     }
     # 前缀匹配的命令（支持参数）
     LOCAL_RUNTIME_COMMAND_PREFIXES = ("!model",)
@@ -647,7 +647,13 @@ class AgentRuntime:
 
     async def _handle_message(self, msg: InboundMessage, on_progress=None) -> OutboundMessage | None:
         cmd = msg.content.strip().lower()
-        if cmd in {"!help", "/help"}:
+
+        # Debug: Log slash commands going to SDK
+        if cmd.startswith("/"):
+            logger.info(f"[Slash Command] Forwarding to SDK: {cmd!r} (session={msg.session_key})")
+
+        # Only handle ! commands locally - all / commands go to SDK
+        if cmd == "!help":
             await self.initialize()
             return OutboundMessage(
                 channel=msg.channel,
@@ -655,10 +661,10 @@ class AgentRuntime:
                 content=await self._help_text(msg.session_key),
                 metadata=msg.metadata or {},
             )
-        if cmd in {"!restart", "/restart"}:
+        if cmd == "!restart":
             asyncio.create_task(self._do_restart())
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="Restarting...")
-        if cmd in {"!stop", "/stop"}:
+        if cmd == "!stop":
             await self.initialize()
             state = await self._terminate_session(msg.session_key, hard_reset=False)
 
@@ -695,7 +701,7 @@ class AgentRuntime:
                     )
 
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(content_parts))
-        if cmd in {"!reset", "/reset"}:
+        if cmd == "!reset":
             await self.initialize()
             state = await self._terminate_session(msg.session_key, hard_reset=True)
 
@@ -717,14 +723,14 @@ class AgentRuntime:
                 parts.append(f"Cleared: {', '.join(details)}.")
 
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(parts))
-        if cmd in {"!state", "/state"}:
+        if cmd == "!state":
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
                 content=self._session_diagnostics_text(msg.session_key),
                 metadata=msg.metadata or {},
             )
-        if cmd in {"!coord", "/coord"}:
+        if cmd == "!coord":
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,

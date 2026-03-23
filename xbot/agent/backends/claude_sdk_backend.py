@@ -1371,6 +1371,11 @@ class ClaudeSDKBackend(AgentBackend):
             
             client = await self._get_or_create_client(context.session_key)
             query_sent_at = time.perf_counter()
+
+            # Debug: Log slash commands being sent to SDK
+            if prompt.strip().startswith("/"):
+                logger.info(f"[SDK Query] Slash command detected: {prompt.strip()[:50]!r} (session={context.session_key})")
+
             append_session_trace(
                 self.sessions,
                 context.session_key,
