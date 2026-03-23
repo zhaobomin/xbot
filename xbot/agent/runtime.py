@@ -230,7 +230,7 @@ class AgentRuntime:
         "/help", "/restart", "/stop", "/reset", "/state", "/coord",
     }
     # 前缀匹配的命令（支持参数）
-    LOCAL_RUNTIME_COMMAND_PREFIXES = ("$model",)
+    LOCAL_RUNTIME_COMMAND_PREFIXES = ("!model",)
     COMMAND_ALIASES: dict[str, str] = {}
     SDK_HELP_FALLBACK_COMMANDS = ["/help", "/clear", "/compact"]
 
@@ -732,8 +732,8 @@ class AgentRuntime:
                 metadata=msg.metadata or {},
             )
 
-        # 处理 $model 命令
-        if cmd.startswith("$model"):
+        # 处理 !model 命令
+        if cmd.startswith("!model"):
             return self._handle_model_command(msg, msg.content.strip())
 
         # Check for workspace command
@@ -1180,7 +1180,7 @@ class AgentRuntime:
         # 检查精确匹配
         if stripped in cls.LOCAL_RUNTIME_COMMANDS:
             return True
-        # 检查前缀匹配（如 $model, $model glm-4-flash）
+        # 检查前缀匹配（如 !model, !model glm-4-flash）
         return any(stripped.startswith(prefix.lower()) for prefix in cls.LOCAL_RUNTIME_COMMAND_PREFIXES)
 
     @classmethod
@@ -1190,11 +1190,11 @@ class AgentRuntime:
         return alias if alias else content
 
     def _handle_model_command(self, msg: InboundMessage, content: str) -> OutboundMessage:
-        """处理 $model 命令。
+        """处理 !model 命令。
 
         格式:
-        - $model: 显示当前状态
-        - $model <模型id>: 切换模型
+        - !model: 显示当前状态
+        - !model <模型id>: 切换模型
 
         Args:
             msg: 入站消息
@@ -1206,7 +1206,7 @@ class AgentRuntime:
         parts = content.split(maxsplit=1)
 
         if len(parts) == 1:
-            # $model - 显示状态
+            # !model - 显示状态
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
@@ -1214,7 +1214,7 @@ class AgentRuntime:
                 metadata=msg.metadata or {},
             )
 
-        # $model <模型id> - 切换模型
+        # !model <模型id> - 切换模型
         model_id = parts[1].strip()
         success, message = self.model_manager.switch_model(model_id)
 
