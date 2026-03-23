@@ -1056,13 +1056,16 @@ class ClaudeSDKBackend(AgentBackend):
         """Refresh slash commands discovered from SDK init metadata."""
         try:
             info = await client.get_server_info()
-            # Debug: log full server info
-            import json
-            logger.info(f"SDK server info for session {session_key}: {json.dumps(info, indent=2, default=str) if info else 'None'}")
         except Exception as e:
             logger.warning(f"Failed to get SDK server info for session {session_key}: {e}")
             return
         commands = self._extract_slash_commands(info)
+        if isinstance(info, dict):
+            logger.debug(
+                "SDK server info keys for session %s: %s",
+                session_key,
+                sorted(info.keys()),
+            )
         logger.info(f"Discovered {len(commands)} SDK slash commands for session {session_key}: {commands}")
         self._session_commands[session_key] = commands
 
@@ -1610,12 +1613,27 @@ class ClaudeSDKBackend(AgentBackend):
 
     async def get_session_commands(self, session_key: str) -> list[str]:
         """Return discovered SDK slash commands for a session."""
-        if session_key not in self._session_commands:
+        cached = self._session_commands.get(session_key)
+        if not cached:
             try:
-                await self._get_or_create_client(session_key)
-            except Exception:
+                client = await self._get_or_create_client(session_key)
+                # Long-lived clients can survive while command cache is evicted or stale.
+                # Always attempt a refresh when cache is missing/empty to avoid sticky fallback.
+                await self._refresh_session_commands(session_key, client)
+            except Exception as e:
+                logger.warning(
+                    "Failed to discover SDK slash commands for session %s: %s",
+                    session_key,
+                    e,
+                )
                 return []
-        return list(self._session_commands.get(session_key, []))
+        commands = list(self._session_commands.get(session_key, []))
+        if not commands:
+            logger.warning(
+                "SDK slash commands empty for session %s; /help will use fallback commands",
+                session_key,
+            )
+        return commands
 
     async def stop_active_task(self, session_key: str) -> bool:
         """Stop the latest active SDK task for a session."""

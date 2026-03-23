@@ -1070,6 +1070,29 @@ class TestSessionCommands:
 
         assert commands == ["/compact", "/clear"]
 
+    @pytest.mark.asyncio
+    async def test_get_session_commands_refreshes_when_cache_is_empty_list(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        backend = ClaudeSDKBackend()
+        backend._session_commands = {"s1": []}
+
+        mock_client = MagicMock()
+        backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
+
+        async def _fake_refresh(session_key: str, client):
+            assert session_key == "s1"
+            assert client is mock_client
+            backend._session_commands[session_key] = ["/debug", "/compact"]
+
+        backend._refresh_session_commands = AsyncMock(side_effect=_fake_refresh)  # type: ignore[method-assign]
+
+        commands = await backend.get_session_commands("s1")
+
+        assert commands == ["/debug", "/compact"]
+        backend._get_or_create_client.assert_awaited_once_with("s1")
+        backend._refresh_session_commands.assert_awaited_once_with("s1", mock_client)
+
 
 class TestCompactSession:
     """Tests for compact_session method."""
