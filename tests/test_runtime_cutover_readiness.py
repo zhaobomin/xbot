@@ -220,7 +220,10 @@ async def test_hard_reset_clears_state_and_lock() -> None:
     result = await runtime._terminate_session(session_key, hard_reset=True)
 
     assert result["backend_cancelled"] == 0
-    assert session_key not in runtime._state_machine._states
+    # hard_reset now resets to clean IDLE instead of deleting state
+    assert session_key in runtime._state_machine._states
+    assert runtime._state_machine.get_phase(session_key) == SessionPhase.IDLE
+    assert runtime._state_machine.get_state(session_key).transition_count == 0
     assert session_key not in runtime._session_locks
 
 

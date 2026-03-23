@@ -35,9 +35,13 @@ class SessionPhase(str, Enum):
 
 
 # Valid state transitions: {from_phase: {to_phase1, to_phase2, ...}}
+# Note: IDLE -> WAITING_* is allowed for edge cases where a task ends but
+# pending requests remain (e.g., agent requests permission then finishes)
 VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
     SessionPhase.IDLE: {
         SessionPhase.RUNNING,
+        SessionPhase.WAITING_PERMISSION,  # Edge case: handling stale pending request
+        SessionPhase.WAITING_INTERACTION,  # Edge case: handling stale pending request
         SessionPhase.STOPPING,
         SessionPhase.RESETTING,
         SessionPhase.ERROR,
@@ -173,8 +177,12 @@ class SessionStateMachine:
 
         return True
 
-    def force_transition(self, session_key: str, to_phase: SessionPhase, *, reason: str = "") -> None:
-        """Force a state transition, bypassing validation."""
+    def force_transition(self, session_key: str, to_phase: SessionPhase, *, reason: str = "") -> bool:
+        """Force a state transition, bypassing validation.
+
+        Returns:
+            Always True (for consistency with transition())
+        """
         state = self.get_state(session_key)
         from_phase = state.phase
 
@@ -189,6 +197,8 @@ class SessionStateMachine:
 
         if self._on_transition:
             self._on_transition(session_key, from_phase, to_phase, reason)
+
+        return True
 
     def reset(self, session_key: str) -> None:
         """Reset a session to IDLE state."""
@@ -386,6 +396,9 @@ class AgentRuntime:
 
         Uses coordinator transactions for atomic state changes.
         """
+        # Note: Task registration happens in run() when creating the task.
+        # When _dispatch is called directly (tests), there's no task registration.
+
         # Log state snapshot at dispatch start
         self._log_state_snapshot(msg.session_key, "dispatch_start")
 
@@ -437,34 +450,46 @@ class AgentRuntime:
                     )
                 )
         finally:
-            # Atomic cleanup
-            async with self._state_coordinator.transaction(
-                msg.session_key, validate_on_commit=False
-            ) as tx:
-                # Check for pending requests
-                has_pending_permission = False
-                has_pending_interaction = False
-                if self.bus is not None:
-                    has_pending_permission = bool(
-                        self.bus.get_pending_request_for_session(msg.session_key)
-                    )
-                    has_pending_interaction = bool(
-                        self.bus.get_pending_interaction_for_session(msg.session_key)
-                    )
+            # Sync phase based on pending requests
+            has_pending_permission = False
+            has_pending_interaction = False
+            if self.bus is not None:
+                has_pending_permission = bool(
+                    self.bus.get_pending_request_for_session(msg.session_key)
+                )
+                has_pending_interaction = bool(
+                    self.bus.get_pending_interaction_for_session(msg.session_key)
+                )
 
-                if has_pending_permission:
+            if has_pending_permission:
+                async with self._state_coordinator.transaction(
+                    msg.session_key, validate_on_commit=False
+                ) as tx:
                     tx.set_phase(SessionPhase.WAITING_PERMISSION, reason="pending_permission")
-                elif has_pending_interaction:
+            elif has_pending_interaction:
+                async with self._state_coordinator.transaction(
+                    msg.session_key, validate_on_commit=False
+                ) as tx:
                     tx.set_phase(SessionPhase.WAITING_INTERACTION, reason="pending_interaction")
-                else:
-                    # Check for active tasks
-                    remaining_tasks = [
-                        t
-                        for t in self._active_tasks.get(msg.session_key, [])
-                        if not t.done()
-                    ]
-                    if not remaining_tasks:
+            else:
+                # Check if this _dispatch was called from run() (task registered)
+                # or directly (no task registered)
+                current_task = asyncio.current_task()
+                registered_tasks = self._active_tasks.get(msg.session_key, [])
+
+                # If current task is registered, callback will handle cleanup
+                # If not registered (or no current task), this is a direct call
+                is_registered_task = (
+                    current_task is not None and current_task in registered_tasks
+                )
+
+                if not is_registered_task:
+                    # Direct call - set IDLE now (no callback will run)
+                    async with self._state_coordinator.transaction(
+                        msg.session_key, validate_on_commit=False
+                    ) as tx:
                         tx.set_phase(SessionPhase.IDLE, reason="dispatch_end")
+                # else: callback will set IDLE after task completes
 
             # Log state snapshot at dispatch end
             self._log_state_snapshot(msg.session_key, "dispatch_end")
@@ -811,16 +836,15 @@ class AgentRuntime:
             # Release lock
             tx.release_lock()
 
-            # Set final phase
-            if not hard_reset:
-                tx.set_phase(SessionPhase.IDLE, reason="terminate_session_completed")
+            # Set final phase (always IDLE, even for hard_reset)
+            tx.set_phase(SessionPhase.IDLE, reason="terminate_session_completed")
 
         # Remove lock from dict (coordinator handles state)
         self._session_locks.pop(session_key, None)
 
-        # Clear state machine state for hard reset
+        # For hard_reset, reset state to fresh IDLE (instead of clear which deletes)
         if hard_reset:
-            self._state_machine.clear(session_key)
+            self._state_machine.reset(session_key)
 
         return {
             "cancelled": cancelled,
@@ -935,12 +959,28 @@ class AgentRuntime:
         """
         current_phase = self._state_coordinator.get_phase(session_key)
 
-        # Only update if session is active
-        if current_phase == SessionPhase.RUNNING:
-            logger.debug(f"Backend client cleaned up for active session: {session_key}")
+        # Only update if session is active or waiting
+        active_phases = {
+            SessionPhase.RUNNING,
+            SessionPhase.WAITING_PERMISSION,
+            SessionPhase.WAITING_INTERACTION,
+        }
+
+        if current_phase in active_phases:
+            logger.debug(
+                f"Backend client cleaned up for session: {session_key} "
+                f"(phase={current_phase.value})"
+            )
+
+            # Clear pending requests if any
+            if self.bus is not None and hasattr(self.bus, "clear_session_requests"):
+                self.bus.clear_session_requests(session_key)
+
+            # Transition to IDLE
             self._state_coordinator.force_transition(
                 session_key, SessionPhase.IDLE, reason="backend_client_cleanup"
             )
+
             # Clean up related runtime state
             self._active_tasks.pop(session_key, None)
             self._session_locks.pop(session_key, None)
