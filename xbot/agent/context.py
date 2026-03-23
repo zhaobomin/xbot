@@ -123,7 +123,8 @@ class ContextBuilder:
         lines = [
             "# Active Skills",
             "",
-            "The following skills are available for use with the Skill tool.",
+            "The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.",
+            "Skills with available=\"false\" need dependencies installed first - you can try installing them with apt/brew.",
             "",
             "<skills>",
         ]
@@ -150,8 +151,18 @@ class ContextBuilder:
 
         lines.append("</skills>")
         lines.append("")
-        lines.append("Use the `load_skill_content` tool to load detailed instructions for a skill when needed.")
-        lines.append("Skills with available=\"false\" need dependencies installed first - you can try installing them with apt/brew.")
+        lines.append("When a skill matches the user's request, invoke the Skill tool.")
+        lines.append("")
+        lines.append("## Skill Triggering Guide")
+        lines.append("")
+        lines.append("- **weather**: TRIGGER when user asks about weather, temperature, forecast, 天气, 温度, 预报")
+        lines.append("- **cron**: TRIGGER when user wants to schedule reminders, recurring tasks, 定时任务, 提醒")
+        lines.append("- **memory**: TRIGGER when you need to remember or recall information, 记忆, 记住")
+        lines.append("- **clawhub**: TRIGGER when user wants to search or install skills from the registry")
+        lines.append("- **skill-creator**: TRIGGER when creating or updating agent skills")
+        lines.append("- **github**: TRIGGER when interacting with GitHub (requires `gh` CLI)")
+        lines.append("- **tmux**: TRIGGER for remote-controlling tmux sessions (requires `tmux`)")
+        lines.append("- **summarize**: TRIGGER for summarizing URLs, podcasts, or transcripts (requires `summarize` CLI)")
 
         return "\n".join(lines)
 
