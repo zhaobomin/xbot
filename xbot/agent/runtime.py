@@ -996,11 +996,12 @@ class AgentRuntime:
         """
         current_phase = self._state_coordinator.get_phase(session_key)
 
-        # Only update if session is active or waiting
+        # Only update if session is active, waiting, or in error state
         active_phases = {
             SessionPhase.RUNNING,
             SessionPhase.WAITING_PERMISSION,
             SessionPhase.WAITING_INTERACTION,
+            SessionPhase.ERROR,  # Also clean up ERROR state sessions
         }
 
         if current_phase in active_phases:
