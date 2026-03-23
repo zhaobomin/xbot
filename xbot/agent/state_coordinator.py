@@ -422,15 +422,16 @@ class SessionStateCoordinator:
 
         return True
 
-    async def atomic_end_dispatch(
+    async def end_dispatch(
         self,
         session_key: str,
         task: asyncio.Task,
         success: bool = True,
     ) -> bool:
-        """原子性地结束 dispatch。
+        """结束 dispatch，注销任务并更新状态。
 
-        在单个事务中注销任务并设置最终状态。
+        注意：此方法执行同步操作序列，不是原子事务。
+        如果需要原子性，请使用 transaction() 方法。
 
         Args:
             session_key: 会话标识
@@ -451,6 +452,16 @@ class SessionStateCoordinator:
             self.force_transition(session_key, SessionPhase.IDLE, reason="dispatch_end")
 
         return True
+
+    # Deprecated alias for backward compatibility
+    async def atomic_end_dispatch(
+        self,
+        session_key: str,
+        task: asyncio.Task,
+        success: bool = True,
+    ) -> bool:
+        """Deprecated: Use end_dispatch() instead."""
+        return await self.end_dispatch(session_key, task, success)
 
     async def atomic_cleanup_session(
         self,

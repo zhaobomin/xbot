@@ -948,9 +948,9 @@ class AgentRuntime:
             # Unregister via coordinator for accurate stats
             self._state_coordinator.unregister_task(session_key, task)
 
-            # Clean up empty lists
+            # Clean up empty task lists
             tasks = self._active_tasks.get(session_key)
-            if tasks and not tasks:
+            if not tasks:  # Empty list or None
                 self._active_tasks.pop(session_key, None)
 
             # Sync phase after task is done to ensure correct state
