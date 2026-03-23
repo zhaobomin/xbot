@@ -426,7 +426,6 @@ class SessionStateCoordinator:
         self,
         session_key: str,
         task: asyncio.Task,
-        success: bool = True,
     ) -> bool:
         """结束 dispatch，注销任务并更新状态。
 
@@ -436,7 +435,6 @@ class SessionStateCoordinator:
         Args:
             session_key: 会话标识
             task: 要注销的任务
-            success: dispatch 是否成功
 
         Returns:
             操作是否成功
@@ -458,10 +456,10 @@ class SessionStateCoordinator:
         self,
         session_key: str,
         task: asyncio.Task,
-        success: bool = True,
+        success: bool = True,  # Keep for backward compatibility
     ) -> bool:
         """Deprecated: Use end_dispatch() instead."""
-        return await self.end_dispatch(session_key, task, success)
+        return await self.end_dispatch(session_key, task)
 
     async def atomic_cleanup_session(
         self,
