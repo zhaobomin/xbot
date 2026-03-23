@@ -35,6 +35,8 @@ class AgentDefaults(Base):
     provider: str = (
         "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
     )
+    # 可用模型列表，用于动态切换。为空时只用 model 字段
+    available_models: list[str] = Field(default_factory=list)
     max_tokens: int = 8192
     context_window_tokens: int = 65_536
     temperature: float = 0.1

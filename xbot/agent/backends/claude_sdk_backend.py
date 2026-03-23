@@ -591,7 +591,17 @@ class OptionsBuilder:
         return api_key, base_url
     
     def _get_model_name(self) -> str:
-        """Get the model name with provider-specific transformations."""
+        """Get the model name with provider-specific transformations.
+
+        优先使用 ModelManager 的当前模型（支持动态切换），
+        回退到配置文件中的 model 字段。
+        """
+        # 优先使用 ModelManager 的当前模型
+        runtime = self._shared_resources.get("runtime")
+        if runtime and hasattr(runtime, "model_manager"):
+            return runtime.model_manager.current_model
+
+        # 回退到配置
         config = self._shared_resources.get("config")
         _, model = resolve_sdk_provider_and_model(config)
         return model

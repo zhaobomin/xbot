@@ -16,6 +16,7 @@ from loguru import logger
 from xbot.agent.capabilities import CapabilityCatalog, canonical_tool_name
 from xbot.agent.commands import CommandsLoader
 from xbot.agent.event_formatter import format_usage_summary
+from xbot.agent.model_manager import ModelManager
 from xbot.agent.protocol import AgentContext
 from xbot.agent.router import AgentRouter, register_default_backends
 from xbot.agent.state_checker import StateConsistencyChecker
@@ -228,6 +229,8 @@ class AgentRuntime:
         "!help", "!restart", "!stop", "!reset", "!state", "!coord",
         "/help", "/restart", "/stop", "/reset", "/state", "/coord",
     }
+    # 前缀匹配的命令（支持参数）
+    LOCAL_RUNTIME_COMMAND_PREFIXES = ("$model",)
     COMMAND_ALIASES: dict[str, str] = {}
     SDK_HELP_FALLBACK_COMMANDS = ["/help", "/clear", "/compact"]
 
@@ -239,6 +242,8 @@ class AgentRuntime:
         self.router = AgentRouter(config.agents, self.shared_resources)
         self.sessions = self.shared_resources.get("session_manager")
         self.model = config.agents.defaults.model
+        self.model_manager = ModelManager(config)  # 模型管理器
+        self.shared_resources["runtime"] = self  # 让 backend 可以访问 runtime.model_manager
         self.channels_config = config.channels
         self.capabilities = CapabilityCatalog(
             self.shared_resources.get("workspace", config.agents.defaults.workspace)
@@ -727,6 +732,10 @@ class AgentRuntime:
                 metadata=msg.metadata or {},
             )
 
+        # 处理 $model 命令
+        if cmd.startswith("$model"):
+            return self._handle_model_command(msg, msg.content.strip())
+
         # Check for workspace command
         command_prefix = ""
         cmd_name = self.commands.get_command_from_text(msg.content.strip())
@@ -1167,13 +1176,54 @@ class AgentRuntime:
 
     @classmethod
     def _is_local_runtime_command(cls, content: str) -> bool:
-        return content.strip().lower() in cls.LOCAL_RUNTIME_COMMANDS
+        stripped = content.strip().lower()
+        # 检查精确匹配
+        if stripped in cls.LOCAL_RUNTIME_COMMANDS:
+            return True
+        # 检查前缀匹配（如 $model, $model glm-4-flash）
+        return any(stripped.startswith(prefix.lower()) for prefix in cls.LOCAL_RUNTIME_COMMAND_PREFIXES)
 
     @classmethod
     def _normalize_command_prompt(cls, content: str) -> str:
         stripped = content.strip()
         alias = cls.COMMAND_ALIASES.get(stripped.lower())
         return alias if alias else content
+
+    def _handle_model_command(self, msg: InboundMessage, content: str) -> OutboundMessage:
+        """处理 $model 命令。
+
+        格式:
+        - $model: 显示当前状态
+        - $model <模型id>: 切换模型
+
+        Args:
+            msg: 入站消息
+            content: 消息内容
+
+        Returns:
+            出站消息
+        """
+        parts = content.split(maxsplit=1)
+
+        if len(parts) == 1:
+            # $model - 显示状态
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=self.model_manager.get_status_text(),
+                metadata=msg.metadata or {},
+            )
+
+        # $model <模型id> - 切换模型
+        model_id = parts[1].strip()
+        success, message = self.model_manager.switch_model(model_id)
+
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=message,
+            metadata=msg.metadata or {},
+        )
 
     def _bus_progress(self, msg: InboundMessage):
         async def _publish(
