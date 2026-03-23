@@ -4,6 +4,9 @@ description: Get current weather and forecasts (no API key required).
 homepage: https://wttr.in/:help
 metadata: {"xbot":{"emoji":"🌤️","requires":{"bins":["curl"]}}}
 tool_exposable: true
+triggers:
+  - when: user_requests
+    patterns: ["weather", "temperature", "forecast", "天气", "温度", "预报", "气温", "湿度"]
 ---
 
 # Weather

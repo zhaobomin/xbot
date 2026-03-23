@@ -153,18 +153,37 @@ class ContextBuilder:
         lines.append("")
         lines.append("When a skill matches the user's request, invoke the Skill tool.")
         lines.append("")
-        lines.append("## Skill Triggering Guide")
-        lines.append("")
-        lines.append("- **weather**: TRIGGER when user asks about weather, temperature, forecast, 天气, 温度, 预报")
-        lines.append("- **cron**: TRIGGER when user wants to schedule reminders, recurring tasks, 定时任务, 提醒")
-        lines.append("- **memory**: TRIGGER when you need to remember or recall information, 记忆, 记住")
-        lines.append("- **clawhub**: TRIGGER when user wants to search or install skills from the registry")
-        lines.append("- **skill-creator**: TRIGGER when creating or updating agent skills")
-        lines.append("- **github**: TRIGGER when interacting with GitHub (requires `gh` CLI)")
-        lines.append("- **tmux**: TRIGGER for remote-controlling tmux sessions (requires `tmux`)")
-        lines.append("- **summarize**: TRIGGER for summarizing URLs, podcasts, or transcripts (requires `summarize` CLI)")
+
+        # Build Skill Triggering Guide dynamically from triggers field
+        trigger_lines = self._build_trigger_guide(skills)
+        if trigger_lines:
+            lines.append("## Skill Triggering Guide")
+            lines.append("")
+            lines.extend(trigger_lines)
 
         return "\n".join(lines)
+
+    def _build_trigger_guide(self, skills: list[dict]) -> list[str]:
+        """Build skill triggering guide from triggers metadata.
+
+        Args:
+            skills: List of skill info dicts from list_available_skills()
+
+        Returns:
+            List of lines for the trigger guide section
+        """
+        lines = []
+        for skill in skills:
+            name = skill["name"]
+            triggers = skill.get("triggers", [])
+            if triggers:
+                # Format trigger keywords
+                trigger_str = ", ".join(triggers[:5])  # Limit to first 5
+                if len(triggers) > 5:
+                    trigger_str += ", ..."
+                lines.append(f"- **{name}**: TRIGGER when user mentions: {trigger_str}")
+
+        return lines
 
     def _get_identity(self) -> str:
         """Get the core identity section."""

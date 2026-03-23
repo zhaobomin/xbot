@@ -553,6 +553,7 @@ class SkillsLoader:
             - available: Whether requirements are met
             - source: Source directory (workspace, scoped_workspace, builtin)
             - requires: Missing requirements (if unavailable)
+            - triggers: Trigger keywords for skill activation (from frontmatter)
         """
         all_skills = self.list_skills(filter_unavailable=False)
         result = []
@@ -573,6 +574,29 @@ class SkillsLoader:
             if not available:
                 skill_info["requires"] = self._get_missing_requirements(skill_meta)
 
+            # Add trigger keywords from frontmatter
+            triggers = self._get_trigger_keywords(name)
+            if triggers:
+                skill_info["triggers"] = triggers
+
             result.append(skill_info)
 
         return result
+
+    def _get_trigger_keywords(self, name: str) -> list[str]:
+        """Extract trigger keywords from skill frontmatter.
+
+        Looks for 'triggers' in frontmatter:
+        triggers:
+          - when: user_requests
+            patterns: ["weather", "temperature", "天气"]
+
+        Returns:
+            List of trigger keywords (flattened from all patterns)
+        """
+        skill_triggers = self.get_skill_triggers(name)
+        keywords = []
+        for trigger in skill_triggers.triggers:
+            if trigger.kind == "user_requests":
+                keywords.extend(trigger.patterns)
+        return keywords
