@@ -227,7 +227,8 @@ async def test_hard_reset_clears_state_and_lock() -> None:
     assert session_key not in runtime._session_locks
 
 
-def test_backend_client_cleanup_running_session_cleans_state() -> None:
+@pytest.mark.asyncio
+async def test_backend_client_cleanup_running_session_cleans_state() -> None:
     session_key = "test:cleanup-running"
     bus = _QueueBus([])
     runtime = _RuntimeHarness(bus)
@@ -237,14 +238,15 @@ def test_backend_client_cleanup_running_session_cleans_state() -> None:
     runtime._active_tasks[session_key] = [MagicMock()]
     runtime._session_locks[session_key] = asyncio.Lock()
 
-    runtime._on_backend_client_cleanup(session_key)
+    await runtime._on_backend_client_cleanup(session_key)
 
     assert runtime.get_session_phase(session_key) == SessionPhase.IDLE
     assert session_key not in runtime._active_tasks
     assert session_key not in runtime._session_locks
 
 
-def test_backend_client_cleanup_idle_session_noop() -> None:
+@pytest.mark.asyncio
+async def test_backend_client_cleanup_idle_session_noop() -> None:
     session_key = "test:cleanup-idle"
     bus = _QueueBus([])
     runtime = _RuntimeHarness(bus)
@@ -254,7 +256,7 @@ def test_backend_client_cleanup_idle_session_noop() -> None:
     runtime._active_tasks[session_key] = []
     runtime._session_locks[session_key] = asyncio.Lock()
 
-    runtime._on_backend_client_cleanup(session_key)
+    await runtime._on_backend_client_cleanup(session_key)
 
     assert runtime.get_session_phase(session_key) == SessionPhase.IDLE
     # Idle path should not force cleanup

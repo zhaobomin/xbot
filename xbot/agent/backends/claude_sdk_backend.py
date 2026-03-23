@@ -1004,7 +1004,7 @@ class ClaudeSDKBackend(AgentBackend):
             on_cleanup = self._shared_resources.get("on_backend_client_cleanup")
             if on_cleanup:
                 try:
-                    on_cleanup(key)
+                    await on_cleanup(key)
                 except Exception as e:
                     logger.debug(f"Error in backend client cleanup callback: {e}")
 

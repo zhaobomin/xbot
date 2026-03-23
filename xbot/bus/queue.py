@@ -331,7 +331,11 @@ class MessageBus:
         return request_id in self._pending_permission_responses
 
     def clear_permission_request(self, request_id: str) -> None:
-        """清除权限请求状态。"""
+        """清除权限请求状态。
+
+        注意：此方法不获取锁，仅用于内部调用或已持有锁的场景。
+        外部调用请使用 aclear_permission_request。
+        """
         self._pending_permission_responses.pop(request_id, None)
         self._permission_results.pop(request_id, None)
         # 清理相关的 session 追踪
@@ -340,7 +344,11 @@ class MessageBus:
             del self._session_pending_requests[k]
 
     def clear_interaction_request(self, request_id: str) -> None:
-        """清除通用交互请求状态。"""
+        """清除通用交互请求状态。
+
+        注意：此方法不获取锁，仅用于内部调用或已持有锁的场景。
+        外部调用请使用 aclear_interaction_request。
+        """
         self._pending_interaction_responses.pop(request_id, None)
         self._interaction_results.pop(request_id, None)
         self._interaction_requests.pop(request_id, None)
@@ -348,8 +356,30 @@ class MessageBus:
         for k in to_remove:
             del self._session_pending_interactions[k]
 
+    async def aclear_permission_request(self, request_id: str) -> None:
+        """异步清除权限请求状态（带锁保护）。"""
+        async with self._permission_lock:
+            self._pending_permission_responses.pop(request_id, None)
+            self._permission_results.pop(request_id, None)
+            to_remove = [k for k, v in self._session_pending_requests.items() if v == request_id]
+            for k in to_remove:
+                del self._session_pending_requests[k]
+
+    async def aclear_interaction_request(self, request_id: str) -> None:
+        """异步清除通用交互请求状态（带锁保护）。"""
+        async with self._interaction_lock:
+            self._pending_interaction_responses.pop(request_id, None)
+            self._interaction_results.pop(request_id, None)
+            self._interaction_requests.pop(request_id, None)
+            to_remove = [k for k, v in self._session_pending_interactions.items() if v == request_id]
+            for k in to_remove:
+                del self._session_pending_interactions[k]
+
     def clear_session_requests(self, session_key: str) -> dict[str, bool]:
-        """清理指定会话下挂起的权限与交互请求。"""
+        """清理指定会话下挂起的权限与交互请求。
+
+        注意：此方法是同步的，不获取锁。推荐使用 aclear_session_requests。
+        """
         cleared_permission = False
         cleared_interaction = False
 
@@ -362,6 +392,41 @@ class MessageBus:
         if interaction_id:
             self.clear_interaction_request(interaction_id)
             cleared_interaction = True
+
+        return {
+            "permission": cleared_permission,
+            "interaction": cleared_interaction,
+        }
+
+    async def aclear_session_requests(self, session_key: str) -> dict[str, bool]:
+        """异步清理指定会话下挂起的权限与交互请求（带锁保护）。
+
+        Args:
+            session_key: 会话标识
+
+        Returns:
+            清理结果字典
+        """
+        cleared_permission = False
+        cleared_interaction = False
+
+        # 先获取需要清理的 request_id（在锁内）
+        async with self._permission_lock:
+            request_id = self._session_pending_requests.get(session_key)
+            if request_id:
+                self._pending_permission_responses.pop(request_id, None)
+                self._permission_results.pop(request_id, None)
+                del self._session_pending_requests[session_key]
+                cleared_permission = True
+
+        async with self._interaction_lock:
+            interaction_id = self._session_pending_interactions.get(session_key)
+            if interaction_id:
+                self._pending_interaction_responses.pop(interaction_id, None)
+                self._interaction_results.pop(interaction_id, None)
+                self._interaction_requests.pop(interaction_id, None)
+                del self._session_pending_interactions[session_key]
+                cleared_interaction = True
 
         return {
             "permission": cleared_permission,

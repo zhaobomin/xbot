@@ -890,8 +890,8 @@ class AgentRuntime:
                 await self.router.backend.reset_session(session_key)
 
             # Clear pending requests
-            if self.bus is not None and hasattr(self.bus, "clear_session_requests"):
-                cleared_requests = self.bus.clear_session_requests(session_key)
+            if self.bus is not None and hasattr(self.bus, "aclear_session_requests"):
+                cleared_requests = await self.bus.aclear_session_requests(session_key)
         except Exception as e:
             logger.warning(f"Error during terminate_session cleanup: {e}")
             # Continue to final cleanup even if backend operations fail
@@ -1025,7 +1025,7 @@ class AgentRuntime:
         except Exception as e:
             logger.debug(f"State snapshot logging failed: {e}")
 
-    def _on_backend_client_cleanup(self, session_key: str) -> None:
+    async def _on_backend_client_cleanup(self, session_key: str) -> None:
         """Callback when backend cleans up a client (TTL/LRU eviction).
 
         This ensures runtime state is synchronized when backend resources
@@ -1037,6 +1037,7 @@ class AgentRuntime:
         current_phase = self._state_coordinator.get_phase(session_key)
 
         # Only update if session is active, waiting, or in error state
+        # Note: STOPPING/RESETTING are handled by _terminate_session
         active_phases = {
             SessionPhase.RUNNING,
             SessionPhase.WAITING_PERMISSION,
@@ -1044,15 +1045,23 @@ class AgentRuntime:
             SessionPhase.ERROR,  # Also clean up ERROR state sessions
         }
 
+        # Log if in STOPPING/RESETTING state for debugging
+        if current_phase in {SessionPhase.STOPPING, SessionPhase.RESETTING}:
+            logger.debug(
+                f"Backend client cleanup for session in {current_phase.value} state: {session_key} "
+                "(will be handled by _terminate_session)"
+            )
+            return
+
         if current_phase in active_phases:
             logger.debug(
                 f"Backend client cleaned up for session: {session_key} "
                 f"(phase={current_phase.value})"
             )
 
-            # Clear pending requests if any
-            if self.bus is not None and hasattr(self.bus, "clear_session_requests"):
-                self.bus.clear_session_requests(session_key)
+            # Clear pending requests if any (async with lock protection)
+            if self.bus is not None and hasattr(self.bus, "aclear_session_requests"):
+                await self.bus.aclear_session_requests(session_key)
 
             # Transition to IDLE
             self._state_coordinator.force_transition(

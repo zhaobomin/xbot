@@ -396,45 +396,6 @@ class SessionStateCoordinator:
 
     # === 原子操作 ===
 
-    async def end_dispatch(
-        self,
-        session_key: str,
-        task: asyncio.Task,
-    ) -> bool:
-        """结束 dispatch，注销任务并更新状态。
-
-        注意：此方法执行同步操作序列，不是原子事务。
-        如果需要原子性，请使用 transaction() 方法。
-
-        Args:
-            session_key: 会话标识
-            task: 要注销的任务
-
-        Returns:
-            操作是否成功
-        """
-        SessionPhase = self._runtime._state_machine.get_phase(session_key).__class__
-
-        # First unregister the task (this will increment tasks_completed)
-        self.unregister_task(session_key, task)
-
-        # Then check remaining tasks (after unregistration)
-        remaining = [t for t in self._runtime._active_tasks.get(session_key, []) if not t.done()]
-        if not remaining:
-            self.force_transition(session_key, SessionPhase.IDLE, reason="dispatch_end")
-
-        return True
-
-    # Deprecated alias for backward compatibility
-    async def atomic_end_dispatch(
-        self,
-        session_key: str,
-        task: asyncio.Task,
-        success: bool = True,  # Keep for backward compatibility
-    ) -> bool:
-        """Deprecated: Use end_dispatch() instead."""
-        return await self.end_dispatch(session_key, task)
-
     async def atomic_cleanup_session(
         self,
         session_key: str,
