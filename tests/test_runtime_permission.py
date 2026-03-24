@@ -346,7 +346,7 @@ class TestRuntimePermissionResponse:
                 channel="telegram",
                 sender_id="user",
                 chat_id="456",
-                content="/stop",
+                content="!stop",  # Use !stop for local command (all / commands go to SDK)
             )
         )
         assert handled is False

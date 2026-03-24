@@ -118,18 +118,20 @@ class TestLocalCommandsNotEatenByInteraction:
     """回归测试：!coord 等本地命令在 WAITING_* 状态下不应被当成回复提交。"""
 
     def test_coord_in_local_runtime_commands(self):
-        """!coord 和 /coord 应该在 LOCAL_RUNTIME_COMMANDS 白名单中。"""
+        """!coord 应该在 LOCAL_RUNTIME_COMMANDS 白名单中。"""
         from xbot.agent.runtime import AgentRuntime
 
         assert "!coord" in AgentRuntime.LOCAL_RUNTIME_COMMANDS
-        assert "/coord" in AgentRuntime.LOCAL_RUNTIME_COMMANDS
+        # Note: /coord is NOT in LOCAL_RUNTIME_COMMANDS because all / commands go to SDK
+        # Only ! commands are handled locally
 
     def test_is_local_runtime_command_recognizes_coord(self):
-        """_is_local_runtime_command 应该识别 !coord 和 /coord。"""
+        """_is_local_runtime_command 应该识别 !coord。"""
         from xbot.agent.runtime import AgentRuntime
 
         assert AgentRuntime._is_local_runtime_command("!coord") is True
-        assert AgentRuntime._is_local_runtime_command("/coord") is True
+        # Note: /coord is forwarded to SDK, not handled locally
+        assert AgentRuntime._is_local_runtime_command("/coord") is False
         assert AgentRuntime._is_local_runtime_command("!state") is True
         assert AgentRuntime._is_local_runtime_command("!help") is True
 
@@ -156,7 +158,8 @@ class TestLocalCommandsNotEatenByInteraction:
         # 这是 _handle_interaction_response 的第一道检查
         # line 538: if self._is_local_runtime_command(msg.content): return False
         assert AgentRuntime._is_local_runtime_command("!coord") is True
-        assert AgentRuntime._is_local_runtime_command("/coord") is True
+        # Note: /coord is forwarded to SDK, not a local command
+        assert AgentRuntime._is_local_runtime_command("/coord") is False
 
         # 这意味着 !coord 会在 line 539 直接返回 False，不会被当成交互回复
 

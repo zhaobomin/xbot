@@ -146,7 +146,8 @@ async def test_router_runtime_slash_help_is_local_compat_entry(tmp_path) -> None
         },
     )
 
-    response = await runtime.process_direct("/help")
+    # Use !help for local help command (all / commands go to SDK)
+    response = await runtime.process_direct("!help")
 
     assert "command reference" in response
     assert "Claude SDK slash commands" in response
@@ -206,7 +207,8 @@ async def test_router_runtime_help_uses_sdk_fallback_commands_when_discovery_emp
         },
     )
 
-    response = await runtime.process_direct("/help")
+    # Use !help for local help command (all / commands go to SDK)
+    response = await runtime.process_direct("!help")
 
     assert "/help" in response
     assert "/clear" in response
@@ -215,7 +217,7 @@ async def test_router_runtime_help_uses_sdk_fallback_commands_when_discovery_emp
 
 @pytest.mark.asyncio
 async def test_router_runtime_help_merges_sdk_commands_with_fallback_baseline(tmp_path) -> None:
-    """Regression: /help must remain complete when SDK command discovery is partial."""
+    """Regression: !help must remain complete when SDK command discovery is partial."""
     from xbot.agent.runtime import AgentRuntime
     from xbot.bus.queue import MessageBus
 
@@ -238,7 +240,8 @@ async def test_router_runtime_help_merges_sdk_commands_with_fallback_baseline(tm
         },
     )
 
-    response = await runtime.process_direct("/help")
+    # Use !help for local help command (all / commands go to SDK)
+    response = await runtime.process_direct("!help")
 
     assert "/debug" in response
     # Baseline compatibility commands should always be visible.
@@ -248,7 +251,8 @@ async def test_router_runtime_help_merges_sdk_commands_with_fallback_baseline(tm
 
 
 @pytest.mark.asyncio
-async def test_router_runtime_new_is_passthrough_without_local_alias(tmp_path) -> None:
+async def test_router_runtime_new_is_local_clear(tmp_path) -> None:
+    """Test that /new is handled locally (not forwarded to SDK)."""
     from xbot.agent.runtime import AgentRuntime
     from xbot.bus.queue import MessageBus
 
@@ -272,9 +276,11 @@ async def test_router_runtime_new_is_passthrough_without_local_alias(tmp_path) -
         },
     )
 
+    # /new is handled locally, not forwarded to SDK
     response = await runtime.process_direct("/new")
 
-    assert response == "echo:/new"
+    assert "Session cleared" in response
+    # Backend is initialized during _do_clear_session -> backend.reset_session
     assert backend.initialized is True
 
 
@@ -449,7 +455,8 @@ async def test_router_runtime_reset_clears_pending_bus_requests_for_session(tmp_
         },
     )
 
-    await runtime.process_direct("/reset")
+    # Use !reset to clear pending requests (local command)
+    await runtime.process_direct("!reset")
 
     assert bus.get_pending_request_for_session("cli:direct") is None
     assert bus.get_pending_interaction_for_session("cli:direct") is None
@@ -497,7 +504,8 @@ async def test_router_runtime_stop_clears_pending_bus_requests_for_session(tmp_p
         },
     )
 
-    response = await runtime.process_direct("/stop")
+    # Use !stop to clear pending requests (local command)
+    response = await runtime.process_direct("!stop")
 
     assert "pending permission" in response
     assert "pending interaction" in response
@@ -574,7 +582,8 @@ async def test_router_runtime_state_command_reports_session_diagnostics(tmp_path
     from xbot.agent.runtime import SessionPhase
     runtime._set_session_phase("cli:direct", SessionPhase.RUNNING, reason="test")
 
-    response = await runtime.process_direct("/state")
+    # Use !state for local diagnostics (all / commands go to SDK)
+    response = await runtime.process_direct("!state")
 
     assert "Session: cli:direct" in response
     assert "Phase: running" in response
