@@ -44,7 +44,7 @@ class AgentRuntime:
     """Single runtime entrypoint for gateway and CLI."""
     # Only intercept ! commands - all / commands go to SDK
     LOCAL_RUNTIME_COMMANDS = {
-        "!help", "!restart", "!stop", "!reset", "!state", "!coord",
+        "!help", "!restart", "!stop", "!reset", "!state", "!coord", "!ver",
     }
     # 前缀匹配的命令（支持参数）
     LOCAL_RUNTIME_COMMAND_PREFIXES = ("!model",)
@@ -296,6 +296,14 @@ class AgentRuntime:
             logger.info(f"[Slash Command] Forwarding to SDK: {cmd!r} (session={msg.session_key})")
 
         # Only handle ! commands locally - other / commands go to SDK
+        if cmd == "!ver":
+            from xbot import version_text
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=version_text(),
+                metadata=msg.metadata or {},
+            )
         if cmd == "!help":
             await self.initialize()
             return OutboundMessage(
@@ -986,6 +994,7 @@ class AgentRuntime:
             "!reset or /reset — Hard reset current session state",
             "!state or /state — Show runtime session diagnostics",
             "!restart or /restart — Restart the bot process",
+            "!ver — Show version and build info",
         ]
 
         # Add workspace commands if any
