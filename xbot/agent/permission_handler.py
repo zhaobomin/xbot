@@ -237,8 +237,12 @@ class PermissionRequestHandler(BasePermissionHandler):
         current = self._current_session_key.get()
         if current:
             return current
-        if len(self._session_context) == 1:
-            return list(self._session_context.keys())[0]
+        try:
+            keys = list(self._session_context.keys())
+            if len(keys) == 1:
+                return keys[0]
+        except (IndexError, RuntimeError):
+            pass
         return None
 
     async def can_use_tool(
@@ -426,7 +430,7 @@ class CLIPermissionHandler(BasePermissionHandler):
         console.print()
 
         # 在线程中运行同步的 prompt
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             response = await loop.run_in_executor(
                 None,
@@ -459,7 +463,7 @@ class CLIPermissionHandler(BasePermissionHandler):
         print(f"  参数: {self.summarize_input(tool_input)}")
         print()
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             response = await loop.run_in_executor(
                 None,
@@ -502,7 +506,7 @@ class CLIPermissionHandler(BasePermissionHandler):
         if suggestions:
             console.print(f"[dim]建议: {' / '.join(suggestions)}[/dim]")
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             if kind in {"confirmation", "approval"}:
                 raw = await loop.run_in_executor(
@@ -544,7 +548,7 @@ class CLIPermissionHandler(BasePermissionHandler):
         print()
         print("💬 需要输入")
         print(prompt)
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         try:
             if kind in {"confirmation", "approval"}:
                 raw = await loop.run_in_executor(None, lambda: input("请选择 [y/n]: ").strip().lower())
@@ -622,7 +626,7 @@ class InteractivePermissionHandler(CLIPermissionHandler):
             console.print()
 
             # 获取用户输入
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             try:
                 response = await loop.run_in_executor(
                     None,

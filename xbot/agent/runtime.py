@@ -556,8 +556,6 @@ class AgentRuntime:
             if self.bus is not None:
                 if hasattr(self.bus, "aclear_session_requests"):
                     cleared_requests = await self.bus.aclear_session_requests(session_key)
-                elif hasattr(self.bus, "clear_session_requests"):
-                    cleared_requests = self.bus.clear_session_requests(session_key)
         except Exception as e:
             logger.warning(f"Error during terminate_session cleanup: {e}")
             # Continue to final cleanup even if backend operations fail
@@ -727,8 +725,6 @@ class AgentRuntime:
             if self.bus is not None:
                 if hasattr(self.bus, "aclear_session_requests"):
                     await self.bus.aclear_session_requests(session_key)
-                elif hasattr(self.bus, "clear_session_requests"):
-                    self.bus.clear_session_requests(session_key)
 
             # Transition to IDLE
             self._state_coordinator.force_transition(
@@ -1062,5 +1058,15 @@ class AgentRuntime:
             logger.warning(f"Error clearing session {session_key}: {e}")
 
     async def _do_restart(self) -> None:
-        await asyncio.sleep(1)
+        """Gracefully clean up resources before restarting the process."""
+        await asyncio.sleep(1)  # Allow the "Restarting..." response to be sent
+
+        # Best-effort cleanup before exec
+        try:
+            logger.info("Restart: cleaning up before exec...")
+            self.stop()
+            await self.close_mcp()
+        except Exception as e:
+            logger.warning("Restart cleanup error (continuing): {}", e)
+
         os.execv(sys.executable, [sys.executable, "-m", "xbot"] + sys.argv[1:])

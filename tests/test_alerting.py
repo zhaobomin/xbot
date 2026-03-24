@@ -42,26 +42,28 @@ class TestAlertService:
         """Test service initialization."""
         assert service.config.chat_id == "test_chat"
 
-    def test_should_alert_disabled(self, mock_bus) -> None:
+    @pytest.mark.asyncio
+    async def test_should_alert_disabled(self, mock_bus) -> None:
         """Test that alerts are skipped when disabled."""
         config = AlertConfig(enabled=False)
         service = AlertService(mock_bus, config)
-        assert service._should_alert("test") is False
+        assert await service._should_alert("test") is False
 
-    def test_should_alert_rate_limit(self, service: AlertService) -> None:
+    @pytest.mark.asyncio
+    async def test_should_alert_rate_limit(self, service: AlertService) -> None:
         """Test rate limiting - _should_alert only checks, doesn't update state."""
         # _should_alert checks cooldown, which uses _last_alert_time
         # This is updated after send_alert, not by _should_alert itself
         # So multiple calls to _should_alert will return True
-        assert service._should_alert("test") is True
-        assert service._should_alert("test") is True  # Still True - state not updated
+        assert await service._should_alert("test") is True
+        assert await service._should_alert("test") is True  # Still True - state not updated
 
         # Update the state manually
         import time
         service._last_alert_time["test"] = time.time()
 
         # Now should be blocked by cooldown
-        assert service._should_alert("test") is False
+        assert await service._should_alert("test") is False
 
     @pytest.mark.asyncio
     async def test_send_alert(self, service: AlertService, mock_bus) -> None:

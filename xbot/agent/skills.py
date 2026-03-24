@@ -1,12 +1,15 @@
 """Skills loader for agent capabilities."""
 
 import json
+import logging
 import os
 import re
 import shutil
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent / "skills"
@@ -352,7 +355,11 @@ class SkillsLoader:
             pass
 
         # Fallback: simple nested parsing for triggers/excludes
-        return self._parse_yaml_simple(yaml_content)
+        try:
+            return self._parse_yaml_simple(yaml_content)
+        except Exception:
+            logger.warning("Failed to parse YAML with fallback parser, returning empty dict")
+            return {}
 
     def _parse_yaml_simple(self, yaml_content: str) -> dict[str, Any]:
         """Simple YAML parser for basic nested structures.
@@ -375,8 +382,8 @@ class SkillsLoader:
         for line in lines:
             stripped = line.rstrip()
 
-            # Skip empty lines
-            if not stripped:
+            # Skip empty lines and comments
+            if not stripped or stripped.lstrip().startswith("#"):
                 continue
 
             # Check for list item (- something)

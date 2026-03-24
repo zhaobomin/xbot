@@ -56,7 +56,18 @@ def validate_config(config: Config) -> None:
     provider_attr = provider_name.replace("-", "_")
     provider_config = getattr(config.providers, provider_attr, None)
 
-    if not provider_config or not provider_config.api_key:
+    if not provider_config:
+        raise ConfigurationError(
+            f"API key not configured for provider '{provider_name}'. "
+            f"Please set providers.{provider_name}.api_key in config.json"
+        )
+
+    # Handle SecretStr: bool(SecretStr("")) is True, so extract the real value
+    api_key = provider_config.api_key
+    api_key_value = (
+        api_key.get_secret_value() if hasattr(api_key, "get_secret_value") else str(api_key or "")
+    )
+    if not api_key_value:
         raise ConfigurationError(
             f"API key not configured for provider '{provider_name}'. "
             f"Please set providers.{provider_name}.api_key in config.json"

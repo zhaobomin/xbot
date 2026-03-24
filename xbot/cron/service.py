@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 import time
 import uuid
 from datetime import datetime
@@ -169,7 +170,17 @@ class CronService:
             ]
         }
 
-        self.store_path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        tmp_path = self.store_path.with_suffix(".json.tmp")
+        try:
+            content = json.dumps(data, indent=2, ensure_ascii=False)
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                f.write(content)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(str(tmp_path), str(self.store_path))
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
         self._last_mtime = self.store_path.stat().st_mtime
     
     async def start(self) -> None:
@@ -299,7 +310,7 @@ class CronService:
         now = _now_ms()
 
         job = CronJob(
-            id=str(uuid.uuid4())[:8],
+            id=uuid.uuid4().hex[:16],
             name=name,
             enabled=True,
             schedule=schedule,

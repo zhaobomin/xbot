@@ -59,6 +59,8 @@ async def test_searxng_search(monkeypatch):
         })
 
     monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
+    # Mock SSRF validation so the test domain isn't rejected
+    monkeypatch.setattr("xbot.agent.tools.web._validate_url_safe", lambda url: (True, ""))
     tool = _tool(provider="searxng", base_url="https://searx.example")
     result = await tool.execute(query="test")
     assert "Result" in result

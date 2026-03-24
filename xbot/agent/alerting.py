@@ -60,29 +60,31 @@ class AlertService:
         self._alert_count = 0
         self._hour_start = time.time()
         self._last_alert_time: dict[str, float] = {}
+        self._rate_lock = asyncio.Lock()
 
-    def _should_alert(self, rule_name: str) -> bool:
+    async def _should_alert(self, rule_name: str) -> bool:
         """Check if an alert should be sent based on rate limits."""
         if not self.config.enabled:
             return False
 
-        # Reset hourly counter
-        now = time.time()
-        if now - self._hour_start > 3600:
-            self._alert_count = 0
-            self._hour_start = now
+        async with self._rate_lock:
+            # Reset hourly counter
+            now = time.time()
+            if now - self._hour_start > 3600:
+                self._alert_count = 0
+                self._hour_start = now
 
-        # Check hourly limit
-        if self._alert_count >= self.config.max_alerts_per_hour:
-            logger.warning(f"Alert rate limit reached, skipping: {rule_name}")
-            return False
+            # Check hourly limit
+            if self._alert_count >= self.config.max_alerts_per_hour:
+                logger.warning(f"Alert rate limit reached, skipping: {rule_name}")
+                return False
 
-        # Check cooldown
-        last_time = self._last_alert_time.get(rule_name, 0)
-        if now - last_time < self.config.cooldown_seconds:
-            return False
+            # Check cooldown
+            last_time = self._last_alert_time.get(rule_name, 0)
+            if now - last_time < self.config.cooldown_seconds:
+                return False
 
-        return True
+            return True
 
     async def send_alert(
         self,
@@ -102,7 +104,7 @@ class AlertService:
         Returns:
             True if alert was sent
         """
-        if not self._should_alert(title):
+        if not await self._should_alert(title):
             return False
 
         from xbot.bus.events import OutboundMessage
@@ -135,8 +137,9 @@ class AlertService:
                 content=alert_text,
             ))
 
-            self._alert_count += 1
-            self._last_alert_time[title] = time.time()
+            async with self._rate_lock:
+                self._alert_count += 1
+                self._last_alert_time[title] = time.time()
             logger.info(f"Alert sent: {title}")
             return True
 

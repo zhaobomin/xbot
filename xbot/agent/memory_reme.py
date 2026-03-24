@@ -22,7 +22,7 @@ from loguru import logger
 from xbot.utils.helpers import ensure_dir
 
 if TYPE_CHECKING:
-    from xbot.providers.base import LLMProvider
+    from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 
 # Patch sqlite3 for chromadb compatibility (requires sqlite >= 3.35.0)
 # This must be done before any chromadb imports
@@ -352,8 +352,7 @@ class ReMeMemoryStore:
     async def consolidate(
         self,
         messages: list[dict],
-        provider: LLMProvider,
-        model: str,
+        backend: "ClaudeSDKBackend",
     ) -> bool:
         """Consolidate messages into memory.
 
@@ -362,8 +361,7 @@ class ReMeMemoryStore:
 
         Args:
             messages: Messages to consolidate
-            provider: LLM provider (not used when ReMe is available)
-            model: Model name (not used when ReMe is available)
+            backend: Claude SDK backend (used by fallback MemoryStore)
 
         Returns:
             True if successful
@@ -380,20 +378,19 @@ class ReMeMemoryStore:
                 logger.warning(f"ReMe summarization failed, falling back: {e}")
 
         # Fallback: use original consolidation logic
-        return await self._fallback_consolidate(messages, provider, model)
+        return await self._fallback_consolidate(messages, backend)
 
     async def _fallback_consolidate(
         self,
         messages: list[dict],
-        provider: LLMProvider,
-        model: str,
+        backend: "ClaudeSDKBackend",
     ) -> bool:
         """Fallback consolidation using original logic."""
         # Import here to avoid circular dependency
         from xbot.agent.memory import MemoryStore
 
         temp_store = MemoryStore(self.workspace)
-        return await temp_store.consolidate(messages, provider, model)
+        return await temp_store.consolidate(messages, backend)
 
     async def close(self) -> None:
         """Clean up resources."""

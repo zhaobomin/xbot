@@ -323,7 +323,7 @@ class DingTalkChannel(BaseChannel):
                 logger.warning("DingTalk media file not found: {}", local_path)
                 return None, None, None
             data = await asyncio.to_thread(local_path.read_bytes)
-            content_type = mimetypes.guess_type(local_path.name)[0]
+            content_type = mimetypes.guess_type(local_path.name)[0] or "application/octet-stream"
             return data, local_path.name, content_type
         except Exception as e:
             logger.error("DingTalk media read error ref={} err={}", media_ref, e)

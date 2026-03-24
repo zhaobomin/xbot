@@ -279,7 +279,7 @@ class MatrixChannel(BaseChannel):
         mxc_url: str, encryption_info: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Build Matrix content payload for an uploaded file/image/audio/video."""
-        prefix = mime.split("/")[0]
+        prefix = mime.split("/")[0] if "/" in mime else ""
         msgtype = {"image": "m.image", "audio": "m.audio", "video": "m.video"}.get(prefix, "m.file")
         content: dict[str, Any] = {
             "msgtype": msgtype, "body": filename, "filename": filename,

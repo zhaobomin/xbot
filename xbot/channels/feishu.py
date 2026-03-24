@@ -77,6 +77,7 @@ class FeishuChannel(BaseChannel):
         self._stop_event = threading.Event()  # Thread-safe stop signal
         self._processed_message_ids: OrderedDict[str, float] = OrderedDict()  # message_id -> timestamp
         self._message_dedup_ttl = 300  # 5 minutes TTL for dedup cache
+        self._dedup_lock = threading.Lock()  # Protects _processed_message_ids from concurrent WebSocket callbacks
         self._ws_reconnect_delay = 5  # seconds between reconnect attempts
         self._ws_max_reconnect_delay = 60  # max delay with exponential backoff
         self._pending_messages: asyncio.Queue[tuple[Any, asyncio.Future]] | None = None
@@ -876,6 +877,19 @@ class FeishuChannel(BaseChannel):
             )
             return
 
+        # Thread-safe deduplication before scheduling async handler
+        try:
+            message_id = data.event.message.message_id
+        except (AttributeError, TypeError):
+            message_id = None
+
+        if message_id:
+            with self._dedup_lock:
+                now = time.time()
+                if message_id in self._processed_message_ids:
+                    return
+                self._processed_message_ids[message_id] = now
+
         try:
             future = asyncio.run_coroutine_threadsafe(
                 self._on_message(data), self._main_loop
@@ -891,30 +905,30 @@ class FeishuChannel(BaseChannel):
             event = data.event
             message = event.message
             sender = event.sender
-            
-            # Deduplication check with TTL-based cleanup
             message_id = message.message_id
             now = time.time()
 
-            # Clean up expired entries first (TTL-based)
-            expired_keys = [
-                key for key, ts in list(self._processed_message_ids.items())
-                if now - ts > self._message_dedup_ttl
-            ]
-            for key in expired_keys:
-                del self._processed_message_ids[key]
+            # Dedup check+mark is done in _on_message_sync (thread-safe).
+            # Here we only do TTL cleanup and trim under lock.
+            with self._dedup_lock:
+                expired_keys = [
+                    key for key, ts in list(self._processed_message_ids.items())
+                    if now - ts > self._message_dedup_ttl
+                ]
+                for key in expired_keys:
+                    del self._processed_message_ids[key]
 
-            # Check if message was already processed
-            if message_id in self._processed_message_ids:
-                return
+                # Double-check in case _on_message_sync couldn't extract message_id
+                if message_id in self._processed_message_ids:
+                    # Already marked by _on_message_sync, just ensure it's there
+                    pass
+                else:
+                    self._processed_message_ids[message_id] = now
 
-            # Mark as processed
-            self._processed_message_ids[message_id] = now
-
-            # Trim cache if still over limit after TTL cleanup
-            max_cache_size = 1000
-            while len(self._processed_message_ids) > max_cache_size:
-                self._processed_message_ids.popitem(last=False)
+                # Trim cache if still over limit after TTL cleanup
+                max_cache_size = 1000
+                while len(self._processed_message_ids) > max_cache_size:
+                    self._processed_message_ids.popitem(last=False)
 
             # Skip bot messages
             if sender.sender_type == "bot":

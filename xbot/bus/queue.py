@@ -70,9 +70,9 @@ class MessageBus:
     Also supports permission request/response flow for SDK interactions.
     """
 
-    def __init__(self):
-        self.inbound: asyncio.Queue[InboundMessage] = asyncio.Queue()
-        self.outbound: asyncio.Queue[OutboundMessage] = asyncio.Queue()
+    def __init__(self, max_queue_size: int = 1000):
+        self.inbound: asyncio.Queue[InboundMessage] = asyncio.Queue(maxsize=max_queue_size)
+        self.outbound: asyncio.Queue[OutboundMessage] = asyncio.Queue(maxsize=max_queue_size)
 
         # 权限请求/响应支持
         self._pending_permission_responses: dict[str, asyncio.Event] = {}
@@ -333,12 +333,10 @@ class MessageBus:
     def clear_permission_request(self, request_id: str) -> None:
         """清除权限请求状态。
 
-        注意：此方法不获取锁，仅用于内部调用或已持有锁的场景。
-        外部调用请使用 aclear_permission_request。
+        注意：此方法不获取锁，仅限 aclear_permission_request 内部调用。
         """
         self._pending_permission_responses.pop(request_id, None)
         self._permission_results.pop(request_id, None)
-        # 清理相关的 session 追踪
         to_remove = [k for k, v in self._session_pending_requests.items() if v == request_id]
         for k in to_remove:
             del self._session_pending_requests[k]
@@ -346,8 +344,7 @@ class MessageBus:
     def clear_interaction_request(self, request_id: str) -> None:
         """清除通用交互请求状态。
 
-        注意：此方法不获取锁，仅用于内部调用或已持有锁的场景。
-        外部调用请使用 aclear_interaction_request。
+        注意：此方法不获取锁，仅限 aclear_interaction_request 内部调用。
         """
         self._pending_interaction_responses.pop(request_id, None)
         self._interaction_results.pop(request_id, None)
@@ -378,7 +375,8 @@ class MessageBus:
     def clear_session_requests(self, session_key: str) -> dict[str, bool]:
         """清理指定会话下挂起的权限与交互请求。
 
-        注意：此方法是同步的，不获取锁。推荐使用 aclear_session_requests。
+        .. deprecated:: 使用 aclear_session_requests 代替。
+           此同步方法不获取锁，在并发场景下不安全。
         """
         cleared_permission = False
         cleared_interaction = False

@@ -1,5 +1,6 @@
 """Tool registry for dynamic tool management."""
 
+import threading
 from typing import Any
 
 from xbot.agent.tools.base import Tool
@@ -10,18 +11,22 @@ class ToolRegistry:
     Registry for agent tools.
 
     Allows dynamic registration and execution of tools.
+    Uses a threading.Lock to protect dict mutations for safety.
     """
 
     def __init__(self):
         self._tools: dict[str, Tool] = {}
+        self._lock = threading.Lock()
 
     def register(self, tool: Tool) -> None:
         """Register a tool."""
-        self._tools[tool.name] = tool
+        with self._lock:
+            self._tools[tool.name] = tool
 
     def unregister(self, name: str) -> None:
         """Unregister a tool by name."""
-        self._tools.pop(name, None)
+        with self._lock:
+            self._tools.pop(name, None)
 
     def get(self, name: str) -> Tool | None:
         """Get a tool by name."""
@@ -33,7 +38,7 @@ class ToolRegistry:
 
     def get_definitions(self) -> list[dict[str, Any]]:
         """Get all tool definitions in OpenAI format."""
-        return [tool.to_schema() for tool in self._tools.values()]
+        return [tool.to_schema() for tool in list(self._tools.values())]
 
     async def execute(self, name: str, params: dict[str, Any]) -> str:
         """Execute a tool by name with given parameters."""

@@ -199,7 +199,11 @@ def _find_match(content: str, old_text: str) -> tuple[str | None, int]:
             candidates.append("\n".join(window))
 
     if candidates:
-        return candidates[0], len(candidates)
+        # Count how many candidates are identical to the first match,
+        # since content.replace() uses exact string matching.
+        first = candidates[0]
+        exact_count = content.count(first)
+        return first, exact_count
     return None, 0
 
 

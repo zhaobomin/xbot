@@ -75,11 +75,13 @@ def split_message(content: str, max_len: int = 2000) -> list[str]:
         cut = content[:max_len]
         # Try to break at newline first, then space, then hard break
         pos = cut.rfind('\n')
-        if pos <= 0:
+        if pos < 1:
             pos = cut.rfind(' ')
-        if pos <= 0:
+        if pos < 1:
             pos = max_len
-        chunks.append(content[:pos])
+        chunk = content[:pos]
+        if chunk:  # Guard against empty chunks
+            chunks.append(chunk)
         content = content[pos:].lstrip()
     return chunks
 

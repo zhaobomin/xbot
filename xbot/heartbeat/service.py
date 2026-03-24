@@ -122,7 +122,7 @@ class HeartbeatService:
             if not is_error or not any(marker in err_text for marker in _TRANSIENT_ERROR_MARKERS):
                 break
 
-        if not response.has_tool_calls:
+        if response is None or not getattr(response, "has_tool_calls", False):
             return "skip", ""
 
         args = response.tool_calls[0].arguments

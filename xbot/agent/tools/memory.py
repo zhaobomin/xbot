@@ -89,6 +89,7 @@ class MemoryTool(Tool):
         content: str | None = None,
         query: str | None = None,
         max_results: int = 5,
+        **kwargs,
     ) -> str:
         """Execute memory action.
 

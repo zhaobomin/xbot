@@ -426,6 +426,9 @@ class StateTransaction:
                 if op.rollback_op == "set_phase":
                     from xbot.agent.state_machine import SessionPhase
 
+                    if not op.rollback_args:
+                        logger.warning("Rollback set_phase: missing args")
+                        continue
                     phase = op.rollback_args[0]
                     self._coordinator.force_transition(
                         self._session_key,
@@ -433,9 +436,15 @@ class StateTransaction:
                         reason=op.rollback_kwargs.get("reason", "rollback"),
                     )
                 elif op.rollback_op == "unregister_task":
+                    if not op.rollback_args:
+                        logger.warning("Rollback unregister_task: missing args")
+                        continue
                     task = op.rollback_args[0]
                     self._coordinator.unregister_task(self._session_key, task)
                 elif op.rollback_op == "register_task":
+                    if not op.rollback_args:
+                        logger.warning("Rollback register_task: missing args")
+                        continue
                     task = op.rollback_args[0]
                     self._coordinator.register_task(self._session_key, task)
                 elif op.rollback_op == "release_lock":

@@ -637,7 +637,8 @@ class ClaudeSDKBackend(AgentBackend):
         Returns:
             List of delegation trace dictionaries
         """
-        traces = self._delegation_traces
+        # Snapshot to avoid race with concurrent _add_trace writes
+        traces = list(self._delegation_traces)
         if session_key:
             traces = [t for t in traces if t.session_key == session_key]
         return [t.to_dict() for t in traces]
@@ -661,6 +662,13 @@ class ClaudeSDKBackend(AgentBackend):
         session_contexts = self._shared_resources.setdefault("_session_contexts", {})
         context_tuple = (context.channel, context.chat_id)
         session_contexts[context.session_key] = context_tuple
+        # Prevent unbounded growth: keep only the most recent entries
+        _MAX_SESSION_CONTEXTS = 500
+        if len(session_contexts) > _MAX_SESSION_CONTEXTS:
+            # Remove oldest entries (dict preserves insertion order in Python 3.7+)
+            excess = len(session_contexts) - _MAX_SESSION_CONTEXTS
+            for _ in range(excess):
+                session_contexts.pop(next(iter(session_contexts)))
         logger.info(
             "[Session Context] Set mapping: session_key='{}' -> (channel='{}', chat_id='{}'). "
             "Current keys in session_contexts: {}",

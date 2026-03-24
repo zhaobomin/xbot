@@ -7,7 +7,7 @@ import select
 import signal
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 # Force UTF-8 encoding for Windows console
 if sys.platform == "win32":
@@ -1207,7 +1207,7 @@ provider_app = typer.Typer(help="Manage providers")
 app.add_typer(provider_app, name="provider")
 
 
-_LOGIN_HANDLERS: dict[str, callable] = {}
+_LOGIN_HANDLERS: dict[str, Callable] = {}
 
 
 def _register_login(name: str):

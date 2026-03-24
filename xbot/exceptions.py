@@ -23,7 +23,7 @@ Exception Hierarchy:
     │   ├── ToolNotFoundError
     │   ├── ToolExecutionError
     │   └── PermissionRequestError
-    └── MemoryError
+    └── XbotMemoryError
         ├── MemoryConsolidationError
         └── MemoryStoreError
 """
@@ -187,16 +187,20 @@ class PermissionRequestError(ToolError):
 # Memory Errors
 # =============================================================================
 
-class MemoryError(XbotError):
+class XbotMemoryError(XbotError):
     """Base exception for memory-related errors."""
     pass
 
 
-class MemoryConsolidationError(MemoryError):
+class MemoryConsolidationError(XbotMemoryError):
     """Raised when memory consolidation fails."""
     pass
 
 
-class MemoryStoreError(MemoryError):
+class MemoryStoreError(XbotMemoryError):
     """Raised when memory storage operations fail."""
     pass
+
+
+# Backward compatibility alias
+MemoryError = XbotMemoryError
