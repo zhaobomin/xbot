@@ -110,7 +110,18 @@ class SessionStateCoordinator:
         Returns:
             会话是否存在
         """
-        return session_key in self._runtime._state_machine._states
+        return self._runtime._state_machine.has_session(session_key)
+
+    def list_state_session_keys(self) -> set[str]:
+        """获取状态机中已存在的 session key（不触发创建）。"""
+        return self._runtime._state_machine.list_session_keys()
+
+    def list_tracked_session_keys(self) -> set[str]:
+        """获取协调器已跟踪的全部 session key。"""
+        keys = set(self.list_state_session_keys())
+        keys.update(self._runtime._active_tasks.keys())
+        keys.update(self._runtime._session_locks.keys())
+        return keys
 
     # === 状态变更操作 ===
 
@@ -353,12 +364,12 @@ class SessionStateCoordinator:
         result = {
             "tasks_cancelled": self.cancel_active_tasks(session_key),
             "lock_released": self.release_lock(session_key),
-            "state_cleared": session_key in self._runtime._state_machine._states,
+            "state_cleared": self._runtime._state_machine.has_session(session_key),
         }
 
         # 清理状态机
-        if session_key in self._runtime._state_machine._states:
-            del self._runtime._state_machine._states[session_key]
+        if self._runtime._state_machine.has_session(session_key):
+            self._runtime._state_machine.clear(session_key)
 
         return result
 

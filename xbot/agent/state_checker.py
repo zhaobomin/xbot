@@ -127,11 +127,12 @@ class StateConsistencyChecker:
         Returns:
             StateSnapshot 状态快照
         """
-        # 获取 Runtime 状态
-        phase = self._runtime._state_machine.get_phase(session_key)
-        state = self._runtime._state_machine.get_state(session_key)
-        tasks = self._runtime._active_tasks.get(session_key, [])
-        has_lock = session_key in self._runtime._session_locks
+        # 获取 Runtime 状态（通过协调器公开接口，避免直接访问状态机私有字段）
+        coordinator = self._runtime._state_coordinator
+        phase = coordinator.get_phase(session_key)
+        state = coordinator.get_state(session_key)
+        active_tasks = coordinator.get_active_tasks(session_key)
+        has_lock = coordinator.has_lock(session_key)
 
         # 获取 Backend 状态
         backend = self._runtime.router._backend
@@ -152,7 +153,7 @@ class StateConsistencyChecker:
             session_key=session_key,
             runtime_phase=phase.value,
             runtime_phase_reason=state.reason,
-            runtime_active_tasks=len([t for t in tasks if not t.done()]),
+            runtime_active_tasks=len(active_tasks),
             runtime_has_lock=has_lock,
             backend_has_client=has_client,
             backend_task_id=task_id,
@@ -210,16 +211,7 @@ class StateConsistencyChecker:
         Returns:
             session key 集合
         """
-        keys: set[str] = set()
-
-        # 从状态机获取
-        keys.update(self._runtime._state_machine._states.keys())
-
-        # 从活跃任务获取
-        keys.update(self._runtime._active_tasks.keys())
-
-        # 从 session locks 获取
-        keys.update(self._runtime._session_locks.keys())
+        keys: set[str] = set(self._runtime._state_coordinator.list_tracked_session_keys())
 
         # 从 backend 获取
         backend = self._runtime.router._backend

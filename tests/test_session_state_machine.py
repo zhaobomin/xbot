@@ -113,6 +113,20 @@ class TestSessionStateMachine:
         assert state.phase == SessionPhase.IDLE
         assert state.transition_count == 0
 
+    def test_has_session(self):
+        """Test has_session checks existence without creating state."""
+        sm = SessionStateMachine()
+        assert sm.has_session("test:123") is False
+        sm.get_state("test:123")
+        assert sm.has_session("test:123") is True
+
+    def test_list_session_keys(self):
+        """Test listing all tracked session keys."""
+        sm = SessionStateMachine()
+        sm.get_state("test:1")
+        sm.get_state("test:2")
+        assert sm.list_session_keys() == {"test:1", "test:2"}
+
     def test_is_idle(self):
         """Test is_idle check."""
         sm = SessionStateMachine()

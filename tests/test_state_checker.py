@@ -237,7 +237,7 @@ class TestStateConsistencyCheckerAllSessions:
     def test_get_all_session_keys(self, mock_runtime):
         """测试获取所有 session key"""
         # 添加一些 session
-        mock_runtime._state_machine._states["state:1"] = mock_runtime._state_machine.get_state("state:1")
+        mock_runtime._state_machine.get_state("state:1")
         mock_runtime._active_tasks["task:1"] = []
         mock_runtime._session_locks["lock:1"] = asyncio.Lock()
         mock_runtime.router._backend._clients["client:1"] = "mock"
@@ -296,5 +296,9 @@ def mock_runtime():
     bus.get_pending_request_for_session = get_pending_permission
     bus.get_pending_interaction_for_session = get_pending_interaction
     runtime.bus = bus
+
+    # 状态协调器（供 checker 通过公开接口访问状态）
+    from xbot.agent.state_coordinator import SessionStateCoordinator
+    runtime._state_coordinator = SessionStateCoordinator(runtime)
 
     return runtime

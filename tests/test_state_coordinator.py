@@ -84,6 +84,7 @@ class TestSessionStateCoordinatorPhaseRead:
     def test_has_session_true(self, mock_runtime):
         """测试会话存在"""
         mock_runtime._state_machine._states = {"test:1": MagicMock()}
+        mock_runtime._state_machine.has_session.side_effect = lambda key: key in mock_runtime._state_machine._states
 
         coordinator = SessionStateCoordinator(mock_runtime)
         assert coordinator.has_session("test:1") is True
@@ -91,6 +92,7 @@ class TestSessionStateCoordinatorPhaseRead:
     def test_has_session_false(self, mock_runtime):
         """测试会话不存在"""
         mock_runtime._state_machine._states = {}
+        mock_runtime._state_machine.has_session.side_effect = lambda key: key in mock_runtime._state_machine._states
 
         coordinator = SessionStateCoordinator(mock_runtime)
         assert coordinator.has_session("test:1") is False
@@ -304,6 +306,8 @@ class TestSessionStateCoordinatorCleanup:
     def test_cleanup_session(self, mock_runtime):
         """测试清理会话"""
         mock_runtime._state_machine._states = {"test:1": MagicMock()}
+        mock_runtime._state_machine.has_session.side_effect = lambda key: key in mock_runtime._state_machine._states
+        mock_runtime._state_machine.clear.side_effect = lambda key: mock_runtime._state_machine._states.pop(key, None)
 
         task = MagicMock(spec=asyncio.Task)
         task.done.return_value = False
@@ -404,6 +408,9 @@ def mock_runtime():
     state_machine.transition = MagicMock()
     state_machine.force_transition = MagicMock()
     runtime._state_machine = state_machine
+    state_machine.has_session = MagicMock(side_effect=lambda key: key in state_machine._states)
+    state_machine.list_session_keys = MagicMock(side_effect=lambda: set(state_machine._states.keys()))
+    state_machine.clear = MagicMock(side_effect=lambda key: state_machine._states.pop(key, None))
 
     runtime._active_tasks = {}
     runtime._session_locks = {}

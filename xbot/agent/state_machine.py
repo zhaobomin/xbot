@@ -265,6 +265,17 @@ class SessionStateMachine:
         """
         self._states.pop(session_key, None)
 
+    def has_session(self, session_key: str) -> bool:
+        """Check whether a session state already exists.
+
+        Unlike get_state(), this method does not create a new state entry.
+        """
+        return session_key in self._states
+
+    def list_session_keys(self) -> set[str]:
+        """Return all session keys currently tracked by the state machine."""
+        return set(self._states.keys())
+
     def is_idle(self, session_key: str) -> bool:
         """Check if session is idle.
 
