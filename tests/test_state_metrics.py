@@ -128,8 +128,9 @@ class TestStateMetricsCollector:
 
     def test_collect_with_inconsistencies(self, mock_runtime):
         """测试有不一致情况的收集"""
-        # 创建不一致状态：RUNNING 但没有 client
+        # 创建不一致状态：有 backend task_id 但没有 client
         mock_runtime._state_machine.force_transition("test:1", SessionPhase.RUNNING)
+        mock_runtime.router._backend._active_task_ids["test:1"] = "task-123"
 
         collector = StateMetricsCollector(mock_runtime)
         metrics = collector.collect()
@@ -156,8 +157,9 @@ class TestStateMetricsCollector:
 
     def test_is_healthy_with_issues(self, mock_runtime):
         """测试健康状态 - 有问题"""
-        # 创建不一致状态
+        # 创建不一致状态：有 backend task_id 但没有 client
         mock_runtime._state_machine.force_transition("test:1", SessionPhase.RUNNING)
+        mock_runtime.router._backend._active_task_ids["test:1"] = "task-123"
 
         collector = StateMetricsCollector(mock_runtime)
         is_healthy, message = collector.is_healthy()

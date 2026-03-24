@@ -252,18 +252,27 @@ class Config(BaseSettings):
             kw = kw.lower()
             return kw in model_lower or kw.replace("-", "_") in model_normalized
 
+        def _get_api_key_value(p: ProviderConfig) -> str:
+            """Safely get API key value, handling both SecretStr and str types."""
+            api_key = p.api_key
+            if api_key is None:
+                return ""
+            if hasattr(api_key, "get_secret_value"):
+                return api_key.get_secret_value()
+            return str(api_key)
+
         # Explicit provider prefix wins — prevents `github-copilot/...codex` matching openai_codex.
         for spec in PROVIDERS:
             p = getattr(self.providers, spec.name, None)
             if p and model_prefix and normalized_prefix == spec.name:
-                if spec.is_oauth or spec.is_local or p.api_key.get_secret_value():
+                if spec.is_oauth or spec.is_local or _get_api_key_value(p):
                     return p, spec.name
 
         # Match by keyword (order follows PROVIDERS registry)
         for spec in PROVIDERS:
             p = getattr(self.providers, spec.name, None)
             if p and any(_kw_matches(kw) for kw in spec.keywords):
-                if spec.is_oauth or spec.is_local or p.api_key.get_secret_value():
+                if spec.is_oauth or spec.is_local or _get_api_key_value(p):
                     return p, spec.name
 
         # Fallback: configured local providers can route models without
@@ -290,7 +299,7 @@ class Config(BaseSettings):
             if spec.is_oauth:
                 continue
             p = getattr(self.providers, spec.name, None)
-            if p and p.api_key.get_secret_value():
+            if p and _get_api_key_value(p):
                 return p, spec.name
         return None, None
 
@@ -308,7 +317,10 @@ class Config(BaseSettings):
         """Get API key for the given model. Falls back to first available key."""
         p = self.get_provider(model)
         if p and p.api_key:
-            return p.api_key.get_secret_value()
+            # Handle both SecretStr and str types
+            if hasattr(p.api_key, "get_secret_value"):
+                return p.api_key.get_secret_value()
+            return str(p.api_key)
         return None
 
     def get_api_base(self, model: str | None = None) -> str | None:

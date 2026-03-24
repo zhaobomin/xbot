@@ -44,9 +44,25 @@ class TestStateManagementIntegration:
         is_consistent, issues = real_runtime._state_coordinator.check_consistency(
             session_key
         )
-        # RUNNING 但没有 client，应该不一致
+        # RUNNING 但没有 client，现在是一致的（规则已移除，因为 client 是懒加载的）
+        assert is_consistent is True
+
+    def test_state_inconsistency_with_backend_task(self, real_runtime):
+        """测试有 backend_task_id 但没有 client 时的不一致"""
+        session_key = "test:integration:2"
+
+        # 设置状态并添加 backend task_id
+        real_runtime._state_coordinator.force_transition(
+            session_key, SessionPhase.RUNNING, reason="test"
+        )
+        real_runtime.router._backend._active_task_ids[session_key] = "task-123"
+
+        # 检查一致性 - 有 task_id 但没有 client 应该不一致
+        is_consistent, issues = real_runtime._state_coordinator.check_consistency(
+            session_key
+        )
         assert is_consistent is False
-        assert any("client" in i.lower() for i in issues)
+        assert any("task" in i.lower() or "client" in i.lower() for i in issues)
 
     def test_metrics_collection_integration(self, real_runtime):
         """测试指标收集集成"""
@@ -144,16 +160,32 @@ class TestConsistencyCheckerIntegration:
         """测试检查器检测不一致"""
         session_key = "test:consistency:1"
 
-        # 设置一个不一致状态：RUNNING 但没有 backend client
+        # 设置一个不一致状态：RUNNING 有 backend task_id 但没有 client
         real_runtime._state_coordinator.force_transition(
             session_key, SessionPhase.RUNNING, reason="test"
         )
+        # 添加 backend task_id 但没有 client -> 不一致
+        real_runtime.router._backend._active_task_ids[session_key] = "task-123"
 
         # 检查
         snapshot = real_runtime._state_checker.check_session(session_key)
 
         assert not snapshot.is_consistent()
         assert len(snapshot.inconsistencies) > 0
+        assert snapshot.runtime_phase == "running"
+        assert snapshot.backend_has_client is False
+
+    def test_checker_passes_running_without_client(self, real_runtime):
+        """测试检查器通过 RUNNING 状态没有 client（client 是懒加载的）"""
+        session_key = "test:consistency:running"
+
+        # RUNNING 状态但没有 client -> 现在是一致的（规则已移除）
+        real_runtime._state_coordinator.force_transition(
+            session_key, SessionPhase.RUNNING, reason="test"
+        )
+
+        snapshot = real_runtime._state_checker.check_session(session_key)
+        assert snapshot.is_consistent()
         assert snapshot.runtime_phase == "running"
         assert snapshot.backend_has_client is False
 
@@ -205,10 +237,11 @@ class TestHealthCheckIntegration:
         # 启动服务
         await service.start()
 
-        # 创建不一致状态
+        # 创建不一致状态：有 backend task_id 但没有 client
         real_runtime._state_coordinator.force_transition(
             "test:health:1", SessionPhase.RUNNING, reason="test"
         )
+        real_runtime.router._backend._active_task_ids["test:health:1"] = "task-123"
 
         # 等待检查执行
         await asyncio.sleep(0.2)
@@ -239,11 +272,12 @@ class TestHealthCheckIntegration:
 
         service.set_alert_callback(on_alert)
 
-        # 启动并创建不一致
+        # 启动并创建不一致：有 backend task_id 但没有 client
         await service.start()
         real_runtime._state_coordinator.force_transition(
             "test:alert:1", SessionPhase.RUNNING, reason="test"
         )
+        real_runtime.router._backend._active_task_ids["test:alert:1"] = "task-123"
 
         await asyncio.sleep(0.15)
 

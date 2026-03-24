@@ -45,9 +45,21 @@ def mock_paths():
         mock_lc.side_effect = lambda _config_path=None: Config()
 
         def _save_config(config: Config, config_path: Path | None = None):
+            from pydantic import SecretStr
+
             target = config_path or config_file
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(json.dumps(config.model_dump(by_alias=True)), encoding="utf-8")
+
+            def secret_str_encoder(obj):
+                """Custom encoder for SecretStr to serialize actual values."""
+                if isinstance(obj, SecretStr):
+                    return obj.get_secret_value()
+                raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
+            target.write_text(
+                json.dumps(config.model_dump(by_alias=True), default=secret_str_encoder),
+                encoding="utf-8"
+            )
 
         mock_sc.side_effect = _save_config
 

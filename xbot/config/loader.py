@@ -271,13 +271,21 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
         config: Configuration to save.
         config_path: Optional path to save to. Uses default if not provided.
     """
+    from pydantic import SecretStr
+
     path = config_path or get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
     data = config.model_dump(by_alias=True)
 
+    def secret_str_encoder(obj):
+        """Custom encoder for SecretStr to serialize actual values."""
+        if isinstance(obj, SecretStr):
+            return obj.get_secret_value()
+        raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
+
     with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+        json.dump(data, f, indent=2, ensure_ascii=False, default=secret_str_encoder)
 
 
 def _migrate_config(data: dict) -> dict:

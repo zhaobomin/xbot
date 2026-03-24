@@ -91,6 +91,16 @@ class WebSearchTool(Tool):
         self.config = config if config is not None else WebSearchConfig()
         self.proxy = proxy
 
+    def _get_api_key(self) -> str:
+        """Get API key from config, handling SecretStr type."""
+        api_key = self.config.api_key
+        if api_key is None:
+            return ""
+        # Handle SecretStr type
+        if hasattr(api_key, "get_secret_value"):
+            return api_key.get_secret_value()
+        return str(api_key)
+
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
         provider = self.config.provider.strip().lower() or "brave"
         n = min(max(count or self.config.max_results, 1), 10)
@@ -109,7 +119,7 @@ class WebSearchTool(Tool):
             return f"Error: unknown search provider '{provider}'"
 
     async def _search_brave(self, query: str, n: int) -> str:
-        api_key = self.config.api_key or os.environ.get("BRAVE_API_KEY", "")
+        api_key = self._get_api_key() or os.environ.get("BRAVE_API_KEY", "")
         if not api_key:
             logger.warning("BRAVE_API_KEY not set, falling back to DuckDuckGo")
             return await self._search_duckduckgo(query, n)
@@ -131,7 +141,7 @@ class WebSearchTool(Tool):
             return f"Error: {e}"
 
     async def _search_tavily(self, query: str, n: int) -> str:
-        api_key = self.config.api_key or os.environ.get("TAVILY_API_KEY", "")
+        api_key = self._get_api_key() or os.environ.get("TAVILY_API_KEY", "")
         if not api_key:
             logger.warning("TAVILY_API_KEY not set, falling back to DuckDuckGo")
             return await self._search_duckduckgo(query, n)
@@ -171,7 +181,7 @@ class WebSearchTool(Tool):
             return f"Error: {e}"
 
     async def _search_jina(self, query: str, n: int) -> str:
-        api_key = self.config.api_key or os.environ.get("JINA_API_KEY", "")
+        api_key = self._get_api_key() or os.environ.get("JINA_API_KEY", "")
         if not api_key:
             logger.warning("JINA_API_KEY not set, falling back to DuckDuckGo")
             return await self._search_duckduckgo(query, n)

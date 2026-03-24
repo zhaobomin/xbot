@@ -118,7 +118,12 @@ class TestStateConsistencyCheckerDetection:
     """测试不一致检测"""
 
     def test_detect_running_without_client(self, mock_runtime):
-        """测试检测 RUNNING 状态但没有 client"""
+        """测试检测 RUNNING 状态但没有 client（此规则已移除）
+
+        注意：running_requires_client 规则已移除
+        原因：backend client 是懒加载的，RUNNING 状态可能还没有 client
+        现在只检查 task_without_client: 有 backend_task_id 时必须有 client
+        """
         # 设置 RUNNING 状态
         mock_runtime._state_machine.force_transition(
             "test:session", SessionPhase.RUNNING
@@ -127,8 +132,22 @@ class TestStateConsistencyCheckerDetection:
         checker = StateConsistencyChecker(mock_runtime)
         snapshot = checker.check_session("test:session")
 
+        # RUNNING without client 现在是一致的状态（规则已移除）
+        assert snapshot.is_consistent()
+
+    def test_detect_task_without_client(self, mock_runtime):
+        """测试检测有 backend_task_id 但没有 client"""
+        mock_runtime._state_machine.force_transition(
+            "test:session", SessionPhase.RUNNING
+        )
+        # 设置有 task_id 但没有 client
+        mock_runtime.router._backend._active_task_ids["test:session"] = "task-123"
+
+        checker = StateConsistencyChecker(mock_runtime)
+        snapshot = checker.check_session("test:session")
+
         assert not snapshot.is_consistent()
-        assert "RUNNING but no backend client" in snapshot.inconsistencies
+        assert "Has backend task_id but no client" in snapshot.inconsistencies
 
     def test_detect_waiting_permission_without_request(self, mock_runtime):
         """测试检测 WAITING_PERMISSION 状态但没有 pending request"""
@@ -207,7 +226,7 @@ class TestStateConsistencyCheckerAllSessions:
         """测试有不一致的 session"""
         # 创建两个 session，其中一个不一致
         mock_runtime._state_machine.force_transition("test:1", SessionPhase.IDLE)
-        mock_runtime._state_machine.force_transition("test:2", SessionPhase.RUNNING)  # 不一致
+        mock_runtime._state_machine.force_transition("test:2", SessionPhase.WAITING_PERMISSION)  # 不一致：没有 pending request
 
         checker = StateConsistencyChecker(mock_runtime)
         results = checker.check_all_sessions()
