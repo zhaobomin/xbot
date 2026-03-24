@@ -6,8 +6,6 @@ import asyncio
 import inspect
 import os
 import sys
-from dataclasses import dataclass
-from enum import Enum
 from pathlib import Path
 from typing import Any, Callable
 
@@ -21,206 +19,24 @@ from xbot.agent.protocol import AgentContext
 from xbot.agent.router import AgentRouter, register_default_backends
 from xbot.agent.state_checker import StateConsistencyChecker
 from xbot.agent.state_coordinator import SessionStateCoordinator
+from xbot.agent.state_machine import (
+    SessionPhase,
+    SessionState,
+    SessionStateMachine,
+    VALID_TRANSITIONS,
+)
 from xbot.agent.trace import append_session_trace
 from xbot.bus.events import InboundMessage, OutboundMessage
 
 
-class SessionPhase(str, Enum):
-    IDLE = "idle"
-    RUNNING = "running"
-    WAITING_PERMISSION = "waiting_permission"
-    WAITING_INTERACTION = "waiting_interaction"
-    STOPPING = "stopping"
-    RESETTING = "resetting"
-    ERROR = "error"
-
-
-# Valid state transitions: {from_phase: {to_phase1, to_phase2, ...}}
-# Note: IDLE -> WAITING_* is allowed for edge cases where a task ends but
-# pending requests remain (e.g., agent requests permission then finishes)
-VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
-    SessionPhase.IDLE: {
-        SessionPhase.RUNNING,
-        SessionPhase.WAITING_PERMISSION,  # Edge case: handling stale pending request
-        SessionPhase.WAITING_INTERACTION,  # Edge case: handling stale pending request
-        SessionPhase.STOPPING,
-        SessionPhase.RESETTING,
-        SessionPhase.ERROR,
-    },
-    SessionPhase.RUNNING: {
-        SessionPhase.IDLE,
-        SessionPhase.WAITING_PERMISSION,
-        SessionPhase.WAITING_INTERACTION,
-        SessionPhase.STOPPING,
-        SessionPhase.RESETTING,
-        SessionPhase.ERROR,
-    },
-    SessionPhase.WAITING_PERMISSION: {
-        SessionPhase.RUNNING,
-        SessionPhase.IDLE,
-        SessionPhase.STOPPING,
-        SessionPhase.RESETTING,
-        SessionPhase.ERROR,
-    },
-    SessionPhase.WAITING_INTERACTION: {
-        SessionPhase.RUNNING,
-        SessionPhase.IDLE,
-        SessionPhase.STOPPING,
-        SessionPhase.RESETTING,
-        SessionPhase.ERROR,
-    },
-    SessionPhase.STOPPING: {
-        SessionPhase.IDLE,
-        SessionPhase.ERROR,
-    },
-    SessionPhase.RESETTING: {
-        SessionPhase.IDLE,
-        SessionPhase.ERROR,
-    },
-    SessionPhase.ERROR: {
-        SessionPhase.IDLE,
-        SessionPhase.RESETTING,
-    },
-}
-
-
-@dataclass
-class SessionState:
-    phase: SessionPhase = SessionPhase.IDLE
-    reason: str = ""
-    previous_phase: SessionPhase | None = None
-    transition_count: int = 0
-
-
-class SessionStateMachine:
-    """Manages session state transitions with validation and logging."""
-
-    def __init__(
-        self,
-        on_transition: Callable[[str, SessionPhase, SessionPhase, str], None] | None = None,
-    ):
-        self._states: dict[str, SessionState] = {}
-        self._on_transition = on_transition
-
-    def get_state(self, session_key: str) -> SessionState:
-        """Get or create state for a session."""
-        if session_key not in self._states:
-            self._states[session_key] = SessionState()
-        return self._states[session_key]
-
-    def get_phase(self, session_key: str) -> SessionPhase:
-        """Get current phase for a session."""
-        return self.get_state(session_key).phase
-
-    def transition(
-        self,
-        session_key: str,
-        to_phase: SessionPhase,
-        *,
-        reason: str = "",
-        force: bool = False,
-    ) -> bool:
-        """Attempt a state transition.
-
-        Args:
-            session_key: Session identifier
-            to_phase: Target phase
-            reason: Reason for transition
-            force: If True, bypass validation (for error recovery)
-
-        Returns:
-            True if transition succeeded, False otherwise
-        """
-        state = self.get_state(session_key)
-        from_phase = state.phase
-
-        # Skip if already in target phase with same reason
-        if from_phase == to_phase and state.reason == reason:
-            return True
-
-        # Same phase with different reason: allow update without transition validation
-        if from_phase == to_phase:
-            state.reason = reason
-            state.transition_count += 1
-            logger.debug(
-                f"Session state reason update: {session_key} {from_phase.value} (reason: {reason})"
-            )
-            if self._on_transition:
-                self._on_transition(session_key, from_phase, to_phase, reason)
-            return True
-
-        # Validate transition
-        if not force:
-            # VALID_TRANSITIONS[from_phase] contains all valid target phases from from_phase
-            allowed_targets = VALID_TRANSITIONS.get(from_phase, set())
-            if to_phase not in allowed_targets:
-                logger.warning(
-                    f"Invalid state transition: {from_phase.value} -> {to_phase.value} "
-                    f"(session={session_key}, reason={reason})"
-                )
-                return False
-
-        # Perform transition
-        state.previous_phase = from_phase
-        state.phase = to_phase
-        state.reason = reason
-        state.transition_count += 1
-
-        # Log transition
-        logger.debug(
-            f"Session state transition: {session_key} {from_phase.value} -> {to_phase.value} ({reason})"
-        )
-
-        # Callback
-        if self._on_transition:
-            self._on_transition(session_key, from_phase, to_phase, reason)
-
-        return True
-
-    def force_transition(self, session_key: str, to_phase: SessionPhase, *, reason: str = "") -> bool:
-        """Force a state transition, bypassing validation.
-
-        Returns:
-            Always True (for consistency with transition())
-        """
-        state = self.get_state(session_key)
-        from_phase = state.phase
-
-        state.previous_phase = from_phase
-        state.phase = to_phase
-        state.reason = reason
-        state.transition_count += 1
-
-        logger.debug(
-            f"Session state transition (forced): {session_key} {from_phase.value} -> {to_phase.value} ({reason})"
-        )
-
-        if self._on_transition:
-            self._on_transition(session_key, from_phase, to_phase, reason)
-
-        return True
-
-    def reset(self, session_key: str) -> None:
-        """Reset a session to IDLE state."""
-        if session_key in self._states:
-            self._states[session_key] = SessionState()
-
-    def clear(self, session_key: str) -> None:
-        """Remove session state entirely."""
-        self._states.pop(session_key, None)
-
-    def is_idle(self, session_key: str) -> bool:
-        """Check if session is idle."""
-        return self.get_phase(session_key) == SessionPhase.IDLE
-
-    def is_waiting(self, session_key: str) -> bool:
-        """Check if session is waiting for user input."""
-        phase = self.get_phase(session_key)
-        return phase in {SessionPhase.WAITING_PERMISSION, SessionPhase.WAITING_INTERACTION}
-
-    def is_active(self, session_key: str) -> bool:
-        """Check if session has active work."""
-        return self.get_phase(session_key) == SessionPhase.RUNNING
+# Re-export for backward compatibility
+__all__ = [
+    "SessionPhase",
+    "SessionState",
+    "SessionStateMachine",
+    "VALID_TRANSITIONS",
+    "AgentRuntime",
+]
 
 
 class AgentRuntime:
@@ -439,11 +255,8 @@ class AgentRuntime:
             # Log state snapshot after state transition (avoids false "IDLE but has active tasks" warning)
             self._log_state_snapshot(msg.session_key, "dispatch_start")
 
-            # Get the lock (should exist after transaction)
-            lock = self._session_locks.get(msg.session_key)
-            if lock is None:
-                # Fallback if transaction didn't create lock
-                lock = self._session_locks.setdefault(msg.session_key, asyncio.Lock())
+            # Get the lock via coordinator
+            lock = self._state_coordinator.get_lock_object(msg.session_key)
 
             # Execute message handling
             async with lock:
@@ -518,7 +331,7 @@ class AgentRuntime:
                 # Check if this _dispatch was called from run() (task registered)
                 # or directly (no task registered)
                 current_task = asyncio.current_task()
-                registered_tasks = self._active_tasks.get(msg.session_key, [])
+                registered_tasks = self._state_coordinator.get_active_tasks(msg.session_key)
 
                 # If current task is registered, callback will handle cleanup
                 # If not registered (or no current task), this is a direct call
@@ -910,7 +723,7 @@ class AgentRuntime:
 
         try:
             # Cancel and wait for tasks (outside transaction as it's async I/O)
-            tasks = self._active_tasks.pop(session_key, [])
+            tasks = self._state_coordinator.pop_active_tasks(session_key)
             cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
             for task in tasks:
                 try:
@@ -947,7 +760,7 @@ class AgentRuntime:
 
         # For hard_reset, reset state to fresh IDLE (instead of clear which deletes)
         if hard_reset:
-            self._state_machine.reset(session_key)
+            self._state_coordinator.reset_session(session_key)
 
         return {
             "cancelled": cancelled,
@@ -984,10 +797,8 @@ class AgentRuntime:
             # Unregister via coordinator for accurate stats
             self._state_coordinator.unregister_task(session_key, task)
 
-            # Clean up empty task lists
-            tasks = self._active_tasks.get(session_key)
-            if not tasks:  # Empty list or None
-                self._active_tasks.pop(session_key, None)
+            # Clean up empty task lists via coordinator
+            self._state_coordinator.cleanup_empty_task_list(session_key)
 
             # Sync phase after task is done to ensure correct state
             # This is critical: _sync_session_phase in _dispatch's finally runs
@@ -1025,7 +836,7 @@ class AgentRuntime:
                     session_key, SessionPhase.WAITING_INTERACTION, reason="sync_pending_interaction"
                 )
                 return
-        active = [t for t in self._active_tasks.get(session_key, []) if not t.done()]
+        active = self._state_coordinator.get_active_tasks(session_key)
         if active:
             self._state_coordinator.force_transition(session_key, SessionPhase.RUNNING, reason="sync_active_tasks")
         else:
@@ -1110,9 +921,9 @@ class AgentRuntime:
                 session_key, SessionPhase.IDLE, reason="backend_client_cleanup"
             )
 
-            # Clean up related runtime state
-            self._active_tasks.pop(session_key, None)
-            self._session_locks.pop(session_key, None)
+            # Clean up related runtime state via coordinator
+            self._state_coordinator.clear_task_list(session_key)
+            self._state_coordinator.release_lock(session_key)
 
     def get_session_state(self, session_key: str) -> str:
         """Return current runtime session phase for diagnostics.
@@ -1136,7 +947,7 @@ class AgentRuntime:
 
     def _session_diagnostics_text(self, session_key: str) -> str:
         phase = self.get_session_state(session_key)
-        active_tasks = sum(1 for t in self._active_tasks.get(session_key, []) if not t.done())
+        active_tasks = len(self._state_coordinator.get_active_tasks(session_key))
         pending_permission = None
         pending_interaction = None
         if self.bus is not None:

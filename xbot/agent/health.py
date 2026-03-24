@@ -8,7 +8,7 @@ from __future__ import annotations
 import asyncio
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Callable
 
 from aiohttp import web
@@ -138,7 +138,7 @@ class HealthCheckService:
 
         return HealthCheckResult(
             healthy=all_healthy,
-            timestamp=datetime.utcnow().isoformat() + "Z",
+            timestamp=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             uptime_seconds=time.time() - self._start_time,
             components=components,
         )

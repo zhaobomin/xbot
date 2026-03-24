@@ -415,55 +415,6 @@ def mock_runtime():
     return runtime
 
 
-class TestSessionStateCoordinatorAtomicOps:
-    """测试原子操作"""
-
-    @pytest.mark.asyncio
-    async def test_atomic_cleanup_session(self, mock_runtime_with_state_machine):
-        """测试原子性清理会话"""
-        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
-
-        coordinator.force_transition("test:1", SessionPhase.RUNNING, reason="test")
-        coordinator.get_lock("test:1")
-
-        result = await coordinator.atomic_cleanup_session("test:1")
-
-        assert result["lock_released"] is True
-        assert coordinator.get_phase("test:1") == SessionPhase.IDLE
-
-    @pytest.mark.asyncio
-    async def test_atomic_wait_permission(self, mock_runtime_with_state_machine):
-        """测试原子性等待权限"""
-        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
-
-        result = await coordinator.atomic_wait_permission("test:1", "perm-123")
-
-        assert result is True
-        assert coordinator.get_phase("test:1") == SessionPhase.WAITING_PERMISSION
-
-    @pytest.mark.asyncio
-    async def test_atomic_wait_interaction(self, mock_runtime_with_state_machine):
-        """测试原子性等待交互"""
-        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
-
-        result = await coordinator.atomic_wait_interaction("test:1", "inter-456")
-
-        assert result is True
-        assert coordinator.get_phase("test:1") == SessionPhase.WAITING_INTERACTION
-
-    @pytest.mark.asyncio
-    async def test_atomic_resume_from_wait(self, mock_runtime_with_state_machine):
-        """测试原子性从等待恢复"""
-        coordinator = SessionStateCoordinator(mock_runtime_with_state_machine)
-
-        coordinator.force_transition("test:1", SessionPhase.WAITING_PERMISSION, reason="test")
-
-        result = await coordinator.atomic_resume_from_wait("test:1")
-
-        assert result is True
-        assert coordinator.get_phase("test:1") == SessionPhase.RUNNING
-
-
 # === Additional Fixtures ===
 
 @pytest.fixture

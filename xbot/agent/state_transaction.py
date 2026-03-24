@@ -28,7 +28,7 @@ from loguru import logger
 
 if TYPE_CHECKING:
     from xbot.agent.state_coordinator import SessionStateCoordinator
-    from xbot.agent.runtime import SessionPhase
+    from xbot.agent.state_machine import SessionPhase
 
 
 class TransactionState(str, Enum):
@@ -125,6 +125,7 @@ class StateTransaction:
         # 待应用的变更（延迟到提交时）
         self._pending_phase: SessionPhase | None = None
         self._pending_phase_reason: str = ""
+        self._pending_phase_force: bool = False
         self._pending_tasks: list[asyncio.Task] = []
         self._pending_unregister_tasks: list[asyncio.Task] = []
         self._pending_lock_acquire: bool = False
@@ -206,9 +207,10 @@ class StateTransaction:
 
         self._pending_phase = phase
         self._pending_phase_reason = reason
+        self._pending_phase_force = force
 
         logger.trace(
-            f"Transaction[{self._session_key}]: set_phase({phase.value}, reason={reason})"
+            f"Transaction[{self._session_key}]: set_phase({phase.value}, reason={reason}, force={force})"
         )
 
     def register_task(self, task: asyncio.Task) -> None:
@@ -336,11 +338,18 @@ class StateTransaction:
         try:
             # 应用所有待处理的变更
             if self._pending_phase is not None:
-                self._coordinator.force_transition(
-                    self._session_key,
-                    self._pending_phase,
-                    reason=self._pending_phase_reason,
-                )
+                if self._pending_phase_force:
+                    self._coordinator.force_transition(
+                        self._session_key,
+                        self._pending_phase,
+                        reason=self._pending_phase_reason,
+                    )
+                else:
+                    self._coordinator.transition(
+                        self._session_key,
+                        self._pending_phase,
+                        reason=self._pending_phase_reason,
+                    )
 
             for task in self._pending_tasks:
                 self._coordinator.register_task(self._session_key, task)
@@ -415,7 +424,7 @@ class StateTransaction:
 
             try:
                 if op.rollback_op == "set_phase":
-                    from xbot.agent.runtime import SessionPhase
+                    from xbot.agent.state_machine import SessionPhase
 
                     phase = op.rollback_args[0]
                     self._coordinator.force_transition(

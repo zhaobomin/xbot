@@ -4,6 +4,9 @@ from types import SimpleNamespace
 
 import pytest
 
+# Skip entire module if matrix dependencies are not installed
+pytest.importorskip("nio")
+
 import xbot.channels.matrix as matrix_module
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus

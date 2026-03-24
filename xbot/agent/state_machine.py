@@ -1,0 +1,300 @@
+"""Session state machine for managing agent session phases.
+
+This module provides the state machine for tracking and validating
+session state transitions in the agent runtime.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from enum import Enum
+from typing import Callable
+
+
+class SessionPhase(str, Enum):
+    """Session lifecycle phases.
+
+    The session progresses through these phases during its lifecycle:
+    - IDLE: No active work, ready to accept new requests
+    - RUNNING: Agent is processing a request
+    - WAITING_PERMISSION: Agent is waiting for user permission
+    - WAITING_INTERACTION: Agent is waiting for user input
+    - STOPPING: Session is being stopped
+    - RESETTING: Session is being reset
+    - ERROR: Session encountered an error
+    """
+
+    IDLE = "idle"
+    RUNNING = "running"
+    WAITING_PERMISSION = "waiting_permission"
+    WAITING_INTERACTION = "waiting_interaction"
+    STOPPING = "stopping"
+    RESETTING = "resetting"
+    ERROR = "error"
+
+
+# Valid state transitions: {from_phase: {to_phase1, to_phase2, ...}}
+# Note: IDLE -> WAITING_* is allowed for edge cases where a task ends but
+# pending requests remain (e.g., agent requests permission then finishes)
+VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
+    SessionPhase.IDLE: {
+        SessionPhase.RUNNING,
+        SessionPhase.WAITING_PERMISSION,  # Edge case: handling stale pending request
+        SessionPhase.WAITING_INTERACTION,  # Edge case: handling stale pending request
+        SessionPhase.STOPPING,
+        SessionPhase.RESETTING,
+        SessionPhase.ERROR,
+    },
+    SessionPhase.RUNNING: {
+        SessionPhase.IDLE,
+        SessionPhase.WAITING_PERMISSION,
+        SessionPhase.WAITING_INTERACTION,
+        SessionPhase.STOPPING,
+        SessionPhase.RESETTING,
+        SessionPhase.ERROR,
+    },
+    SessionPhase.WAITING_PERMISSION: {
+        SessionPhase.RUNNING,
+        SessionPhase.IDLE,
+        SessionPhase.STOPPING,
+        SessionPhase.RESETTING,
+        SessionPhase.ERROR,
+    },
+    SessionPhase.WAITING_INTERACTION: {
+        SessionPhase.RUNNING,
+        SessionPhase.IDLE,
+        SessionPhase.STOPPING,
+        SessionPhase.RESETTING,
+        SessionPhase.ERROR,
+    },
+    SessionPhase.STOPPING: {
+        SessionPhase.IDLE,
+        SessionPhase.ERROR,
+    },
+    SessionPhase.RESETTING: {
+        SessionPhase.IDLE,
+        SessionPhase.ERROR,
+    },
+    SessionPhase.ERROR: {
+        SessionPhase.IDLE,
+        SessionPhase.RESETTING,
+    },
+}
+
+
+@dataclass
+class SessionState:
+    """State data for a single session.
+
+    Attributes:
+        phase: Current session phase
+        reason: Reason for the current phase
+        previous_phase: The phase before the current one (for rollback)
+        transition_count: Number of transitions this session has made
+    """
+
+    phase: SessionPhase = SessionPhase.IDLE
+    reason: str = ""
+    previous_phase: SessionPhase | None = None
+    transition_count: int = 0
+
+
+class SessionStateMachine:
+    """Manages session state transitions with validation and logging.
+
+    This class provides a state machine for tracking session lifecycle
+    and validating that transitions follow allowed paths.
+
+    Example:
+        machine = SessionStateMachine()
+        machine.transition("session:1", SessionPhase.RUNNING, reason="start")
+        phase = machine.get_phase("session:1")  # RUNNING
+    """
+
+    def __init__(
+        self,
+        on_transition: Callable[[str, SessionPhase, SessionPhase, str], None] | None = None,
+    ):
+        """Initialize the state machine.
+
+        Args:
+            on_transition: Optional callback called on each transition
+                with (session_key, from_phase, to_phase, reason)
+        """
+        self._states: dict[str, SessionState] = {}
+        self._on_transition = on_transition
+
+    def get_state(self, session_key: str) -> SessionState:
+        """Get or create state for a session.
+
+        Args:
+            session_key: Session identifier
+
+        Returns:
+            SessionState for this session (creates new if not exists)
+        """
+        if session_key not in self._states:
+            self._states[session_key] = SessionState()
+        return self._states[session_key]
+
+    def get_phase(self, session_key: str) -> SessionPhase:
+        """Get current phase for a session.
+
+        Args:
+            session_key: Session identifier
+
+        Returns:
+            Current SessionPhase
+        """
+        return self.get_state(session_key).phase
+
+    def transition(
+        self,
+        session_key: str,
+        to_phase: SessionPhase,
+        *,
+        reason: str = "",
+        force: bool = False,
+    ) -> bool:
+        """Attempt a state transition.
+
+        Args:
+            session_key: Session identifier
+            to_phase: Target phase
+            reason: Reason for transition
+            force: If True, bypass validation (for error recovery)
+
+        Returns:
+            True if transition succeeded, False otherwise
+        """
+        from loguru import logger
+
+        state = self.get_state(session_key)
+        from_phase = state.phase
+
+        # Skip if already in target phase with same reason
+        if from_phase == to_phase and state.reason == reason:
+            return True
+
+        # Same phase with different reason: allow update without transition validation
+        if from_phase == to_phase:
+            state.reason = reason
+            state.transition_count += 1
+            logger.debug(
+                f"Session state reason update: {session_key} {from_phase.value} (reason: {reason})"
+            )
+            if self._on_transition:
+                self._on_transition(session_key, from_phase, to_phase, reason)
+            return True
+
+        # Validate transition
+        if not force:
+            # VALID_TRANSITIONS[from_phase] contains all valid target phases from from_phase
+            allowed_targets = VALID_TRANSITIONS.get(from_phase, set())
+            if to_phase not in allowed_targets:
+                logger.warning(
+                    f"Invalid state transition: {from_phase.value} -> {to_phase.value} "
+                    f"(session={session_key}, reason={reason})"
+                )
+                return False
+
+        # Perform transition
+        state.previous_phase = from_phase
+        state.phase = to_phase
+        state.reason = reason
+        state.transition_count += 1
+
+        # Log transition
+        from loguru import logger
+        logger.debug(
+            f"Session state transition: {session_key} {from_phase.value} -> {to_phase.value} ({reason})"
+        )
+
+        # Callback
+        if self._on_transition:
+            self._on_transition(session_key, from_phase, to_phase, reason)
+
+        return True
+
+    def force_transition(
+        self, session_key: str, to_phase: SessionPhase, *, reason: str = ""
+    ) -> bool:
+        """Force a state transition, bypassing validation.
+
+        Args:
+            session_key: Session identifier
+            to_phase: Target phase
+            reason: Reason for transition
+
+        Returns:
+            Always True (for consistency with transition())
+        """
+        from loguru import logger
+
+        state = self.get_state(session_key)
+        from_phase = state.phase
+
+        state.previous_phase = from_phase
+        state.phase = to_phase
+        state.reason = reason
+        state.transition_count += 1
+
+        logger.debug(
+            f"Session state transition (forced): {session_key} {from_phase.value} -> {to_phase.value} ({reason})"
+        )
+
+        if self._on_transition:
+            self._on_transition(session_key, from_phase, to_phase, reason)
+
+        return True
+
+    def reset(self, session_key: str) -> None:
+        """Reset a session to IDLE state.
+
+        Args:
+            session_key: Session identifier
+        """
+        if session_key in self._states:
+            self._states[session_key] = SessionState()
+
+    def clear(self, session_key: str) -> None:
+        """Remove session state entirely.
+
+        Args:
+            session_key: Session identifier
+        """
+        self._states.pop(session_key, None)
+
+    def is_idle(self, session_key: str) -> bool:
+        """Check if session is idle.
+
+        Args:
+            session_key: Session identifier
+
+        Returns:
+            True if session is in IDLE phase
+        """
+        return self.get_phase(session_key) == SessionPhase.IDLE
+
+    def is_waiting(self, session_key: str) -> bool:
+        """Check if session is waiting for user input.
+
+        Args:
+            session_key: Session identifier
+
+        Returns:
+            True if session is waiting for permission or interaction
+        """
+        phase = self.get_phase(session_key)
+        return phase in {SessionPhase.WAITING_PERMISSION, SessionPhase.WAITING_INTERACTION}
+
+    def is_active(self, session_key: str) -> bool:
+        """Check if session has active work.
+
+        Args:
+            session_key: Session identifier
+
+        Returns:
+            True if session is in RUNNING phase
+        """
+        return self.get_phase(session_key) == SessionPhase.RUNNING

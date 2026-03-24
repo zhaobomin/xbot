@@ -128,6 +128,22 @@ class TestStateTransactionOperations:
 
         assert len(tx.operations) == 1
         assert tx.operations[0].operation == "set_phase"
+        # force=False (default) 应该调用 transition 而非 force_transition
+        mock_coordinator.transition.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_set_phase_force(self, mock_coordinator):
+        """测试强制设置阶段"""
+        from xbot.agent.runtime import SessionPhase
+
+        mock_coordinator.get_phase.return_value = SessionPhase.IDLE
+
+        async with StateTransaction(mock_coordinator, "test:1") as tx:
+            tx.set_phase(SessionPhase.RUNNING, reason="test", force=True)
+
+        assert len(tx.operations) == 1
+        assert tx.operations[0].operation == "set_phase"
+        # force=True 应该调用 force_transition
         mock_coordinator.force_transition.assert_called_once()
 
     @pytest.mark.asyncio

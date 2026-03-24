@@ -28,7 +28,8 @@ from typing import TYPE_CHECKING, Any, Callable
 from loguru import logger
 
 if TYPE_CHECKING:
-    from xbot.agent.runtime import AgentRuntime, SessionPhase
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.agent.state_machine import SessionPhase
 
 
 @dataclass
@@ -132,7 +133,7 @@ class SessionStateCoordinator:
         Returns:
             转换是否成功
         """
-        from xbot.agent.runtime import SessionPhase
+        from xbot.agent.state_machine import SessionPhase
 
         old_phase = self.get_phase(session_key)
 
@@ -236,6 +237,49 @@ class SessionStateCoordinator:
 
         return cancelled
 
+    def pop_active_tasks(self, session_key: str) -> list[asyncio.Task]:
+        """取出并清除活跃任务列表。
+
+        不取消任务，仅取出引用。用于需要手动处理任务的场景。
+
+        Args:
+            session_key: 会话标识
+
+        Returns:
+            活跃任务列表（可能包含已完成的任务）
+        """
+        return self._runtime._active_tasks.pop(session_key, [])
+
+    def clear_task_list(self, session_key: str) -> list[asyncio.Task]:
+        """清除任务列表条目。
+
+        无条件移除任务列表条目（不取消任务）。
+
+        Args:
+            session_key: 会话标识
+
+        Returns:
+            被移除的任务列表
+        """
+        return self._runtime._active_tasks.pop(session_key, [])
+
+    def cleanup_empty_task_list(self, session_key: str) -> bool:
+        """清理空的任务列表。
+
+        如果任务列表为空，则移除它。
+
+        Args:
+            session_key: 会话标识
+
+        Returns:
+            是否移除了空列表
+        """
+        tasks = self._runtime._active_tasks.get(session_key)
+        if not tasks:  # Empty list or None
+            self._runtime._active_tasks.pop(session_key, None)
+            return True
+        return False
+
     # === 锁管理 ===
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
@@ -281,6 +325,20 @@ class SessionStateCoordinator:
         """
         return session_key in self._runtime._session_locks
 
+    def get_lock_object(self, session_key: str) -> asyncio.Lock:
+        """获取锁对象用于 async with。
+
+        与 get_lock 不同，此方法用于获取已存在的锁对象，
+        如果不存在则创建一个新锁。
+
+        Args:
+            session_key: 会话标识
+
+        Returns:
+            会话锁对象
+        """
+        return self.get_lock(session_key)
+
     # === 会话生命周期 ===
 
     def cleanup_session(self, session_key: str) -> dict[str, Any]:
@@ -303,6 +361,16 @@ class SessionStateCoordinator:
             del self._runtime._state_machine._states[session_key]
 
         return result
+
+    def reset_session(self, session_key: str) -> None:
+        """重置会话状态到初始状态。
+
+        用于 hard_reset 场景，重置状态机到 fresh IDLE。
+
+        Args:
+            session_key: 会话标识
+        """
+        self._runtime._state_machine.reset(session_key)
 
     # === 统计信息 ===
 
@@ -329,7 +397,7 @@ class SessionStateCoordinator:
         Returns:
             (is_consistent, issues) 元组
         """
-        from xbot.agent.runtime import SessionPhase
+        from xbot.agent.state_machine import SessionPhase
 
         issues = []
 
@@ -393,98 +461,3 @@ class SessionStateCoordinator:
             on_commit=on_commit,
             on_rollback=on_rollback,
         )
-
-    # === 原子操作 ===
-
-    async def atomic_cleanup_session(
-        self,
-        session_key: str,
-        cancel_tasks: bool = True,
-    ) -> dict[str, Any]:
-        """原子性地清理会话状态。
-
-        在单个事务中清理所有会话相关的状态。
-
-        Args:
-            session_key: 会话标识
-            cancel_tasks: 是否取消活跃任务
-
-        Returns:
-            清理结果
-        """
-        from xbot.agent.runtime import SessionPhase
-
-        cancelled = 0
-        if cancel_tasks:
-            cancelled = self.cancel_active_tasks(session_key)
-
-        async with self.transaction(session_key, validate_on_commit=False) as tx:
-            tx.set_phase(SessionPhase.IDLE, reason="cleanup")
-            if self.has_lock(session_key):
-                tx.release_lock()
-
-        return {
-            "tasks_cancelled": cancelled,
-            "lock_released": not self.has_lock(session_key),
-        }
-
-    async def atomic_wait_permission(
-        self,
-        session_key: str,
-        permission_id: str,
-    ) -> bool:
-        """原子性地进入等待权限状态。
-
-        Args:
-            session_key: 会话标识
-            permission_id: 权限请求 ID
-
-        Returns:
-            操作是否成功
-        """
-        from xbot.agent.runtime import SessionPhase
-
-        async with self.transaction(session_key, validate_on_commit=False) as tx:
-            tx.set_phase(SessionPhase.WAITING_PERMISSION, reason=f"awaiting:{permission_id}")
-
-        return True
-
-    async def atomic_wait_interaction(
-        self,
-        session_key: str,
-        interaction_id: str,
-    ) -> bool:
-        """原子性地进入等待交互状态。
-
-        Args:
-            session_key: 会话标识
-            interaction_id: 交互请求 ID
-
-        Returns:
-            操作是否成功
-        """
-        from xbot.agent.runtime import SessionPhase
-
-        async with self.transaction(session_key, validate_on_commit=False) as tx:
-            tx.set_phase(SessionPhase.WAITING_INTERACTION, reason=f"awaiting:{interaction_id}")
-
-        return True
-
-    async def atomic_resume_from_wait(
-        self,
-        session_key: str,
-    ) -> bool:
-        """原子性地从等待状态恢复到运行。
-
-        Args:
-            session_key: 会话标识
-
-        Returns:
-            操作是否成功
-        """
-        from xbot.agent.runtime import SessionPhase
-
-        async with self.transaction(session_key, validate_on_commit=False) as tx:
-            tx.set_phase(SessionPhase.RUNNING, reason="resume_from_wait")
-
-        return True
