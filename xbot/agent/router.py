@@ -3,13 +3,12 @@
 Provides a unified interface for message processing through the Claude SDK.
 """
 
-import logging
 from typing import Any, AsyncIterator, Type
+
+from loguru import logger
 
 from xbot.agent.protocol import AgentBackend, AgentContext, AgentResponse
 from xbot.config.schema import AgentsConfig
-
-logger = logging.getLogger(__name__)
 
 
 class AgentRouter:
@@ -77,10 +76,14 @@ class AgentRouter:
         Yields:
             AgentResponse objects
         """
+        logger.info(f"[Router] Starting process for session={context.session_key}, backend={self._backend.name if self._backend else None}")
+
         if not self._initialized:
             await self.initialize()
 
+        logger.info(f"[Router] Calling backend.process for session={context.session_key}")
         async for response in self._backend.process(context):
+            logger.info(f"[Router] Yielding response for session={context.session_key}")
             yield response
 
     async def shutdown(self) -> None:

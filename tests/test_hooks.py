@@ -52,12 +52,14 @@ class TestCompactHookHandler:
 
         handler = CompactHookHandler(enabled=False)
         # Create mock input and context
+        # NOTE: session_id is in INPUT (PreCompactHookInput), not in context (HookContext)
         mock_input = MagicMock()
         mock_input.messages = []
         mock_input.token_count = 0
         mock_input.trigger = "auto"
+        mock_input.session_id = "test_session"  # session_id is in input
         mock_context = MagicMock()
-        mock_context.session_id = "test_session"
+        mock_context.signal = None  # HookContext only has 'signal'
 
         import asyncio
         result = asyncio.run(handler(mock_input, None, mock_context))
@@ -69,10 +71,12 @@ class TestCompactHookHandler:
 
         handler = CompactHookHandler(enabled=True)
         # Create mock input and context
+        # NOTE: session_id is in INPUT (PreCompactHookInput), not in context (HookContext)
         mock_input = MagicMock()
         mock_input.trigger = "auto"
+        mock_input.session_id = "test_session"  # session_id is in input
         mock_context = MagicMock()
-        mock_context.session_id = "test_session"
+        mock_context.signal = None
 
         import asyncio
         result = asyncio.run(handler(mock_input, None, mock_context))
@@ -89,8 +93,9 @@ class TestCompactHookHandler:
         handler = CompactHookHandler(enabled=True)
         mock_input = MagicMock()
         mock_input.trigger = "manual"
+        mock_input.session_id = "test_session"  # session_id is in input
         mock_context = MagicMock()
-        mock_context.session_id = "test_session"
+        mock_context.signal = None
 
         import asyncio
         asyncio.run(handler(mock_input, None, mock_context))
@@ -110,8 +115,9 @@ class TestCompactHookHandler:
         for i in range(60):
             mock_input = MagicMock()
             mock_input.trigger = "auto"
+            mock_input.session_id = f"session_{i}"  # session_id is in input
             mock_context = MagicMock()
-            mock_context.session_id = f"session_{i}"
+            mock_context.signal = None
 
             import asyncio
             asyncio.run(handler(mock_input, None, mock_context))
@@ -134,8 +140,9 @@ class TestCompactHookHandler:
         handler = CompactHookHandler(enabled=True)
         mock_input = MagicMock()
         mock_input.trigger = "auto"
+        mock_input.session_id = "test_session"  # session_id is in input
         mock_context = MagicMock()
-        mock_context.session_id = "test_session"
+        mock_context.signal = None
 
         import asyncio
         result = asyncio.run(handler(mock_input, None, mock_context))

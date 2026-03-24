@@ -7,12 +7,13 @@ with support for Anthropic and Anthropic-compatible providers (Aliyun Coding Pla
 from __future__ import annotations
 
 import asyncio
-import logging
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator
+
+from loguru import logger
 
 from xbot.agent.capabilities import CapabilityCatalog, canonical_tool_name
 from xbot.agent.capability_policy import CapabilityPolicy
@@ -43,8 +44,6 @@ if TYPE_CHECKING:
         TaskProgressMessage,
         TaskStartedMessage,
     )
-
-logger = logging.getLogger(__name__)
 
 # Try to import Claude SDK
 try:
@@ -424,28 +423,52 @@ class OptionsBuilder:
         hooks: dict[str, list] = dict(self._sdk_config.hooks or {})
 
         # Add PreCompact hook if compact_notify is enabled
-        if getattr(self._sdk_config, "compact_notify", True):
+        compact_notify = getattr(self._sdk_config, "compact_notify", True)
+        logger.info("[Hooks] Building hooks, compact_notify={}", compact_notify)
+        if compact_notify:
             from xbot.agent.hooks import CompactHookHandler
             from xbot.bus.events import OutboundMessage
 
             def send_compact_notification(session_key: str, message: str) -> None:
                 """Send compact notification to the user's channel."""
+                logger.info(
+                    "[Compact Notification] Called with session_key='{}', message='{}'",
+                    session_key,
+                    message[:50] if message else "",
+                )
+
                 bus = self._shared_resources.get("bus")
                 if bus is None:
-                    logger.debug(f"No bus available for compact notification: {session_key}")
+                    logger.warning("[Compact Notification] No bus available for session: {}", session_key)
                     return
 
                 # Look up channel and chat_id for this session
                 session_contexts = self._shared_resources.get("_session_contexts", {})
+
+                # DEBUG: Log all available session keys for troubleshooting
+                logger.info(
+                    "[Compact Notification] Looking up session_key='{}' in _session_contexts. "
+                    "Available keys: {}",
+                    session_key,
+                    list(session_contexts.keys()),
+                )
+
                 context_info = session_contexts.get(session_key)
                 if context_info is None:
                     logger.warning(
-                        f"No context info for compact notification session: {session_key}. "
-                        f"The notification will not be delivered to the user."
+                        "[Compact Notification] No context info for session_key='{}'. "
+                        "Available keys: {}. The notification will NOT be delivered.",
+                        session_key,
+                        list(session_contexts.keys()),
                     )
                     return
 
                 channel, chat_id = context_info
+                logger.info(
+                    "[Compact Notification] Found context: channel='{}', chat_id='{}'",
+                    channel,
+                    chat_id,
+                )
                 # Fire and forget - send notification asynchronously
                 import asyncio
                 async def _send():
@@ -487,7 +510,9 @@ class OptionsBuilder:
                 message_callback=send_compact_notification,
             )
             hooks.setdefault("PreCompact", []).append({"hooks": [compact_handler]})
+            logger.info("[Hooks] Added PreCompact hook with CompactHookHandler, hooks keys={}", list(hooks.keys()))
 
+        logger.info("[Hooks] Final hooks configuration: {}", hooks if hooks else "None")
         return hooks if hooks else None
     
     def _build_env_config(self) -> dict[str, str]:
@@ -758,6 +783,7 @@ class ClaudeSDKBackend(AgentBackend):
         self._clients: dict[str, ClaudeSDKClient] = {}
         self._clients_lock = asyncio.Lock()
         self._client_last_used: dict[str, float] = {}  # Track last usage time for TTL cleanup
+        self._client_models: dict[str, str] = {}  # Track model used for each client (for model change detection)
         self._active_task_ids: dict[str, str] = {}
         self._session_commands: dict[str, list[str]] = {}
         self._delegation_traces: list[DelegationTrace] = []
@@ -1040,10 +1066,26 @@ class ClaudeSDKBackend(AgentBackend):
             ClaudeSDKClient instance for the session
         """
         async with self._clients_lock:
-            # Update last used time for existing client
+            # Get current model for model change detection
+            current_model = self._options_builder._get_model_name() if self._options_builder else None
+
+            # Check if client exists and model hasn't changed
             if session_key in self._clients:
-                self._client_last_used[session_key] = time.time()
-                return self._clients[session_key]
+                cached_model = self._client_models.get(session_key)
+                if cached_model == current_model:
+                    self._client_last_used[session_key] = time.time()
+                    logger.debug(f"[Client] Reusing existing client for session={session_key}, model={current_model}")
+                    return self._clients[session_key]
+                else:
+                    # Model changed, need to recreate client
+                    logger.info(f"[Client] Model changed from {cached_model} to {current_model}, recreating client for session={session_key}")
+                    old_client = self._clients.pop(session_key)
+                    try:
+                        await old_client.disconnect()
+                    except Exception:
+                        pass
+                    self._client_last_used.pop(session_key, None)
+                    self._client_models.pop(session_key, None)
 
             # Cleanup expired clients before creating new one
             await self._cleanup_stale_clients_unlocked()
@@ -1052,11 +1094,29 @@ class ClaudeSDKBackend(AgentBackend):
             if len(self._clients) >= self.MAX_CLIENTS:
                 await self._evict_lru_client_unlocked()
 
+            # Create new client with timing
+            client_start = time.perf_counter()
+            logger.info(f"[Client] Creating new client for session={session_key}")
+
             client = _ClaudeSDKClient(options=self._build_options(session_key))
+
+            connect_start = time.perf_counter()
             await client.connect()
+            connect_time = time.perf_counter() - connect_start
+            logger.info(f"[Client] connect() took {connect_time:.2f}s for session={session_key}")
+
+            refresh_start = time.perf_counter()
             await self._refresh_session_commands(session_key, client)
+            refresh_time = time.perf_counter() - refresh_start
+            logger.info(f"[Client] get_server_info() took {refresh_time:.2f}s for session={session_key}")
+
+            total_time = time.perf_counter() - client_start
+            logger.info(f"[Client] Total client creation took {total_time:.2f}s for session={session_key}")
+
             self._clients[session_key] = client
             self._client_last_used[session_key] = time.time()
+            self._client_models[session_key] = current_model  # Track the model used
+            logger.info(f"[Client] Client created for session={session_key}, model={current_model}")
             return client
 
     async def _cleanup_stale_clients_unlocked(self) -> int:
@@ -1258,12 +1318,24 @@ class ClaudeSDKBackend(AgentBackend):
         Yields:
             AgentResponse objects
         """
+        process_start = time.perf_counter()
+        # Debug: Log entry to backend process
+        logger.info(f"[Backend Process] Starting process for session={context.session_key}, prompt_preview={context.prompt[:50]!r}")
+
         # Store session context for compact notifications
         # Maps session_key to (channel, chat_id) tuple
         # This ensures hooks can find the context when processing messages
         session_contexts = self._shared_resources.setdefault("_session_contexts", {})
         context_tuple = (context.channel, context.chat_id)
         session_contexts[context.session_key] = context_tuple
+        logger.info(
+            "[Session Context] Set mapping: session_key='{}' -> (channel='{}', chat_id='{}'). "
+            "Current keys in session_contexts: {}",
+            context.session_key,
+            context.channel,
+            context.chat_id,
+            list(session_contexts.keys()),
+        )
 
         if self._tool_adapter:
             if not self._tool_adapter._tools:
@@ -1292,11 +1364,14 @@ class ClaudeSDKBackend(AgentBackend):
         # Detect triggered skills based on user message
         triggered_skills_prefix = ""
         if self._context_builder:
+            skills_start = time.perf_counter()
             triggered_skills = self._context_builder.skills.get_triggered_skills(
                 user_message=context.prompt,
                 code_context="",  # Could be enhanced to include file content
                 file_paths=None,
             )
+            skills_time = time.perf_counter() - skills_start
+            logger.info(f"[Backend Process] get_triggered_skills took {skills_time:.3f}s for session={context.session_key}")
             if triggered_skills:
                 triggered_content = self._context_builder.skills.load_skills_for_context(triggered_skills)
                 if triggered_content:
@@ -1371,6 +1446,7 @@ class ClaudeSDKBackend(AgentBackend):
             
             client = await self._get_or_create_client(context.session_key)
             query_sent_at = time.perf_counter()
+            logger.info(f"[Backend Process] Client obtained for session={context.session_key}")
 
             # Debug: Log slash commands being sent to SDK
             if prompt.strip().startswith("/"):
@@ -1384,13 +1460,16 @@ class ClaudeSDKBackend(AgentBackend):
                     "backend": self.name,
                 },
             )
+            logger.info(f"[Backend Process] Sending query to SDK for session={context.session_key}")
             await client.query(
                 prompt,
                 session_id=self._query_session_id(context.session_key, session),
             )
+            logger.info(f"[Backend Process] Query sent, waiting for response for session={context.session_key}")
 
             first_sdk_message_logged = False
             async for message in client.receive_response():
+                logger.info(f"[Backend Process] Received message type={type(message).__name__} for session={context.session_key}")
                 is_terminal_result = isinstance(message, ResultMessage)
                 if not first_sdk_message_logged:
                     first_sdk_message_logged = True
@@ -1407,8 +1486,29 @@ class ClaudeSDKBackend(AgentBackend):
                     )
                 if isinstance(message, SystemMessage) and message.subtype == "init":
                     commands = self._extract_slash_commands(message.data)
-                    logger.info(f"SDK init message for session {context.session_key}, discovered {len(commands)} commands: {commands}")
+                    # DEBUG: Log full init message data to check for session_id
+                    logger.info(
+                        "[SDK Init] session={}, commands={}, data_keys={}, data={}",
+                        context.session_key,
+                        commands,
+                        list(message.data.keys()) if isinstance(message.data, dict) else "N/A",
+                        message.data,
+                    )
                     self._session_commands[context.session_key] = commands
+
+                    # Try to extract session_id from init message for early mapping
+                    # This ensures hooks can find context from the first message
+                    sdk_session_id = message.data.get("session_id") if isinstance(message.data, dict) else None
+                    if sdk_session_id:
+                        logger.info(
+                            "[SDK Init] Found session_id in init message: sdk_session_id='{}', mapping to context",
+                            sdk_session_id,
+                        )
+                        session_contexts[sdk_session_id] = context_tuple
+                        # Also save to session metadata
+                        if session is not None:
+                            session.metadata["sdk_session_id"] = sdk_session_id
+                            self.sessions.save(session)
                 if isinstance(message, TaskStartedMessage) and message.task_id:
                     self._active_task_ids[context.session_key] = message.task_id
                 if (
@@ -1517,8 +1617,26 @@ class ClaudeSDKBackend(AgentBackend):
                             is_terminal_result = isinstance(message, ResultMessage)
                             if isinstance(message, SystemMessage) and message.subtype == "init":
                                 commands = self._extract_slash_commands(message.data)
-                                logger.info(f"SDK init message (fallback) for session {context.session_key}, discovered {len(commands)} commands: {commands}")
+                                logger.info(
+                                    "[SDK Init Fallback] session={}, commands={}, data={}",
+                                    context.session_key,
+                                    commands,
+                                    message.data,
+                                )
                                 self._session_commands[context.session_key] = commands
+                                # Early mapping for hooks
+                                sdk_session_id = message.data.get("session_id") if isinstance(message.data, dict) else None
+                                if sdk_session_id:
+                                    logger.info(
+                                        "[SDK Init Fallback] Found session_id='{}', mapping to context",
+                                        sdk_session_id,
+                                    )
+                                    session_contexts = self._shared_resources.get("_session_contexts")
+                                    if session_contexts is not None:
+                                        session_contexts[sdk_session_id] = (context.channel, context.chat_id)
+                                    if session is not None:
+                                        session.metadata["sdk_session_id"] = sdk_session_id
+                                        self.sessions.save(session)
                             if isinstance(message, TaskStartedMessage) and message.task_id:
                                 self._active_task_ids[context.session_key] = message.task_id
                             if (

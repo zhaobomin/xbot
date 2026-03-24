@@ -74,9 +74,9 @@ class CompactHookHandler:
         """Handle PreCompact hook event.
 
         Args:
-            input: Hook input with compaction details
+            input: Hook input with compaction details (contains session_id)
             output: Current output (usually None for PreCompact)
-            context: Hook context with session info
+            context: Hook context with signal (does NOT contain session_id)
 
         Returns:
             Hook output dict with systemMessage for CLI display, or None if disabled
@@ -84,9 +84,34 @@ class CompactHookHandler:
         if not self.enabled:
             return None
 
-        # Extract information from hook input
-        session_key = getattr(context, "session_id", "unknown")
-        trigger = getattr(input, "trigger", "auto")
+        # DEBUG: Log raw input and context for troubleshooting
+        logger.info(
+            "[PreCompact Hook] Triggered! Raw input type={}, input keys={}, context type={}, context keys={}",
+            type(input).__name__,
+            list(input.keys()) if isinstance(input, dict) else "N/A",
+            type(context).__name__,
+            list(context.keys()) if isinstance(context, dict) else getattr(context, "__dict__", "N/A"),
+        )
+
+        # Extract session_id from input (PreCompactHookInput inherits from BaseHookInput)
+        # NOTE: session_id is in INPUT, not in context! context only has 'signal' field.
+        if isinstance(input, dict):
+            session_key = input.get("session_id", "unknown")
+            trigger = input.get("trigger", "auto")
+        else:
+            # Handle TypedDict objects (which support .get()) and mock objects
+            session_key = getattr(input, "session_id", None) or input.get("session_id", "unknown") if hasattr(input, "get") else getattr(input, "session_id", "unknown")
+            trigger = getattr(input, "trigger", None) or input.get("trigger", "auto") if hasattr(input, "get") else getattr(input, "trigger", "auto")
+
+        # Ensure we have string values (handles MagicMock and other edge cases)
+        session_key = str(session_key) if session_key is not None else "unknown"
+        trigger = str(trigger) if trigger is not None else "auto"
+
+        logger.info(
+            "[PreCompact Hook] Extracted session_id='{}', trigger='{}'",
+            session_key,
+            trigger,
+        )
 
         event = CompactEvent(
             session_key=str(session_key),

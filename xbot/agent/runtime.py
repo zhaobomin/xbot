@@ -648,11 +648,22 @@ class AgentRuntime:
     async def _handle_message(self, msg: InboundMessage, on_progress=None) -> OutboundMessage | None:
         cmd = msg.content.strip().lower()
 
+        # Handle /clear, /new, /reset locally (not supported by non-Claude models)
+        if cmd in ("/clear", "/new", "/reset"):
+            logger.info(f"[Local Command] Clearing session locally: {cmd!r} (session={msg.session_key})")
+            await self._do_clear_session(msg.session_key)
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="♻️ Session cleared. Starting fresh!",
+                metadata=msg.metadata or {},
+            )
+
         # Debug: Log slash commands going to SDK
         if cmd.startswith("/"):
             logger.info(f"[Slash Command] Forwarding to SDK: {cmd!r} (session={msg.session_key})")
 
-        # Only handle ! commands locally - all / commands go to SDK
+        # Only handle ! commands locally - other / commands go to SDK
         if cmd == "!help":
             await self.initialize()
             return OutboundMessage(
@@ -742,6 +753,8 @@ class AgentRuntime:
         if cmd.startswith("!model"):
             return self._handle_model_command(msg, msg.content.strip())
 
+        logger.info(f"[Runtime] After !model check, cmd={cmd!r}")
+
         # Check for workspace command
         command_prefix = ""
         cmd_name = self.commands.get_command_from_text(msg.content.strip())
@@ -776,10 +789,13 @@ class AgentRuntime:
                 "prompt_preview": msg.content[:120],
             },
         )
+        logger.info(f"[Runtime] After request_start trace for session={msg.session_key}")
 
         final = ""
         usage: dict[str, Any] | None = None
+        logger.info(f"[Runtime] Starting router.process for session={msg.session_key}, prompt={normalized_prompt[:50]!r}")
         async for response in self.router.process(context):
+            logger.info(f"[Runtime] Received response from router for session={msg.session_key}")
             if response.progress_texts:
                 for text in response.progress_texts:
                     if text:
@@ -1396,6 +1412,24 @@ class AgentRuntime:
             return prefix + body
 
         return ", ".join(_fmt(tc) for tc in tool_calls)
+
+    async def _do_clear_session(self, session_key: str) -> None:
+        """Clear session context by resetting backend session.
+
+        This is used for /clear, /new, /reset commands when using non-Claude models
+        that don't support SDK's built-in slash commands.
+        """
+        try:
+            # Reset backend session (disconnects SDK client, clears session data)
+            if hasattr(self.router.backend, "reset_session"):
+                await self.router.backend.reset_session(session_key)
+                logger.info(f"Session cleared via backend.reset_session: {session_key}")
+            else:
+                # Fallback: terminate session locally
+                await self._terminate_session(session_key, hard_reset=True)
+                logger.info(f"Session cleared via terminate_session: {session_key}")
+        except Exception as e:
+            logger.warning(f"Error clearing session {session_key}: {e}")
 
     async def _do_restart(self) -> None:
         await asyncio.sleep(1)
