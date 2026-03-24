@@ -133,6 +133,7 @@ class NanobotDingTalkHandler(CallbackHandler):
                     sender_name,
                     conversation_type,
                     conversation_id,
+                    media=file_paths or None,
                 )
             )
             self.channel._background_tasks.add(task)
@@ -509,6 +510,7 @@ class DingTalkChannel(BaseChannel):
         sender_name: str,
         conversation_type: str | None = None,
         conversation_id: str | None = None,
+        media: list[str] | None = None,
     ) -> None:
         """Handle incoming message (called by NanobotDingTalkHandler).
 
@@ -523,6 +525,7 @@ class DingTalkChannel(BaseChannel):
                 sender_id=sender_id,
                 chat_id=chat_id,
                 content=str(content),
+                media=media,
                 metadata={
                     "sender_name": sender_name,
                     "platform": "dingtalk",

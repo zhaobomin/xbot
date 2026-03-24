@@ -217,6 +217,7 @@ class WecomChannel(BaseChannel):
             chat_id = body.get("chatid", sender_id)
 
             content_parts = []
+            media_paths = []
 
             if msg_type == "text":
                 text = body.get("text", {}).get("content", "")
@@ -233,6 +234,7 @@ class WecomChannel(BaseChannel):
                     if file_path:
                         filename = os.path.basename(file_path)
                         content_parts.append(f"[image: {filename}]\n[Image: source: {file_path}]")
+                        media_paths.append(file_path)
                     else:
                         content_parts.append("[image: download failed]")
                 else:
@@ -257,6 +259,7 @@ class WecomChannel(BaseChannel):
                     file_path = await self._download_and_save_media(file_url, aes_key, "file", file_name)
                     if file_path:
                         content_parts.append(f"[file: {file_name}]\n[File: source: {file_path}]")
+                        media_paths.append(file_path)
                     else:
                         content_parts.append(f"[file: {file_name}: download failed]")
                 else:
@@ -286,12 +289,11 @@ class WecomChannel(BaseChannel):
             self._chat_frames[chat_id] = frame
 
             # Forward to message bus
-            # Note: media paths are included in content for broader model compatibility
             await self._handle_message(
                 sender_id=sender_id,
                 chat_id=chat_id,
                 content=content,
-                media=None,
+                media=media_paths or None,
                 metadata={
                     "message_id": msg_id,
                     "msg_type": msg_type,

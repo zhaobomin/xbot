@@ -54,6 +54,39 @@ console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
 
 # ---------------------------------------------------------------------------
+# Media reference parsing for @path syntax
+# ---------------------------------------------------------------------------
+
+import re as _re
+
+_MEDIA_REF_RE = _re.compile(
+    r"""@(["']?)(\S+?\.(?:png|jpg|jpeg|gif|webp|bmp))\1""",
+    _re.IGNORECASE,
+)
+
+
+def _parse_media_from_input(user_input: str) -> tuple[str, list[str]]:
+    """Extract ``@path`` image references from user input.
+
+    Returns ``(clean_text, media_paths)`` where *clean_text* has matched
+    references removed and *media_paths* contains resolved absolute paths
+    for files that exist on disk.
+    """
+    media_paths: list[str] = []
+
+    def _replace(m: _re.Match) -> str:
+        raw_path = m.group(2)
+        p = Path(raw_path).expanduser().resolve()
+        if p.is_file():
+            media_paths.append(str(p))
+            return ""
+        # File does not exist – keep original text so user sees it
+        return m.group(0)
+
+    clean = _MEDIA_REF_RE.sub(_replace, user_input).strip()
+    return clean or "请描述这张图片", media_paths
+
+# ---------------------------------------------------------------------------
 # CLI input: prompt_toolkit for editing, paste, history, and display
 # ---------------------------------------------------------------------------
 
@@ -949,11 +982,16 @@ def agent(
                         turn_done.clear()
                         turn_response.clear()
 
+                        clean_text, media_paths = _parse_media_from_input(user_input)
+                        if media_paths:
+                            console.print(f"[dim]Attached {len(media_paths)} image(s)[/dim]")
+
                         await bus.publish_inbound(InboundMessage(
                             channel=cli_channel,
                             sender_id="user",
                             chat_id=cli_chat_id,
-                            content=user_input,
+                            content=clean_text,
+                            media=media_paths,
                         ))
 
                         nonlocal _thinking

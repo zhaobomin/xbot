@@ -7,6 +7,7 @@ with support for Anthropic and Anthropic-compatible providers (Aliyun Coding Pla
 from __future__ import annotations
 
 import asyncio
+import base64
 import time
 from datetime import datetime
 from pathlib import Path
@@ -33,6 +34,7 @@ from xbot.config.provider_registry import get_provider_spec
 from xbot.config.sdk_resolver import detect_provider_from_model, resolve_sdk_provider_and_model
 from xbot.config.schema import AgentsConfig, ProviderConfig
 from xbot.session.manager import SessionManager
+from xbot.utils.helpers import detect_image_mime
 
 if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
@@ -499,6 +501,57 @@ class ClaudeSDKBackend(AgentBackend):
             session_contexts.pop(session_key, None)
         return client
 
+    # -- Multimodal (image) helpers ----------------------------------------
+
+    _MAX_IMAGE_BYTES = 20 * 1024 * 1024  # Anthropic 20 MB limit
+    _SUPPORTED_IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+
+    def _build_image_content_blocks(self, media: list[str]) -> list[dict[str, Any]]:
+        """Convert local image files to Anthropic-format image content blocks."""
+        blocks: list[dict[str, Any]] = []
+        for path in media:
+            p = Path(path)
+            if not p.is_file():
+                logger.warning("Image file not found, skipping: {}", path)
+                continue
+            if p.stat().st_size > self._MAX_IMAGE_BYTES:
+                logger.warning("Image too large (>20 MB), skipping: {}", path)
+                continue
+            raw = p.read_bytes()
+            mime = detect_image_mime(raw)
+            if not mime or mime not in self._SUPPORTED_IMAGE_MIMES:
+                logger.warning("Unsupported image format ({}), skipping: {}", mime, path)
+                continue
+            blocks.append({
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": mime,
+                    "data": base64.b64encode(raw).decode(),
+                },
+            })
+        return blocks
+
+    async def _build_multimodal_query(
+        self,
+        prompt: str,
+        media: list[str],
+        session_id: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield a single user message with image content blocks (AsyncIterable mode)."""
+        image_blocks = self._build_image_content_blocks(media)
+        if not image_blocks:
+            # All images failed – fall back to plain text
+            content: str | list[dict[str, Any]] = prompt
+        else:
+            content = image_blocks + [{"type": "text", "text": prompt}]
+        yield {
+            "type": "user",
+            "message": {"role": "user", "content": content},
+            "parent_tool_use_id": None,
+            "session_id": session_id,
+        }
+
     async def _cleanup_stale_clients_unlocked(self) -> int:
         """Remove clients that have been idle longer than TTL.
 
@@ -843,10 +896,15 @@ class ClaudeSDKBackend(AgentBackend):
                 },
             )
             logger.info(f"[Backend Process] Sending query to SDK for session={context.session_key}")
-            await client.query(
-                prompt,
-                session_id=self._query_session_id(context.session_key, session),
-            )
+            _query_session_id = self._query_session_id(context.session_key, session)
+            if context.media:
+                logger.info(f"[Backend Process] Multimodal query with {len(context.media)} media file(s)")
+                await client.query(
+                    self._build_multimodal_query(prompt, context.media, _query_session_id),
+                    session_id=_query_session_id,
+                )
+            else:
+                await client.query(prompt, session_id=_query_session_id)
             logger.info(f"[Backend Process] Query sent, waiting for response for session={context.session_key}")
 
             first_sdk_message_logged = False

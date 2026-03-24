@@ -817,6 +817,7 @@ class AgentRuntime:
         channel: str = "cli",
         chat_id: str = "direct",
         on_progress=None,
+        media: list[str] | None = None,
     ) -> str:
         msg = InboundMessage(
             channel=channel,
@@ -824,6 +825,7 @@ class AgentRuntime:
             chat_id=chat_id,
             content=content,
             session_key_override=session_key,
+            media=media or [],
         )
         if not self._is_local_runtime_command(content):
             await self.initialize()
