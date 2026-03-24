@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import AsyncExitStack
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -9,6 +10,17 @@ from loguru import logger
 
 from xbot.agent.tools.base import Tool
 from xbot.agent.tools.registry import ToolRegistry
+
+
+@dataclass
+class MCPServerConnection:
+    """Represents a connection to an MCP server with its own lifecycle."""
+    name: str
+    session: Any
+    stack: AsyncExitStack = field(default_factory=AsyncExitStack)
+    tools_registered: int = 0
+    connected: bool = False
+    error: str | None = None
 
 
 class MCPToolWrapper(Tool):
@@ -71,114 +83,165 @@ class MCPToolWrapper(Tool):
         return "\n".join(parts) or "(no output)"
 
 
-async def connect_mcp_servers(
-    mcp_servers: dict, registry: ToolRegistry, stack: AsyncExitStack
-) -> None:
-    """Connect to configured MCP servers and register their tools."""
+async def _connect_single_mcp_server(
+    name: str,
+    cfg: dict,
+    registry: ToolRegistry,
+) -> MCPServerConnection:
+    """Connect to a single MCP server with isolated error handling.
+
+    Each server gets its own AsyncExitStack, so failures don't affect other servers.
+    """
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.sse import sse_client
     from mcp.client.stdio import stdio_client
     from mcp.client.streamable_http import streamable_http_client
 
-    for name, cfg in mcp_servers.items():
-        try:
-            transport_type = cfg.type
-            if not transport_type:
-                if cfg.command:
-                    transport_type = "stdio"
-                elif cfg.url:
-                    # Convention: URLs ending with /sse use SSE transport; others use streamableHttp
-                    transport_type = (
-                        "sse" if cfg.url.rstrip("/").endswith("/sse") else "streamableHttp"
-                    )
-                else:
-                    logger.warning("MCP server '{}': no command or url configured, skipping", name)
-                    continue
+    conn = MCPServerConnection(name=name, session=None)
 
-            if transport_type == "stdio":
-                params = StdioServerParameters(
-                    command=cfg.command, args=cfg.args, env=cfg.env or None
-                )
-                read, write = await stack.enter_async_context(stdio_client(params))
-            elif transport_type == "sse":
-                def httpx_client_factory(
-                    headers: dict[str, str] | None = None,
-                    timeout: httpx.Timeout | None = None,
-                    auth: httpx.Auth | None = None,
-                ) -> httpx.AsyncClient:
-                    merged_headers = {**(cfg.headers or {}), **(headers or {})}
-                    return httpx.AsyncClient(
-                        headers=merged_headers or None,
-                        follow_redirects=True,
-                        timeout=timeout,
-                        auth=auth,
-                    )
+    try:
+        # Create isolated stack for this server
+        conn.stack = AsyncExitStack()
 
-                read, write = await stack.enter_async_context(
-                    sse_client(cfg.url, httpx_client_factory=httpx_client_factory)
-                )
-            elif transport_type == "streamableHttp":
-                # Always provide an explicit httpx client so MCP HTTP transport does not
-                # inherit httpx's default 5s timeout and preempt the higher-level tool timeout.
-                http_client = await stack.enter_async_context(
-                    httpx.AsyncClient(
-                        headers=cfg.headers or None,
-                        follow_redirects=True,
-                        timeout=None,
-                    )
-                )
-                read, write, _ = await stack.enter_async_context(
-                    streamable_http_client(cfg.url, http_client=http_client)
-                )
+        transport_type = cfg.type
+        if not transport_type:
+            if cfg.command:
+                transport_type = "stdio"
+            elif cfg.url:
+                transport_type = "sse" if cfg.url.rstrip("/").endswith("/sse") else "streamableHttp"
             else:
-                logger.warning("MCP server '{}': unknown transport type '{}'", name, transport_type)
+                logger.warning("MCP server '{}': no command or url configured, skipping", name)
+                conn.error = "No command or url configured"
+                return conn
+
+        # Setup transport based on type
+        if transport_type == "stdio":
+            params = StdioServerParameters(
+                command=cfg.command, args=cfg.args, env=cfg.env or None
+            )
+            read, write = await conn.stack.enter_async_context(stdio_client(params))
+        elif transport_type == "sse":
+            def httpx_client_factory(
+                headers: dict[str, str] | None = None,
+                timeout: httpx.Timeout | None = None,
+                auth: httpx.Auth | None = None,
+            ) -> httpx.AsyncClient:
+                merged_headers = {**(cfg.headers or {}), **(headers or {})}
+                return httpx.AsyncClient(
+                    headers=merged_headers or None,
+                    follow_redirects=True,
+                    timeout=timeout,
+                    auth=auth,
+                )
+            read, write = await conn.stack.enter_async_context(
+                sse_client(cfg.url, httpx_client_factory=httpx_client_factory)
+            )
+        elif transport_type == "streamableHttp":
+            http_client = await conn.stack.enter_async_context(
+                httpx.AsyncClient(
+                    headers=cfg.headers or None,
+                    follow_redirects=True,
+                    timeout=None,
+                )
+            )
+            read, write, _ = await conn.stack.enter_async_context(
+                streamable_http_client(cfg.url, http_client=http_client)
+            )
+        else:
+            logger.warning("MCP server '{}': unknown transport type '{}'", name, transport_type)
+            conn.error = f"Unknown transport type: {transport_type}"
+            return conn
+
+        # Create and initialize session
+        conn.session = await conn.stack.enter_async_context(ClientSession(read, write))
+        await conn.session.initialize()
+
+        # List and register tools
+        tools = await conn.session.list_tools()
+        enabled_tools = set(cfg.enabled_tools)
+        allow_all_tools = "*" in enabled_tools
+        registered_count = 0
+        matched_enabled_tools: set[str] = set()
+        available_raw_names = [tool_def.name for tool_def in tools.tools]
+        available_wrapped_names = [f"mcp_{name}_{tool_def.name}" for tool_def in tools.tools]
+
+        for tool_def in tools.tools:
+            wrapped_name = f"mcp_{name}_{tool_def.name}"
+            if (
+                not allow_all_tools
+                and tool_def.name not in enabled_tools
+                and wrapped_name not in enabled_tools
+            ):
+                logger.debug(
+                    "MCP: skipping tool '{}' from server '{}' (not in enabledTools)",
+                    wrapped_name,
+                    name,
+                )
                 continue
+            wrapper = MCPToolWrapper(conn.session, name, tool_def, tool_timeout=cfg.tool_timeout)
+            registry.register(wrapper)
+            logger.debug("MCP: registered tool '{}' from server '{}'", wrapper.name, name)
+            registered_count += 1
+            if enabled_tools:
+                if tool_def.name in enabled_tools:
+                    matched_enabled_tools.add(tool_def.name)
+                if wrapped_name in enabled_tools:
+                    matched_enabled_tools.add(wrapped_name)
 
-            session = await stack.enter_async_context(ClientSession(read, write))
-            await session.initialize()
+        if enabled_tools and not allow_all_tools:
+            unmatched_enabled_tools = sorted(enabled_tools - matched_enabled_tools)
+            if unmatched_enabled_tools:
+                logger.warning(
+                    "MCP server '{}': enabledTools entries not found: {}. Available raw names: {}. "
+                    "Available wrapped names: {}",
+                    name,
+                    ", ".join(unmatched_enabled_tools),
+                    ", ".join(available_raw_names) or "(none)",
+                    ", ".join(available_wrapped_names) or "(none)",
+                )
 
-            tools = await session.list_tools()
-            enabled_tools = set(cfg.enabled_tools)
-            allow_all_tools = "*" in enabled_tools
-            registered_count = 0
-            matched_enabled_tools: set[str] = set()
-            available_raw_names = [tool_def.name for tool_def in tools.tools]
-            available_wrapped_names = [f"mcp_{name}_{tool_def.name}" for tool_def in tools.tools]
-            for tool_def in tools.tools:
-                wrapped_name = f"mcp_{name}_{tool_def.name}"
-                if (
-                    not allow_all_tools
-                    and tool_def.name not in enabled_tools
-                    and wrapped_name not in enabled_tools
-                ):
-                    logger.debug(
-                        "MCP: skipping tool '{}' from server '{}' (not in enabledTools)",
-                        wrapped_name,
-                        name,
-                    )
-                    continue
-                wrapper = MCPToolWrapper(session, name, tool_def, tool_timeout=cfg.tool_timeout)
-                registry.register(wrapper)
-                logger.debug("MCP: registered tool '{}' from server '{}'", wrapper.name, name)
-                registered_count += 1
-                if enabled_tools:
-                    if tool_def.name in enabled_tools:
-                        matched_enabled_tools.add(tool_def.name)
-                    if wrapped_name in enabled_tools:
-                        matched_enabled_tools.add(wrapped_name)
+        conn.tools_registered = registered_count
+        conn.connected = True
+        logger.info("MCP server '{}': connected, {} tools registered", name, registered_count)
 
-            if enabled_tools and not allow_all_tools:
-                unmatched_enabled_tools = sorted(enabled_tools - matched_enabled_tools)
-                if unmatched_enabled_tools:
-                    logger.warning(
-                        "MCP server '{}': enabledTools entries not found: {}. Available raw names: {}. "
-                        "Available wrapped names: {}",
-                        name,
-                        ", ".join(unmatched_enabled_tools),
-                        ", ".join(available_raw_names) or "(none)",
-                        ", ".join(available_wrapped_names) or "(none)",
-                    )
+    except Exception as e:
+        conn.error = f"{type(e).__name__}: {str(e)}"
+        logger.error("MCP server '{}': failed to connect: {}", name, conn.error)
+        # Cleanup stack if connection failed
+        try:
+            await conn.stack.aclose()
+        except Exception:
+            pass
 
-            logger.info("MCP server '{}': connected, {} tools registered", name, registered_count)
-        except Exception as e:
-            logger.error("MCP server '{}': failed to connect: {}", name, e)
+    return conn
+
+
+async def connect_mcp_servers(
+    mcp_servers: dict, registry: ToolRegistry, stack: AsyncExitStack
+) -> None:
+    """Connect to configured MCP servers and register their tools.
+
+    Each server is connected in parallel with isolated error handling.
+    A failure in one server does not affect other servers.
+    """
+    if not mcp_servers:
+        return
+
+    # Connect to all servers in parallel
+    tasks = [
+        _connect_single_mcp_server(name, cfg, registry)
+        for name, cfg in mcp_servers.items()
+    ]
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Log summary
+    connected_count = sum(1 for r in results if isinstance(r, MCPServerConnection) and r.connected)
+    failed_count = len(results) - connected_count
+
+    if failed_count > 0:
+        logger.warning(
+            "MCP: {} servers connected, {} servers failed",
+            connected_count,
+            failed_count,
+        )
