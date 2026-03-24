@@ -11,7 +11,6 @@ from xbot.config.provider_registry import (
     get_sdk_compatible_providers,
 )
 from xbot.config.schema import Config
-from xbot.config.sdk_resolver import resolve_sdk_provider_and_model
 
 
 class ConfigurationError(Exception):

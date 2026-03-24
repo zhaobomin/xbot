@@ -33,7 +33,6 @@ from xbot.bus.queue import (
     InteractionResponse,
     MessageBus,
     PermissionRequest,
-    PermissionResponse,
 )
 
 

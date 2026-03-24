@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, SecretStr
 from pydantic.alias_generators import to_camel
 from pydantic_settings import BaseSettings
 
@@ -102,7 +102,7 @@ class AgentsConfig(Base):
 class ProviderConfig(Base):
     """LLM provider configuration."""
 
-    api_key: str = ""
+    api_key: SecretStr = SecretStr("")
     api_base: str | None = None
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
 
@@ -163,7 +163,7 @@ class WebSearchConfig(Base):
     """Web search tool configuration."""
 
     provider: str = "brave"  # brave, tavily, duckduckgo, searxng, jina
-    api_key: str = ""
+    api_key: SecretStr = SecretStr("")
     base_url: str = ""  # SearXNG base URL
     max_results: int = 5
 
@@ -254,14 +254,14 @@ class Config(BaseSettings):
         for spec in PROVIDERS:
             p = getattr(self.providers, spec.name, None)
             if p and model_prefix and normalized_prefix == spec.name:
-                if spec.is_oauth or spec.is_local or p.api_key:
+                if spec.is_oauth or spec.is_local or p.api_key.get_secret_value():
                     return p, spec.name
 
         # Match by keyword (order follows PROVIDERS registry)
         for spec in PROVIDERS:
             p = getattr(self.providers, spec.name, None)
             if p and any(_kw_matches(kw) for kw in spec.keywords):
-                if spec.is_oauth or spec.is_local or p.api_key:
+                if spec.is_oauth or spec.is_local or p.api_key.get_secret_value():
                     return p, spec.name
 
         # Fallback: configured local providers can route models without
@@ -288,7 +288,7 @@ class Config(BaseSettings):
             if spec.is_oauth:
                 continue
             p = getattr(self.providers, spec.name, None)
-            if p and p.api_key:
+            if p and p.api_key.get_secret_value():
                 return p, spec.name
         return None, None
 
@@ -305,7 +305,9 @@ class Config(BaseSettings):
     def get_api_key(self, model: str | None = None) -> str | None:
         """Get API key for the given model. Falls back to first available key."""
         p = self.get_provider(model)
-        return p.api_key if p else None
+        if p and p.api_key:
+            return p.api_key.get_secret_value()
+        return None
 
     def get_api_base(self, model: str | None = None) -> str | None:
         """Get API base URL for the given model. Applies default URLs for gateway/local providers."""
