@@ -604,16 +604,24 @@ class OptionsBuilder:
         provider_attr = provider_name.replace("-", "_")
         provider_config: ProviderConfig | None = getattr(config.providers, provider_attr, None)
 
-        if not provider_config or not provider_config.api_key:
+        def _get_api_key_value(api_key):
+            """Safely get API key value from either SecretStr or str."""
+            if api_key is None:
+                return ""
+            if hasattr(api_key, "get_secret_value"):
+                return api_key.get_secret_value()
+            return str(api_key)
+
+        api_key_value = _get_api_key_value(provider_config.api_key) if provider_config else ""
+        if not provider_config or not api_key_value:
             raise ValueError(
                 f"API key not configured for provider '{provider_name}'. "
                 f"Please set providers.{provider_name}.api_key in config.json"
             )
-        
-        api_key = provider_config.api_key
+
         base_url = provider_config.api_base if provider_config.api_base else spec.default_base_url
 
-        return api_key, base_url
+        return api_key_value, base_url
     
     def _get_model_name(self) -> str:
         """Get the model name with provider-specific transformations.
@@ -2050,15 +2058,24 @@ class ClaudeSDKBackend(AgentBackend):
 
         provider_attr = provider_name.replace("-", "_")
         provider_config: ProviderConfig | None = getattr(config.providers, provider_attr, None)
-        if not provider_config or not provider_config.api_key:
+
+        def _get_api_key_value(api_key):
+            """Safely get API key value from either SecretStr or str."""
+            if api_key is None:
+                return ""
+            if hasattr(api_key, "get_secret_value"):
+                return api_key.get_secret_value()
+            return str(api_key)
+
+        api_key_value = _get_api_key_value(provider_config.api_key) if provider_config else ""
+        if not provider_config or not api_key_value:
             raise ValueError(
                 f"API key not configured for provider '{provider_name}'. "
                 f"Please set providers.{provider_name}.api_key in config.json"
             )
 
-        api_key = provider_config.api_key
         base_url = provider_config.api_base if provider_config.api_base else spec.default_base_url
-        return api_key, base_url, provider_config.extra_headers
+        return api_key_value, base_url, provider_config.extra_headers
 
     def _resolve_consolidation_model(self) -> str:
         """Resolve model name for direct consolidation calls."""
