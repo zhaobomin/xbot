@@ -53,6 +53,7 @@ class SkillsLoader:
         self.workspace = workspace
         self.workspace_skills = workspace / "skills"
         self.scoped_workspace_skills = workspace / ".xbot" / "skills"
+        self.personal_skills = Path.home() / ".xbot" / "skills"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
 
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
@@ -63,33 +64,31 @@ class SkillsLoader:
             filter_unavailable: If True, filter out skills with unmet requirements.
 
         Returns:
-            List of skill info dicts with 'name', 'path', 'source'.
+            List of skill info dicts with 'name', 'path', 'source', 'type'.
         """
-        skills = []
+        skills: list[dict[str, str]] = []
 
-        # Workspace skills (highest priority)
-        if self.workspace_skills.exists():
-            for skill_dir in self.workspace_skills.iterdir():
-                if skill_dir.is_dir():
-                    skill_file = skill_dir / "SKILL.md"
-                    if skill_file.exists():
-                        skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "workspace"})
-
-        # Scoped workspace-local skills
-        if self.scoped_workspace_skills.exists():
-            for skill_dir in self.scoped_workspace_skills.iterdir():
+        def _scan_dir(base: Path, source: str) -> None:
+            if not base.exists():
+                return
+            for skill_dir in base.iterdir():
                 if skill_dir.is_dir():
                     skill_file = skill_dir / "SKILL.md"
                     if skill_file.exists() and not any(s["name"] == skill_dir.name for s in skills):
-                        skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "scoped_workspace"})
+                        skill_type = "python" if (skill_dir / "tool.py").exists() else "markdown"
+                        skills.append({
+                            "name": skill_dir.name,
+                            "path": str(skill_file),
+                            "source": source,
+                            "type": skill_type,
+                        })
 
-        # Built-in skills
-        if self.builtin_skills and self.builtin_skills.exists():
-            for skill_dir in self.builtin_skills.iterdir():
-                if skill_dir.is_dir():
-                    skill_file = skill_dir / "SKILL.md"
-                    if skill_file.exists() and not any(s["name"] == skill_dir.name for s in skills):
-                        skills.append({"name": skill_dir.name, "path": str(skill_file), "source": "builtin"})
+        # Priority: workspace > scoped_workspace > personal > builtin
+        _scan_dir(self.workspace_skills, "workspace")
+        _scan_dir(self.scoped_workspace_skills, "scoped_workspace")
+        _scan_dir(self.personal_skills, "personal")
+        if self.builtin_skills:
+            _scan_dir(self.builtin_skills, "builtin")
 
         # Filter by requirements
         if filter_unavailable:
@@ -114,6 +113,11 @@ class SkillsLoader:
         scoped_workspace_skill = self.scoped_workspace_skills / name / "SKILL.md"
         if scoped_workspace_skill.exists():
             return scoped_workspace_skill.read_text(encoding="utf-8")
+
+        # Check personal skills
+        personal_skill = self.personal_skills / name / "SKILL.md"
+        if personal_skill.exists():
+            return personal_skill.read_text(encoding="utf-8")
 
         # Check built-in
         if self.builtin_skills:
@@ -149,6 +153,8 @@ class SkillsLoader:
         This is used for progressive loading - the agent can read the full
         skill content using read_file when needed.
 
+        Skills with ``disable-model-invocation: true`` are excluded.
+
         Returns:
             XML-formatted skills summary.
         """
@@ -161,10 +167,16 @@ class SkillsLoader:
 
         lines = ["<skills>"]
         for s in all_skills:
-            name = escape_xml(s["name"])
+            skill_name = s["name"]
+
+            # Skip skills that opted out of model invocation
+            if not self.is_model_invocable(skill_name):
+                continue
+
+            name = escape_xml(skill_name)
             path = s["path"]
-            desc = escape_xml(self._get_skill_description(s["name"]))
-            skill_meta = self._get_skill_meta(s["name"])
+            desc = escape_xml(self._get_skill_description(skill_name))
+            skill_meta = self._get_skill_meta(skill_name)
             available = self._check_requirements(skill_meta)
 
             lines.append(f"  <skill available=\"{str(available).lower()}\">")
@@ -280,6 +292,35 @@ class SkillsLoader:
         if isinstance(value, str):
             return value.strip().lower() in {"true", "1", "yes", "on"}
         return False
+
+    def is_model_invocable(self, name: str) -> bool:
+        """Return True when the model may auto-invoke this skill.
+
+        Skills with ``disable-model-invocation: true`` in frontmatter are
+        excluded from the skills catalog so the model never sees them.
+        They can still be invoked manually via ``/name``.
+        """
+        metadata = self.get_skill_metadata(name) or {}
+        value = metadata.get("disable-model-invocation", "false")
+        if isinstance(value, bool):
+            return not value
+        if isinstance(value, str):
+            return value.strip().lower() not in {"true", "1", "yes", "on"}
+        return True
+
+    def is_user_invocable(self, name: str) -> bool:
+        """Return True when the skill should appear in the ``/`` slash menu.
+
+        Skills with ``user-invocable: false`` are hidden from the menu but
+        their description stays in the catalog for model auto-invocation.
+        """
+        metadata = self.get_skill_metadata(name) or {}
+        value = metadata.get("user-invocable", "true")
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, str):
+            return value.strip().lower() not in {"false", "0", "no", "off"}
+        return True
 
     def get_skill_triggers(self, name: str) -> SkillTriggers:
         """Get trigger configuration for a skill.
@@ -553,12 +594,18 @@ class SkillsLoader:
         This returns only essential information (name, description, availability)
         for the Skills Catalog, without loading full skill content.
 
+        Skills with ``disable-model-invocation: true`` are excluded because
+        their descriptions should NOT appear in the model's context (Claude Code
+        spec: "Description not in context, full skill loads when you invoke").
+
         Returns:
             List of skill info dicts with:
             - name: Skill name
-            - description: Skill description from frontmatter (includes trigger keywords per AgentSkills spec)
+            - description: Skill description from frontmatter
             - available: Whether requirements are met
-            - source: Source directory (workspace, scoped_workspace, builtin)
+            - source: Source directory (workspace, scoped_workspace, personal, builtin)
+            - type: "markdown" or "python"
+            - user_invocable: Whether the skill appears in slash menu
             - requires: Missing requirements (if unavailable)
         """
         all_skills = self.list_skills(filter_unavailable=False)
@@ -566,14 +613,21 @@ class SkillsLoader:
 
         for s in all_skills:
             name = s["name"]
+
+            # Skip skills that opted out of model invocation
+            if not self.is_model_invocable(name):
+                continue
+
             skill_meta = self._get_skill_meta(name)
             available = self._check_requirements(skill_meta)
 
-            skill_info = {
+            skill_info: dict[str, Any] = {
                 "name": name,
                 "description": self._get_skill_description(name),
                 "available": available,
                 "source": s["source"],
+                "type": s.get("type", "markdown"),
+                "user_invocable": self.is_user_invocable(name),
             }
 
             # Add missing requirements for unavailable skills

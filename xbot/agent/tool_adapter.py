@@ -62,6 +62,7 @@ class ToolAdapter:
         self.skill_progress_callback = skill_progress_callback
         self._tools: dict[str, Any] = {}
         self._tool_context: dict[str, Any] = {}
+        self._python_skill_tool_names: set[str] = set()
 
     def create_mcp_server(self) -> dict[str, Any]:
         """Create an MCP server with all xbot tools.
@@ -257,3 +258,27 @@ class ToolAdapter:
     def get(self, name: str) -> Any | None:
         """Registry-compatible alias used by gateway/runtime integrations."""
         return self.get_tool(name)
+
+    def register_python_skill_tools(self, tools: list[Any]) -> None:
+        """Register (or replace) Python skill tools.
+
+        Removes any previously registered Python skill tools first, then
+        adds the new set.  Called by :class:`SkillManager.sync_tools_to_adapter`
+        whenever Python skills change on disk.
+        """
+        # Remove old Python skill tools
+        for name in self._python_skill_tool_names:
+            self._tools.pop(name, None)
+        self._python_skill_tool_names.clear()
+
+        # Register new ones
+        for t in tools:
+            self._tools[t.name] = t
+            self._python_skill_tool_names.add(t.name)
+
+        if tools:
+            logger.info(
+                "[ToolAdapter] Registered %d Python skill tool(s): %s",
+                len(tools),
+                [t.name for t in tools],
+            )

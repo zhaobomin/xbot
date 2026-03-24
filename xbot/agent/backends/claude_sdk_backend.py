@@ -130,6 +130,8 @@ class ClaudeSDKBackend(AgentBackend):
         self._options_builder: OptionsBuilder | None = None
         self._message_converter: MessageConverter | None = None
         self._permission_handler: Any = None
+        self._skill_manager: Any = None
+        self._client_skills_versions: dict[str, str | None] = {}  # Track skills version per client
 
     async def initialize(self, config: AgentsConfig, shared_resources: dict[str, Any]) -> None:
         """Initialize the backend.
@@ -196,6 +198,17 @@ class ClaudeSDKBackend(AgentBackend):
         except ImportError:
             logger.warning("SkillToMCPConverter not available")
 
+        # Initialize SkillManager for hot-reload and Python skill support
+        try:
+            from xbot.agent.skill_manager import SkillManager
+            self._skill_manager = SkillManager(workspace_path)
+            # Replace the ContextBuilder's skills_loader with the one managed by SkillManager
+            if self._context_builder:
+                self._context_builder.skills = self._skill_manager.skills_loader
+            logger.info("[Backend] SkillManager initialized, version={}", self._skill_manager.version)
+        except Exception as e:
+            logger.warning("SkillManager not available: {}", e)
+
         # Initialize tool adapter
         try:
             from xbot.agent.tool_adapter import ToolAdapter
@@ -210,10 +223,14 @@ class ClaudeSDKBackend(AgentBackend):
                 workspace=shared_resources.get("workspace", config.defaults.workspace),
                 tools_config=tools_config,
                 shared_resources={**shared_resources, "model": config.defaults.model, "memory_store": memory_store},
-                skills_loader=self._context_builder.skills if self._context_builder else None,
+                skills_loader=self._skill_manager.skills_loader if self._skill_manager else (self._context_builder.skills if self._context_builder else None),
                 skill_progress_callback=skill_progress_callback,
             )
             self.tools = self._tool_adapter
+
+            # Sync initial Python skill tools
+            if self._skill_manager:
+                self._skill_manager.sync_tools_to_adapter(self._tool_adapter)
         except ImportError:
             logger.warning("ToolAdapter not available")
 
@@ -401,24 +418,34 @@ class ClaudeSDKBackend(AgentBackend):
         async with self._clients_lock:
             # Get current model for model change detection
             current_model = self._options_builder._get_model_name() if self._options_builder else None
+            # Get current skills version for hot-reload detection
+            current_skills_version = self._skill_manager.version if self._skill_manager else None
 
-            # Check if client exists and model hasn't changed
+            # Check if client exists and model/skills haven't changed
             if session_key in self._clients:
                 cached_model = self._client_models.get(session_key)
-                if cached_model == current_model:
+                cached_skills = self._client_skills_versions.get(session_key)
+                model_ok = cached_model == current_model
+                skills_ok = cached_skills == current_skills_version
+
+                if model_ok and skills_ok:
                     self._client_last_used[session_key] = time.time()
                     logger.debug(f"[Client] Reusing existing client for session={session_key}, model={current_model}")
                     return self._clients[session_key]
                 else:
-                    # Model changed, need to recreate client
-                    logger.info(f"[Client] Model changed from {cached_model} to {current_model}, recreating client for session={session_key}")
-                    old_client = self._clients.pop(session_key)
-                    try:
-                        await old_client.disconnect()
-                    except Exception:
-                        pass
-                    self._client_last_used.pop(session_key, None)
-                    self._client_models.pop(session_key, None)
+                    # Model or skills changed, need to recreate client
+                    reasons = []
+                    if not model_ok:
+                        reasons.append(f"model {cached_model}->{current_model}")
+                    if not skills_ok:
+                        reasons.append(f"skills {cached_skills[:8] if cached_skills else 'None'}->{current_skills_version[:8] if current_skills_version else 'None'}")
+                    logger.info(f"[Client] Recreating client for session={session_key}: {', '.join(reasons)}")
+                    old_client = self._remove_client_state(session_key)
+                    if old_client is not None:
+                        try:
+                            await old_client.disconnect()
+                        except Exception:
+                            pass
 
             # Cleanup expired clients before creating new one
             await self._cleanup_stale_clients_unlocked()
@@ -449,8 +476,28 @@ class ClaudeSDKBackend(AgentBackend):
             self._clients[session_key] = client
             self._client_last_used[session_key] = time.time()
             self._client_models[session_key] = current_model  # Track the model used
+            self._client_skills_versions[session_key] = current_skills_version  # Track skills version
             logger.info(f"[Client] Client created for session={session_key}, model={current_model}")
             return client
+
+    def _remove_client_state(self, session_key: str) -> "ClaudeSDKClient | None":
+        """Remove all tracked state for a session and return the client (if any).
+
+        Centralises the cleanup of the six parallel per-session dicts so that
+        every eviction / shutdown / error path stays in sync.  The caller is
+        responsible for disconnecting the returned client.
+        """
+        client = self._clients.pop(session_key, None)
+        self._client_last_used.pop(session_key, None)
+        self._client_models.pop(session_key, None)
+        self._client_skills_versions.pop(session_key, None)
+        self._session_commands.pop(session_key, None)
+        self._active_task_ids.pop(session_key, None)
+        # Clear session context for compact notifications
+        session_contexts = self._shared_resources.get("_session_contexts")
+        if session_contexts is not None:
+            session_contexts.pop(session_key, None)
+        return client
 
     async def _cleanup_stale_clients_unlocked(self) -> int:
         """Remove clients that have been idle longer than TTL.
@@ -467,14 +514,7 @@ class ClaudeSDKBackend(AgentBackend):
         ]
 
         for key in stale_keys:
-            client = self._clients.pop(key, None)
-            self._client_last_used.pop(key, None)
-            self._session_commands.pop(key, None)
-            self._active_task_ids.pop(key, None)
-            # Clear session context for compact notifications
-            session_contexts = self._shared_resources.get("_session_contexts")
-            if session_contexts is not None:
-                session_contexts.pop(key, None)
+            client = self._remove_client_state(key)
             if client is not None:
                 try:
                     await client.disconnect()
@@ -505,14 +545,7 @@ class ClaudeSDKBackend(AgentBackend):
         # Find the oldest (LRU) client
         lru_key = min(self._client_last_used, key=self._client_last_used.get)
 
-        client = self._clients.pop(lru_key, None)
-        self._client_last_used.pop(lru_key, None)
-        self._session_commands.pop(lru_key, None)
-        self._active_task_ids.pop(lru_key, None)
-        # Clear session context for compact notifications
-        session_contexts = self._shared_resources.get("_session_contexts")
-        if session_contexts is not None:
-            session_contexts.pop(lru_key, None)
+        client = self._remove_client_state(lru_key)
 
         if client is not None:
             try:
@@ -701,6 +734,14 @@ class ClaudeSDKBackend(AgentBackend):
             )
             if hasattr(self._permission_handler, "set_current_session"):
                 self._permission_handler.set_current_session(context.session_key)
+
+        # Check for skill changes on disk (hot-reload)
+        if self._skill_manager:
+            try:
+                if self._skill_manager.check_for_changes() and self._tool_adapter:
+                    self._skill_manager.sync_tools_to_adapter(self._tool_adapter)
+            except Exception as e:
+                logger.warning(f"[Backend Process] Skill change check failed: {e}")
 
         # Detect triggered skills based on user message
         triggered_skills_prefix = ""
@@ -912,7 +953,7 @@ class ClaudeSDKBackend(AgentBackend):
                     )
 
         except Exception as e:
-            client = self._clients.pop(context.session_key, None)
+            client = self._remove_client_state(context.session_key)
             if client is not None:
                 try:
                     await client.disconnect()
@@ -1134,28 +1175,20 @@ class ClaudeSDKBackend(AgentBackend):
 
     async def shutdown(self) -> None:
         """Shutdown the backend."""
-        for session_key, client in list(self._clients.items()):
-            try:
-                await client.disconnect()
-            except Exception:
-                logger.debug(f"Ignoring error while disconnecting Claude SDK session {session_key}")
-        self._clients.clear()
-        self._client_last_used.clear()
-        self._session_commands.clear()
-        self._active_task_ids.clear()
+        for session_key in list(self._clients):
+            client = self._remove_client_state(session_key)
+            if client is not None:
+                try:
+                    await client.disconnect()
+                except Exception:
+                    logger.debug(f"Ignoring error while disconnecting Claude SDK session {session_key}")
         # Clear session contexts for compact notifications
         self._shared_resources.pop("_session_contexts", None)
         logger.info("Claude SDK backend shutdown complete")
 
     async def reset_session(self, session_key: str) -> None:
         """Reset a session, disconnecting client and clearing state."""
-        client = self._clients.pop(session_key, None)
-        self._client_last_used.pop(session_key, None)
-        self._session_commands.pop(session_key, None)
-        self._active_task_ids.pop(session_key, None)
-        # Clear session context for compact notifications
-        session_contexts = self._shared_resources.get("_session_contexts", {})
-        session_contexts.pop(session_key, None)
+        client = self._remove_client_state(session_key)
         if client is not None:
             try:
                 await client.disconnect()
@@ -1341,7 +1374,7 @@ class ClaudeSDKBackend(AgentBackend):
     async def _reset_session_client_state(self, session_key: str) -> None:
         """Reset SDK client/task state for a session after incomplete interaction."""
         task_id = self._active_task_ids.get(session_key)
-        client = self._clients.pop(session_key, None)
+        client = self._remove_client_state(session_key)
         if client is not None and task_id:
             try:
                 await client.stop_task(task_id)
@@ -1352,7 +1385,6 @@ class ClaudeSDKBackend(AgentBackend):
                 await client.disconnect()
             except Exception:
                 logger.debug("Failed to disconnect client while resetting session state")
-        self._active_task_ids.pop(session_key, None)
 
     def get_tools_summary(self) -> str:
         """Get a summary of available tools and capabilities."""
