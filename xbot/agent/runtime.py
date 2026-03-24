@@ -314,6 +314,11 @@ class AgentRuntime:
                 continue
 
             # Dispatch message with atomic state management
+            # IMPORTANT: Set phase to RUNNING BEFORE creating task to avoid race condition.
+            # This ensures state is consistent when task is registered (fixes "IDLE but has active tasks" warning).
+            self._state_coordinator.force_transition(
+                msg.session_key, SessionPhase.RUNNING, reason="dispatch_start"
+            )
             task = asyncio.create_task(self._dispatch(msg))
             self._state_coordinator.register_task(msg.session_key, task)
             task.add_done_callback(self._make_task_done_callback(msg.session_key))
