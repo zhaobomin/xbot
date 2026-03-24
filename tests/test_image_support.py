@@ -67,12 +67,26 @@ class TestParseMediaFromInput:
         assert len(paths) == 1
         assert paths[0] == str(img)
 
-    def test_non_image_extension_ignored(self, tmp_path: Path):
+    def test_non_image_extension_now_matched(self, tmp_path: Path):
+        """With universal @path, text files are now matched too."""
         txt = tmp_path / "notes.txt"
         txt.write_text("hello")
         clean, paths = self._parse(f"@{txt} read this")
+        assert len(paths) == 1
+        assert paths[0] == str(txt)
+
+    def test_email_not_matched(self):
+        """Email addresses should not be matched by @path regex."""
+        clean, paths = self._parse("contact user@example.com for help")
         assert paths == []
-        assert f"@{txt}" in clean
+        assert "user@example.com" in clean
+
+    def test_python_file_matched(self, tmp_path: Path):
+        f = tmp_path / "script.py"
+        f.write_text("x = 1")
+        clean, paths = self._parse(f"@{f} explain")
+        assert len(paths) == 1
+        assert paths[0] == str(f)
 
     def test_case_insensitive_extension(self, tmp_path: Path):
         img = tmp_path / "PHOTO.PNG"
@@ -258,15 +272,19 @@ class TestBuildMultimodalQuery:
         assert content[1]["text"] == "describe"
 
     @pytest.mark.asyncio
-    async def test_all_images_fail_fallback_to_text(self):
+    async def test_nonexistent_image_becomes_file_reference(self):
+        """Nonexistent .png is classified as FILE (can't check magic bytes),
+        so it produces a file reference instead of falling back to text."""
         backend = self._get_backend()
         messages = await self._collect(
             backend._build_multimodal_query("hello", ["/nonexistent.png"], "sess-2")
         )
         assert len(messages) == 1
         content = messages[0]["message"]["content"]
-        # Should fall back to plain string
-        assert content == "hello"
+        assert isinstance(content, list)
+        # Should have file ref block + prompt block
+        assert any("nonexistent.png" in b.get("text", "") for b in content)
+        assert content[-1]["text"] == "hello"
 
     @pytest.mark.asyncio
     async def test_multiple_images(self, tmp_path: Path):

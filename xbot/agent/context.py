@@ -14,6 +14,7 @@ from xbot.agent.commands import CommandsLoader
 from xbot.agent.memory import MemoryStore
 from xbot.agent.skills import SkillsLoader
 from xbot.utils.helpers import build_assistant_message, detect_image_mime
+from xbot.utils.file_reader import FileType, classify_file, format_file_reference
 
 if TYPE_CHECKING:
     from xbot.agent.memory_reme import ReMeMemoryStore
@@ -266,30 +267,41 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         ]
 
     def _build_user_content(self, text: str, media: list[str] | None) -> str | list[dict[str, Any]]:
-        """Build user message content with optional base64-encoded images."""
+        """Build user message content with optional images and file references."""
         if not media:
             return text
 
         images = []
+        file_refs: list[str] = []
         for path in media:
-            p = Path(path)
-            if not p.is_file():
-                continue
-            raw = p.read_bytes()
-            # Detect real MIME type from magic bytes; fallback to filename guess
-            mime = detect_image_mime(raw) or mimetypes.guess_type(path)[0]
-            if not mime or not mime.startswith("image/"):
-                continue
-            b64 = base64.b64encode(raw).decode()
-            images.append({
-                "type": "image_url",
-                "image_url": {"url": f"data:{mime};base64,{b64}"},
-                "_meta": {"path": str(p)},
-            })
+            ft = classify_file(path)
+            if ft is FileType.IMAGE:
+                p = Path(path)
+                if not p.is_file():
+                    continue
+                raw = p.read_bytes()
+                mime = detect_image_mime(raw) or mimetypes.guess_type(path)[0]
+                if not mime or not mime.startswith("image/"):
+                    continue
+                b64 = base64.b64encode(raw).decode()
+                images.append({
+                    "type": "image_url",
+                    "image_url": {"url": f"data:{mime};base64,{b64}"},
+                    "_meta": {"path": str(p)},
+                })
+            else:
+                file_refs.append(format_file_reference(path))
+
+        # Build final text with file references prepended
+        final_text = text
+        if file_refs:
+            header = "用户附加了以下文件，你可以通过工具读取或修改这些文件:"
+            refs_block = header + "\n" + "\n".join(file_refs)
+            final_text = refs_block + "\n\n" + text
 
         if not images:
-            return text
-        return images + [{"type": "text", "text": text}]
+            return final_text
+        return images + [{"type": "text", "text": final_text}]
 
     def add_tool_result(
         self, messages: list[dict[str, Any]],

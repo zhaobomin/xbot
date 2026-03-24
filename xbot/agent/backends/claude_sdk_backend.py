@@ -35,6 +35,7 @@ from xbot.config.sdk_resolver import detect_provider_from_model, resolve_sdk_pro
 from xbot.config.schema import AgentsConfig, ProviderConfig
 from xbot.session.manager import SessionManager
 from xbot.utils.helpers import detect_image_mime
+from xbot.utils.file_reader import FileType, classify_file, format_file_reference
 
 if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeAgentOptions, ClaudeSDKClient
@@ -532,19 +533,48 @@ class ClaudeSDKBackend(AgentBackend):
             })
         return blocks
 
+    def _build_file_content_blocks(
+        self, media: list[str]
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """Classify media into file reference blocks and image paths.
+
+        Returns ``(file_ref_blocks, image_paths)`` where *file_ref_blocks*
+        is a list of text content blocks containing path references for
+        non-image files, and *image_paths* is the subset that should be
+        sent as base64 image content blocks.
+        """
+        image_paths: list[str] = []
+        file_refs: list[str] = []
+        for path in media:
+            ft = classify_file(path)
+            if ft is FileType.IMAGE:
+                image_paths.append(path)
+            else:
+                ref = format_file_reference(path)
+                file_refs.append(ref)
+                logger.info("[Backend] File reference: {}", ref)
+        if not file_refs:
+            return [], image_paths
+        header = "用户附加了以下文件，你可以通过工具读取或修改这些文件:"
+        block_text = header + "\n" + "\n".join(file_refs)
+        return [{"type": "text", "text": block_text}], image_paths
+
     async def _build_multimodal_query(
         self,
         prompt: str,
         media: list[str],
         session_id: str,
     ) -> AsyncIterator[dict[str, Any]]:
-        """Yield a single user message with image content blocks (AsyncIterable mode)."""
-        image_blocks = self._build_image_content_blocks(media)
-        if not image_blocks:
-            # All images failed – fall back to plain text
+        """Yield a single user message with image blocks and/or file references."""
+        file_ref_blocks, image_paths = self._build_file_content_blocks(media)
+        image_blocks = self._build_image_content_blocks(image_paths)
+
+        all_blocks = image_blocks + file_ref_blocks
+        if not all_blocks:
+            # Everything failed – fall back to plain text
             content: str | list[dict[str, Any]] = prompt
         else:
-            content = image_blocks + [{"type": "text", "text": prompt}]
+            content = all_blocks + [{"type": "text", "text": prompt}]
         yield {
             "type": "user",
             "message": {"role": "user", "content": content},

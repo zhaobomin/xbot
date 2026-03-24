@@ -54,19 +54,19 @@ console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
 
 # ---------------------------------------------------------------------------
-# Media reference parsing for @path syntax
+# File reference parsing for @path syntax
 # ---------------------------------------------------------------------------
 
 import re as _re
 
-_MEDIA_REF_RE = _re.compile(
-    r"""@(["']?)(\S+?\.(?:png|jpg|jpeg|gif|webp|bmp))\1""",
-    _re.IGNORECASE,
+_FILE_REF_RE = _re.compile(
+    r"""(?:^|(?<=\s))@(?:"([^"@]+?\.[a-zA-Z0-9]+)"|'([^'@]+?\.[a-zA-Z0-9]+)'|([^\s"'@]+?\.[a-zA-Z0-9]+))""",
+    _re.IGNORECASE | _re.MULTILINE,
 )
 
 
 def _parse_media_from_input(user_input: str) -> tuple[str, list[str]]:
-    """Extract ``@path`` image references from user input.
+    """Extract ``@path`` file references from user input.
 
     Returns ``(clean_text, media_paths)`` where *clean_text* has matched
     references removed and *media_paths* contains resolved absolute paths
@@ -75,7 +75,7 @@ def _parse_media_from_input(user_input: str) -> tuple[str, list[str]]:
     media_paths: list[str] = []
 
     def _replace(m: _re.Match) -> str:
-        raw_path = m.group(2)
+        raw_path = m.group(1) or m.group(2) or m.group(3)
         p = Path(raw_path).expanduser().resolve()
         if p.is_file():
             media_paths.append(str(p))
@@ -83,8 +83,8 @@ def _parse_media_from_input(user_input: str) -> tuple[str, list[str]]:
         # File does not exist – keep original text so user sees it
         return m.group(0)
 
-    clean = _MEDIA_REF_RE.sub(_replace, user_input).strip()
-    return clean or "请描述这张图片", media_paths
+    clean = _FILE_REF_RE.sub(_replace, user_input).strip()
+    return clean or "请处理这些文件", media_paths
 
 # ---------------------------------------------------------------------------
 # CLI input: prompt_toolkit for editing, paste, history, and display
@@ -984,7 +984,7 @@ def agent(
 
                         clean_text, media_paths = _parse_media_from_input(user_input)
                         if media_paths:
-                            console.print(f"[dim]Attached {len(media_paths)} image(s)[/dim]")
+                            console.print(f"[dim]Attached {len(media_paths)} file(s)[/dim]")
 
                         await bus.publish_inbound(InboundMessage(
                             channel=cli_channel,
