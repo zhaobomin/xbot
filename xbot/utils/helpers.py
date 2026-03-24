@@ -1,6 +1,7 @@
 """Utility functions for xbot."""
 
 import json
+import logging
 import re
 import time
 from datetime import datetime
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 import tiktoken
+
+logger = logging.getLogger(__name__)
 
 
 def detect_image_mime(data: bytes) -> str | None:
@@ -119,7 +122,8 @@ def estimate_prompt_tokens(
         if tools:
             parts.append(json.dumps(tools, ensure_ascii=False))
         return len(enc.encode("\n".join(parts)))
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to estimate prompt tokens: %s", e)
         return 0
 
 
@@ -153,7 +157,8 @@ def estimate_message_tokens(message: dict[str, Any]) -> int:
     try:
         enc = tiktoken.get_encoding("cl100k_base")
         return max(1, len(enc.encode(payload)))
-    except Exception:
+    except Exception as e:
+        logger.debug("Failed to estimate message tokens: %s", e)
         return max(1, len(payload) // 4)
 
 
@@ -170,8 +175,8 @@ def estimate_prompt_tokens_chain(
             tokens, source = provider_counter(messages, tools, model)
             if isinstance(tokens, (int, float)) and tokens > 0:
                 return int(tokens), str(source or "provider_counter")
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Provider token counter failed: %s", e)
 
     estimated = estimate_prompt_tokens(messages, tools)
     if estimated > 0:
