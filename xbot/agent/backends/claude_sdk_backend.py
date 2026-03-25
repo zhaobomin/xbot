@@ -98,6 +98,7 @@ class ClaudeSDKBackend(AgentBackend):
         "confirmation_required",
         "approval_required",
     }
+    _MAX_QUERY_RETRIES = 3  # Max retries when SDK returns stale task notifications instead of ResultMessage
 
     # Client pool management constants
     MAX_CLIENTS = 100  # Maximum number of concurrent clients
@@ -908,126 +909,160 @@ class ClaudeSDKBackend(AgentBackend):
                     ],
                 )
                 prompt = f"{self._handoff_policy.build_request_prefix(decision)}\n{context.prompt}"
-            
-            client = await self._get_or_create_client(context.session_key)
-            query_sent_at = time.perf_counter()
-            logger.info(f"[Backend Process] Client obtained for session={context.session_key}")
 
-            # Debug: Log slash commands being sent to SDK
-            if prompt.strip().startswith("/"):
-                logger.info(f"[SDK Query] Slash command detected: {prompt.strip()[:50]!r} (session={context.session_key})")
+            # Retry loop: SDK may return stale task notifications instead of ResultMessage
+            # We need to retry the query in such cases, with a limit to avoid infinite loops
+            query_retry = 0
+            received_result = False
+            user_cancelled = False  # Track if user cancelled during input_required
 
-            append_session_trace(
-                self.sessions,
-                context.session_key,
-                "sdk_query_sent",
-                {
-                    "backend": self.name,
-                },
-            )
-            logger.info(f"[Backend Process] Sending query to SDK for session={context.session_key}")
-            _query_session_id = self._query_session_id(context.session_key, session)
-            if context.media:
-                logger.info(f"[Backend Process] Multimodal query with {len(context.media)} media file(s)")
-                await client.query(
-                    self._build_multimodal_query(prompt, context.media, _query_session_id),
-                    session_id=_query_session_id,
+            while query_retry < self._MAX_QUERY_RETRIES:
+                client = await self._get_or_create_client(context.session_key)
+                query_sent_at = time.perf_counter()
+                logger.info(f"[Backend Process] Client obtained for session={context.session_key}")
+
+                # Debug: Log slash commands being sent to SDK
+                if prompt.strip().startswith("/"):
+                    logger.info(f"[SDK Query] Slash command detected: {prompt.strip()[:50]!r} (session={context.session_key})")
+
+                append_session_trace(
+                    self.sessions,
+                    context.session_key,
+                    "sdk_query_sent",
+                    {
+                        "backend": self.name,
+                    },
                 )
-            else:
-                await client.query(prompt, session_id=_query_session_id)
-            logger.info(f"[Backend Process] Query sent, waiting for response for session={context.session_key}")
-
-            first_sdk_message_logged = False
-            async for message in client.receive_response():
-                logger.info(f"[Backend Process] Received message type={type(message).__name__} for session={context.session_key}")
-                is_terminal_result = isinstance(message, ResultMessage)
-                if not first_sdk_message_logged:
-                    first_sdk_message_logged = True
-                    append_session_trace(
-                        self.sessions,
-                        context.session_key,
-                        "sdk_first_message",
-                        {
-                            "backend": self.name,
-                            "latency_ms": int((time.perf_counter() - query_sent_at) * 1000),
-                            "message_type": message.__class__.__name__,
-                            "subtype": getattr(message, "subtype", None),
-                        },
+                logger.info(f"[Backend Process] Sending query to SDK for session={context.session_key}")
+                _query_session_id = self._query_session_id(context.session_key, session)
+                if context.media:
+                    logger.info(f"[Backend Process] Multimodal query with {len(context.media)} media file(s)")
+                    await client.query(
+                        self._build_multimodal_query(prompt, context.media, _query_session_id),
+                        session_id=_query_session_id,
                     )
-                if isinstance(message, SystemMessage) and message.subtype == "init":
-                    commands = self._extract_slash_commands(message.data)
-                    # DEBUG: Log full init message data to check for session_id
-                    logger.info(
-                        "[SDK Init] session={}, commands={}, data_keys={}, data={}",
-                        context.session_key,
-                        commands,
-                        list(message.data.keys()) if isinstance(message.data, dict) else "N/A",
-                        message.data,
-                    )
-                    self._session_commands[context.session_key] = commands
-
-                    # Try to extract session_id from init message for early mapping
-                    # This ensures hooks can find context from the first message
-                    sdk_session_id = message.data.get("session_id") if isinstance(message.data, dict) else None
-                    if sdk_session_id:
-                        logger.info(
-                            "[SDK Init] Found session_id in init message: sdk_session_id='{}', mapping to context",
-                            sdk_session_id,
-                        )
-                        session_contexts[sdk_session_id] = context_tuple
-                        # Also save to session metadata
-                        if session is not None:
-                            session.metadata["sdk_session_id"] = sdk_session_id
-                            self.sessions.save(session)
-                if isinstance(message, TaskStartedMessage) and message.task_id:
-                    self._active_task_ids[context.session_key] = message.task_id
-                if (
-                    isinstance(message, TaskNotificationMessage)
-                    and message.status in {"completed", "failed", "stopped"}
-                ):
-                    self._active_task_ids.pop(context.session_key, None)
-                if (
-                    isinstance(message, TaskNotificationMessage)
-                    and str(message.status or "").lower() in self._INPUT_REQUIRED_STATUSES
-                ):
-                    user_input = await self._wait_for_user_input(context, message)
-                    if user_input:
-                        await client.query(
-                            user_input,
-                            session_id=self._query_session_id(context.session_key, session),
-                        )
-                    else:
-                        # User cancelled or no actionable input: end current turn to avoid
-                        # holding the session lock while the SDK waits for further input.
-                        # Also reset client/task state to avoid dirty carry-over into next turn.
-                        await self._reset_session_client_state(context.session_key)
-                        break
-                if is_terminal_result:
-                    self._active_task_ids.pop(context.session_key, None)
-                    if session is not None and message.session_id:
-                        session.metadata["sdk_session_id"] = message.session_id
-                        self.sessions.save(session)
-                        # Also update session_contexts mapping for SDK session ID
-                        # This ensures hooks can find context when SDK returns the UUID
-                        session_contexts = self._shared_resources.get("_session_contexts")
-                        if session_contexts is not None:
-                            context_tuple = (context.channel, context.chat_id)
-                            session_contexts[message.session_id] = context_tuple
-
-                if self._message_converter:
-                    response = self._message_converter.convert(message)
                 else:
-                    response = self._convert_message_legacy(message)
+                    await client.query(prompt, session_id=_query_session_id)
+                logger.info(f"[Backend Process] Query sent, waiting for response for session={context.session_key}")
 
-                if response:
-                    # Accumulate content: delta content or final content
-                    if response.is_delta and response.delta_content:
-                        final_content += response.delta_content
-                    elif response.content:
-                        final_content = response.content
-                    yield response
-                if is_terminal_result:
-                    break
+                first_sdk_message_logged = False
+                received_result = False  # Reset for each retry
+
+                async for message in client.receive_response():
+                    logger.info(f"[Backend Process] Received message type={type(message).__name__} for session={context.session_key}")
+                    is_terminal_result = isinstance(message, ResultMessage)
+                    if not first_sdk_message_logged:
+                        first_sdk_message_logged = True
+                        append_session_trace(
+                            self.sessions,
+                            context.session_key,
+                            "sdk_first_message",
+                            {
+                                "backend": self.name,
+                                "latency_ms": int((time.perf_counter() - query_sent_at) * 1000),
+                                "message_type": message.__class__.__name__,
+                                "subtype": getattr(message, "subtype", None),
+                            },
+                        )
+                    if isinstance(message, SystemMessage) and message.subtype == "init":
+                        commands = self._extract_slash_commands(message.data)
+                        # DEBUG: Log full init message data to check for session_id
+                        logger.info(
+                            "[SDK Init] session={}, commands={}, data_keys={}, data={}",
+                            context.session_key,
+                            commands,
+                            list(message.data.keys()) if isinstance(message.data, dict) else "N/A",
+                            message.data,
+                        )
+                        self._session_commands[context.session_key] = commands
+
+                        # Try to extract session_id from init message for early mapping
+                        # This ensures hooks can find context from the first message
+                        sdk_session_id = message.data.get("session_id") if isinstance(message.data, dict) else None
+                        if sdk_session_id:
+                            logger.info(
+                                "[SDK Init] Found session_id in init message: sdk_session_id='{}', mapping to context",
+                                sdk_session_id,
+                            )
+                            session_contexts[sdk_session_id] = context_tuple
+                            # Also save to session metadata
+                            if session is not None:
+                                session.metadata["sdk_session_id"] = sdk_session_id
+                                self.sessions.save(session)
+                    if isinstance(message, TaskStartedMessage) and message.task_id:
+                        self._active_task_ids[context.session_key] = message.task_id
+                    if (
+                        isinstance(message, TaskNotificationMessage)
+                        and message.status in {"completed", "failed", "stopped"}
+                    ):
+                        self._active_task_ids.pop(context.session_key, None)
+                    if (
+                        isinstance(message, TaskNotificationMessage)
+                        and str(message.status or "").lower() in self._INPUT_REQUIRED_STATUSES
+                    ):
+                        user_input = await self._wait_for_user_input(context, message)
+                        if user_input:
+                            await client.query(
+                                user_input,
+                                session_id=self._query_session_id(context.session_key, session),
+                            )
+                        else:
+                            # User cancelled or no actionable input: end current turn to avoid
+                            # holding the session lock while the SDK waits for further input.
+                            # Also reset client/task state to avoid dirty carry-over into next turn.
+                            await self._reset_session_client_state(context.session_key)
+                            user_cancelled = True  # Mark as cancelled to skip retry
+                            break
+                    if is_terminal_result:
+                        self._active_task_ids.pop(context.session_key, None)
+                        if session is not None and message.session_id:
+                            session.metadata["sdk_session_id"] = message.session_id
+                            self.sessions.save(session)
+                            # Also update session_contexts mapping for SDK session ID
+                            # This ensures hooks can find context when SDK returns the UUID
+                            session_contexts = self._shared_resources.get("_session_contexts")
+                            if session_contexts is not None:
+                                context_tuple = (context.channel, context.chat_id)
+                                session_contexts[message.session_id] = context_tuple
+
+                    if self._message_converter:
+                        response = self._message_converter.convert(message)
+                    else:
+                        response = self._convert_message_legacy(message)
+
+                    if response:
+                        # Accumulate content: delta content or final content
+                        if response.is_delta and response.delta_content:
+                            final_content += response.delta_content
+                        elif response.content:
+                            final_content = response.content
+                        yield response
+                    if is_terminal_result:
+                        received_result = True  # Mark that we received a ResultMessage
+                        break  # Exit async for loop
+
+                # After async for loop ends, check if we got a ResultMessage
+                if received_result:
+                    break  # Got valid result, exit retry loop
+
+                # If user cancelled during input_required, don't retry
+                if user_cancelled:
+                    break  # User cancelled, exit retry loop
+
+                # No ResultMessage received - likely stale task notification
+                query_retry += 1
+                if query_retry < self._MAX_QUERY_RETRIES:
+                    logger.warning(
+                        f"SDK returned no ResultMessage for session={context.session_key}, "
+                        f"retrying ({query_retry}/{self._MAX_QUERY_RETRIES})"
+                    )
+                    # Clear the final_content for retry
+                    final_content = ""
+                else:
+                    logger.error(
+                        f"SDK returned no ResultMessage after {self._MAX_QUERY_RETRIES} attempts "
+                        f"for session={context.session_key}. Last content: {final_content[:200] if final_content else '(empty)'}"
+                    )
 
             if session is not None and final_content:
                 session.add_message("assistant", final_content)
