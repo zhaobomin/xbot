@@ -1238,6 +1238,145 @@ def status():
 
 
 # ============================================================================
+# Crew Orchestration
+# ============================================================================
+
+crew_app = typer.Typer(help="Multi-agent crew orchestration")
+app.add_typer(crew_app, name="crew")
+
+
+@crew_app.command("run")
+def crew_run(
+    config_file: str = typer.Argument(..., help="Path to crew YAML config"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Override workspace path"),
+    config: str | None = typer.Option(None, "--config", "-c", help="xbot config file"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    resume: str | None = typer.Option(None, "--resume", help="Resume from checkpoint JSON"),
+):
+    """Run a multi-agent crew from a YAML config file."""
+    from xbot.agent.crew import CrewOrchestrator, load_crew_config
+
+    # 1. Load xbot global config
+    xbot_config = _load_runtime_config(config, workspace)
+
+    # 2. Load crew YAML
+    crew_config = load_crew_config(Path(config_file))
+    if workspace:
+        crew_config.workspace = str(Path(workspace).expanduser().resolve())
+    if verbose:
+        crew_config.verbose = True
+
+    # 3. Permission handler for human review
+    perm_config = xbot_config.agents.claude_sdk.permission
+    permission_handler = InteractivePermissionHandler(
+        auto_approve_safe_tools=perm_config.auto_approve_safe_tools,
+        safe_tools=set(perm_config.safe_tools),
+    )
+
+    # 4. Progress callback
+    def on_progress(message: str, **kwargs: Any) -> None:
+        if verbose:
+            console.print(f"[dim][crew][/dim] {message}")
+
+    # 5. Execute
+    async def _run() -> None:
+        orch = CrewOrchestrator(
+            crew_config=crew_config,
+            xbot_config=xbot_config,
+            permission_handler=permission_handler,
+            config_path=str(Path(config_file).expanduser().resolve()),
+            on_progress=on_progress,
+        )
+        checkpoint_path = Path(resume) if resume else None
+        result = await orch.run(checkpoint_path=checkpoint_path)
+        _print_crew_result(result)
+
+    asyncio.run(_run())
+
+
+@crew_app.command("show")
+def crew_show(
+    config_file: str = typer.Argument(..., help="Path to crew YAML config"),
+):
+    """Display and validate a crew config file."""
+    from xbot.agent.crew import load_crew_config
+
+    try:
+        crew_config = load_crew_config(Path(config_file))
+    except Exception as exc:
+        console.print(f"[red]Error loading crew config: {exc}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]{crew_config.name}[/bold]")
+    if crew_config.description:
+        console.print(f"  {crew_config.description}")
+    console.print(f"  Process: {crew_config.process.value}")
+    console.print(f"  Workspace: {crew_config.workspace}")
+    console.print()
+
+    # Agents table
+    table = Table(title="Agents")
+    table.add_column("Name", style="cyan")
+    table.add_column("Goal")
+    table.add_column("Model")
+    for name, role in crew_config.agents.items():
+        table.add_row(name, role.goal[:60], role.model)
+    console.print(table)
+    console.print()
+
+    # Tasks table
+    table = Table(title="Tasks")
+    table.add_column("Name", style="cyan")
+    table.add_column("Agent")
+    table.add_column("Deps")
+    table.add_column("Review")
+    table.add_column("Briefing")
+    for task in crew_config.tasks:
+        table.add_row(
+            task.name,
+            task.agent,
+            ", ".join(task.context_from) or "-",
+            "yes" if task.human_review else "-",
+            "yes" if task.human_briefing else "-",
+        )
+    console.print(table)
+
+
+def _print_crew_result(result: Any) -> None:
+    """Print a crew execution result as a Rich table."""
+    console.print()
+    status_style = {
+        "completed": "[green]completed[/green]",
+        "failed": "[red]failed[/red]",
+        "aborted": "[yellow]aborted[/yellow]",
+    }
+    console.print(f"[bold]Crew:[/bold] {result.crew_name}")
+    console.print(f"[bold]Status:[/bold] {status_style.get(result.status, result.status)}")
+    console.print(f"[bold]Time:[/bold] {result.total_time:.1f}s")
+    console.print()
+
+    table = Table(title="Task Results")
+    table.add_column("Task", style="cyan")
+    table.add_column("Agent")
+    table.add_column("Status")
+    table.add_column("Duration")
+    for r in result.task_results:
+        dur = (r.finished_at - r.started_at).total_seconds()
+        s = r.status
+        if s in ("success", "completed"):
+            s = f"[green]{s}[/green]"
+        elif s == "failed":
+            s = f"[red]{s}[/red]"
+        elif s in ("skipped", "human_rejected"):
+            s = f"[yellow]{s}[/yellow]"
+        table.add_row(r.task_name, r.agent_name, s, f"{dur:.1f}s")
+    console.print(table)
+    console.print()
+    console.print(result.summary)
+    console.print()
+
+
+# ============================================================================
 # OAuth Login
 # ============================================================================
 

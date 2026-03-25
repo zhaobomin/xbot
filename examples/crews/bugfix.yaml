@@ -1,0 +1,134 @@
+# Bug Fix Crew — Multi-agent workflow
+#
+# Workflow:
+#   1. Bug Scout scans code and discovers bugs
+#   2. Bug Fixer resolves each bug
+#   3. Reviewer verifies fixes and runs tests
+#   4. Git Operator commits and creates a PR
+#
+# Human intervention points:
+#   - discover_bugs: human reviews the bug list (filter, annotate, edit)
+#   - fix_bugs:      human provides prioritisation before execution
+#   - review_and_test: human confirms test results before PR creation
+
+name: bug-fix-crew
+description: "Automated bug discovery, fix, review, and PR creation workflow"
+process: sequential
+verbose: true
+
+global_context: |
+  You are part of a software engineering team working on a codebase.
+  Communicate clearly and keep your outputs structured in Markdown.
+  Always explain your reasoning.
+
+agents:
+  bug_scout:
+    name: bug_scout
+    description: "Code analyst who identifies bugs, code smells, and potential issues"
+    goal: "Thoroughly scan the codebase, run tests, and produce a prioritised bug report"
+    backstory: "Senior QA engineer with deep experience in static analysis and testing"
+    max_iterations: 30
+    tools: null  # all tools
+
+  bug_fixer:
+    name: bug_fixer
+    description: "Developer who fixes bugs with minimal, safe code changes"
+    goal: "Fix each reported bug with the smallest correct change, avoiding regressions"
+    backstory: "Experienced developer focused on surgical fixes and clean diffs"
+    max_iterations: 40
+    tools: null
+
+  reviewer:
+    name: reviewer
+    description: "Code reviewer and test runner who verifies fixes"
+    goal: "Review all code changes for correctness, style, and safety; run the test suite"
+    backstory: "Staff engineer responsible for maintaining code quality"
+    max_iterations: 30
+    tools: null
+
+  git_operator:
+    name: git_operator
+    description: "Git and GitHub specialist who commits changes and creates PRs"
+    goal: "Create a clean commit with a descriptive message and open a pull request"
+    backstory: "DevOps engineer who follows conventional commit standards"
+    max_iterations: 20
+    tools: null
+
+tasks:
+  - name: discover_bugs
+    agent: bug_scout
+    description: |
+      Scan the project codebase thoroughly:
+      1. Read key source files and look for logical errors, edge cases, and bad patterns
+      2. Run the existing test suite and note any failures
+      3. Check for common issues: null checks, off-by-one, resource leaks, error handling
+      4. Produce a numbered Markdown list of bugs found, each with:
+         - File and line number
+         - Description of the issue
+         - Severity (critical / major / minor)
+         - Suggested fix approach
+    expected_output: |
+      A Markdown-formatted bug report:
+      ## Bug Report
+      1. **[critical]** `src/foo.py:42` — Description...
+      2. **[major]** `src/bar.py:17` — Description...
+    human_review: true
+    timeout: 300
+
+  - name: fix_bugs
+    agent: bug_fixer
+    description: |
+      Based on the bug report from the previous task, fix each bug:
+      1. Read the files mentioned in the bug report
+      2. Apply the smallest correct fix for each issue
+      3. After each fix, briefly explain what you changed and why
+      4. Do NOT introduce new features or refactor unrelated code
+    expected_output: |
+      A summary of changes made:
+      ## Fix Report
+      ### Bug #1: [file:line] — status
+      - Changed: ...
+      - Reason: ...
+    context_from:
+      - discover_bugs
+    human_briefing: true
+    timeout: 600
+
+  - name: review_and_test
+    agent: reviewer
+    description: |
+      Review all the code changes made by the bug fixer:
+      1. Check each fix for correctness and potential regressions
+      2. Run the full test suite
+      3. Report test results (pass/fail counts)
+      4. Flag any concerns about the changes
+    expected_output: |
+      ## Review Report
+      ### Test Results
+      - Passed: N
+      - Failed: N
+      ### Change Review
+      - Bug #1 fix: [approved/needs revision] — notes
+    context_from:
+      - discover_bugs
+      - fix_bugs
+    human_review: true
+    timeout: 300
+
+  - name: create_pr
+    agent: git_operator
+    description: |
+      Create a git commit and pull request for the bug fixes:
+      1. Stage all modified files
+      2. Write a clear commit message following conventional commits
+      3. Create or push to a feature branch (e.g., fix/bug-fixes-YYYYMMDD)
+      4. Create a pull request with a summary of all fixes
+    expected_output: |
+      ## PR Created
+      - Branch: fix/bug-fixes-...
+      - Commit: "fix: resolve N bugs found in codebase scan"
+      - PR URL: ...
+    context_from:
+      - fix_bugs
+      - review_and_test
+    timeout: 120
