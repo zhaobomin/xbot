@@ -80,7 +80,7 @@ class ClaudeSDKAgentConfig(Base):
     # Context Compaction 通知配置
     compact_notify: bool = True  # 是否在压缩上下文时发送通知
     include_partial_messages: bool = False  # Disable SDK partial/delta messages by default for stable output
-    memory_consolidation_mode: Literal["off", "async", "sync"] = "off"  # Local memory consolidation strategy in SDK mode
+    memory_consolidation_mode: Literal["off", "async", "sync"] = "async"  # Local memory consolidation strategy in SDK mode
 
 
 class AgentDefinition(Base):
