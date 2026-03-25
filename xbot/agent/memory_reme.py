@@ -118,6 +118,9 @@ class ReMeMemoryStore:
         self._initialized = False
         self._lock = asyncio.Lock()
 
+        # Compatibility with MemoryConsolidator
+        self._MAX_FAILURES_BEFORE_RAW_ARCHIVE = 5
+
     async def _ensure_initialized(self) -> bool:
         """Lazy initialization of ReMe backend."""
         if self._initialized:
