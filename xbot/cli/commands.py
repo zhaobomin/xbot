@@ -1252,15 +1252,45 @@ def crew_run(
     config: str | None = typer.Option(None, "--config", "-c", help="xbot config file"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     resume: str | None = typer.Option(None, "--resume", help="Resume from checkpoint JSON"),
+    progress: bool = typer.Option(True, "--progress/--no-progress", help="Show progress display"),
+    var: list[str] = typer.Option([], "--var", help="Set variable (name=value), can be used multiple times"),
 ):
-    """Run a multi-agent crew from a YAML config file."""
+    """Run a multi-agent crew from a YAML config file.
+
+    Variables can be set with --var name=value and used in the config as ${name}.
+    """
+    from pathlib import Path
     from xbot.agent.crew import CrewOrchestrator, load_crew_config
+    from xbot.agent.crew.config import CrewConfigLoader
+    from xbot.agent.crew.models import parse_crew_config
 
     # 1. Load xbot global config
     xbot_config = _load_runtime_config(config, workspace)
 
-    # 2. Load crew YAML
-    crew_config = load_crew_config(Path(config_file))
+    # 2. Parse CLI variables
+    cli_vars = {}
+    for v in var:
+        if "=" in v:
+            name, value = v.split("=", 1)
+            cli_vars[name.strip()] = value
+        else:
+            console.print(f"[yellow]Warning: Invalid --var format '{v}', expected 'name=value'[/yellow]")
+
+    # 3. Load crew YAML with variable resolution and inheritance support
+    config_path = Path(config_file).expanduser().resolve()
+
+    # Use CrewConfigLoader for proper variable resolution and inheritance
+    loader = CrewConfigLoader(cli_vars=cli_vars)
+    try:
+        config_dict = loader.load(config_path)
+        crew_config = parse_crew_config(config_dict, config_path)
+    except Exception as e:
+        # Fallback: try simple load without variable resolution
+        try:
+            crew_config = load_crew_config(config_path)
+        except Exception:
+            raise e
+
     if workspace:
         crew_config.workspace = str(Path(workspace).expanduser().resolve())
     if verbose:
@@ -1273,9 +1303,29 @@ def crew_run(
         safe_tools=set(perm_config.safe_tools),
     )
 
-    # 4. Progress callback
+    # 4. Progress callback with enhanced display
+    task_count = len(crew_config.tasks)
+    completed_count = [0]  # Use list for mutable closure
+
     def on_progress(message: str, **kwargs: Any) -> None:
-        if verbose:
+        if progress:
+            # Check for task completion
+            if "done" in message.lower() or "completed" in message.lower():
+                completed_count[0] += 1
+
+            # Show progress bar
+            bar_width = 20
+            filled = int(bar_width * completed_count[0] / task_count) if task_count > 0 else 0
+            bar = "█" * filled + "░" * (bar_width - filled)
+
+            status = kwargs.get("status", "")
+            task_name = kwargs.get("task_name", "")
+
+            if task_name:
+                console.print(f"\r[dim][crew][/dim] [{bar}] {completed_count[0]}/{task_count} | {task_name[:30]:<30}", end="")
+            else:
+                console.print(f"\r[dim][crew][/dim] [{bar}] {completed_count[0]}/{task_count} | {message[:30]:<30}", end="")
+        elif verbose:
             console.print(f"[dim][crew][/dim] {message}")
 
     # 5. Execute
@@ -1289,6 +1339,8 @@ def crew_run(
         )
         checkpoint_path = Path(resume) if resume else None
         result = await orch.run(checkpoint_path=checkpoint_path)
+        if progress:
+            console.print()  # Clear progress line
         _print_crew_result(result)
 
     asyncio.run(_run())
@@ -1340,6 +1392,695 @@ def crew_show(
             "yes" if task.human_briefing else "-",
         )
     console.print(table)
+
+
+@crew_app.command("init")
+def crew_init(
+    project_name: str = typer.Argument(..., help="Name of the project to create"),
+    template: str | None = typer.Option(None, "--template", "-t", help="Template to use"),
+    path: str | None = typer.Option(None, "--path", "-p", help="Parent directory (default: current dir)"),
+):
+    """Initialize a new crew project with a template."""
+    from xbot.agent.crew.templates import get_template, init_project, list_templates
+
+    # Validate template if specified
+    if template:
+        t = get_template(template)
+        if not t:
+            console.print(f"[red]Unknown template: {template}[/red]")
+            console.print("\nAvailable templates:")
+            for tmpl in list_templates():
+                console.print(f"  - {tmpl.name}: {tmpl.description}")
+            raise typer.Exit(1)
+
+    # Determine project directory
+    parent_dir = Path(path) if path else Path.cwd()
+    project_dir = parent_dir / project_name
+
+    if project_dir.exists():
+        console.print(f"[red]Directory already exists: {project_dir}[/red]")
+        raise typer.Exit(1)
+
+    # Create project
+    try:
+        config_path = init_project(
+            project_dir=project_dir,
+            template_name=template,
+            project_name=project_name,
+        )
+        console.print(f"\n[green]✓[/green] Created crew project: [bold]{project_name}[/bold]")
+        console.print(f"  Directory: {project_dir}")
+        console.print(f"  Config:    {config_path}")
+        if template:
+            console.print(f"  Template:  {template}")
+        console.print("\nNext steps:")
+        console.print(f"  cd {project_name}")
+        console.print("  xbot crew run crew_config.yaml")
+    except Exception as exc:
+        console.print(f"[red]Error creating project: {exc}[/red]")
+        raise typer.Exit(1)
+
+
+@crew_app.command("templates")
+def crew_templates():
+    """List available crew templates."""
+    from xbot.agent.crew.templates import list_templates
+
+    templates = list_templates()
+
+    console.print("\n[bold]Available Crew Templates[/bold]\n")
+
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Name", style="cyan")
+    table.add_column("Description")
+    table.add_column("Agents")
+    table.add_column("Tasks")
+
+    for t in templates:
+        config = t.load_config()
+        agents_count = len(config.get("agents", {}))
+        tasks_count = len(config.get("tasks", []))
+        table.add_row(t.name, t.description, str(agents_count), str(tasks_count))
+
+    console.print(table)
+    console.print("\nUsage: [dim]xbot crew init my-project --template <name>[/dim]")
+
+
+@crew_app.command("validate")
+def crew_validate(
+    config_file: str = typer.Argument(..., help="Path to crew YAML config"),
+    strict: bool = typer.Option(False, "--strict", help="Enable strict validation"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Simulate execution without running"),
+):
+    """Validate a crew configuration file."""
+    from xbot.agent.crew import load_crew_config
+
+    console.print(f"\n[bold]Validating:[/bold] {config_file}\n")
+
+    errors = []
+    warnings = []
+
+    # 1. Load and parse YAML
+    try:
+        crew_config = load_crew_config(Path(config_file))
+        console.print("[green]✓[/green] YAML syntax valid")
+    except FileNotFoundError:
+        console.print("[red]✗[/red] File not found")
+        raise typer.Exit(1)
+    except Exception as e:
+        errors.append(f"Configuration error: {e}")
+        console.print(f"[red]✗[/red] Configuration error: {e}")
+
+    if errors:
+        console.print(f"\n[red]Validation failed with {len(errors)} error(s)[/red]")
+        raise typer.Exit(1)
+
+    # 2. Validate agents
+    console.print(f"[green]✓[/green] {len(crew_config.agents)} agent(s) defined")
+
+    # Check for duplicate agent names
+    agent_names = list(crew_config.agents.keys())
+    if len(agent_names) != len(set(agent_names)):
+        errors.append("Duplicate agent names found")
+
+    # 3. Validate tasks
+    console.print(f"[green]✓[/green] {len(crew_config.tasks)} task(s) defined")
+
+    task_names = {t.name for t in crew_config.tasks}
+
+    # Check for duplicate task names
+    if len(crew_config.tasks) != len(task_names):
+        errors.append("Duplicate task names found")
+        console.print("[red]✗[/red] Duplicate task names found")
+    else:
+        console.print("[green]✓[/green] All task names unique")
+
+    # 4. Validate agent references
+    for task in crew_config.tasks:
+        if task.agent not in crew_config.agents:
+            errors.append(f"Task '{task.name}' references unknown agent '{task.agent}'")
+            console.print(f"[red]✗[/red] Task '{task.name}' references unknown agent '{task.agent}'")
+
+    if not any(e.startswith("Task") and "unknown agent" in e for e in errors):
+        console.print("[green]✓[/green] All agent references valid")
+
+    # 5. Validate dependencies
+    dep_errors = False
+    for task in crew_config.tasks:
+        for dep in task.context_from:
+            if dep not in task_names:
+                errors.append(f"Task '{task.name}' has invalid dependency '{dep}'")
+                console.print(f"[red]✗[/red] Task '{task.name}' has invalid dependency '{dep}'")
+                dep_errors = True
+
+    if not dep_errors:
+        console.print("[green]✓[/green] All task dependencies valid")
+
+    # 6. Check for circular dependencies
+    if not dep_errors:
+        visited = set()
+        rec_stack = set()
+
+        def has_cycle(task_name: str) -> bool:
+            visited.add(task_name)
+            rec_stack.add(task_name)
+            task = next((t for t in crew_config.tasks if t.name == task_name), None)
+            if task:
+                for dep in task.context_from:
+                    if dep not in visited:
+                        if has_cycle(dep):
+                            return True
+                    elif dep in rec_stack:
+                        return True
+            rec_stack.remove(task_name)
+            return False
+
+        for task in crew_config.tasks:
+            if task.name not in visited:
+                if has_cycle(task.name):
+                    errors.append("Circular dependency detected")
+                    console.print("[red]✗[/red] Circular dependency detected")
+                    break
+        else:
+            console.print("[green]✓[/green] No circular dependencies")
+
+    # 7. Summary
+    console.print()
+    if errors:
+        console.print(f"[red]✗ Validation failed with {len(errors)} error(s)[/red]")
+        raise typer.Exit(1)
+    else:
+        console.print("[green]✓ Validation passed![/green]")
+
+        if dry_run:
+            console.print("\n[bold]Execution Plan:[/bold]")
+            for i, task in enumerate(crew_config.tasks, 1):
+                deps = f" (depends on: {', '.join(task.context_from)})" if task.context_from else ""
+                console.print(f"  {i}. {task.name} → {task.agent}{deps}")
+
+            console.print(f"\n[dim]Estimated time: ~{len(crew_config.tasks) * 2}-{len(crew_config.tasks) * 4} minutes[/dim]")
+
+        console.print(f"\nRun with: [dim]xbot crew run {config_file}[/dim]")
+
+
+@crew_app.command("checkpoints")
+def crew_checkpoints(
+    project_dir: str = typer.Argument(".", help="Project directory"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Max checkpoints to show"),
+):
+    """List available checkpoints for a crew project."""
+    project_path = Path(project_dir).resolve()
+    checkpoint_dir = project_path / ".xbot" / "crew_checkpoints"
+
+    if not checkpoint_dir.exists():
+        console.print(f"[dim]No checkpoints found in {project_path}[/dim]")
+        return
+
+    checkpoints = sorted(
+        checkpoint_dir.glob("*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )[:limit]
+
+    if not checkpoints:
+        console.print(f"[dim]No checkpoints found in {project_path}[/dim]")
+        return
+
+    console.print(f"\n[bold]Checkpoints in {project_path.name}[/bold]\n")
+
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("#", style="dim", width=3)
+    table.add_column("Checkpoint", style="cyan")
+    table.add_column("Time")
+    table.add_column("Status")
+    table.add_column("Tasks")
+
+    for i, cp in enumerate(checkpoints, 1):
+        try:
+            import json
+            with open(cp) as f:
+                data = json.load(f)
+
+            cp_time = data.get("checkpoint_at", "")[11:19] or "unknown"
+            cp_status = data.get("crew_phase", "unknown")
+            completed = len(data.get("completed_tasks", []))
+            next_task = data.get("next_task", "-")
+
+            status_style = {
+                "completed": "[green]completed[/green]",
+                "running": "[yellow]running[/yellow]",
+                "failed": "[red]failed[/red]",
+            }
+
+            table.add_row(
+                str(i),
+                cp.name,
+                cp_time,
+                status_style.get(cp_status, cp_status),
+                f"{completed} done, next: {next_task}" if next_task else f"{completed} done",
+            )
+        except Exception:
+            table.add_row(str(i), cp.name, "?", "?", "?")
+
+    console.print(table)
+    console.print(f"\nResume: [dim]xbot crew resume {project_dir} --checkpoint <name>[/dim]")
+
+
+@crew_app.command("resume")
+def crew_resume(
+    project_dir: str = typer.Argument(".", help="Project directory"),
+    checkpoint: str | None = typer.Option(None, "--checkpoint", "-c", help="Checkpoint name (default: latest)"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+):
+    """Resume a crew from a checkpoint."""
+    from xbot.agent.crew import CrewOrchestrator, load_crew_config
+    from xbot.agent.crew.context import load_checkpoint
+
+    project_path = Path(project_dir).resolve()
+    checkpoint_dir = project_path / ".xbot" / "crew_checkpoints"
+    config_path = project_path / "crew_config.yaml"
+
+    # Find config
+    if not config_path.exists():
+        console.print(f"[red]No crew_config.yaml found in {project_path}[/red]")
+        raise typer.Exit(1)
+
+    # Find checkpoint
+    if checkpoint:
+        checkpoint_path = checkpoint_dir / checkpoint
+        if not checkpoint_path.exists():
+            console.print(f"[red]Checkpoint not found: {checkpoint}[/red]")
+            raise typer.Exit(1)
+    else:
+        # Find latest
+        checkpoints = sorted(
+            checkpoint_dir.glob("*.json"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        if not checkpoints:
+            console.print(f"[red]No checkpoints found in {project_path}[/red]")
+            raise typer.Exit(1)
+        checkpoint_path = checkpoints[0]
+
+    console.print(f"\n[bold]Resuming from:[/bold] {checkpoint_path.name}")
+
+    # Load checkpoint to show status
+    try:
+        cp_data = load_checkpoint(checkpoint_path)
+        completed = len(cp_data.get("completed_tasks", []))
+        next_task = cp_data.get("next_task")
+        console.print(f"  Completed tasks: {completed}")
+        if next_task:
+            console.print(f"  Next task: {next_task}")
+    except Exception as e:
+        console.print(f"[red]Error loading checkpoint: {e}[/red]")
+        raise typer.Exit(1)
+
+    # Load configs
+    xbot_config = _load_runtime_config(None, None)
+    crew_config = load_crew_config(config_path)
+
+    # Permission handler
+    perm_config = xbot_config.agents.claude_sdk.permission
+    permission_handler = InteractivePermissionHandler(
+        auto_approve_safe_tools=perm_config.auto_approve_safe_tools,
+        safe_tools=set(perm_config.safe_tools),
+    )
+
+    # Progress callback
+    def on_progress(message: str, **kwargs: Any) -> None:
+        if verbose:
+            console.print(f"[dim][crew][/dim] {message}")
+
+    # Execute
+    async def _run() -> None:
+        orch = CrewOrchestrator(
+            crew_config=crew_config,
+            xbot_config=xbot_config,
+            permission_handler=permission_handler,
+            config_path=str(config_path),
+            on_progress=on_progress,
+        )
+        result = await orch.run(checkpoint_path=checkpoint_path)
+        _print_crew_result(result)
+
+    asyncio.run(_run())
+
+
+@crew_app.command("history")
+def crew_history(
+    project_dir: str = typer.Argument(".", help="Project directory"),
+    limit: int = typer.Option(10, "--limit", "-n", help="Max entries to show"),
+):
+    """Show execution history for a crew project."""
+    project_path = Path(project_dir).resolve()
+    checkpoint_dir = project_path / ".xbot" / "crew_checkpoints"
+
+    if not checkpoint_dir.exists():
+        console.print(f"[dim]No execution history in {project_path}[/dim]")
+        return
+
+    checkpoints = sorted(
+        checkpoint_dir.glob("*.json"),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    )[:limit]
+
+    if not checkpoints:
+        console.print(f"[dim]No execution history in {project_path}[/dim]")
+        return
+
+    console.print(f"\n[bold]Execution History: {project_path.name}[/bold]\n")
+
+    table = Table(show_header=True, header_style="bold cyan")
+    table.add_column("Time", width=19)
+    table.add_column("Crew", style="cyan")
+    table.add_column("Status")
+    table.add_column("Tasks")
+    table.add_column("Duration")
+
+    for cp in checkpoints:
+        try:
+            import json
+            from datetime import datetime
+
+            with open(cp) as f:
+                data = json.load(f)
+
+            started = data.get("started_at", "")
+            try:
+                dt = datetime.fromisoformat(started)
+                time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
+            except:
+                time_str = started[:19] if started else "unknown"
+
+            crew_name = data.get("crew_name", "unknown")
+            crew_phase = data.get("crew_phase", "unknown")
+            completed = len(data.get("completed_tasks", []))
+            total_tasks = len([t for t in data.get("completed_tasks", [])])
+
+            # Calculate duration if possible
+            started_at = data.get("started_at")
+            checkpoint_at = data.get("checkpoint_at")
+            duration = "-"
+            if started_at and checkpoint_at:
+                try:
+                    start = datetime.fromisoformat(started_at)
+                    end = datetime.fromisoformat(checkpoint_at)
+                    secs = (end - start).total_seconds()
+                    if secs >= 60:
+                        duration = f"{int(secs // 60)}m {int(secs % 60)}s"
+                    else:
+                        duration = f"{int(secs)}s"
+                except:
+                    pass
+
+            status_style = {
+                "completed": "[green]completed[/green]",
+                "completing": "[green]completing[/green]",
+                "running": "[yellow]running[/yellow]",
+                "failed": "[red]failed[/red]",
+                "aborted": "[red]aborted[/red]",
+            }
+
+            table.add_row(
+                time_str,
+                crew_name,
+                status_style.get(crew_phase, crew_phase),
+                str(completed),
+                duration,
+            )
+        except Exception:
+            pass
+
+    console.print(table)
+
+
+@crew_app.command("graph")
+def crew_graph(
+    config_file: str = typer.Argument(..., help="Path to crew YAML config"),
+    output: str | None = typer.Option(None, "--output", "-o", help="Output file (default: stdout)"),
+    mermaid: bool = typer.Option(False, "--mermaid", help="Output Mermaid diagram format"),
+):
+    """Generate a task dependency graph."""
+    from xbot.agent.crew import load_crew_config
+
+    try:
+        crew_config = load_crew_config(Path(config_file))
+    except Exception as exc:
+        console.print(f"[red]Error loading config: {exc}[/red]")
+        raise typer.Exit(1)
+
+    tasks = crew_config.tasks
+    task_names = {t.name for t in tasks}
+
+    # Build graph
+    if mermaid:
+        lines = ["graph TD"]
+        lines.append(f"    title[{crew_config.name}]")
+
+        for task in tasks:
+            # Node label
+            label = f"{task.name}\\n({task.agent})"
+            lines.append(f'    {task.name}["{label}"]')
+
+            # Edges
+            for dep in task.context_from:
+                lines.append(f"    {dep} --> {task.name}")
+
+        # Style completed/running nodes if we had that info
+        lines.append("")
+        lines.append("    classDef task fill:#e1f5fe,stroke:#01579b")
+        lines.append(f"    class {','.join(task_names)} task")
+
+        output_text = "\n".join(lines)
+    else:
+        # ASCII art format
+        lines = []
+        lines.append(f"\n[bold]Task Dependency Graph: {crew_config.name}[/bold]\n")
+
+        # Find tasks with no dependencies (roots)
+        roots = [t for t in tasks if not t.context_from]
+
+        # BFS to build graph
+        visited = set()
+        levels = []
+        current_level = roots
+
+        while current_level:
+            levels.append(current_level)
+            visited.update(t.name for t in current_level)
+            next_level = []
+            for task in tasks:
+                if task.name not in visited:
+                    if all(dep in visited for dep in task.context_from):
+                        next_level.append(task)
+            current_level = next_level
+
+        for i, level in enumerate(levels):
+            prefix = "  " * i
+            connector = "└─ " if i > 0 else ""
+            task_names_str = " → ".join(t.name for t in level)
+            lines.append(f"{prefix}{connector}[cyan]{task_names_str}[/cyan]")
+            for t in level:
+                if t.context_from:
+                    deps = ", ".join(t.context_from)
+                    lines.append(f"{prefix}   [dim]← {deps}[/dim]")
+
+        output_text = "\n".join(lines)
+
+    if output:
+        with open(output, "w") as f:
+            f.write(output_text)
+        console.print(f"[green]✓[/green] Graph written to {output}")
+    else:
+        console.print(output_text)
+
+
+@crew_app.command("export")
+def crew_export(
+    project_dir: str = typer.Argument(".", help="Project directory"),
+    output: str | None = typer.Option(None, "--output", "-o", help="Output file (default: stdout)"),
+    format: str = typer.Option("markdown", "--format", "-f", help="Output format: markdown, json, html"),
+    run_id: str | None = typer.Option(None, "--run", "-r", help="Specific run ID to export"),
+):
+    """Export crew execution results as a report.
+
+    Generates a report from the latest or specified run.
+
+    Examples:
+        xbot crew export . -f markdown -o report.md
+        xbot crew export . -f json
+        xbot crew export . --run code_review_20240325
+    """
+    from pathlib import Path
+    import json
+    from datetime import datetime
+
+    project_path = Path(project_dir).expanduser().resolve()
+    runs_dir = project_path / ".xbot" / "crew_runs"
+
+    if not runs_dir.exists():
+        console.print(f"[yellow]No crew runs found in {project_path}[/yellow]")
+        console.print("[dim]Run 'xbot crew run <config.yaml>' first[/dim]")
+        raise typer.Exit(1)
+
+    # Find the run to export
+    if run_id:
+        run_dir = runs_dir / run_id
+        if not run_dir.exists():
+            console.print(f"[red]Run not found: {run_id}[/red]")
+            raise typer.Exit(1)
+    else:
+        # Get the latest run
+        run_dirs = sorted(runs_dir.iterdir(), key=lambda p: p.stat().st_mtime, reverse=True)
+        if not run_dirs:
+            console.print(f"[yellow]No crew runs found in {project_path}[/yellow]")
+            raise typer.Exit(1)
+        run_dir = run_dirs[0]
+        run_id = run_dir.name
+
+    # Load manifest
+    manifest_path = run_dir / "manifest.json"
+    if not manifest_path.exists():
+        console.print(f"[red]Manifest not found for run: {run_id}[/red]")
+        raise typer.Exit(1)
+
+    with open(manifest_path) as f:
+        manifest = json.load(f)
+
+    # Load task outputs
+    tasks_dir = run_dir / "tasks"
+    task_outputs = []
+    if tasks_dir.exists():
+        for task_file in sorted(tasks_dir.iterdir()):
+            if task_file.suffix in (".json", ".md", ".txt"):
+                try:
+                    content = task_file.read_text()
+                    if task_file.suffix == ".json":
+                        try:
+                            content = json.dumps(json.loads(content), indent=2)
+                        except:
+                            pass
+                    task_outputs.append({
+                        "file": task_file.name,
+                        "content": content,
+                    })
+                except Exception as e:
+                    console.print(f"[yellow]Warning: Could not read {task_file.name}: {e}[/yellow]")
+
+    # Generate report
+    if format == "json":
+        report = json.dumps({
+            "manifest": manifest,
+            "tasks": task_outputs,
+        }, indent=2)
+    elif format == "html":
+        report = _generate_html_report(manifest, task_outputs)
+    else:  # markdown
+        report = _generate_markdown_report(manifest, task_outputs)
+
+    # Output
+    if output:
+        Path(output).write_text(report)
+        console.print(f"[green]✓[/green] Report written to {output}")
+    else:
+        console.print(report)
+
+
+def _generate_markdown_report(manifest: dict, task_outputs: list) -> str:
+    """Generate a Markdown report from run data."""
+    lines = []
+    lines.append(f"# Crew Execution Report: {manifest.get('crew_name', 'Unknown')}")
+    lines.append("")
+    lines.append(f"**Run ID:** {manifest.get('run_id', 'N/A')}")
+    lines.append(f"**Status:** {manifest.get('status', 'N/A')}")
+    lines.append(f"**Started:** {manifest.get('started_at', 'N/A')}")
+    lines.append(f"**Finished:** {manifest.get('finished_at', 'N/A')}")
+    lines.append(f"**Total Time:** {manifest.get('total_time', 0):.1f}s")
+    lines.append("")
+
+    # Summary table
+    lines.append("## Summary")
+    lines.append("")
+    lines.append("| Task | Status |")
+    lines.append("|------|--------|")
+    for task in manifest.get("tasks", []):
+        lines.append(f"| {task.get('task_name', 'N/A')} | {task.get('status', 'N/A')} |")
+    lines.append("")
+
+    # Task outputs
+    lines.append("## Task Outputs")
+    lines.append("")
+    for i, task_output in enumerate(task_outputs, 1):
+        lines.append(f"### {task_output['file']}")
+        lines.append("")
+        lines.append("```")
+        lines.append(task_output["content"][:2000])  # Limit output size
+        if len(task_output["content"]) > 2000:
+            lines.append("... (truncated)")
+        lines.append("```")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def _generate_html_report(manifest: dict, task_outputs: list) -> str:
+    """Generate an HTML report from run data."""
+    crew_name = manifest.get('crew_name', 'Unknown')
+    status = manifest.get('status', 'N/A')
+    total_time = manifest.get('total_time', 0)
+
+    tasks_html = ""
+    for task in manifest.get("tasks", []):
+        task_status = task.get('status', 'N/A')
+        status_class = "success" if task_status == "success" else "failed" if task_status == "failed" else ""
+        tasks_html += f'<tr><td>{task.get("task_name", "N/A")}</td><td class="{status_class}">{task_status}</td></tr>'
+
+    outputs_html = ""
+    for task_output in task_outputs:
+        content = task_output["content"][:2000].replace("<", "&lt;").replace(">", "&gt;").replace("\n", "<br>")
+        outputs_html += f'''
+        <div class="task-output">
+            <h3>{task_output["file"]}</h3>
+            <pre>{content}</pre>
+        </div>
+        '''
+
+    return f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Crew Report: {crew_name}</title>
+    <style>
+        body {{ font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; margin: 40px; }}
+        h1 {{ color: #333; }}
+        .summary {{ background: #f5f5f5; padding: 20px; border-radius: 8px; margin: 20px 0; }}
+        table {{ border-collapse: collapse; width: 100%; }}
+        th, td {{ border: 1px solid #ddd; padding: 12px; text-align: left; }}
+        th {{ background: #4CAF50; color: white; }}
+        .success {{ color: green; }}
+        .failed {{ color: red; }}
+        .task-output {{ margin: 20px 0; padding: 15px; background: #fafafa; border-radius: 8px; }}
+        pre {{ white-space: pre-wrap; word-wrap: break-word; }}
+    </style>
+</head>
+<body>
+    <h1>Crew Execution Report: {crew_name}</h1>
+    <div class="summary">
+        <p><strong>Status:</strong> {status}</p>
+        <p><strong>Duration:</strong> {total_time:.1f}s</p>
+    </div>
+    <h2>Tasks</h2>
+    <table>
+        <tr><th>Task</th><th>Status</th></tr>
+        {tasks_html}
+    </table>
+    <h2>Task Outputs</h2>
+    {outputs_html}
+</body>
+</html>'''
 
 
 def _print_crew_result(result: Any) -> None:

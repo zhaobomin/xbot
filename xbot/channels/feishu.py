@@ -787,6 +787,29 @@ class FeishuChannel(BaseChannel):
                     )
                 return
 
+            # Handle AskUserQuestion interaction requests with formatted post message.
+            # Show options clearly and ask user to reply with option text.
+            # Supports question, approval, and confirmation types.
+            if msg.metadata.get("interaction_request") and msg.metadata.get("interaction_kind") in ("question", "approval", "confirmation"):
+                suggestions = msg.metadata.get("suggestions", [])
+                if suggestions:
+                    # Build formatted prompt with options list
+                    options_text = "\n".join(f"  • {opt}" for opt in suggestions)
+                    formatted_content = f"{msg.content.strip()}\n\n{options_text}\n\n请回复选项内容（如\"{suggestions[0]}\"）"
+                    post_body = self._markdown_to_post(formatted_content)
+                    await loop.run_in_executor(
+                        None, self._send_message_sync,
+                        receive_id_type, msg.chat_id, "post", post_body,
+                    )
+                else:
+                    # No options, send as plain text
+                    text_body = json.dumps({"text": msg.content.strip()}, ensure_ascii=False)
+                    await loop.run_in_executor(
+                        None, self._send_message_sync,
+                        receive_id_type, msg.chat_id, "text", text_body,
+                    )
+                return
+
             # Determine whether the first message should quote the user's message.
             # Only the very first send (media or text) in this call uses reply; subsequent
             # chunks/media fall back to plain create to avoid redundant quote bubbles.

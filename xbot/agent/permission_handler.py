@@ -65,10 +65,28 @@ class BasePermissionHandler:
         self._safe_tools.add(tool_name)
 
     @staticmethod
-    def summarize_input(tool_input: dict[str, Any], max_len: int = 100) -> str:
-        """摘要工具输入用于显示。"""
+    def summarize_input(
+        tool_input: dict[str, Any],
+        max_len: int = 100,
+        tool_name: str | None = None,
+    ) -> str:
+        """摘要工具输入用于显示。
+
+        Args:
+            tool_input: 工具输入参数
+            max_len: 最大长度（默认 100 字符）
+            tool_name: 工具名称（用于特殊处理，如 AskUserQuestion）
+
+        Returns:
+            格式化后的输入摘要
+        """
         if not tool_input:
             return ""
+
+        # AskUserQuestion 特殊处理：显示完整问题和选项
+        if tool_name == "AskUserQuestion":
+            return BasePermissionHandler._format_ask_user_question(tool_input)
+
         try:
             s = json.dumps(tool_input, ensure_ascii=False)
             if len(s) > max_len:
@@ -77,13 +95,58 @@ class BasePermissionHandler:
         except Exception:
             return str(tool_input)[:max_len]
 
+    @staticmethod
+    def _format_ask_user_question(tool_input: dict[str, Any]) -> str:
+        """格式化 AskUserQuestion 工具的输入，显示完整问题和选项。
+
+        Args:
+            tool_input: AskUserQuestion 的输入参数
+
+        Returns:
+            格式化后的问题文本
+        """
+        questions = tool_input.get("questions", [])
+        if not questions:
+            return json.dumps(tool_input, ensure_ascii=False)
+
+        parts = []
+        for i, q in enumerate(questions, 1):
+            header = q.get("header", f"问题 {i}")
+            question = q.get("question", "")
+            options = q.get("options", [])
+            multi_select = q.get("multiSelect", False)
+
+            parts.append(f"[{header}]")
+            if question:
+                parts.append(f"  {question}")
+            if options:
+                parts.append("  可选：")
+                for opt in options:
+                    label = opt.get("label", "")
+                    desc = opt.get("description", "")
+                    if desc:
+                        parts.append(f"  • {label}: {desc}")
+                    else:
+                        parts.append(f"  • {label}")
+            if multi_select:
+                parts.append("  (可多选)")
+            parts.append("")
+
+        return "\n".join(parts).strip()
+
     def format_permission_message(
         self,
         tool_name: str,
         tool_input: dict[str, Any],
     ) -> str:
         """格式化权限请求消息。"""
+        # AskUserQuestion 使用特殊格式，显示完整问题和选项
+        if tool_name == "AskUserQuestion":
+            input_summary = self.summarize_input(tool_input, tool_name=tool_name)
+            return "📝 " + input_summary
+
         input_summary = self.summarize_input(tool_input)
+
         msg = f"🔐 需要权限确认\n\n工具: {tool_name}"
         if input_summary:
             msg += f"\n参数: {input_summary}"

@@ -69,9 +69,13 @@ class CrewOrchestrator:
                 cp = load_checkpoint(checkpoint_path)
                 self._apply_checkpoint(cp, context, state_manager)
                 # Only initialise backends for remaining tasks
+                # Check all terminal states, not just COMPLETED
+                terminal_phases = {
+                    TaskPhase.COMPLETED, TaskPhase.SKIPPED, TaskPhase.FAILED, TaskPhase.REJECTED
+                }
                 remaining_agents = {
                     t.agent for t in self.crew_config.tasks
-                    if state_manager.get_task_phase(t.name) != TaskPhase.COMPLETED
+                    if state_manager.get_task_phase(t.name) not in terminal_phases
                 }
                 only_roles = remaining_agents or None
                 self._progress(
@@ -114,22 +118,26 @@ class CrewOrchestrator:
             config_path=self.config_path,
             started_at=started_at,
             on_progress=self.on_progress,
+            llm_repair=self._get_llm_repair_callable(),
         )
 
         # Execute
         results: list[TaskResult] = []
+        final_status = "completed"  # Default
         try:
             results = await process.execute(self.crew_config.tasks)
         except KeyboardInterrupt:
             logger.info("[crew] Interrupted by user (Ctrl+C)")
             state_manager.transition_crew(CrewPhase.ABORTING, "KeyboardInterrupt")
             state_manager.transition_crew(CrewPhase.ABORTED)
+            final_status = "aborted"
         except Exception as exc:
             logger.exception("[crew] Unhandled exception during execution")
             try:
                 state_manager.transition_crew(CrewPhase.FAILED, str(exc))
             except Exception:
                 pass
+            final_status = "failed"
         finally:
             await pool.shutdown()
 
@@ -160,6 +168,9 @@ class CrewOrchestrator:
             else:
                 status = "completed"
 
+        # Finalize output persistence
+        process.finalize_output(status)
+
         summary = self._build_summary(results, total_time)
 
         return CrewResult(
@@ -182,13 +193,24 @@ class CrewOrchestrator:
     ) -> None:
         """Inject completed tasks from a checkpoint into context and state.
 
-        Only tasks with status 'success' or 'completed' are restored;
-        failed/skipped tasks are left as PENDING so they get re-executed.
+        Only tasks with status 'success' or 'completed' are restored.
+        Failed/skipped tasks are logged and left as PENDING for re-execution.
         """
+        completed_count = 0
+        retry_count = 0
+
         for completed in cp.get("completed_tasks", []):
             status = completed.get("status", "success")
+
+            # Only restore successful tasks
             if status not in ("success", "completed"):
+                retry_count += 1
+                logger.info(
+                    f"[crew-checkpoint] Task '{completed.get('name')}' had status "
+                    f"'{status}' — will be re-executed"
+                )
                 continue
+
             result = TaskResult(
                 task_name=completed["name"],
                 agent_name=completed["agent"],
@@ -202,6 +224,13 @@ class CrewOrchestrator:
             )
             context.add_result(result)
             state_manager.force_task_phase(completed["name"], TaskPhase.COMPLETED)
+            completed_count += 1
+
+        if retry_count > 0:
+            logger.warning(
+                f"[crew-checkpoint] {retry_count} task(s) with failed/skipped status "
+                f"will be re-executed from scratch"
+            )
 
     # ------------------------------------------------------------------
     # Helpers
@@ -219,3 +248,18 @@ class CrewOrchestrator:
         logger.info(f"[crew] {message}")
         if self.on_progress:
             self.on_progress(message, **kwargs)
+
+    def _get_llm_repair_callable(self) -> Callable[[str], str] | None:
+        """Get an LLM callable for output repair.
+
+        Returns None if no simple LLM call mechanism is available,
+        in which case repair will gracefully fail.
+
+        Returns:
+            Callable that takes a prompt and returns LLM response, or None.
+        """
+        # For now, return None - repair will gracefully fail.
+        # This can be enhanced later to use a dedicated repair LLM client.
+        # The orchestrator context doesn't have a simple sync LLM call method,
+        # and the agent backends are async-based.
+        return None

@@ -1,0 +1,93 @@
+# Bug Hunter Crew Template
+# Finds bugs, analyzes root causes, and suggests fixes
+
+name: bug_hunter_crew
+description: Hunt for bugs, analyze root causes, and suggest fixes
+
+process: sequential
+
+workspace: .
+
+global_context: |
+  You are part of a debugging team. Your goal is to find and fix bugs.
+  Be methodical - reproduce, isolate, understand, then fix.
+  Document your findings so others can learn from them.
+
+agents:
+  detector:
+    description: Bug detector
+    goal: Identify potential bugs and issues in code
+    backstory: |
+      You have a keen eye for potential bugs. You know common patterns that lead to errors:
+      off-by-one errors, null pointer issues, race conditions, resource leaks.
+    max_iterations: 30
+
+  investigator:
+    description: Root cause investigator
+    goal: Deep dive into bugs to understand root causes
+    backstory: |
+      You are a methodical debugger who can trace issues to their source.
+      You understand system interactions and can isolate problems.
+    max_iterations: 35
+
+  fixer:
+    description: Bug fixer
+    goal: Implement fixes for identified bugs
+    backstory: |
+      You are a careful developer who fixes bugs without introducing new ones.
+      You write defensive code and add tests to prevent regression.
+    max_iterations: 40
+
+tasks:
+  - name: detect_bugs
+    description: |
+      Scan the codebase for potential bugs.
+
+      Look for:
+      1. Logic errors and edge cases
+      2. Resource management issues (leaks, unclosed resources)
+      3. Error handling gaps
+      4. Concurrency issues
+      5. Security vulnerabilities
+      6. Performance bottlenecks
+
+      Prioritize by severity: Critical > High > Medium > Low
+    agent: detector
+    expected_output: Prioritized bug report with locations and severity
+    timeout: 300
+
+  - name: investigate_bugs
+    description: |
+      Investigate the critical and high severity bugs.
+
+      For each bug:
+      1. Explain what the bug is
+      2. Trace the execution path
+      3. Identify the root cause
+      4. Describe the potential impact
+      5. Suggest investigation steps
+
+      Focus on the top 3-5 most critical bugs.
+    agent: investigator
+    context_from:
+      - detect_bugs
+    expected_output: Detailed investigation report for critical bugs
+    timeout: 300
+
+  - name: fix_bugs
+    description: |
+      Provide fixes for the investigated bugs.
+
+      For each bug:
+      1. Show the current buggy code
+      2. Show the fixed code
+      3. Explain the fix
+      4. Suggest a regression test
+
+      Ensure fixes don't break existing functionality.
+    agent: fixer
+    context_from:
+      - detect_bugs
+      - investigate_bugs
+    expected_output: Code fixes with explanations and regression tests
+    timeout: 400

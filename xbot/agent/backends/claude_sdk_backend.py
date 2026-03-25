@@ -1182,12 +1182,67 @@ class ClaudeSDKBackend(AgentBackend):
         message: "TaskNotificationMessage",
     ) -> str | None:
         """Ask user for input when SDK task enters input-required state."""
+        import json
+
         summary = str(message.summary or "").strip()
         prompt = summary or "Task requires your input. Please reply to continue."
         if not summary:
             prompt = f"Task `{message.task_id or ''}` requires your input. Please reply to continue.".strip()
 
         status = str(message.status or "").lower()
+        
+        # Extract options from AskUserQuestion if available
+        options = []
+        question_headers = []
+        multi_select = False
+        
+        # Try to extract questions from task_result or summary
+        task_result = getattr(message, "task_result", None)
+        if task_result:
+            try:
+                # Check if this is an AskUserQuestion tool call
+                if isinstance(task_result, dict):
+                    questions = task_result.get("questions", [])
+                    if isinstance(questions, list):
+                        for q in questions:
+                            if isinstance(q, dict):
+                                header = q.get("header", "")
+                                if header:
+                                    question_headers.append(header)
+                                for opt in q.get("options", []):
+                                    if isinstance(opt, dict):
+                                        # Prefer label, fallback to value if label is missing
+                                        option_value = opt.get("label") or opt.get("value")
+                                        if option_value:
+                                            options.append(option_value)
+                                if q.get("multiSelect", False):
+                                    multi_select = True
+            except (TypeError, AttributeError, json.JSONDecodeError):
+                pass
+        
+        # Also try to parse from summary if it looks like JSON
+        if not options and summary.startswith("{"):
+            try:
+                data = json.loads(summary)
+                questions = data.get("questions", [])
+                if isinstance(questions, list):
+                    for q in questions:
+                        if isinstance(q, dict):
+                            header = q.get("header", "")
+                            if header:
+                                question_headers.append(header)
+                            for opt in q.get("options", []):
+                                if isinstance(opt, dict):
+                                    # Prefer label, fallback to value if label is missing
+                                    option_value = opt.get("label") or opt.get("value")
+                                    if option_value:
+                                        options.append(option_value)
+                            if q.get("multiSelect", False):
+                                multi_select = True
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+        # Determine interaction kind and suggestions
         if status == "approval_required":
             interaction_kind = "approval"
             suggestions = ["允许", "拒绝"]
@@ -1196,7 +1251,11 @@ class ClaudeSDKBackend(AgentBackend):
             suggestions = ["确认", "取消"]
         else:
             interaction_kind = "question"
-            suggestions = ["继续", "取消"]
+            # Use extracted options as suggestions if available
+            if options:
+                suggestions = options
+            else:
+                suggestions = ["继续", "取消"]
 
         timeout = float(getattr(getattr(self.sdk_config, "permission", None), "timeout", 300.0))
         response = None
@@ -1218,6 +1277,14 @@ class ClaudeSDKBackend(AgentBackend):
             from xbot.bus.queue import InteractionRequest
             import uuid
 
+            # Build metadata with valid_options for answer validation
+            metadata_dict = dict(context.metadata or {})
+            if options:
+                metadata_dict["valid_options"] = options
+            if question_headers:
+                metadata_dict["question_headers"] = question_headers
+            metadata_dict["multi_select"] = multi_select
+
             request = InteractionRequest(
                 request_id=str(uuid.uuid4()),
                 session_key=context.session_key,
@@ -1226,7 +1293,7 @@ class ClaudeSDKBackend(AgentBackend):
                 kind=interaction_kind,
                 prompt=prompt,
                 suggestions=suggestions,
-                metadata=dict(context.metadata or {}),
+                metadata=metadata_dict,
             )
             await bus.publish_interaction_request(request)
             response = await bus.wait_interaction_response(request.request_id, timeout=timeout)

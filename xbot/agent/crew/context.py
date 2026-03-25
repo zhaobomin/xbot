@@ -47,6 +47,7 @@ class CrewExecutionContext:
         role: AgentRole,
         global_context: str = "",
         human_briefing: str | None = None,
+        max_context_length: int = 4000,
     ) -> str:
         """Build the full prompt for a task, embedding human inputs naturally.
 
@@ -57,6 +58,13 @@ class CrewExecutionContext:
         - Additional instructions from team lead (human_briefing)
         - Context from upstream tasks (with effective_output and annotations)
         - Expected output format
+
+        Args:
+            task: Task definition.
+            role: Agent role executing the task.
+            global_context: Global project context.
+            human_briefing: Pre-execution human instructions.
+            max_context_length: Max chars for upstream output (default 4000).
         """
         parts: list[str] = []
 
@@ -86,8 +94,8 @@ class CrewExecutionContext:
             for dep_name, dep_result in upstream.items():
                 output = dep_result.effective_output
                 # Truncate very long outputs to avoid prompt overflow
-                if len(output) > 4000:
-                    output = output[:4000] + "\n\n... (output truncated)"
+                if len(output) > max_context_length:
+                    output = output[:max_context_length] + "\n\n... (output truncated)"
                 ctx_lines.append(
                     f"### Task: {dep_name} (by {dep_result.agent_name})\n{output}"
                 )

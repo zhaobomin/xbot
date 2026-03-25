@@ -944,3 +944,299 @@ class TestBugfixYAML:
         assert task_map["fix_bugs"].human_briefing is True
         assert task_map["review_and_test"].human_review is True
         assert task_map["create_pr"].human_review is False
+
+
+# ============================================================================
+# Integration: Config inheritance and variable resolution
+# ============================================================================
+
+
+class TestConfigInheritance:
+    """Integration tests for configuration inheritance."""
+
+    def test_inheritance_chain(self, tmp_path: Path):
+        """Test that inheritance chain works end-to-end."""
+        # Create parent config
+        parent_yaml = tmp_path / "parent.yaml"
+        parent_yaml.write_text(yaml.dump({
+            "name": "parent-crew",
+            "agents": {
+                "worker": {"description": "Base worker", "goal": "Work"},
+            },
+            "tasks": [
+                {"name": "task1", "description": "First task", "agent": "worker"},
+            ],
+        }))
+
+        # Create child config that extends parent
+        child_yaml = tmp_path / "child.yaml"
+        child_yaml.write_text(yaml.dump({
+            "extends": str(parent_yaml),
+            "name": "child-crew",
+            "tasks": [
+                {"name": "task2", "description": "Second task", "agent": "worker"},
+            ],
+        }))
+
+        from xbot.agent.crew.config.loader import CrewConfigLoader
+        loader = CrewConfigLoader()
+        config = loader.load(child_yaml)
+
+        # Child overrides name
+        assert config["name"] == "child-crew"
+        # Parent agent inherited
+        assert "worker" in config["agents"]
+        # Tasks appended (parent + child)
+        assert len(config["tasks"]) == 2
+        assert config["tasks"][0]["name"] == "task1"
+        assert config["tasks"][1]["name"] == "task2"
+
+    def test_variable_resolution_with_cli_vars(self, tmp_path: Path):
+        """Test that CLI variables override config variables."""
+        config_yaml = tmp_path / "config.yaml"
+        config_yaml.write_text(yaml.dump({
+            "name": "${CREW_NAME}",
+            "variables": {
+                "CREW_NAME": "default-name",
+            },
+            "agents": {
+                "worker": {"description": "Worker", "goal": "Work"},
+            },
+            "tasks": [
+                {"name": "task1", "description": "Task", "agent": "worker"},
+            ],
+        }))
+
+        from xbot.agent.crew.config.loader import CrewConfigLoader
+        loader = CrewConfigLoader(cli_vars={"CREW_NAME": "cli-name"})
+        config = loader.load(config_yaml)
+
+        assert config["name"] == "cli-name"
+
+    def test_builtin_variables(self, tmp_path: Path):
+        """Test that builtin variables are available."""
+        config_yaml = tmp_path / "config.yaml"
+        config_yaml.write_text(yaml.dump({
+            "name": "test",
+            "agents": {
+                "worker": {"description": "Worker", "goal": "Work"},
+            },
+            "tasks": [
+                {"name": "task1", "description": "Config in ${CONFIG_DIR}", "agent": "worker"},
+            ],
+        }))
+
+        from xbot.agent.crew.config.loader import CrewConfigLoader
+        loader = CrewConfigLoader()
+        config = loader.load(config_yaml)
+
+        # CONFIG_DIR is resolved as the parent directory of the config file
+        assert str(tmp_path) in config["tasks"][0]["description"]
+
+    def test_validation_integration(self, tmp_path: Path):
+        """Test that validation catches errors in loaded config."""
+        config_yaml = tmp_path / "config.yaml"
+        config_yaml.write_text(yaml.dump({
+            "name": "test",
+            "agents": {
+                "worker": {"description": "Worker"},
+            },
+            "tasks": [
+                {"name": "task1", "agent": "nonexistent_agent"},
+            ],
+        }))
+
+        from xbot.agent.crew.config.loader import CrewConfigLoader
+        from xbot.agent.crew.config.validator import validate_crew_config
+        loader = CrewConfigLoader()
+        config = loader.load(config_yaml)
+
+        result = validate_crew_config(config)
+        assert not result.valid
+        assert any("nonexistent_agent" in m.message for m in result.errors)
+
+
+class TestOutputPersistenceIntegration:
+    """Integration tests for output persistence."""
+
+    def test_full_output_lifecycle(self, tmp_path: Path):
+        """Test complete output lifecycle: create, save, finalize, load."""
+        from xbot.agent.crew.output.persist import OutputPersister, create_persister
+        from datetime import datetime
+
+        # Create persister
+        persister = create_persister(str(tmp_path), "test-crew")
+
+        now = datetime.now()
+
+        # Save multiple task outputs
+        persister.save_task_output(
+            task_name="analyze",
+            output="# Analysis\n\nResults here",
+            status="success",
+            started_at=now,
+            finished_at=now,
+            output_format="markdown",
+        )
+
+        persister.save_task_output(
+            task_name="generate",
+            output='{"files": ["a.py", "b.py"]}',
+            status="success",
+            started_at=now,
+            finished_at=now,
+            output_format="json",
+            structured_output={"files": ["a.py", "b.py"]},
+        )
+
+        # Save artifact
+        persister.save_artifact("summary.md", "# Summary\n\nAll done!")
+
+        # Finalize
+        persister.finalize("completed")
+
+        # Verify manifest
+        manifest_path = persister.run_dir / "manifest.json"
+        assert manifest_path.exists()
+
+        import json
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+
+        assert manifest["status"] == "completed"
+        assert len(manifest["tasks"]) == 2
+        assert manifest["total_time"] >= 0
+
+    def test_truncation_integration(self):
+        """Test that truncation works with real content."""
+        from xbot.agent.crew.output.truncate import OutputTruncator, TruncationStrategy
+
+        truncator = OutputTruncator()
+
+        # Large markdown content
+        content = """# Report
+
+## Section 1
+""" + ("This is a paragraph with some content.\n\n" * 100) + """
+## Section 2
+""" + ("More content here.\n\n" * 100)
+
+        result = truncator.truncate(content, max_length=500, strategy=TruncationStrategy.MARKDOWN)
+        assert result.truncated
+        assert len(result.content) <= 600  # Account for truncation marker
+        assert "truncated" in result.content.lower()
+
+    def test_format_detection_and_parsing(self):
+        """Test format detection and parsing integration."""
+        from xbot.agent.crew.output.format import OutputParser, detect_format, OutputFormat
+
+        parser = OutputParser()
+
+        # JSON in markdown
+        content = """Here is the result:
+```json
+{"status": "success", "count": 42}
+```
+"""
+        detected = detect_format(content)
+        assert detected == OutputFormat.JSON
+
+        result = parser.parse(content, OutputFormat.JSON)
+        assert result.valid
+        assert result.structured["status"] == "success"
+        assert result.structured["count"] == 42
+
+
+class TestOutputRepairIntegration:
+    """Integration tests for output repair."""
+
+    def test_repair_flow(self):
+        """Test the repair flow with a mock LLM."""
+        from xbot.agent.crew.output.format import OutputParser, OutputFormat
+        from xbot.agent.crew.output.repair import OutputRepairer, should_attempt_repair
+
+        parser = OutputParser()
+
+        # Invalid JSON that LLM should fix
+        bad_json = "{status: success, count: 42}"  # Missing quotes
+
+        parsed = parser.parse(bad_json, OutputFormat.JSON)
+        assert not parsed.valid
+        assert should_attempt_repair(parsed)
+
+        # Mock LLM that returns valid JSON
+        def mock_llm(prompt: str) -> str:
+            return '{"status": "success", "count": 42}'
+
+        repairer = OutputRepairer(llm_call=mock_llm)
+        result = repairer.repair(bad_json, OutputFormat.JSON)
+        assert result.success
+        assert result.parsed is not None
+        assert result.parsed.structured["status"] == "success"
+
+
+class TestEndToEndConfigOutput:
+    """End-to-end tests for config and output modules working together."""
+
+    def test_config_to_output_flow(self, tmp_path: Path):
+        """Test full flow: load config -> simulate run -> save outputs."""
+        from xbot.agent.crew.config.loader import CrewConfigLoader
+        from xbot.agent.crew.config.validator import validate_crew_config
+        from xbot.agent.crew.output.persist import OutputPersister
+        from datetime import datetime
+
+        # 1. Create config
+        config_yaml = tmp_path / "crew.yaml"
+        config_yaml.write_text(yaml.dump({
+            "name": "${CREW_NAME}",
+            "workspace": str(tmp_path),
+            "variables": {"CREW_NAME": "e2e-crew"},
+            "agents": {
+                "analyst": {"description": "Analyst", "goal": "Analyze"},
+                "writer": {"description": "Writer", "goal": "Write"},
+            },
+            "tasks": [
+                {"name": "analyze", "description": "Analyze data", "agent": "analyst"},
+                {"name": "report", "description": "Write report", "agent": "writer", "context_from": ["analyze"]},
+            ],
+        }))
+
+        # 2. Load and validate
+        loader = CrewConfigLoader()
+        config = loader.load(config_yaml)
+
+        result = validate_crew_config(config)
+        assert result.valid
+
+        # 3. Create output persister
+        persister = OutputPersister(tmp_path, config["name"])
+        persister.initialize()
+
+        # 4. Simulate task execution
+        now = datetime.now()
+        persister.save_task_output(
+            task_name="analyze",
+            output='{"findings": ["item1", "item2"]}',
+            status="success",
+            started_at=now,
+            finished_at=now,
+            output_format="json",
+        )
+
+        persister.save_task_output(
+            task_name="report",
+            output="# Report\n\nBased on analysis: item1, item2",
+            status="success",
+            started_at=now,
+            finished_at=now,
+            output_format="markdown",
+        )
+
+        # 5. Finalize
+        persister.finalize("completed")
+
+        # 6. Verify output
+        summary = persister.get_run_summary()
+        assert summary["status"] == "completed"
+        assert summary["total_tasks"] == 2
+        assert summary["successful_tasks"] == 2

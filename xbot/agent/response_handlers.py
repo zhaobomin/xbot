@@ -104,7 +104,7 @@ class RuntimeResponseHandlers:
 
         return True
 
-    async def handle_interaction_response(self, msg: InboundMessage) -> bool:
+    async def handle_interaction_response(self, msg: InboundMessage, retry_count: int = 0) -> bool:
         """Handle pending generic interaction replies for a session."""
         if self._bus is None:
             return False
@@ -137,6 +137,26 @@ class RuntimeResponseHandlers:
             logger.debug(
                 f"Ignoring interaction response for session in {current_phase.value} state"
             )
+            # Give user feedback about why their response wasn't processed
+            phase_messages = {
+                SessionPhase.WAITING_PERMISSION: "⚠️ 当前有待处理的权限请求，请先完成权限确认后再回答此问题。",
+                SessionPhase.STOPPING: "⚠️ 系统正在关闭中，交互已取消。",
+                SessionPhase.ERROR: "⚠️ 会话遇到错误，无法处理交互请求。",
+                SessionPhase.RESETTING: "⚠️ 会话正在重置中，请稍后再试。",
+            }
+            fallback_msg = f"⚠️ 当前状态为「{current_phase.value}」，无法处理交互请求。"
+            user_msg = phase_messages.get(current_phase, fallback_msg)
+
+            await self._bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=user_msg,
+                )
+            )
+            # Clean up retry count to prevent memory leak
+            if hasattr(self._runtime, '_interaction_retry_counts'):
+                self._runtime._interaction_retry_counts.pop(msg.session_key, None)
             return True
 
         if current_phase != SessionPhase.WAITING_INTERACTION:
@@ -158,15 +178,78 @@ class RuntimeResponseHandlers:
                     content="⚠️ 交互请求已过期或被取消，请重新发起操作。",
                 )
             )
+            # Clean up retry count
+            if hasattr(self._runtime, '_interaction_retry_counts'):
+                self._runtime._interaction_retry_counts.pop(msg.session_key, None)
             return True
 
+        # AskUserQuestion 答案验证：检查用户回复是否在有效选项内
+        # 保存原始输入用于日志记录
+        original_input = content
+        if req.kind == "question" and req.metadata:
+            valid_options = req.metadata.get("valid_options", [])
+            if valid_options:
+                # 精确匹配或模糊匹配（忽略大小写、前后空格）
+                normalized_content = content.lower().strip()
+                normalized_options = [str(opt).lower().strip() for opt in valid_options]
+
+                # 查找匹配选项的原始值
+                matched_option = None
+                for i, opt in enumerate(normalized_options):
+                    if normalized_content == opt:
+                        matched_option = valid_options[i]
+                        break
+
+                if matched_option is None:
+                    retry_count += 1
+                    # Update retry count in runtime
+                    if hasattr(self._runtime, '_interaction_retry_counts'):
+                        self._runtime._interaction_retry_counts[msg.session_key] = retry_count
+
+                    if retry_count >= 3:
+                        await self._bus.publish_outbound(
+                            OutboundMessage(
+                                channel=msg.channel,
+                                chat_id=msg.chat_id,
+                                content=f"⚠️ 答案无效已达 3 次，交互已取消。\n有效选项：{', '.join(str(opt) for opt in valid_options)}",
+                            )
+                        )
+                        async with self._state_coordinator.transaction(
+                            msg.session_key, validate_on_commit=False
+                        ) as tx:
+                            tx.set_phase(SessionPhase.IDLE, reason="invalid_answer_max_retries")
+                        # Clean up retry count
+                        self._runtime._interaction_retry_counts.pop(msg.session_key, None)
+                        return True
+
+                    # Build options list string
+                    options_str = "\n".join(f"  • {opt}" for opt in valid_options)
+                    await self._bus.publish_outbound(
+                        OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content=f"⚠️ 答案无效，请从以下选项中选择：\n{options_str}\n\n当前回复「{original_input}」不在有效选项中（第 {retry_count}/3 次尝试）",
+                        )
+                    )
+                    return True
+
+                # 匹配成功，使用标准化后的选项值，清理重试计数
+                content = matched_option
+                if hasattr(self._runtime, '_interaction_retry_counts'):
+                    self._runtime._interaction_retry_counts.pop(msg.session_key, None)
+
         action = derive_interaction_action(kind=req.kind, content=content)
+        # 构建响应 metadata，包含原始输入用于日志记录
+        response_metadata = {"original_input": original_input}
+        if req.metadata:
+            response_metadata.update(req.metadata)
         submitted = await self._bus.submit_interaction_response(
             InteractionResponse(
                 request_id=request_id,
                 session_key=msg.session_key,
                 action=action,
                 content=content,
+                metadata=response_metadata,
             )
         )
         if not submitted:
@@ -182,6 +265,9 @@ class RuntimeResponseHandlers:
                     content="⚠️ 交互请求已过期或被取消，请重新发起操作。",
                 )
             )
+            # Clean up retry count
+            if hasattr(self._runtime, '_interaction_retry_counts'):
+                self._runtime._interaction_retry_counts.pop(msg.session_key, None)
             return True
 
         logger.info(f"Interaction response submitted: action={action}, request={request_id}")
@@ -190,5 +276,9 @@ class RuntimeResponseHandlers:
             msg.session_key, validate_on_commit=False
         ) as tx:
             tx.set_phase(SessionPhase.RUNNING, reason="interaction_response_submitted")
+
+        # Clean up retry count on success
+        if hasattr(self._runtime, '_interaction_retry_counts'):
+            self._runtime._interaction_retry_counts.pop(msg.session_key, None)
 
         return True

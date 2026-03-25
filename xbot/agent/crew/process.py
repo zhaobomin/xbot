@@ -13,13 +13,22 @@ import re
 import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable
 
 from loguru import logger
 
 from xbot.agent.crew.agent_pool import AgentPool
 from xbot.agent.crew.context import CrewExecutionContext, save_checkpoint
-from xbot.agent.crew.models import CrewConfig, TaskDefinition, TaskResult
+from xbot.agent.crew.models import CrewConfig, OutputFormat, TaskDefinition, TaskResult, UserAction
+from xbot.agent.crew.output import (
+    OutputParser,
+    OutputPersister,
+    OutputTruncator,
+    OutputRepairer,
+    TruncationStrategy,
+    should_attempt_repair,
+)
 from xbot.agent.crew.state import CrewStateManager, TaskPhase
 from xbot.agent.permission_handler import BasePermissionHandler
 
@@ -37,6 +46,7 @@ class BaseProcess(ABC):
         config_path: str = "",
         started_at: datetime | None = None,
         on_progress: Callable[..., None] | None = None,
+        llm_repair: Callable[[str], str] | None = None,
     ) -> None:
         self.pool = pool
         self.context = context
@@ -48,6 +58,25 @@ class BaseProcess(ABC):
         self.on_progress = on_progress
         self._review_lock = asyncio.Lock()
 
+        # Output management
+        self._output_parser = OutputParser()
+        self._output_truncator = OutputTruncator()
+        self._output_repairer = OutputRepairer(llm_call=llm_repair)
+        self._persister: OutputPersister | None = None
+
+        # Initialize persister if output is enabled
+        if crew_config.output.enabled:
+            try:
+                self._persister = OutputPersister(
+                    workspace=Path(crew_config.workspace),
+                    crew_name=crew_config.name,
+                    retention_days=crew_config.output.retention_days,
+                )
+                self._persister.initialize()
+                logger.debug(f"[crew-output] Initialized output persister: {self._persister.run_dir}")
+            except Exception as e:
+                logger.warning(f"[crew-output] Failed to initialize persister: {e}")
+
     @abstractmethod
     async def execute(self, tasks: list[TaskDefinition]) -> list[TaskResult]:
         """Run all tasks and return results."""
@@ -57,7 +86,7 @@ class BaseProcess(ABC):
     # ------------------------------------------------------------------
 
     async def _execute_single_task(self, task: TaskDefinition) -> TaskResult:
-        """Execute a single task: briefing -> run -> return result.
+        """Execute a single task: briefing -> run -> process output -> return result.
 
         Does NOT include human review — callers handle review separately so
         state transitions stay clean.
@@ -72,6 +101,7 @@ class BaseProcess(ABC):
             task, role,
             global_context=self.crew_config.global_context,
             human_briefing=human_briefing,
+            max_context_length=self.crew_config.max_context_length,
         )
 
         # 3. Generate session key
@@ -95,6 +125,51 @@ class BaseProcess(ABC):
             status = "failed"
 
         finished = datetime.now()
+
+        # 5. Process output (format, repair, truncate)
+        output_format = task.output_format
+        structured_output = None
+        repaired = False
+        truncated = False
+
+        if output_format != OutputFormat.RAW and status == "success":
+            # Parse output according to format
+            parsed = self._output_parser.parse(
+                output,
+                output_format=output_format,
+                schema=task.output_schema,
+            )
+
+            # Attempt repair if parsing failed
+            if not parsed.valid and should_attempt_repair(parsed):
+                self._progress(f"Attempting to repair output for task '{task.name}'...")
+                repair_result = self._output_repairer.repair(
+                    output,
+                    target_format=output_format,
+                    schema=task.output_schema,
+                    error_message=parsed.error,
+                )
+                if repair_result.success and repair_result.parsed:
+                    output = repair_result.repaired_content
+                    structured_output = repair_result.parsed.structured
+                    repaired = True
+                    logger.info(f"[crew-output] Successfully repaired output for task '{task.name}'")
+            else:
+                structured_output = parsed.structured
+
+        # 6. Truncate if needed
+        max_output_size = self.crew_config.output.max_output_size
+        if len(output) > max_output_size:
+            trunc_result = self._output_truncator.truncate(
+                output,
+                max_length=max_output_size,
+                strategy=TruncationStrategy.SMART,
+            )
+            if trunc_result.truncated:
+                output = trunc_result.content
+                truncated = True
+                logger.info(f"[crew-output] Truncated output for task '{task.name}' ({trunc_result.original_length} -> {trunc_result.truncated_length})")
+
         return TaskResult(
             task_name=task.name,
             agent_name=task.agent,
@@ -103,6 +178,10 @@ class BaseProcess(ABC):
             started_at=started,
             finished_at=finished,
             human_briefing_input=human_briefing,
+            output_format=output_format,
+            structured_output=structured_output,
+            truncated=truncated,
+            repaired=repaired,
         )
 
     # ------------------------------------------------------------------
@@ -148,53 +227,95 @@ class BaseProcess(ABC):
             return await self._do_human_review(task, result)
 
     async def _do_human_review(self, task: TaskDefinition, result: TaskResult) -> TaskResult:
-        """Actual review interaction (called while holding the lock)."""
-        output_preview = result.output[:2000]
-        if len(result.output) > 2000:
-            output_preview += "\n... (truncated)"
+        """Actual review interaction (called while holding the lock).
 
-        self._progress(f"Awaiting human review for task '{task.name}' ...")
-        response = await self.permission_handler.request_interaction(
-            kind="question",
-            prompt=(
-                f"Task '{task.name}' completed (status: {result.status}).\n\n"
-                f"Output:\n{output_preview}\n\n"
-                "Choose an action:\n"
-                "1. continue  — accept as-is\n"
-                "2. annotate  — add notes for downstream tasks\n"
-                "3. edit      — modify the output\n"
-                "4. redo      — re-execute with feedback\n"
-                "5. skip      — skip this task\n"
-                "6. abort     — stop the entire crew\n"
-            ),
-            suggestions=["continue", "annotate", "edit", "redo", "skip", "abort"],
-            session_key=f"crew:{self.crew_config.name}",
-        )
+        Loops until the user chooses a terminal action (continue/skip/abort).
+        Non-terminal actions (annotate/edit/redo) allow further review.
+        """
+        while True:
+            output_preview = result.output[:2000]
+            if len(result.output) > 2000:
+                output_preview += "\n... (truncated)"
 
-        action = (response.content or "continue").strip().lower()
+            self._progress(f"Awaiting human review for task '{task.name}' ...")
+            response = await self.permission_handler.request_interaction(
+                kind="question",
+                prompt=(
+                    f"Task '{task.name}' finished (status: {result.status}).\n\n"
+                    f"Output:\n{output_preview}\n\n"
+                    "Choose an action:\n"
+                    "1. continue  — accept as-is\n"
+                    "2. annotate  — add notes for downstream tasks\n"
+                    "3. edit      — modify the output\n"
+                    "4. redo      — re-execute with feedback\n"
+                    "5. skip      — skip this task\n"
+                    "6. abort     — stop the entire crew\n"
+                ),
+                suggestions=["continue", "annotate", "edit", "redo", "skip", "abort"],
+                session_key=f"crew:{self.crew_config.name}",
+            )
 
-        if action in ("1", "continue", "继续"):
+            action = self._parse_user_action(response.content or "continue")
+
+            # Terminal actions: exit review loop
+            if action == UserAction.CONTINUE:
+                return result
+
+            if action == UserAction.SKIP:
+                result.status = "skipped"
+                return result
+
+            if action == UserAction.ABORT:
+                result.status = "human_rejected"
+                return result
+
+            # Non-terminal actions: modify result and continue reviewing
+            if action == UserAction.ANNOTATE:
+                result = await self._collect_annotation(result)
+                continue
+
+            if action == UserAction.EDIT:
+                result = await self._collect_edit(result)
+                continue
+
+            if action == UserAction.REDO:
+                result, _ = await self._redo_task(task, result)
+                # Continue reviewing the new result
+                continue
+
+            # Default: treat as continue (terminal)
             return result
 
-        if action in ("2", "annotate", "批注"):
-            return await self._collect_annotation(result)
+    def _parse_user_action(self, raw: str) -> UserAction:
+        """Parse user input into a UserAction enum value.
 
-        if action in ("3", "edit", "修改"):
-            return await self._collect_edit(result)
+        Supports numeric shortcuts (1-6) and Chinese equivalents.
+        """
+        action = raw.strip().lower()
 
-        if action in ("4", "redo", "重做"):
-            return await self._redo_task(task, result)
+        # Map numeric shortcuts and Chinese equivalents
+        action_map = {
+            "1": UserAction.CONTINUE,
+            "continue": UserAction.CONTINUE,
+            "继续": UserAction.CONTINUE,
+            "2": UserAction.ANNOTATE,
+            "annotate": UserAction.ANNOTATE,
+            "批注": UserAction.ANNOTATE,
+            "3": UserAction.EDIT,
+            "edit": UserAction.EDIT,
+            "修改": UserAction.EDIT,
+            "4": UserAction.REDO,
+            "redo": UserAction.REDO,
+            "重做": UserAction.REDO,
+            "5": UserAction.SKIP,
+            "skip": UserAction.SKIP,
+            "跳过": UserAction.SKIP,
+            "6": UserAction.ABORT,
+            "abort": UserAction.ABORT,
+            "终止": UserAction.ABORT,
+        }
 
-        if action in ("5", "skip", "跳过"):
-            result.status = "skipped"
-            return result
-
-        if action in ("6", "abort", "终止"):
-            result.status = "human_rejected"
-            return result
-
-        # Default: treat as continue
-        return result
+        return action_map.get(action, UserAction.CONTINUE)
 
     async def _collect_annotation(self, result: TaskResult) -> TaskResult:
         """Collect annotation text and attach to result."""
@@ -220,14 +341,22 @@ class BaseProcess(ABC):
             result.human_edited_output = text
         return result
 
-    async def _redo_task(self, task: TaskDefinition, original: TaskResult) -> TaskResult:
-        """Re-execute a task with human feedback."""
+    async def _redo_task(self, task: TaskDefinition, original: TaskResult) -> tuple[TaskResult, bool]:
+        """Re-execute a task with human feedback.
+
+        Returns:
+            A tuple of (TaskResult, success: bool) where success indicates
+            whether the redo completed successfully.
+        """
         resp = await self.permission_handler.request_interaction(
             kind="question",
             prompt="Enter feedback for the redo (what should be different?):",
             session_key=f"crew:{self.crew_config.name}",
         )
         feedback = (resp.content or "").strip()
+
+        # Transition to RETRYING state
+        self.state_manager.transition_task(task.name, TaskPhase.RETRYING, "human requested redo")
 
         # Build a new prompt with feedback
         role = self.crew_config.agents[task.agent]
@@ -236,22 +365,30 @@ class BaseProcess(ABC):
             task, role,
             global_context=self.crew_config.global_context,
             human_briefing=extra_briefing,
+            max_context_length=self.crew_config.max_context_length,
         )
 
         session_key = f"crew:{self.crew_config.name}:{task.name}:redo:{uuid.uuid4().hex[:8]}"
         started = datetime.now()
+
+        # Transition to RUNNING for the actual redo execution
+        self.state_manager.transition_task(task.name, TaskPhase.RUNNING, "redo execution started")
+
         try:
             output = await asyncio.wait_for(
                 self.pool.run_task(task.agent, prompt, session_key),
                 timeout=task.timeout,
             )
             status = "success"
+            success = True
         except asyncio.TimeoutError:
             output = f"Redo timed out after {task.timeout}s"
             status = "failed"
+            success = False
         except Exception as exc:
             output = f"Redo failed: {exc}"
             status = "failed"
+            success = False
 
         return TaskResult(
             task_name=task.name,
@@ -261,7 +398,7 @@ class BaseProcess(ABC):
             started_at=started,
             finished_at=datetime.now(),
             human_briefing_input=extra_briefing,
-        )
+        ), success
 
     # ------------------------------------------------------------------
     # Helpers
@@ -303,6 +440,36 @@ class BaseProcess(ABC):
         except Exception:
             logger.exception("[crew] Failed to save checkpoint")
 
+    def _persist_task_output(self, result: TaskResult) -> None:
+        """Persist task output to disk immediately after completion."""
+        if not self._persister:
+            return
+
+        try:
+            self._persister.save_task_output(
+                task_name=result.task_name,
+                output=result.output,
+                status=result.status,
+                started_at=result.started_at,
+                finished_at=result.finished_at,
+                output_format=result.output_format.value if result.output_format else "raw",
+                truncated=result.truncated,
+                repaired=result.repaired,
+                structured_output=result.structured_output,
+                artifacts=result.artifacts if result.artifacts else None,
+            )
+            logger.debug(f"[crew-output] Persisted output for task '{result.task_name}'")
+        except Exception:
+            logger.exception(f"[crew-output] Failed to persist output for task '{result.task_name}'")
+
+    def finalize_output(self, status: str = "completed") -> None:
+        """Finalize output persistence after all tasks complete."""
+        if self._persister:
+            try:
+                self._persister.finalize(status)
+            except Exception:
+                logger.exception("[crew-output] Failed to finalize output persistence")
+
 
 # ==========================================================================
 # Sequential Process
@@ -314,10 +481,15 @@ class SequentialProcess(BaseProcess):
     async def execute(self, tasks: list[TaskDefinition]) -> list[TaskResult]:
         results: list[TaskResult] = []
 
+        # Terminal states - tasks in these states should be skipped
+        terminal_states = {
+            TaskPhase.COMPLETED, TaskPhase.SKIPPED, TaskPhase.FAILED, TaskPhase.REJECTED
+        }
+
         for task in tasks:
             phase = self.state_manager.get_task_phase(task.name)
-            # Skip already completed tasks (resume scenario)
-            if phase == TaskPhase.COMPLETED:
+            # Skip already completed/terminal tasks (resume scenario)
+            if phase in terminal_states:
                 existing = self.context.get_result(task.name)
                 if existing:
                     results.append(existing)
@@ -337,6 +509,7 @@ class SequentialProcess(BaseProcess):
                 )
                 self.context.add_result(result)
                 results.append(result)
+                self._persist_task_output(result)
                 continue
 
             # Transition: PENDING -> QUEUED -> RUNNING
@@ -354,19 +527,19 @@ class SequentialProcess(BaseProcess):
             # Execute
             result = await self._execute_single_task(task)
 
-            # Handle failure
-            if result.status == "failed":
-                self.state_manager.transition_task(task.name, TaskPhase.FAILED, "execution failed")
-                self.context.add_result(result)
-                results.append(result)
-                self._save_checkpoint(tasks)
-                self._progress(f"Task '{task.name}' failed: {result.output[:200]}")
-                continue
-
-            # Human review
+            # Human review (for both success and failure cases)
             if task.human_review:
                 self.state_manager.transition_task(task.name, TaskPhase.AWAITING_REVIEW)
                 result = await self._human_review(task, result)
+            elif result.status == "failed":
+                # No human review - just fail
+                self.state_manager.transition_task(task.name, TaskPhase.FAILED, "execution failed")
+                self.context.add_result(result)
+                results.append(result)
+                self._persist_task_output(result)
+                self._save_checkpoint(tasks)
+                self._progress(f"Task '{task.name}' failed: {result.output[:200]}")
+                continue
 
             # Post-review state
             if result.status == "human_rejected":
@@ -374,6 +547,7 @@ class SequentialProcess(BaseProcess):
                 self.state_manager.transition_task(task.name, TaskPhase.SKIPPED, "rejected -> skip")
                 self.context.add_result(result)
                 results.append(result)
+                self._persist_task_output(result)
                 self._save_checkpoint(tasks)
                 self._progress(f"Crew aborted by human at task '{task.name}'")
                 # Abort: skip all remaining tasks
@@ -391,16 +565,17 @@ class SequentialProcess(BaseProcess):
                         )
                         self.context.add_result(skip_result)
                         results.append(skip_result)
+                        self._persist_task_output(skip_result)
                 break
             elif result.status == "skipped":
                 self.state_manager.transition_task(task.name, TaskPhase.SKIPPED, "human skipped")
             elif result.status == "failed":
-                # Redo returned a failure — treat as task failure
-                self.state_manager.transition_task(task.name, TaskPhase.RETRYING, "redo requested")
-                self.state_manager.transition_task(task.name, TaskPhase.RUNNING, "redo running")
+                # Redo failed - state already transitioned by _redo_task
+                # The task is now in FAILED state
                 self.state_manager.transition_task(task.name, TaskPhase.FAILED, "redo failed")
                 self.context.add_result(result)
                 results.append(result)
+                self._persist_task_output(result)
                 self._save_checkpoint(tasks)
                 self._progress(f"Task '{task.name}' redo failed: {result.output[:200]}")
                 continue
@@ -409,6 +584,7 @@ class SequentialProcess(BaseProcess):
 
             self.context.add_result(result)
             results.append(result)
+            self._persist_task_output(result)
             self._save_checkpoint(tasks)
             self._progress(
                 f"Task '{task.name}' done (status={result.status})",
@@ -503,7 +679,7 @@ class HierarchicalProcess(BaseProcess):
         try:
             output = await asyncio.wait_for(
                 self.pool.run_task(manager_role_name, prompt, session_key),
-                timeout=120,
+                timeout=self.crew_config.manager_timeout,
             )
             return self._parse_plan(output)
         except Exception:

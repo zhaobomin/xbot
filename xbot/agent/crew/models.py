@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import yaml
 from pydantic import BaseModel, Field
@@ -17,6 +17,36 @@ class ProcessType(str, Enum):
 
     sequential = "sequential"
     hierarchical = "hierarchical"
+
+
+class UserAction(str, Enum):
+    """Human review actions for task intervention."""
+
+    CONTINUE = "continue"
+    ANNOTATE = "annotate"
+    EDIT = "edit"
+    REDO = "redo"
+    SKIP = "skip"
+    ABORT = "abort"
+
+
+class OutputFormat(str, Enum):
+    """Supported output formats for tasks."""
+
+    RAW = "raw"
+    JSON = "json"
+    MARKDOWN = "markdown"
+    STRUCTURED = "structured"
+
+
+class OutputConfig(BaseModel):
+    """Configuration for output management."""
+
+    enabled: bool = True
+    formats: list[str] = ["json"]
+    artifacts_dir: str | None = None
+    retention_days: int = 30
+    max_output_size: int = 100000  # Max characters per task output
 
 
 class AgentRole(BaseModel):
@@ -43,6 +73,11 @@ class TaskDefinition(BaseModel):
     human_briefing: bool = False  # Allow human to add instructions before execution
     timeout: int = 600  # Timeout in seconds
 
+    # Output format configuration
+    output_format: OutputFormat = OutputFormat.RAW
+    output_schema: dict[str, Any] | None = None  # JSON schema for validation
+    output_template: str | None = None  # Template for structured output
+
 
 class CrewConfig(BaseModel):
     """Top-level crew configuration loaded from YAML."""
@@ -56,6 +91,15 @@ class CrewConfig(BaseModel):
     verbose: bool = False
     global_context: str = ""  # Global context injected into all prompts
     manager_agent: str | None = None  # Manager role for hierarchical mode
+    manager_timeout: int = 120  # Timeout in seconds for manager plan generation
+    max_context_length: int = 4000  # Max chars for upstream output in prompts
+
+    # Configuration inheritance
+    extends: str | None = None  # Template or parent config to extend
+    variables: dict[str, str] = Field(default_factory=dict)  # Config variables
+
+    # Output management
+    output: OutputConfig = Field(default_factory=OutputConfig)
 
 
 @dataclass
@@ -72,6 +116,13 @@ class TaskResult:
     human_annotations: list[str] = field(default_factory=list)  # Human review notes
     human_briefing_input: str | None = None  # Pre-execution human instructions
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    # Output format information
+    output_format: OutputFormat = OutputFormat.RAW
+    structured_output: dict[str, Any] | None = None  # Parsed structured data
+    artifacts: list[str] = field(default_factory=list)  # Generated file paths
+    truncated: bool = False  # Whether output was truncated
+    repaired: bool = False  # Whether output was repaired by LLM
 
     @property
     def effective_output(self) -> str:
@@ -113,6 +164,26 @@ def load_crew_config(path: Path) -> CrewConfig:
     if not isinstance(raw, dict):
         raise ValueError(f"Expected a YAML mapping at top level, got {type(raw).__name__}")
 
+    return parse_crew_config(raw, path)
+
+
+def parse_crew_config(raw: dict[str, Any], config_path: Path | None = None) -> CrewConfig:
+    """Parse and validate a CrewConfig from a raw dictionary.
+
+    This is useful when you have already loaded/resolved the config dict
+    (e.g., from CrewConfigLoader) and need to convert it to a CrewConfig.
+
+    Args:
+        raw: Raw configuration dictionary
+        config_path: Optional path to the config file (for workspace resolution)
+
+    Returns:
+        Validated CrewConfig instance
+
+    Raises:
+        ValueError: If the config is invalid
+        pydantic.ValidationError: If validation fails
+    """
     # Parse agents: support both dict-of-dicts and list-of-dicts formats
     raw_agents = raw.get("agents", {})
     if isinstance(raw_agents, list):
@@ -127,6 +198,7 @@ def load_crew_config(path: Path) -> CrewConfig:
         agents = {}
         for name, definition in raw_agents.items():
             if isinstance(definition, dict):
+                definition = definition.copy()  # Don't modify original
                 definition.setdefault("name", name)
                 agents[name] = AgentRole(**definition)
             else:
@@ -146,10 +218,11 @@ def load_crew_config(path: Path) -> CrewConfig:
 
     config = CrewConfig(**raw)
 
-    # Resolve workspace relative to YAML location
-    ws = Path(config.workspace)
-    if not ws.is_absolute():
-        config.workspace = str((path.parent / ws).resolve())
+    # Resolve workspace relative to config file location
+    if config_path:
+        ws = Path(config.workspace)
+        if not ws.is_absolute():
+            config.workspace = str((config_path.parent / ws).resolve())
 
     # Validate: all task.agent references exist in agents
     for task in config.tasks:
@@ -173,7 +246,8 @@ def load_crew_config(path: Path) -> CrewConfig:
     if config.process == ProcessType.hierarchical and config.manager_agent:
         if config.manager_agent not in config.agents:
             raise ValueError(
-                f"manager_agent '{config.manager_agent}' not found in agents"
+                f"manager_agent '{config.manager_agent}' not found in agents. "
+                f"Available: {list(config.agents.keys())}"
             )
 
     return config

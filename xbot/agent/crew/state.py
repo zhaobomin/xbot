@@ -66,7 +66,7 @@ TASK_VALID_TRANSITIONS: dict[TaskPhase, set[TaskPhase]] = {
     TaskPhase.BLOCKED: {TaskPhase.QUEUED, TaskPhase.SKIPPED},
     TaskPhase.QUEUED: {TaskPhase.RUNNING, TaskPhase.SKIPPED},
     TaskPhase.RUNNING: {TaskPhase.AWAITING_REVIEW, TaskPhase.COMPLETED, TaskPhase.FAILED},
-    TaskPhase.AWAITING_REVIEW: {TaskPhase.COMPLETED, TaskPhase.REJECTED, TaskPhase.RETRYING, TaskPhase.SKIPPED},
+    TaskPhase.AWAITING_REVIEW: {TaskPhase.COMPLETED, TaskPhase.REJECTED, TaskPhase.RETRYING, TaskPhase.SKIPPED, TaskPhase.FAILED},
     TaskPhase.RETRYING: {TaskPhase.RUNNING},
     TaskPhase.REJECTED: {TaskPhase.SKIPPED},
     # Terminal states
@@ -100,6 +100,7 @@ class CrewStateManager:
         task_names: list[str],
         task_definitions: list[TaskDefinition] | None = None,
         on_transition: Callable[[str, str, str, str, str], None] | None = None,
+        strict_invariants: bool = False,
     ):
         """Initialise state manager.
 
@@ -107,6 +108,8 @@ class CrewStateManager:
             task_names: Ordered list of task names.
             task_definitions: Optional task definitions for dependency checking.
             on_transition: Callback(layer, name, from_phase, to_phase, reason).
+            strict_invariants: If True, raise InvariantViolationError on critical
+                violations instead of just logging warnings.
         """
         self._crew_phase = CrewPhase.CREATED
         self._task_phases: dict[str, TaskPhase] = {
@@ -117,6 +120,7 @@ class CrewStateManager:
             for td in task_definitions:
                 self._task_defs[td.name] = td
         self._on_transition = on_transition
+        self._strict_invariants = strict_invariants
 
     @property
     def crew_phase(self) -> CrewPhase:
@@ -195,21 +199,29 @@ class CrewStateManager:
             self._log_transition("crew", "crew", from_phase.value, to_phase.value, "auto-sync")
 
     def _check_invariants(self) -> None:
-        """Validate state consistency invariants after transitions."""
+        """Validate state consistency invariants after transitions.
+
+        Critical violations (Invariant 3) will raise InvariantViolationError
+        if strict_invariants is enabled, otherwise log a warning.
+        """
         # Invariant 1: Crew RUNNING -> at least one task active
         if self._crew_phase == CrewPhase.RUNNING:
             active = {TaskPhase.RUNNING, TaskPhase.QUEUED, TaskPhase.AWAITING_REVIEW, TaskPhase.RETRYING}
             if not any(p in active for p in self._task_phases.values()):
-                logger.warning("Invariant violation: Crew RUNNING but no active tasks")
+                msg = "Crew RUNNING but no active tasks"
+                logger.warning(f"Invariant violation: {msg}")
 
         # Invariant 2: Crew PAUSED -> at least one AWAITING_REVIEW, no RUNNING
         if self._crew_phase == CrewPhase.PAUSED:
             if not any(p == TaskPhase.AWAITING_REVIEW for p in self._task_phases.values()):
-                logger.warning("Invariant violation: Crew PAUSED but no tasks awaiting review")
+                msg = "Crew PAUSED but no tasks awaiting review"
+                logger.warning(f"Invariant violation: {msg}")
             if any(p == TaskPhase.RUNNING for p in self._task_phases.values()):
-                logger.warning("Invariant violation: Crew PAUSED but tasks still RUNNING")
+                msg = "Crew PAUSED but tasks still RUNNING"
+                logger.warning(f"Invariant violation: {msg}")
 
         # Invariant 3: Task RUNNING/QUEUED -> all context_from deps are COMPLETED
+        # This is a critical invariant - violates data integrity for downstream tasks
         for task_name, phase in self._task_phases.items():
             if phase in {TaskPhase.RUNNING, TaskPhase.QUEUED}:
                 task_def = self._task_defs.get(task_name)
@@ -217,10 +229,28 @@ class CrewStateManager:
                     for dep in task_def.context_from:
                         dep_phase = self._task_phases.get(dep)
                         if dep_phase and dep_phase != TaskPhase.COMPLETED:
-                            logger.warning(
-                                f"Invariant violation: Task '{task_name}' is {phase.value} "
+                            msg = (
+                                f"Task '{task_name}' is {phase.value} "
                                 f"but dependency '{dep}' is {dep_phase.value}"
                             )
+                            if self._strict_invariants:
+                                raise InvariantViolationError(
+                                    f"Critical invariant violation: {msg}"
+                                )
+                            logger.warning(f"Invariant violation: {msg}")
+
+        # Invariant 4: Crew COMPLETING -> all tasks terminal
+        if self._crew_phase == CrewPhase.COMPLETING:
+            terminal = {TaskPhase.COMPLETED, TaskPhase.SKIPPED, TaskPhase.FAILED, TaskPhase.REJECTED}
+            if not all(p in terminal for p in self._task_phases.values()):
+                msg = "Crew COMPLETING but not all tasks are terminal"
+                logger.warning(f"Invariant violation: {msg}")
+
+        # Invariant 5: Crew ABORTING -> no RUNNING tasks
+        if self._crew_phase == CrewPhase.ABORTING:
+            if any(p == TaskPhase.RUNNING for p in self._task_phases.values()):
+                msg = "Crew ABORTING but tasks still RUNNING"
+                logger.warning(f"Invariant violation: {msg}")
 
     def _log_transition(
         self, layer: str, name: str, from_phase: str, to_phase: str, reason: str

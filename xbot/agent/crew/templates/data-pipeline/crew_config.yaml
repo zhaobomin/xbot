@@ -1,0 +1,111 @@
+# Data Pipeline Crew Template
+# Builds data processing pipelines with analysis, transformation, and validation
+
+name: data_pipeline_crew
+description: Design and implement data processing pipelines
+
+process: sequential
+
+workspace: .
+
+global_context: |
+  You are part of a data engineering team. Your goal is to build robust data pipelines.
+  Focus on data quality, error handling, and maintainability.
+  Provide production-ready code with proper logging and validation.
+
+agents:
+  analyst:
+    description: Data analyst
+    goal: Analyze data structures and requirements
+    backstory: |
+      You understand data patterns and can identify quality issues.
+      You design efficient data flows and transformations.
+    max_iterations: 25
+
+  developer:
+    description: Pipeline developer
+    goal: Implement data processing code
+    backstory: |
+      You are a skilled Python developer specializing in data processing.
+      You write clean, efficient, and well-tested code.
+    max_iterations: 35
+
+  validator:
+    description: Data validator
+    goal: Ensure data quality and pipeline correctness
+    backstory: |
+      You are meticulous about data quality.
+      You design comprehensive tests and validation rules.
+    max_iterations: 25
+
+tasks:
+  - name: analyze_data
+    description: |
+      Analyze the data sources in the workspace.
+
+      Identify:
+      1. Data formats and schemas
+      2. Data volume and characteristics
+      3. Quality issues (missing values, outliers, etc.)
+      4. Transformation requirements
+      5. Output requirements
+
+      Provide a data analysis report.
+    agent: analyst
+    expected_output: Data analysis report with schema and quality assessment
+    timeout: 240
+
+  - name: design_pipeline
+    description: |
+      Design the data pipeline architecture based on the analysis.
+
+      Define:
+      1. Pipeline stages (extract, transform, load)
+      2. Data transformations at each stage
+      3. Error handling strategy
+      4. Validation checkpoints
+      5. Output format
+
+      Provide a pipeline design document.
+    agent: analyst
+    context_from:
+      - analyze_data
+    expected_output: Pipeline design document with flow diagram
+    timeout: 180
+
+  - name: implement_pipeline
+    description: |
+      Implement the data pipeline based on the design.
+
+      Create:
+      1. Data extraction module
+      2. Transformation functions
+      3. Validation rules
+      4. Output generators
+      5. Main pipeline orchestrator
+
+      Include proper error handling and logging.
+    agent: developer
+    context_from:
+      - analyze_data
+      - design_pipeline
+    expected_output: Production-ready pipeline code
+    timeout: 400
+
+  - name: create_tests
+    description: |
+      Create tests for the data pipeline.
+
+      Include:
+      1. Unit tests for transformations
+      2. Validation rule tests
+      3. Integration tests for the pipeline
+      4. Edge case handling tests
+
+      Provide test files that can be run with pytest.
+    agent: validator
+    context_from:
+      - analyze_data
+      - implement_pipeline
+    expected_output: Pytest-compatible test suite
+    timeout: 300

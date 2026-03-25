@@ -1,0 +1,91 @@
+# Documentation Generator Crew Template
+# Analyzes code and generates comprehensive documentation
+
+name: doc_generator_crew
+description: Analyze code and generate comprehensive documentation
+
+process: sequential
+
+workspace: .
+
+global_context: |
+  You are part of a documentation team. Your goal is to create clear, helpful documentation.
+  Write for developers who will use or maintain this code.
+  Include examples and explain the "why" not just the "what".
+
+agents:
+  analyst:
+    description: Code structure analyst
+    goal: Analyze code structure and identify documentation needs
+    backstory: |
+      You are skilled at understanding code architecture and identifying what needs documentation.
+      You can quickly map out classes, functions, and their relationships.
+    max_iterations: 25
+
+  writer:
+    description: Technical writer
+    goal: Write clear, comprehensive documentation
+    backstory: |
+      You are an experienced technical writer who can explain complex concepts simply.
+      You know how to structure documentation for maximum usefulness.
+    max_iterations: 30
+
+  reviewer:
+    description: Documentation reviewer
+    goal: Review documentation for completeness and accuracy
+    backstory: |
+      You ensure documentation is accurate, complete, and helpful.
+      You catch errors and improve clarity.
+    max_iterations: 20
+
+tasks:
+  - name: analyze_structure
+    description: |
+      Analyze the codebase structure.
+
+      Identify:
+      1. All modules and their purposes
+      2. Classes and their relationships
+      3. Key functions and their roles
+      4. Configuration and data files
+      5. Entry points and APIs
+
+      Output a structured analysis.
+    agent: analyst
+    expected_output: Structured code analysis with module/class/function mapping
+    timeout: 180
+
+  - name: generate_docs
+    description: |
+      Generate comprehensive documentation based on the analysis.
+
+      Include:
+      1. Project overview
+      2. Installation guide
+      3. Quick start / usage examples
+      4. API reference (classes, functions)
+      5. Configuration options
+      6. Contributing guidelines (if applicable)
+
+      Write in Markdown format.
+    agent: writer
+    context_from:
+      - analyze_structure
+    expected_output: Complete Markdown documentation
+    timeout: 300
+
+  - name: review_docs
+    description: |
+      Review the generated documentation for:
+      1. Accuracy - does it match the actual code?
+      2. Completeness - is anything missing?
+      3. Clarity - is it easy to understand?
+      4. Examples - are there enough examples?
+
+      Provide the final, polished documentation.
+    agent: reviewer
+    context_from:
+      - analyze_structure
+      - generate_docs
+    expected_output: Final reviewed documentation
+    timeout: 180

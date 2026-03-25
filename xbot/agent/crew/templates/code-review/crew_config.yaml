@@ -1,0 +1,88 @@
+# Code Review Crew Template
+# Reviews code for quality, identifies issues, and suggests improvements
+
+name: code_review_crew
+description: Analyze code quality, identify issues, and suggest improvements
+
+process: sequential
+
+workspace: .
+
+global_context: |
+  You are part of a code review team. Your goal is to improve code quality.
+  Be thorough but practical. Focus on actionable feedback.
+  All tasks are automated - no human intervention required.
+
+agents:
+  reviewer:
+    description: Code quality analyst
+    goal: Review code for quality, patterns, and potential issues
+    backstory: |
+      You are an experienced software engineer with deep knowledge of best practices.
+      You can quickly identify code smells, potential bugs, and improvement opportunities.
+    max_iterations: 30
+
+  analyzer:
+    description: Deep code analyzer
+    goal: Perform detailed analysis on specific issues found
+    backstory: |
+      You are a specialist in static analysis and code patterns.
+      You dive deep into specific issues and provide detailed explanations.
+    max_iterations: 25
+
+  fixer:
+    description: Code improvement specialist
+    goal: Suggest concrete fixes and improvements
+    backstory: |
+      You are a pragmatic developer who can translate issues into actionable fixes.
+      You focus on maintainable, readable solutions.
+    max_iterations: 35
+
+tasks:
+  - name: review_code
+    description: |
+      Review the codebase in the workspace.
+
+      Analyze:
+      1. Code structure and organization
+      2. Naming conventions and readability
+      3. Potential bugs and error handling
+      4. Performance concerns
+      5. Security considerations
+      6. Test coverage gaps
+
+      Provide a prioritized list of findings.
+    agent: reviewer
+    expected_output: Prioritized list of code quality findings with severity levels
+    timeout: 300
+
+  - name: analyze_issues
+    description: |
+      Based on the code review, perform deep analysis on the most critical issues.
+
+      For each critical/high severity issue:
+      1. Explain why it's a problem
+      2. Show the specific code location
+      3. Describe the potential impact
+    agent: analyzer
+    context_from:
+      - review_code
+    expected_output: Detailed analysis of critical issues
+    timeout: 240
+
+  - name: suggest_fixes
+    description: |
+      Based on the analysis, provide concrete fix suggestions.
+
+      For each issue:
+      1. Show the current code
+      2. Show the improved code
+      3. Explain the improvement
+
+      Focus on the top 5-10 most impactful fixes.
+    agent: fixer
+    context_from:
+      - review_code
+      - analyze_issues
+    expected_output: Code diff suggestions with explanations
+    timeout: 300

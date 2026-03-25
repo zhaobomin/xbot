@@ -84,6 +84,9 @@ class AgentRuntime:
         self._state_coordinator = SessionStateCoordinator(self)
         self._response_handlers = RuntimeResponseHandlers(self)
 
+        # Retry count tracking for interaction responses (max 3 retries for invalid answers)
+        self._interaction_retry_counts: dict[str, int] = {}
+
         # Register backend state sync callbacks
         self.shared_resources["on_backend_client_cleanup"] = self._on_backend_client_cleanup
 
@@ -275,7 +278,10 @@ class AgentRuntime:
             handler = None
         if handler is None:
             handler = RuntimeResponseHandlers(self)
-        return await handler.handle_interaction_response(msg)
+
+        # Get retry count for this session (handler manages the count internally)
+        retry_count = getattr(self, '_interaction_retry_counts', {}).get(msg.session_key, 0)
+        return await handler.handle_interaction_response(msg, retry_count=retry_count)
 
     async def _handle_message(self, msg: InboundMessage, on_progress=None) -> OutboundMessage | None:
         cmd = msg.content.strip().lower()

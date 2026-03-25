@@ -30,12 +30,16 @@ class AgentPool:
         self.xbot_config = xbot_config
         self.permission_handler = permission_handler
         self._backends: dict[str, Any] = {}  # role_name -> ClaudeSDKBackend
+        self._failed_roles: dict[str, str] = {}  # role_name -> error message
 
     async def initialize(self, only_roles: set[str] | None = None) -> None:
         """Create and initialise a backend for each role.
 
         Args:
             only_roles: If provided, only initialise these roles (for resume).
+
+        Raises:
+            RuntimeError: If no backends could be initialised.
         """
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 
@@ -63,11 +67,25 @@ class AgentPool:
                 await backend.initialize(agents_config, shared_resources)
                 self._backends[role_name] = backend
                 logger.info(f"[crew-pool] Initialised backend for role '{role_name}'")
-            except Exception:
+            except Exception as e:
+                error_msg = str(e)
+                self._failed_roles[role_name] = error_msg
                 logger.exception(f"[crew-pool] Failed to initialise backend for role '{role_name}'")
 
         if not self._backends:
-            raise RuntimeError("All backend initialisations failed — cannot run crew")
+            failed_info = ", ".join(f"'{r}': {e}" for r, e in self._failed_roles.items())
+            raise RuntimeError(
+                f"All backend initialisations failed — cannot run crew. "
+                f"Failed roles: {failed_info}"
+            )
+
+        # Warn if some roles failed but we can continue
+        if self._failed_roles:
+            failed_names = ", ".join(self._failed_roles.keys())
+            logger.warning(
+                f"[crew-pool] Some roles failed to initialise: {failed_names}. "
+                f"Tasks using these roles will fail."
+            )
 
     async def run_task(self, role_name: str, prompt: str, session_key: str) -> str:
         """Execute a prompt with the specified role's backend and collect the full response.
@@ -79,10 +97,21 @@ class AgentPool:
 
         Returns:
             The concatenated response text.
+
+        Raises:
+            KeyError: If the role was not initialised or initialisation failed.
         """
         backend = self._backends.get(role_name)
         if backend is None:
-            raise KeyError(f"No backend for role '{role_name}' (not initialised or init failed)")
+            if role_name in self._failed_roles:
+                raise KeyError(
+                    f"Backend for role '{role_name}' failed to initialise: "
+                    f"{self._failed_roles[role_name]}"
+                )
+            raise KeyError(
+                f"No backend for role '{role_name}' (not initialised). "
+                f"Available roles: {list(self._backends.keys())}"
+            )
 
         context = AgentContext(
             session_key=session_key,
@@ -127,3 +156,7 @@ class AgentPool:
     def get_initialised_roles(self) -> list[str]:
         """Return role names that have a live backend."""
         return list(self._backends.keys())
+
+    def get_failed_roles(self) -> dict[str, str]:
+        """Return role names that failed to initialise with their error messages."""
+        return dict(self._failed_roles)

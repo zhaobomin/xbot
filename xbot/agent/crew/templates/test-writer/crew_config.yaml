@@ -1,0 +1,108 @@
+# Test Writer Crew Template
+# Analyzes code and writes comprehensive tests
+
+name: test_writer_crew
+description: Analyze code and write comprehensive tests
+
+process: sequential
+
+workspace: .
+
+global_context: |
+  You are part of a testing team. Your goal is to ensure code correctness through tests.
+  Write tests that are clear, maintainable, and comprehensive.
+  Follow the testing pyramid: many unit tests, some integration tests, few e2e tests.
+
+agents:
+  analyst:
+    description: Code analyst
+    goal: Analyze code to identify test scenarios
+    backstory: |
+      You understand code deeply and can identify all the scenarios that need testing.
+      You think about edge cases, error paths, and boundary conditions.
+    max_iterations: 25
+
+  unit_tester:
+    description: Unit test writer
+    goal: Write unit tests for individual functions and methods
+    backstory: |
+      You are skilled at writing focused, isolated unit tests.
+      You use mocking appropriately and test one thing at a time.
+    max_iterations: 35
+
+  integration_tester:
+    description: Integration test writer
+    goal: Write integration tests for component interactions
+    backstory: |
+      You understand how components interact and test those interactions.
+      You set up realistic test fixtures and test workflows.
+    max_iterations: 30
+
+tasks:
+  - name: analyze_code
+    description: |
+      Analyze the codebase to identify test scenarios.
+
+      For each module:
+      1. List classes and methods to test
+      2. Identify test scenarios (happy path, edge cases, error cases)
+      3. Note dependencies that need mocking
+      4. Identify integration points
+
+      Provide a test plan with coverage goals.
+    agent: analyst
+    expected_output: Test plan with scenarios and coverage goals
+    timeout: 240
+
+  - name: write_unit_tests
+    description: |
+      Write unit tests based on the test plan.
+
+      Create tests for:
+      1. All public methods
+      2. Edge cases and boundary conditions
+      3. Error handling paths
+      4. Validation logic
+
+      Use pytest format with clear test names.
+      Include appropriate mocks for dependencies.
+    agent: unit_tester
+    context_from:
+      - analyze_code
+    expected_output: Pytest unit test files
+    timeout: 400
+
+  - name: write_integration_tests
+    description: |
+      Write integration tests for key workflows.
+
+      Create tests for:
+      1. End-to-end data flows
+      2. Component interactions
+      3. Database/API integrations (if applicable)
+      4. Configuration loading
+
+      Use realistic test fixtures.
+    agent: integration_tester
+    context_from:
+      - analyze_code
+      - write_unit_tests
+    expected_output: Pytest integration test files
+    timeout: 300
+
+  - name: create_test_summary
+    description: |
+      Summarize the test coverage and provide usage instructions.
+
+      Include:
+      1. Test file locations
+      2. How to run tests
+      3. Coverage summary
+      4. Any skipped tests and why
+    agent: analyst
+    context_from:
+      - analyze_code
+      - write_unit_tests
+      - write_integration_tests
+    expected_output: Test summary document
+    timeout: 120
