@@ -5,6 +5,7 @@ for use with Claude SDK backend.
 """
 
 import logging
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -63,6 +64,11 @@ class ToolAdapter:
         self._tools: dict[str, Any] = {}
         self._tool_context: dict[str, Any] = {}
         self._python_skill_tool_names: set[str] = set()
+        # Thread safety locks for concurrent access
+        self._tools_lock = threading.Lock()
+        self._context_lock = threading.Lock()
+        # Flag to track if core tools are registered (for idempotency)
+        self._core_tools_registered = False
 
     def create_mcp_server(self) -> dict[str, Any]:
         """Create an MCP server with all xbot tools.
@@ -75,9 +81,9 @@ class ToolAdapter:
             logger.debug("SDK not available, returning empty tools")
             return {}
 
-        # Register xbot-specific tools
-        if not self._tools:
-            self._register_xbot_tools()
+        # Ensure xbot core tools are always registered (not just Python skill tools)
+        # This handles the case where Python skills were synced before create_mcp_server
+        self._ensure_core_tools_registered()
 
         # Convert to MCP tools
         mcp_tools = []
@@ -175,6 +181,26 @@ class ToolAdapter:
                 progress_callback=self.skill_progress_callback,
             )
 
+    def _ensure_core_tools_registered(self) -> None:
+        """Ensure core xbot tools are registered even if Python skills were synced first.
+
+        This handles the initialization order issue where sync_tools_to_adapter
+        may be called before create_mcp_server, causing _tools to be non-empty
+        but missing core tools like web_search/web_fetch.
+        """
+        if self._core_tools_registered:
+            logger.debug("[ToolAdapter] Core tools already registered")
+            return
+
+        # Check if web_search is registered (a reliable indicator of full registration)
+        if "web_search" not in self._tools:
+            logger.info("[ToolAdapter] Core tools not registered, calling _register_xbot_tools")
+            self._register_xbot_tools()
+            self._core_tools_registered = True
+        else:
+            # Core tools are already registered
+            self._core_tools_registered = True
+
     def _adapt_tool(self, tool_name: str, tool_instance: Any) -> Any:
         """Adapt an xbot Tool to MCP format.
 
@@ -227,22 +253,40 @@ class ToolAdapter:
         Args:
             channel: Channel name
             chat_id: Chat ID
+            session_key: Session key for per-session context
             message_id: Message ID for reply
-        """
-        self._tool_context = {
-            "channel": channel,
-            "chat_id": chat_id,
-            "session_key": session_key,
-            "message_id": message_id,
-        }
 
-        for name, args in {
-            "message": (channel, chat_id, message_id),
-            "cron": (channel, chat_id),
-        }.items():
-            tool = self._tools.get(name)
-            if tool and hasattr(tool, "set_context"):
-                tool.set_context(*args)
+        Thread-safe: uses lock to protect against concurrent modifications.
+        Uses per-session context to avoid race conditions in multi-session scenarios.
+        """
+        with self._context_lock:
+            # Use per-session context to avoid race conditions
+            if session_key:
+                self._tool_context[session_key] = {
+                    "channel": channel,
+                    "chat_id": chat_id,
+                    "session_key": session_key,
+                    "message_id": message_id,
+                }
+                context = self._tool_context[session_key]
+            else:
+                # Fallback to global context for backward compatibility
+                self._tool_context["_global"] = {
+                    "channel": channel,
+                    "chat_id": chat_id,
+                    "session_key": session_key,
+                    "message_id": message_id,
+                }
+                context = self._tool_context["_global"]
+
+            # Update tool contexts
+            for name, args in {
+                "message": (channel, chat_id, message_id),
+                "cron": (channel, chat_id),
+            }.items():
+                tool = self._tools.get(name)
+                if tool and hasattr(tool, "set_context"):
+                    tool.set_context(*args)
 
     def get_tool(self, name: str) -> Any | None:
         """Get a tool by name.
@@ -265,20 +309,23 @@ class ToolAdapter:
         Removes any previously registered Python skill tools first, then
         adds the new set.  Called by :class:`SkillManager.sync_tools_to_adapter`
         whenever Python skills change on disk.
+
+        Thread-safe: uses lock to protect against concurrent modifications.
         """
-        # Remove old Python skill tools
-        for name in self._python_skill_tool_names:
-            self._tools.pop(name, None)
-        self._python_skill_tool_names.clear()
+        with self._tools_lock:
+            # Remove old Python skill tools
+            for name in self._python_skill_tool_names:
+                self._tools.pop(name, None)
+            self._python_skill_tool_names.clear()
 
-        # Register new ones
-        for t in tools:
-            self._tools[t.name] = t
-            self._python_skill_tool_names.add(t.name)
+            # Register new ones
+            for t in tools:
+                self._tools[t.name] = t
+                self._python_skill_tool_names.add(t.name)
 
-        if tools:
-            logger.info(
-                "[ToolAdapter] Registered %d Python skill tool(s): %s",
-                len(tools),
-                [t.name for t in tools],
-            )
+            if tools:
+                logger.info(
+                    "[ToolAdapter] Registered %d Python skill tool(s): %s",
+                    len(tools),
+                    [t.name for t in tools],
+                )

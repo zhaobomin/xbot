@@ -122,7 +122,7 @@ class ReMeMemoryStore:
         self._MAX_FAILURES_BEFORE_RAW_ARCHIVE = 5
 
     async def _ensure_initialized(self) -> bool:
-        """Lazy initialization of ReMe backend."""
+        """Lazy initialization of ReMe backend with timeout protection."""
         if self._initialized:
             return self._reme is not None
 
@@ -149,10 +149,16 @@ class ReMeMemoryStore:
                     },
                     enable_load_env=True,
                 )
-                await self._reme.start()
+                # Add timeout to prevent blocking during initialization
+                # ReMe can take a long time to initialize due to ChromaDB setup
+                await asyncio.wait_for(self._reme.start(), timeout=30.0)
                 self._initialized = True
                 logger.info("ReMe memory store initialized successfully")
                 return True
+            except asyncio.TimeoutError:
+                logger.warning("ReMe initialization timed out (30s), using fallback mode")
+                self._initialized = True
+                return False
             except Exception as e:
                 logger.warning(f"ReMe initialization failed: {e}, using fallback mode")
                 self._initialized = True

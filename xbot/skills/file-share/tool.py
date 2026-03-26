@@ -34,9 +34,6 @@ class FileShareTool(Tool):
     def SERVER_SCRIPT(self) -> Path:
         return Path(__file__).parent / "serve.py"
 
-    # Track running servers: {port: {"pid": int, "path": str, "started": float}}
-    _servers: dict[int, dict[str, Any]] = {}
-
     def __init__(
         self,
         public_ip: str | None = None,
@@ -50,6 +47,9 @@ class FileShareTool(Tool):
         """
         self._public_ip = public_ip or os.environ.get("XBOT_PUBLIC_IP", self.DEFAULT_PUBLIC_IP)
         self._default_timeout = default_timeout or self.DEFAULT_TIMEOUT
+        # Track running servers: {port: {"pid": int, "path": str, "started": float}}
+        # Instance variable to avoid shared state across multiple skill reloads
+        self._servers: dict[int, dict[str, Any]] = {}
 
     @property
     def name(self) -> str:

@@ -75,7 +75,7 @@ def _is_tool_choice_unsupported(content: str | None) -> bool:
 class MemoryStore:
     """Two-layer memory: MEMORY.md (long-term facts) + HISTORY.md (grep-searchable log)."""
 
-    _MAX_FAILURES_BEFORE_RAW_ARCHIVE = 3
+    _MAX_FAILURES_BEFORE_RAW_ARCHIVE = 5  # Match ReMeMemoryStore for consistency
 
     def __init__(self, workspace: Path):
         self.memory_dir = ensure_dir(workspace / "memory")
@@ -217,7 +217,29 @@ class MemoryStore:
 
 
 class MemoryConsolidator:
-    """Owns consolidation policy, locking, and session offset updates."""
+    """Owns consolidation policy, locking, and session offset updates.
+
+    ## Design Note: Relationship with SDK Session History
+
+    Memory consolidation in xbot serves a different purpose than SDK context management:
+
+    - **This consolidator**: Archives messages to MEMORY.md/HISTORY.md for long-term
+      persistent memory. This enables the agent to recall important facts across
+      sessions and after restarts.
+
+    - **SDK context management**: The Claude SDK maintains its own session history
+      via the `resume` parameter. SDK handles context window optimization through
+      its internal mechanisms (e.g., /compact command).
+
+    The `last_consolidated` offset in Session tracks which messages have been
+    archived to files, NOT which messages the SDK has in its context. This is
+    intentional - the two systems manage different concerns:
+
+    1. xbot consolidation → persistent searchable memory (HISTORY.md, MEMORY.md)
+    2. SDK history → temporary context window management
+
+    Changes to `last_consolidated` do NOT affect what the SDK sends to the LLM.
+    """
 
     _MAX_CONSOLIDATION_ROUNDS = 5
 
@@ -304,15 +326,17 @@ class MemoryConsolidator:
         lock = self.get_lock(session.key)
         async with lock:
             target = self.context_window_tokens // 2
+            trigger_threshold = target  # 触发阈值：context_window 的一半
             estimated, source = self.estimate_session_prompt_tokens(session)
             if estimated <= 0:
                 return
-            if estimated < self.context_window_tokens:
+            if estimated < trigger_threshold:
                 logger.debug(
-                    "Token consolidation idle {}: {}/{} via {}",
+                    "Token consolidation idle {}: {}/{} (trigger at {}) via {}",
                     session.key,
                     estimated,
                     self.context_window_tokens,
+                    trigger_threshold,
                     source,
                 )
                 return

@@ -3,10 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from loguru import logger
+
 from xbot.bus.events import InboundMessage, OutboundMessage
+
+
+# Constants for request pool management
+MAX_PENDING_REQUESTS = 1000
+REQUEST_TIMEOUT_SECONDS = 600  # 10 minutes default timeout
 
 
 @dataclass
@@ -22,6 +30,11 @@ class PermissionRequest:
     message: str  # 给用户的提示信息
     suggestions: list[str] = field(default_factory=list)  # 可选的建议回复
     metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)  # 请求创建时间
+
+    def is_expired(self, timeout: float = REQUEST_TIMEOUT_SECONDS) -> bool:
+        """检查请求是否已超时。"""
+        return time.time() - self.created_at > timeout
 
 
 @dataclass
@@ -47,6 +60,11 @@ class InteractionRequest:
     prompt: str = ""
     suggestions: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+    created_at: float = field(default_factory=time.time)  # 请求创建时间
+
+    def is_expired(self, timeout: float = REQUEST_TIMEOUT_SECONDS) -> bool:
+        """检查请求是否已超时。"""
+        return time.time() - self.created_at > timeout
 
 
 @dataclass
@@ -70,9 +88,10 @@ class MessageBus:
     Also supports permission request/response flow for SDK interactions.
     """
 
-    def __init__(self, max_queue_size: int = 1000):
+    def __init__(self, max_queue_size: int = 1000, max_pending_requests: int = MAX_PENDING_REQUESTS):
         self.inbound: asyncio.Queue[InboundMessage] = asyncio.Queue(maxsize=max_queue_size)
         self.outbound: asyncio.Queue[OutboundMessage] = asyncio.Queue(maxsize=max_queue_size)
+        self._max_pending_requests = max_pending_requests
 
         # 权限请求/响应支持
         self._pending_permission_responses: dict[str, asyncio.Event] = {}
@@ -80,6 +99,8 @@ class MessageBus:
         self._permission_lock = asyncio.Lock()
         # 按会话追踪 pending request: session_key -> request_id
         self._session_pending_requests: dict[str, str] = {}
+        # 存储 PermissionRequest 对象用于超时检查
+        self._permission_requests: dict[str, PermissionRequest] = {}
 
         # 通用交互请求/响应支持
         self._pending_interaction_responses: dict[str, asyncio.Event] = {}
@@ -87,6 +108,56 @@ class MessageBus:
         self._interaction_requests: dict[str, InteractionRequest] = {}
         self._interaction_lock = asyncio.Lock()
         self._session_pending_interactions: dict[str, str] = {}
+
+    def _cleanup_expired_permission_requests_unlocked(self) -> int:
+        """清理超时的权限请求。必须在持有 _permission_lock 时调用。
+
+        Returns:
+            清理的请求数量
+        """
+        expired_keys = []
+        for request_id, req in self._permission_requests.items():
+            if req.is_expired():
+                expired_keys.append(request_id)
+
+        for request_id in expired_keys:
+            self._permission_requests.pop(request_id, None)
+            self._pending_permission_responses.pop(request_id, None)
+            self._permission_results.pop(request_id, None)
+            # 也清理 session 映射
+            for session_key, rid in list(self._session_pending_requests.items()):
+                if rid == request_id:
+                    self._session_pending_requests.pop(session_key, None)
+
+        if expired_keys:
+            logger.warning(f"Cleaned up {len(expired_keys)} expired permission request(s)")
+
+        return len(expired_keys)
+
+    def _cleanup_expired_interaction_requests_unlocked(self) -> int:
+        """清理超时的交互请求。必须在持有 _interaction_lock 时调用。
+
+        Returns:
+            清理的请求数量
+        """
+        expired_keys = []
+        for request_id, req in self._interaction_requests.items():
+            if req.is_expired():
+                expired_keys.append(request_id)
+
+        for request_id in expired_keys:
+            self._interaction_requests.pop(request_id, None)
+            self._pending_interaction_responses.pop(request_id, None)
+            self._interaction_results.pop(request_id, None)
+            # 也清理 session 映射
+            for session_key, rid in list(self._session_pending_interactions.items()):
+                if rid == request_id:
+                    self._session_pending_interactions.pop(session_key, None)
+
+        if expired_keys:
+            logger.warning(f"Cleaned up {len(expired_keys)} expired interaction request(s)")
+
+        return len(expired_keys)
 
     async def publish_inbound(self, msg: InboundMessage) -> None:
         """Publish a message from a channel to the agent."""
@@ -115,8 +186,17 @@ class MessageBus:
             req: 权限请求对象
         """
         # 追踪会话的 pending request，并预注册 waiter 事件，避免
-        # “用户先回复、waiter 后注册”导致的竞态丢失。
+        # "用户先回复、waiter 后注册"导致的竞态丢失。
         async with self._permission_lock:
+            # 检查并清理超时请求
+            if len(self._permission_requests) >= self._max_pending_requests:
+                cleaned = self._cleanup_expired_permission_requests_unlocked()
+                if len(self._permission_requests) >= self._max_pending_requests:
+                    logger.warning(
+                        f"Permission request pool at capacity ({len(self._permission_requests)}/{self._max_pending_requests}), "
+                        f"cleaned {cleaned} expired request(s)"
+                    )
+
             previous_request_id = self._session_pending_requests.get(req.session_key)
             if previous_request_id and previous_request_id != req.request_id:
                 prev_event = self._pending_permission_responses.get(previous_request_id)
@@ -131,8 +211,11 @@ class MessageBus:
                 else:
                     self._pending_permission_responses.pop(previous_request_id, None)
                     self._permission_results.pop(previous_request_id, None)
+                    self._permission_requests.pop(previous_request_id, None)
             self._session_pending_requests[req.session_key] = req.request_id
             self._pending_permission_responses.setdefault(req.request_id, asyncio.Event())
+            # 存储请求对象用于超时检查
+            self._permission_requests[req.request_id] = req
 
         # 发送消息通知用户
         await self.publish_outbound(OutboundMessage(
@@ -150,6 +233,15 @@ class MessageBus:
     async def publish_interaction_request(self, req: InteractionRequest) -> None:
         """发布通用交互请求并通知用户。"""
         async with self._interaction_lock:
+            # 检查并清理超时请求
+            if len(self._interaction_requests) >= self._max_pending_requests:
+                cleaned = self._cleanup_expired_interaction_requests_unlocked()
+                if len(self._interaction_requests) >= self._max_pending_requests:
+                    logger.warning(
+                        f"Interaction request pool at capacity ({len(self._interaction_requests)}/{self._max_pending_requests}), "
+                        f"cleaned {cleaned} expired request(s)"
+                    )
+
             previous_request_id = self._session_pending_interactions.get(req.session_key)
             if previous_request_id and previous_request_id != req.request_id:
                 # Cancel stale interaction for the same session to avoid dangling waiters.

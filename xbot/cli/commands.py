@@ -17,7 +17,9 @@ if sys.platform == "win32":
         try:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
+        except (OSError, ValueError) as e:
+            # OSError: handle invalid (redirected/piped)
+            # ValueError: reconfigure not supported
             pass
 
 import typer
@@ -100,14 +102,17 @@ def _flush_pending_tty_input() -> None:
         fd = sys.stdin.fileno()
         if not os.isatty(fd):
             return
-    except Exception:
+    except (OSError, ValueError):
+        # stdin not available or not a valid file descriptor
         return
 
     try:
         import termios
         termios.tcflush(fd, termios.TCIFLUSH)
         return
-    except Exception:
+    except (ImportError, OSError, termios.error):
+        # ImportError: termios not available (Windows)
+        # OSError/termios.error: device doesn't support the operation
         pass
 
     try:
@@ -117,7 +122,8 @@ def _flush_pending_tty_input() -> None:
                 break
             if not os.read(fd, 4096):
                 break
-    except Exception:
+    except (OSError, ValueError, BlockingIOError):
+        # Fallback failed, but it's not critical
         return
 
 

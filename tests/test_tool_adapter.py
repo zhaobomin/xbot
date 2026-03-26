@@ -38,17 +38,19 @@ class TestToolAdapter:
 
     def test_set_tool_context(self, adapter: ToolAdapter) -> None:
         """Test setting tool context."""
+        session_key = "telegram:123:topic:99"
         adapter.set_tool_context(
             channel="telegram",
             chat_id="123",
-            session_key="telegram:123:topic:99",
+            session_key=session_key,
             message_id="456",
         )
 
-        assert adapter._tool_context["channel"] == "telegram"
-        assert adapter._tool_context["chat_id"] == "123"
-        assert adapter._tool_context["session_key"] == "telegram:123:topic:99"
-        assert adapter._tool_context["message_id"] == "456"
+        # Context is stored under session_key
+        assert adapter._tool_context[session_key]["channel"] == "telegram"
+        assert adapter._tool_context[session_key]["chat_id"] == "123"
+        assert adapter._tool_context[session_key]["session_key"] == session_key
+        assert adapter._tool_context[session_key]["message_id"] == "456"
 
     def test_get_tool_empty(self, adapter: ToolAdapter) -> None:
         """Test getting tool when not registered."""

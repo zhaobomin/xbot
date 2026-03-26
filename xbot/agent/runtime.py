@@ -7,9 +7,13 @@ import inspect
 import os
 import sys
 from pathlib import Path
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable, Coroutine, TypeAlias
 
 from loguru import logger
+
+if TYPE_CHECKING:
+    from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+    from xbot.agent.tools.base import ToolRegistry
 
 from xbot.agent.capabilities import CapabilityCatalog, canonical_tool_name
 from xbot.agent.commands import CommandsLoader
@@ -28,6 +32,13 @@ from xbot.agent.state_machine import (
 )
 from xbot.agent.trace import append_session_trace
 from xbot.bus.events import InboundMessage, OutboundMessage
+
+
+# Type alias for progress callback
+ProgressCallback: TypeAlias = Callable[
+    [str],
+    Coroutine[None, None, None],
+]
 
 
 # Re-export for backward compatibility
@@ -91,11 +102,11 @@ class AgentRuntime:
         self.shared_resources["on_backend_client_cleanup"] = self._on_backend_client_cleanup
 
     @property
-    def backend(self):
+    def backend(self) -> "ClaudeSDKBackend | None":
         return self.router.backend
 
     @property
-    def tools(self):
+    def tools(self) -> "ToolRegistry | None":
         backend = self.router._backend
         if backend is None:
             return None
@@ -283,7 +294,11 @@ class AgentRuntime:
         retry_count = getattr(self, '_interaction_retry_counts', {}).get(msg.session_key, 0)
         return await handler.handle_interaction_response(msg, retry_count=retry_count)
 
-    async def _handle_message(self, msg: InboundMessage, on_progress=None) -> OutboundMessage | None:
+    async def _handle_message(
+        self,
+        msg: InboundMessage,
+        on_progress: Callable[..., Coroutine[None, None, None]] | None = None,
+    ) -> OutboundMessage | None:
         cmd = msg.content.strip().lower()
 
         # Handle /clear, /new, /reset locally (not supported by non-Claude models)
@@ -559,6 +574,31 @@ class AgentRuntime:
                 except (asyncio.CancelledError, Exception):
                     pass
 
+            # Extra cleanup: scan for any orphaned tasks that might have been missed
+            # This handles edge cases where tasks were created but not properly registered
+            all_current_tasks = asyncio.all_tasks()
+            orphaned_tasks = []
+            for task in all_current_tasks:
+                # Check if task's coroutine name or str representation contains session_key
+                coro = task.get_coro()
+                if coro and session_key in str(coro):
+                    # Also check if it's not already in our tracking
+                    if task not in tasks:
+                        orphaned_tasks.append(task)
+
+            if orphaned_tasks:
+                logger.warning(
+                    f"Found {len(orphaned_tasks)} orphaned task(s) for session {session_key}, cancelling..."
+                )
+                for task in orphaned_tasks:
+                    if not task.done():
+                        task.cancel()
+                        try:
+                            await task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                        cancelled += 1
+
             # Backend cleanup (async I/O)
             backend_cancelled = await self.router.backend.cancel_session(session_key)
             backend_task_stopped = await self.router.backend.stop_active_task(session_key)
@@ -612,7 +652,7 @@ class AgentRuntime:
             },
         )
 
-    def _make_task_done_callback(self, session_key: str):
+    def _make_task_done_callback(self, session_key: str) -> Callable[[asyncio.Task], None]:
         """Create a done callback for task cleanup.
 
         Returns a callback that removes the task from _active_tasks when done.
@@ -889,7 +929,7 @@ class AgentRuntime:
             metadata=msg.metadata or {},
         )
 
-    def _bus_progress(self, msg: InboundMessage):
+    def _bus_progress(self, msg: InboundMessage) -> Callable[..., Coroutine[None, None, None]]:
         async def _publish(
             content: str,
             *,
@@ -919,7 +959,7 @@ class AgentRuntime:
 
     async def _emit_progress(
         self,
-        on_progress,
+        on_progress: Callable[..., Coroutine[None, None, None]] | None,
         text: str,
         *,
         tool_hint: bool = False,
@@ -937,7 +977,9 @@ class AgentRuntime:
             await on_progress(text, tool_hint=tool_hint)
 
     @staticmethod
-    def _supports_extended_progress_callback(on_progress) -> bool:
+    def _supports_extended_progress_callback(
+        on_progress: Callable[..., Coroutine[None, None, None]] | None,
+    ) -> bool:
         try:
             signature = inspect.signature(on_progress)
         except (TypeError, ValueError):

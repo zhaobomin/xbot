@@ -134,6 +134,92 @@ class BasePermissionHandler:
 
         return "\n".join(parts).strip()
 
+    @staticmethod
+    def _parse_answers(
+        user_response: str,
+        questions: list[dict[str, Any]],
+        question_options_map: list[list[str]],
+    ) -> list[dict[str, str]]:
+        """解析用户回复，构建 AskUserQuestion 期望的 answers 格式。
+
+        Args:
+            user_response: 用户回复的文本，可能是单个答案或多个答案（用逗号分开）
+            questions: 原始问题列表
+            question_options_map: 每个问题对应的选项列表
+
+        Returns:
+            answers 列表，格式为 [{"question": "...", "answer": "..."}]
+        """
+        import re
+
+        def match_option(candidate: str, valid_options: list[str]) -> str | None:
+            """尝试匹配候选答案到有效选项。"""
+            candidate_lower = candidate.lower().strip()
+            for opt in valid_options:
+                opt_lower = opt.lower()
+                # 精确匹配（忽略大小写）
+                if candidate_lower == opt_lower:
+                    return opt
+                # 包含匹配（候选包含在选项中，或选项包含候选）
+                if candidate_lower and (candidate_lower in opt_lower or opt_lower in candidate_lower):
+                    return opt
+            return None
+
+        # 分割多个答案：只用逗号分割（支持中文逗号、英文逗号、顿号）
+        # 不用空格分割，避免破坏包含空格的选项
+        parts = re.split(r'[，,、]+', user_response.strip())
+        parts = [p.strip() for p in parts if p.strip()]
+
+        # 校验：答案数量与问题数量是否匹配
+        num_parts = len(parts)
+        num_questions = len(questions)
+        if num_parts != num_questions:
+            logger.warning(
+                f"[AskUserQuestion] Answer count mismatch: "
+                f"received {num_parts} answer(s) for {num_questions} question(s). "
+                f"Input: '{user_response}'"
+            )
+            if num_parts < num_questions:
+                logger.warning(
+                    f"[AskUserQuestion] Missing answers for {num_questions - num_parts} question(s). "
+                    f"Empty answers will be used for unanswered questions."
+                )
+            else:
+                logger.warning(
+                    f"[AskUserQuestion] Extra answers ({num_parts - num_questions}) will be ignored."
+                )
+
+        # 构建答案列表
+        answers = []
+        for i, q in enumerate(questions):
+            question_text = q.get("question", "")
+            valid_options = question_options_map[i] if i < len(question_options_map) else []
+
+            # 获取对应位置的答案
+            answer = ""
+            if i < len(parts):
+                candidate = parts[i]
+                # 尝试匹配到有效选项
+                matched = match_option(candidate, valid_options)
+                if matched:
+                    answer = matched
+                else:
+                    # 答案未匹配到任何有效选项，记录警告
+                    if valid_options:
+                        logger.warning(
+                            f"[AskUserQuestion] Answer '{candidate}' for question {i+1} "
+                            f"does not match any valid options: {valid_options}. "
+                            f"Using raw input as answer."
+                        )
+                    answer = candidate
+
+            answers.append({
+                "question": question_text,
+                "answer": answer,
+            })
+
+        return answers
+
     def format_permission_message(
         self,
         tool_name: str,
@@ -320,7 +406,12 @@ class PermissionRequestHandler(BasePermissionHandler):
             logger.debug(f"Auto-approving safe tool: {tool_name}")
             return "allow", tool_input
 
-        # 2. 获取会话上下文
+        # 2. AskUserQuestion 特殊处理：使用 InteractionRequest 而非 PermissionRequest
+        # 因为用户回复的是选项内容，不是 yes/no
+        if tool_name == "AskUserQuestion":
+            return await self._handle_ask_user_question(tool_input)
+
+        # 3. 获取会话上下文
         session_key = self.get_current_session_key()
         if not session_key or session_key not in self._session_context:
             logger.warning(f"No session context for permission request: {tool_name}")
@@ -328,7 +419,7 @@ class PermissionRequestHandler(BasePermissionHandler):
 
         ctx = self._session_context[session_key]
 
-        # 3. 创建权限请求
+        # 4. 创建权限请求
         request_id = str(uuid.uuid4())
         request = PermissionRequest(
             request_id=request_id,
@@ -342,7 +433,7 @@ class PermissionRequestHandler(BasePermissionHandler):
             metadata=dict(ctx.get("metadata") or {}),
         )
 
-        # 4. 发送请求并等待响应
+        # 5. 发送请求并等待响应
         logger.info(f"Sending permission request: {tool_name} (id={request_id})")
         await self.bus.publish_permission_request(request)
 
@@ -357,6 +448,94 @@ class PermissionRequestHandler(BasePermissionHandler):
             return "allow", response.updated_input or tool_input
         else:
             return "deny", response.reason or "User denied"
+
+    async def _handle_ask_user_question(
+        self,
+        tool_input: dict[str, Any],
+    ) -> tuple[Literal["allow"], dict] | tuple[Literal["deny"], str]:
+        """处理 AskUserQuestion 工具，使用 InteractionRequest。
+
+        AskUserQuestion 需要特殊处理，因为用户回复的是选项内容，不是 yes/no。
+        使用 InteractionRequest 可以正确处理选项匹配。
+
+        支持多问题场景：将多个问题合并展示，用户回复多个答案（用分隔符分开）。
+        """
+        session_key = self.get_current_session_key()
+        if not session_key or session_key not in self._session_context:
+            logger.warning("No session context for AskUserQuestion")
+            return "deny", "No active session context"
+
+        ctx = self._session_context[session_key]
+
+        # 提取问题和选项
+        questions = tool_input.get("questions", [])
+        if not questions:
+            return "deny", "No questions provided"
+
+        # 构建合并的提示消息和所有有效选项
+        prompt_parts = []
+        all_valid_options: list[str] = []
+        question_headers: list[str] = []
+        question_options_map: list[list[str]] = []  # 每个问题的选项列表
+
+        for i, q in enumerate(questions, 1):
+            header = q.get("header", f"问题 {i}")
+            question_text = q.get("question", "")
+            options = q.get("options", [])
+            option_labels = [opt.get("label", "") for opt in options if opt.get("label")]
+
+            question_headers.append(header)
+            question_options_map.append(option_labels)
+            all_valid_options.extend(option_labels)
+
+            # 构建单个问题的提示
+            part = f"[{header}]"
+            if question_text:
+                part += f"\n{question_text}"
+            if option_labels:
+                part += "\n" + " / ".join(option_labels)
+
+            prompt_parts.append(part)
+
+        # 合并所有问题
+        if len(questions) == 1:
+            prompt = prompt_parts[0]
+        else:
+            # 多问题：提示用户用分隔符回复
+            prompt = "请依次回答以下问题，答案之间用空格或逗号分隔：\n\n"
+            prompt += "\n\n".join(prompt_parts)
+            prompt += "\n\n示例回复：答案1, 答案2, 答案3"
+
+        # 发起交互请求
+        response = await self.request_interaction(
+            kind="question",
+            prompt=prompt,
+            suggestions=all_valid_options,
+            metadata={
+                "valid_options": all_valid_options,
+                "question_options_map": question_options_map,  # 每个问题的选项
+                "question_count": len(questions),
+                "multi_select": any(q.get("multiSelect", False) for q in questions),
+                "original_questions": questions,
+            },
+        )
+
+        if response.action == "answer" and response.content:
+            # 解析用户回复，构建 answers
+            answers = self._parse_answers(
+                response.content,
+                questions,
+                question_options_map,
+            )
+
+            # 构建更新后的 tool_input
+            updated_input = dict(tool_input)
+            updated_input["answers"] = answers
+            logger.info(f"AskUserQuestion answered: {answers}")
+            return "allow", updated_input
+        else:
+            logger.info(f"AskUserQuestion cancelled or no answer: {response.action}")
+            return "deny", response.content or "User cancelled"
 
     async def request_interaction(
         self,

@@ -80,7 +80,14 @@ class ClaudeSDKAgentConfig(Base):
     # Context Compaction 通知配置
     compact_notify: bool = True  # 是否在压缩上下文时发送通知
     include_partial_messages: bool = False  # Disable SDK partial/delta messages by default for stable output
-    memory_consolidation_mode: Literal["off", "async", "sync"] = "async"  # Local memory consolidation strategy in SDK mode
+    # Memory consolidation 策略："off"=禁用，"async"=异步后台，"sync"=同步阻塞
+    # 默认禁用，避免异步任务阻塞和 ReMe 初始化超时问题。需要时可手动启用 "async"
+    memory_consolidation_mode: Literal["off", "async", "sync"] = "off"
+
+    # Client pool configuration
+    max_clients: int = Field(default=100, description="Maximum number of concurrent SDK clients in the pool")
+    client_ttl_seconds: int = Field(default=3600, description="Time-to-live for idle clients in seconds (1 hour)")
+    client_disconnect_retries: int = Field(default=2, description="Number of retry attempts when disconnecting clients")
 
 
 class AgentDefinition(Base):

@@ -100,9 +100,10 @@ class ClaudeSDKBackend(AgentBackend):
     }
     _MAX_QUERY_RETRIES = 3  # Max retries when SDK returns stale task notifications instead of ResultMessage
 
-    # Client pool management constants
-    MAX_CLIENTS = 100  # Maximum number of concurrent clients
-    CLIENT_TTL_SECONDS = 3600  # 1 hour TTL for idle clients
+    # Default client pool constants (can be overridden by config)
+    DEFAULT_MAX_CLIENTS = 100
+    DEFAULT_CLIENT_TTL_SECONDS = 3600  # 1 hour TTL for idle clients
+    DEFAULT_DISCONNECT_RETRIES = 2
 
     def __init__(self):
         """Initialize the backend."""
@@ -136,6 +137,27 @@ class ClaudeSDKBackend(AgentBackend):
         self._permission_handler: Any = None
         self._skill_manager: Any = None
         self._client_skills_versions: dict[str, str | None] = {}  # Track skills version per client
+
+    @property
+    def max_clients(self) -> int:
+        """Get max clients from config or use default."""
+        if self.sdk_config and hasattr(self.sdk_config, "max_clients"):
+            return self.sdk_config.max_clients
+        return self.DEFAULT_MAX_CLIENTS
+
+    @property
+    def client_ttl_seconds(self) -> int:
+        """Get client TTL from config or use default."""
+        if self.sdk_config and hasattr(self.sdk_config, "client_ttl_seconds"):
+            return self.sdk_config.client_ttl_seconds
+        return self.DEFAULT_CLIENT_TTL_SECONDS
+
+    @property
+    def disconnect_retries(self) -> int:
+        """Get disconnect retries from config or use default."""
+        if self.sdk_config and hasattr(self.sdk_config, "client_disconnect_retries"):
+            return self.sdk_config.client_disconnect_retries
+        return self.DEFAULT_DISCONNECT_RETRIES
 
     async def initialize(self, config: AgentsConfig, shared_resources: dict[str, Any]) -> None:
         """Initialize the backend.
@@ -419,6 +441,9 @@ class ClaudeSDKBackend(AgentBackend):
         Returns:
             ClaudeSDKClient instance for the session
         """
+        # Collect clients that need to be disconnected (outside lock)
+        clients_to_disconnect: list[tuple["ClaudeSDKClient", str, str]] = []
+
         async with self._clients_lock:
             # Get current model for model change detection
             current_model = self._options_builder._get_model_name() if self._options_builder else None
@@ -446,17 +471,18 @@ class ClaudeSDKBackend(AgentBackend):
                     logger.info(f"[Client] Recreating client for session={session_key}: {', '.join(reasons)}")
                     old_client = self._remove_client_state(session_key)
                     if old_client is not None:
-                        try:
-                            await old_client.disconnect()
-                        except Exception:
-                            pass
+                        # Defer disconnect to outside the lock
+                        clients_to_disconnect.append((old_client, session_key, "model/skills change"))
 
             # Cleanup expired clients before creating new one
-            await self._cleanup_stale_clients_unlocked()
+            stale_clients = await self._cleanup_stale_clients_unlocked()
+            clients_to_disconnect.extend((c, k, "TTL expiry") for c, k in stale_clients)
 
             # Evict LRU client if at capacity
-            if len(self._clients) >= self.MAX_CLIENTS:
-                await self._evict_lru_client_unlocked()
+            if len(self._clients) >= self.max_clients:
+                evicted_client, evicted_key = await self._evict_lru_client_unlocked()
+                if evicted_client is not None:
+                    clients_to_disconnect.append((evicted_client, evicted_key, "LRU eviction"))
 
             # Create new client with timing
             client_start = time.perf_counter()
@@ -482,7 +508,19 @@ class ClaudeSDKBackend(AgentBackend):
             self._client_models[session_key] = current_model  # Track the model used
             self._client_skills_versions[session_key] = current_skills_version  # Track skills version
             logger.info(f"[Client] Client created for session={session_key}, model={current_model}")
-            return client
+
+        # Disconnect old clients outside the lock
+        for old_client, client_key, reason in clients_to_disconnect:
+            await self._safe_disconnect_client(old_client, client_key, context=f"client recreation ({reason})")
+            # Notify runtime to sync state
+            on_cleanup = self._shared_resources.get("on_backend_client_cleanup")
+            if on_cleanup:
+                try:
+                    await on_cleanup(client_key)
+                except Exception as e:
+                    logger.debug(f"Error in backend client cleanup callback: {e}")
+
+        return self._clients[session_key]
 
     def _remove_client_state(self, session_key: str) -> "ClaudeSDKClient | None":
         """Remove all tracked state for a session and return the client (if any).
@@ -502,6 +540,54 @@ class ClaudeSDKBackend(AgentBackend):
         if session_contexts is not None:
             session_contexts.pop(session_key, None)
         return client
+
+    async def _safe_disconnect_client(
+        self,
+        client: "ClaudeSDKClient | None",
+        session_key: str,
+        context: str = "",
+        retries: int = 2,
+    ) -> bool:
+        """Safely disconnect a client with retries and proper error logging.
+
+        Args:
+            client: The client to disconnect (can be None)
+            session_key: Session identifier for logging
+            context: Additional context for logging (e.g., "stale client", "shutdown")
+            retries: Number of retry attempts
+
+        Returns:
+            True if disconnect succeeded or client was None, False otherwise
+        """
+        if client is None:
+            return True
+
+        context_msg = f" ({context})" if context else ""
+        last_error = None
+
+        for attempt in range(retries + 1):
+            try:
+                await client.disconnect()
+                if attempt > 0:
+                    logger.info(f"Client disconnect succeeded on attempt {attempt + 1} for session {session_key}{context_msg}")
+                return True
+            except asyncio.CancelledError:
+                raise  # Don't retry on cancellation
+            except Exception as e:
+                last_error = e
+                if attempt < retries:
+                    logger.warning(
+                        f"Client disconnect failed (attempt {attempt + 1}/{retries + 1}) "
+                        f"for session {session_key}{context_msg}: {e}. Retrying..."
+                    )
+                    await asyncio.sleep(0.5)  # Brief delay before retry
+                else:
+                    logger.error(
+                        f"Client disconnect failed after {retries + 1} attempts "
+                        f"for session {session_key}{context_msg}: {e}"
+                    )
+
+        return False
 
     # -- Multimodal (image) helpers ----------------------------------------
 
@@ -583,48 +669,43 @@ class ClaudeSDKBackend(AgentBackend):
             "session_id": session_id,
         }
 
-    async def _cleanup_stale_clients_unlocked(self) -> int:
+    async def _cleanup_stale_clients_unlocked(self) -> list[tuple["ClaudeSDKClient", str]]:
         """Remove clients that have been idle longer than TTL.
 
         Must be called while holding _clients_lock.
 
         Returns:
-            Number of clients removed.
+            List of (client, session_key) tuples that need to be disconnected.
+            Caller is responsible for disconnecting these clients outside the lock.
         """
         now = time.time()
         stale_keys = [
             key for key, last_used in self._client_last_used.items()
-            if now - last_used > self.CLIENT_TTL_SECONDS
+            if now - last_used > self.client_ttl_seconds
         ]
 
+        clients_to_disconnect = []
         for key in stale_keys:
             client = self._remove_client_state(key)
             if client is not None:
-                try:
-                    await client.disconnect()
-                except Exception:
-                    logger.debug(f"Ignoring error while disconnecting stale client for session {key}")
-
-            # Notify runtime to sync state
-            on_cleanup = self._shared_resources.get("on_backend_client_cleanup")
-            if on_cleanup:
-                try:
-                    await on_cleanup(key)
-                except Exception as e:
-                    logger.debug(f"Error in backend client cleanup callback: {e}")
+                clients_to_disconnect.append((client, key))
 
         if stale_keys:
-            logger.info(f"Cleaned up {len(stale_keys)} stale client(s) (TTL={self.CLIENT_TTL_SECONDS}s)")
+            logger.info(f"Found {len(stale_keys)} stale client(s) to cleanup (TTL={self.client_ttl_seconds}s)")
 
-        return len(stale_keys)
+        return clients_to_disconnect
 
-    async def _evict_lru_client_unlocked(self) -> None:
+    async def _evict_lru_client_unlocked(self) -> tuple["ClaudeSDKClient | None", str | None]:
         """Evict the least recently used client.
 
         Must be called while holding _clients_lock.
+
+        Returns:
+            Tuple of (client, session_key) that was evicted.
+            Caller is responsible for disconnecting the client outside the lock.
         """
         if not self._client_last_used:
-            return
+            return None, None
 
         # Find the oldest (LRU) client
         lru_key = min(self._client_last_used, key=self._client_last_used.get)
@@ -632,19 +713,9 @@ class ClaudeSDKBackend(AgentBackend):
         client = self._remove_client_state(lru_key)
 
         if client is not None:
-            try:
-                await client.disconnect()
-                logger.info(f"Evicted LRU client for session {lru_key} (pool at capacity)")
-            except Exception:
-                logger.debug(f"Ignoring error while disconnecting evicted client for session {lru_key}")
+            logger.info(f"Evicting LRU client for session {lru_key} (pool at capacity)")
 
-        # Notify runtime to sync state
-        on_cleanup = self._shared_resources.get("on_backend_client_cleanup")
-        if on_cleanup:
-            try:
-                await on_cleanup(lru_key)
-            except Exception as e:
-                logger.debug(f"Error in backend client cleanup callback: {e}")
+        return client, lru_key
 
     async def _refresh_session_commands(self, session_key: str, client: "ClaudeSDKClient") -> None:
         """Refresh slash commands discovered from SDK init metadata."""
@@ -879,9 +950,17 @@ class ClaudeSDKBackend(AgentBackend):
             if self.memory_consolidator and mode == "sync":
                 await self.memory_consolidator.maybe_consolidate_by_tokens(session)
             elif self.memory_consolidator and mode == "async":
-                asyncio.create_task(
-                    self.memory_consolidator.maybe_consolidate_by_tokens(session)
-                )
+                # Wrap consolidation in a task with error handling to prevent unhandled exceptions
+                async def _safe_consolidate():
+                    try:
+                        await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+                    except asyncio.CancelledError:
+                        logger.debug(f"Memory consolidation cancelled for session {context.session_key}")
+                        raise
+                    except Exception as e:
+                        # Log but don't propagate - consolidation is non-critical
+                        logger.warning(f"Async memory consolidation failed for {context.session_key}: {e}")
+                asyncio.create_task(_safe_consolidate())
 
         try:
             final_content = ""
@@ -1071,17 +1150,19 @@ class ClaudeSDKBackend(AgentBackend):
                 if self.memory_consolidator and mode == "sync":
                     await self.memory_consolidator.maybe_consolidate_by_tokens(session)
                 elif self.memory_consolidator and mode == "async":
-                    asyncio.create_task(
-                        self.memory_consolidator.maybe_consolidate_by_tokens(session)
-                    )
+                    async def _safe_consolidate():
+                        try:
+                            await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+                        except asyncio.CancelledError:
+                            logger.debug(f"Memory consolidation cancelled for session {context.session_key}")
+                            raise
+                        except Exception as e:
+                            logger.warning(f"Async memory consolidation failed for {context.session_key}: {e}")
+                    asyncio.create_task(_safe_consolidate())
 
         except Exception as e:
             client = self._remove_client_state(context.session_key)
-            if client is not None:
-                try:
-                    await client.disconnect()
-                except Exception:
-                    logger.debug(f"Ignoring error while disconnecting failed Claude SDK session {context.session_key}")
+            await self._safe_disconnect_client(client, context.session_key, context="error recovery")
 
             # Don't immediately clear sdk_session_id - preserve context for potential recovery
             # Instead, mark the session as needing recovery
@@ -1184,9 +1265,15 @@ class ClaudeSDKBackend(AgentBackend):
                         if self.memory_consolidator and mode == "sync":
                             await self.memory_consolidator.maybe_consolidate_by_tokens(session)
                         elif self.memory_consolidator and mode == "async":
-                            asyncio.create_task(
-                                self.memory_consolidator.maybe_consolidate_by_tokens(session)
-                            )
+                            async def _safe_consolidate():
+                                try:
+                                    await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+                                except asyncio.CancelledError:
+                                    logger.debug(f"Memory consolidation cancelled for session {context.session_key}")
+                                    raise
+                                except Exception as e:
+                                    logger.warning(f"Async memory consolidation failed for {context.session_key}: {e}")
+                            asyncio.create_task(_safe_consolidate())
                     return
                 except Exception as fallback_error:
                     logger.exception("Claude SDK fallback to main agent failed")
@@ -1367,11 +1454,7 @@ class ClaudeSDKBackend(AgentBackend):
         """Shutdown the backend."""
         for session_key in list(self._clients):
             client = self._remove_client_state(session_key)
-            if client is not None:
-                try:
-                    await client.disconnect()
-                except Exception:
-                    logger.debug(f"Ignoring error while disconnecting Claude SDK session {session_key}")
+            await self._safe_disconnect_client(client, session_key, context="shutdown")
         # Clear session contexts for compact notifications
         self._shared_resources.pop("_session_contexts", None)
         logger.info("Claude SDK backend shutdown complete")
@@ -1379,11 +1462,7 @@ class ClaudeSDKBackend(AgentBackend):
     async def reset_session(self, session_key: str) -> None:
         """Reset a session, disconnecting client and clearing state."""
         client = self._remove_client_state(session_key)
-        if client is not None:
-            try:
-                await client.disconnect()
-            except Exception:
-                logger.debug(f"Ignoring error while disconnecting Claude SDK session {session_key}")
+        await self._safe_disconnect_client(client, session_key, context="session reset")
 
         if self.sessions:
             session = self.sessions.get_or_create(session_key)
@@ -1571,10 +1650,7 @@ class ClaudeSDKBackend(AgentBackend):
             except Exception:
                 logger.debug("Failed to stop active task while resetting session state")
         if client is not None:
-            try:
-                await client.disconnect()
-            except Exception:
-                logger.debug("Failed to disconnect client while resetting session state")
+            await self._safe_disconnect_client(client, session_key, context="force reset session state")
 
     def get_tools_summary(self) -> str:
         """Get a summary of available tools and capabilities."""

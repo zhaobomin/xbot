@@ -432,17 +432,14 @@ class TestMemoryConsolidationTypeHandling:
         backend = _make_mock_backend([error_response])
         messages = _make_messages(message_count=60)
 
-        # First failure
-        result1 = await store.consolidate(messages, backend)
-        assert result1 is False
+        # Failures 1-4 should return False (threshold is 5)
+        for i in range(4):
+            result = await store.consolidate(messages, backend)
+            assert result is False, f"Failure {i+1} should return False"
 
-        # Second failure
-        result2 = await store.consolidate(messages, backend)
-        assert result2 is False
-
-        # Third failure - triggers raw archive (threshold is 3)
-        result3 = await store.consolidate(messages, backend)
-        assert result3 is True  # Raw archived
+        # Fifth failure - triggers raw archive (threshold is 5)
+        result5 = await store.consolidate(messages, backend)
+        assert result5 is True  # Raw archived
 
     @pytest.mark.asyncio
     async def test_raw_archive_counter_resets_on_success(self, tmp_path: Path) -> None:

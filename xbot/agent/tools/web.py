@@ -210,7 +210,8 @@ class WebSearchTool(Tool):
         try:
             from ddgs import DDGS
 
-            ddgs = DDGS(timeout=10)
+            # Pass proxy to DDGS if configured
+            ddgs = DDGS(timeout=10, proxy=self.proxy) if self.proxy else DDGS(timeout=10)
             raw = await asyncio.to_thread(ddgs.text, query, max_results=n)
             if not raw:
                 return f"No results for: {query}"
