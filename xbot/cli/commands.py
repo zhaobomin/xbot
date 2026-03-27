@@ -1778,7 +1778,7 @@ def crew_history(
             try:
                 dt = datetime.fromisoformat(started)
                 time_str = dt.strftime("%Y-%m-%d %H:%M:%S")
-            except:
+            except (ValueError, TypeError):
                 time_str = started[:19] if started else "unknown"
 
             crew_name = data.get("crew_name", "unknown")
@@ -1799,7 +1799,7 @@ def crew_history(
                         duration = f"{int(secs // 60)}m {int(secs % 60)}s"
                     else:
                         duration = f"{int(secs)}s"
-                except:
+                except (ValueError, TypeError):
                     pass
 
             status_style = {
@@ -1967,7 +1967,7 @@ def crew_export(
                     if task_file.suffix == ".json":
                         try:
                             content = json.dumps(json.loads(content), indent=2)
-                        except:
+                        except (json.JSONDecodeError, ValueError):
                             pass
                     task_outputs.append({
                         "file": task_file.name,

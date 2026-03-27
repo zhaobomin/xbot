@@ -207,14 +207,12 @@ class OptionsBuilder:
                     loop = asyncio.get_running_loop()
                     asyncio.ensure_future(_send(), loop=loop)
                 except RuntimeError:
-                    # No running event loop - try to get any loop
+                    # No running event loop - create a new one for this context
                     try:
-                        loop = asyncio.get_event_loop()
-                        if loop.is_running():
-                            asyncio.ensure_future(_send(), loop=loop)
-                        else:
-                            # Loop exists but not running, run until complete
-                            loop.run_until_complete(_send())
+                        loop = asyncio.new_event_loop()
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(_send())
+                        loop.close()
                     except Exception as e:
                         logger.warning(
                             f"Cannot send compact notification for session {session_key}: "
