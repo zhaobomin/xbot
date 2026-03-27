@@ -106,19 +106,24 @@ class WebSearchTool(Tool):
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
         provider = self.config.provider.strip().lower() or "brave"
         n = min(max(count or self.config.max_results, 1), 10)
+        logger.debug("WebSearch: query='{}', provider={}, count={}", query, provider, n)
 
         if provider == "duckduckgo":
-            return await self._search_duckduckgo(query, n)
+            result = await self._search_duckduckgo(query, n)
         elif provider == "tavily":
-            return await self._search_tavily(query, n)
+            result = await self._search_tavily(query, n)
         elif provider == "searxng":
-            return await self._search_searxng(query, n)
+            result = await self._search_searxng(query, n)
         elif provider == "jina":
-            return await self._search_jina(query, n)
+            result = await self._search_jina(query, n)
         elif provider == "brave":
-            return await self._search_brave(query, n)
+            result = await self._search_brave(query, n)
         else:
+            logger.warning("WebSearch: unknown provider '{}'", provider)
             return f"Error: unknown search provider '{provider}'"
+
+        logger.debug("WebSearch: completed for '{}', result_len={}", query, len(result))
+        return result
 
     async def _search_brave(self, query: str, n: int) -> str:
         api_key = self._get_api_key() or os.environ.get("BRAVE_API_KEY", "")
@@ -250,14 +255,20 @@ class WebFetchTool(Tool):
 
     async def execute(self, url: str, extractMode: str = "markdown", maxChars: int | None = None, **kwargs: Any) -> str:
         max_chars = maxChars or self.max_chars
+        logger.debug("WebFetch: url='{}', extractMode={}, maxChars={}", url, extractMode, max_chars)
+
         if not self.disable_security_checks:
             is_valid, error_msg = _validate_url_safe(url)
             if not is_valid:
+                logger.warning("WebFetch: URL validation failed for '{}': {}", url, error_msg)
                 return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
 
         result = await self._fetch_jina(url, max_chars)
         if result is None:
+            logger.debug("WebFetch: Jina failed, falling back to readability for '{}'", url)
             result = await self._fetch_readability(url, extractMode, max_chars)
+
+        logger.debug("WebFetch: completed for '{}', result_len={}", url, len(result))
         return result
 
     async def _fetch_jina(self, url: str, max_chars: int) -> str | None:

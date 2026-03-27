@@ -357,6 +357,7 @@ class MochatChannel(BaseChannel):
             parts.extend(m for m in msg.media if isinstance(m, str) and m.strip())
         content = "\n".join(parts).strip()
         if not content:
+            logger.debug("Mochat: skipping empty outbound message")
             return
 
         target = resolve_mochat_target(msg.chat_id)
@@ -365,6 +366,8 @@ class MochatChannel(BaseChannel):
             return
 
         is_panel = (target.is_panel or target.id in self._panel_set) and not target.id.startswith("session_")
+        logger.debug("Mochat: sending message to target='{}', is_panel={}, len={}",
+                     target.id, is_panel, len(content))
         try:
             if is_panel:
                 await self._api_send("/api/claw/groups/panels/send", "panelId", target.id,
@@ -372,8 +375,9 @@ class MochatChannel(BaseChannel):
             else:
                 await self._api_send("/api/claw/sessions/send", "sessionId", target.id,
                                      content, msg.reply_to)
+            logger.debug("Mochat: message sent successfully to target='{}'", target.id)
         except Exception as e:
-            logger.error("Failed to send Mochat message: {}", e)
+            logger.error("Failed to send Mochat message to target='{}': {}", target.id, e)
 
     # ---- config / init helpers ---------------------------------------------
 
@@ -720,14 +724,19 @@ class MochatChannel(BaseChannel):
         if not author or (self.config.agent_user_id and author == self.config.agent_user_id):
             return
         if not self.is_allowed(author):
+            logger.debug("Mochat: ignoring message from unauthorized author='{}'", author)
             return
 
         message_id = _str_field(payload, "messageId")
         seen_key = f"{target_kind}:{target_id}"
         if message_id and self._remember_message_id(seen_key, message_id):
+            logger.debug("Mochat: ignoring duplicate message_id='{}'", message_id)
             return
 
         raw_body = normalize_mochat_content(payload.get("content")) or "[empty message]"
+        logger.debug("Mochat: processing inbound message from author='{}', target='{}:{}', len={}",
+                     author, target_kind, target_id, len(raw_body))
+
         ai = _safe_dict(payload.get("authorInfo"))
         sender_name = _str_field(ai, "nickname", "email")
         sender_username = _str_field(ai, "agentId")
