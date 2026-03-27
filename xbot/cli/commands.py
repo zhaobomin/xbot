@@ -1624,7 +1624,7 @@ def crew_checkpoints(
     for i, cp in enumerate(checkpoints, 1):
         try:
             import json
-            with open(cp) as f:
+            with open(cp, encoding="utf-8") as f:
                 data = json.load(f)
 
             cp_time = data.get("checkpoint_at", "")[11:19] or "unknown"
@@ -1771,7 +1771,7 @@ def crew_history(
             import json
             from datetime import datetime
 
-            with open(cp) as f:
+            with open(cp, encoding="utf-8") as f:
                 data = json.load(f)
 
             started = data.get("started_at", "")
@@ -1897,7 +1897,7 @@ def crew_graph(
         output_text = "\n".join(lines)
 
     if output:
-        with open(output, "w") as f:
+        with open(output, "w", encoding="utf-8") as f:
             f.write(output_text)
         console.print(f"[green]✓[/green] Graph written to {output}")
     else:
@@ -1953,7 +1953,7 @@ def crew_export(
         console.print(f"[red]Manifest not found for run: {run_id}[/red]")
         raise typer.Exit(1)
 
-    with open(manifest_path) as f:
+    with open(manifest_path, encoding="utf-8") as f:
         manifest = json.load(f)
 
     # Load task outputs

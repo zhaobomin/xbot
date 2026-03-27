@@ -339,7 +339,7 @@ class OutputPersister:
             manifest_path = run_path / "manifest.json"
             if manifest_path.exists():
                 try:
-                    with open(manifest_path) as f:
+                    with open(manifest_path, encoding="utf-8") as f:
                         data = json.load(f)
                     started = datetime.fromisoformat(data.get("started_at", ""))
                     if started.timestamp() < cutoff:
