@@ -334,31 +334,67 @@ class FeishuChannel(BaseChannel):
         return elements or [{"tag": "markdown", "content": content}]
 
     @staticmethod
-    def _split_elements_by_table_limit(elements: list[dict], max_tables: int = 1) -> list[list[dict]]:
-        """Split card elements into groups with at most *max_tables* table elements each.
+    def _split_elements_by_table_limit(
+        elements: list[dict],
+        max_tables: int = 1,
+        max_chars_per_card: int = 3500,
+    ) -> list[list[dict]]:
+        """Split card elements into groups respecting table table and length limits.
 
-        Feishu cards have a hard limit of one table per card (API error 11310).
-        When the rendered content contains multiple markdown tables each table is
-        placed in a separate card message so every table reaches the user.
+        Feishu cards have:
+        - A hard limit of one table per card (API error 11310)
+        - A content length limit of ~4096 characters (API error 230025)
+
+        When the rendered content contains multiple markdown tables or exceeds
+        the character limit, elements are split across multiple card messages.
+
+        Args:
+            elements: List of card elements (div, markdown, table, etc.)
+            max_tables: Maximum tables per card (default 1)
+            max_chars_per_card: Maximum characters per card (default 3500,
+                                leaving headroom under the 4096 limit)
+
+        Returns:
+            List of element groups, each suitable for a single card.
         """
         if not elements:
             return [[]]
+
         groups: list[list[dict]] = []
         current: list[dict] = []
         table_count = 0
+        current_chars = 0
+
         for el in elements:
+            el_chars = len(el.get("content", ""))
+
+            # Check if we need to start a new card
+            need_new_card = False
+
+            # Table limit check
             if el.get("tag") == "table":
                 if table_count >= max_tables:
-                    if current:
-                        groups.append(current)
-                    current = []
-                    table_count = 0
-                current.append(el)
+                    need_new_card = True
+
+            # Length limit check - always check before adding any element
+            if current_chars + el_chars > max_chars_per_card:
+                need_new_card = True
+
+            if need_new_card:
+                if current:
+                    groups.append(current)
+                current = []
+                table_count = 0
+                current_chars = 0
+
+            current.append(el)
+            if el.get("tag") == "table":
                 table_count += 1
-            else:
-                current.append(el)
+            current_chars += el_chars
+
         if current:
             groups.append(current)
+
         return groups or [[]]
 
     def _split_headings(self, content: str) -> list[dict]:
