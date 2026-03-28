@@ -741,6 +741,8 @@ def gateway(
             )
         except KeyboardInterrupt:
             console.print("\nShutting down...")
+        except asyncio.CancelledError:
+            console.print("\nShutting down (cancelled)...")
         except Exception as e:
             import traceback
             console.print("\n[red]Error: Gateway crashed unexpectedly[/red]")

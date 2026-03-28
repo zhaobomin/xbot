@@ -610,6 +610,9 @@ class AgentRuntime:
             if self.bus is not None:
                 if hasattr(self.bus, "aclear_session_requests"):
                     cleared_requests = await self.bus.aclear_session_requests(session_key)
+        except asyncio.CancelledError:
+            logger.warning(f"terminate_session cancelled for {session_key}, continuing cleanup")
+            # Continue to final cleanup even if cancelled
         except Exception as e:
             logger.warning(f"Error during terminate_session cleanup: {e}")
             # Continue to final cleanup even if backend operations fail
