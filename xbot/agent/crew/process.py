@@ -18,7 +18,7 @@ from typing import Any, Callable
 
 from loguru import logger
 
-from xbot.agent.crew.agent_pool import AgentPool
+from xbot.agent.crew.agent_pool import AgentPool, TaskProgress
 from xbot.agent.crew.context import CrewExecutionContext, save_checkpoint
 from xbot.agent.crew.models import CrewConfig, OutputFormat, TaskDefinition, TaskResult, UserAction
 from xbot.agent.crew.output import (
@@ -85,11 +85,45 @@ class BaseProcess(ABC):
     # Single task execution
     # ------------------------------------------------------------------
 
+    # Soft timeout configuration
+    SOFT_TIMEOUT_BUFFER = 60  # Seconds to extend when progress detected
+    ACTIVITY_THRESHOLD = 30  # Seconds without output to consider "stuck"
+    MAX_EXTENSIONS = 5  # Maximum number of timeout extensions
+
+    def _estimate_timeout(self, task: TaskDefinition) -> int:
+        """Estimate timeout based on task complexity.
+
+        Args:
+            task: Task definition
+
+        Returns:
+            Estimated timeout in seconds
+        """
+        base = 60  # Minimum 1 minute
+
+        # Description length indicates complexity
+        desc_bonus = min(len(task.description or "") // 10, 120)
+
+        # Role complexity (based on agent configuration)
+        role = self.crew_config.agents.get(task.agent)
+        role_bonus = 60  # Default medium complexity
+        if role:
+            # More iterations = more complex task
+            role_bonus = min(role.max_iterations * 3, 120)
+
+        total = base + desc_bonus + role_bonus
+        logger.debug(f"[crew] Estimated timeout for '{task.name}': {total}s")
+        return total
+
     async def _execute_single_task(self, task: TaskDefinition) -> TaskResult:
         """Execute a single task: briefing -> run -> process output -> return result.
 
         Does NOT include human review — callers handle review separately so
         state transitions stay clean.
+
+        Supports soft timeout with progress detection:
+        - If timeout is None: smart mode with auto-extend on progress
+        - If timeout is set: traditional hard timeout (backward compatible)
         """
         role = self.crew_config.agents[task.agent]
 
@@ -107,23 +141,37 @@ class BaseProcess(ABC):
         # 3. Generate session key
         session_key = f"crew:{self.crew_config.name}:{task.name}:{uuid.uuid4().hex[:8]}"
 
-        # 4. Execute with timeout
+        # 4. Determine timeout mode
+        use_soft_timeout = task.timeout is None
+        initial_timeout = task.timeout if task.timeout else self._estimate_timeout(task)
+
+        # 5. Execute with soft timeout
         started = datetime.now()
+        output = ""
+        status = "success"
+        extended_count = 0
+        quality = "full"
+
         try:
-            output = await asyncio.wait_for(
-                self.pool.run_task(task.agent, prompt, session_key),
-                timeout=task.timeout,
+            output, extended_count = await self._execute_with_soft_timeout(
+                task=task,
+                prompt=prompt,
+                session_key=session_key,
+                initial_timeout=initial_timeout,
+                use_soft_timeout=use_soft_timeout,
             )
-            status = "success"
+            if extended_count > 0:
+                quality = "partial"
+                logger.info(f"[crew] Task '{task.name}' completed with {extended_count} timeout extensions")
+
         except asyncio.CancelledError:
             logger.warning(f"[crew] Task '{task.name}' was cancelled")
-            output = f"Task cancelled"
+            output = "Task cancelled"
             status = "cancelled"
-            # Re-raise to let orchestrator handle crew-level cancellation
             raise
         except asyncio.TimeoutError:
-            logger.warning(f"[crew] Task '{task.name}' timed out after {task.timeout}s")
-            output = f"Task timed out after {task.timeout} seconds"
+            logger.warning(f"[crew] Task '{task.name}' timed out after extensions")
+            output = f"Task timed out after {initial_timeout + extended_count * self.SOFT_TIMEOUT_BUFFER}s"
             status = "failed"
         except Exception as exc:
             logger.exception(f"[crew] Task '{task.name}' failed with error")
@@ -132,7 +180,7 @@ class BaseProcess(ABC):
 
         finished = datetime.now()
 
-        # 5. Process output (format, repair, truncate)
+        # 6. Process output (format, repair, truncate)
         output_format = task.output_format
         structured_output = None
         repaired = False
@@ -163,7 +211,7 @@ class BaseProcess(ABC):
             else:
                 structured_output = parsed.structured
 
-        # 6. Truncate if needed
+        # 7. Truncate if needed
         max_output_size = self.crew_config.output.max_output_size
         if len(output) > max_output_size:
             trunc_result = self._output_truncator.truncate(
@@ -188,7 +236,75 @@ class BaseProcess(ABC):
             structured_output=structured_output,
             truncated=truncated,
             repaired=repaired,
+            quality=quality,
+            extended_count=extended_count,
         )
+
+    async def _execute_with_soft_timeout(
+        self,
+        task: TaskDefinition,
+        prompt: str,
+        session_key: str,
+        initial_timeout: int,
+        use_soft_timeout: bool,
+    ) -> tuple[str, int]:
+        """Execute task with soft timeout and progress detection.
+
+        Args:
+            task: Task definition
+            prompt: Full prompt
+            session_key: Session identifier
+            initial_timeout: Initial timeout in seconds
+            use_soft_timeout: If True, extend on progress; if False, hard timeout
+
+        Returns:
+            Tuple of (output, extended_count)
+        """
+        import time
+
+        start_time = time.monotonic()
+        deadline = start_time + initial_timeout
+        extended_count = 0
+        last_activity_time = start_time
+        output = ""
+
+        async for progress in self.pool.run_task_streaming(task.agent, prompt, session_key):
+            current_time = time.monotonic()
+
+            # Update last activity time when we get content
+            if progress.delta_content:
+                last_activity_time = current_time
+
+            # Update output
+            output = progress.total_content
+
+            # Check timeout
+            if current_time > deadline:
+                if use_soft_timeout and extended_count < self.MAX_EXTENSIONS:
+                    # Check if we have recent activity
+                    time_since_activity = current_time - last_activity_time
+
+                    if time_since_activity < self.ACTIVITY_THRESHOLD:
+                        # Task is making progress, extend timeout
+                        extended_count += 1
+                        deadline += self.SOFT_TIMEOUT_BUFFER
+                        logger.info(
+                            f"[crew] Task '{task.name}' has progress, "
+                            f"extending timeout by {self.SOFT_TIMEOUT_BUFFER}s "
+                            f"(extension #{extended_count})"
+                        )
+                    else:
+                        # No recent activity, task is stuck
+                        logger.warning(
+                            f"[crew] Task '{task.name}' appears stuck "
+                            f"(no output for {time_since_activity:.0f}s), stopping"
+                        )
+                        raise asyncio.TimeoutError()
+                else:
+                    # Hard timeout or max extensions reached
+                    raise asyncio.TimeoutError()
+
+        return output, extended_count
 
     # ------------------------------------------------------------------
     # Human intervention
@@ -380,21 +496,27 @@ class BaseProcess(ABC):
         # Transition to RUNNING for the actual redo execution
         self.state_manager.transition_task(task.name, TaskPhase.RUNNING, "redo execution started")
 
+        # Determine timeout mode (same as _execute_single_task)
+        use_soft_timeout = task.timeout is None
+        initial_timeout = task.timeout if task.timeout else self._estimate_timeout(task)
+
         try:
-            output = await asyncio.wait_for(
-                self.pool.run_task(task.agent, prompt, session_key),
-                timeout=task.timeout,
+            output, extended_count = await self._execute_with_soft_timeout(
+                task=task,
+                prompt=prompt,
+                session_key=session_key,
+                initial_timeout=initial_timeout,
+                use_soft_timeout=use_soft_timeout,
             )
             status = "success"
             success = True
         except asyncio.CancelledError:
-            output = f"Redo cancelled"
+            output = "Redo cancelled"
             status = "cancelled"
             success = False
-            # Re-raise to let orchestrator handle crew-level cancellation
             raise
         except asyncio.TimeoutError:
-            output = f"Redo timed out after {task.timeout}s"
+            output = f"Redo timed out after extensions"
             status = "failed"
             success = False
         except Exception as exc:
@@ -410,6 +532,8 @@ class BaseProcess(ABC):
             started_at=started,
             finished_at=datetime.now(),
             human_briefing_input=extra_briefing,
+            quality="partial" if extended_count > 0 else "full",
+            extended_count=extended_count,
         ), success
 
     # ------------------------------------------------------------------

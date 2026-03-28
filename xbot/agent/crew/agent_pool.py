@@ -3,14 +3,24 @@
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, AsyncIterator
 
 from loguru import logger
 
 from xbot.agent.crew.models import AgentRole, CrewConfig
 from xbot.agent.protocol import AgentContext
 from xbot.config.schema import AgentsConfig, Config
+
+
+@dataclass
+class TaskProgress:
+    """Progress event from task execution."""
+
+    delta_content: str = ""  # New content since last event
+    total_content: str = ""  # All content so far
+    is_final: bool = False  # True when task completes
 
 
 class AgentPool:
@@ -102,6 +112,30 @@ class AgentPool:
         Raises:
             KeyError: If the role was not initialised or initialisation failed.
         """
+        content = ""
+        async for progress in self.run_task_streaming(role_name, prompt, session_key):
+            content = progress.total_content
+        return content
+
+    async def run_task_streaming(
+        self, role_name: str, prompt: str, session_key: str
+    ) -> AsyncIterator[TaskProgress]:
+        """Execute a prompt and yield progress events.
+
+        This method allows callers to monitor task progress for soft timeout
+        detection. Any content output indicates the task is making progress.
+
+        Args:
+            role_name: The crew role to use.
+            prompt: Full prompt text.
+            session_key: Unique session key for this invocation.
+
+        Yields:
+            TaskProgress events with delta and total content.
+
+        Raises:
+            KeyError: If the role was not initialised or initialisation failed.
+        """
         backend = self._backends.get(role_name)
         if backend is None:
             if role_name in self._failed_roles:
@@ -121,14 +155,31 @@ class AgentPool:
             chat_id=role_name,
         )
 
-        content = ""
+        total_content = ""
         async for response in backend.process(context):
+            delta = ""
             if response.is_delta:
-                content += response.delta_content
+                delta = response.delta_content
+                total_content += delta
             else:
-                content = response.content or content
+                # Non-delta response replaces content
+                new_content = response.content or total_content
+                delta = new_content[len(total_content):] if new_content.startswith(total_content) else new_content
+                total_content = new_content
 
-        return content
+            if delta or response.is_delta:
+                yield TaskProgress(
+                    delta_content=delta,
+                    total_content=total_content,
+                    is_final=False,
+                )
+
+        # Final event
+        yield TaskProgress(
+            delta_content="",
+            total_content=total_content,
+            is_final=True,
+        )
 
     async def shutdown(self) -> None:
         """Shutdown all managed backends.

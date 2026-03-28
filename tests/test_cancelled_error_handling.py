@@ -127,9 +127,15 @@ class TestProcessCancelledError:
     @pytest.mark.asyncio
     async def test_execute_single_task_catches_cancelled(self) -> None:
         """Task execution should catch CancelledError and re-raise."""
+        from xbot.agent.crew.agent_pool import TaskProgress
+
         pool = MagicMock()
-        # Make run_task raise CancelledError
-        pool.run_task = AsyncMock(side_effect=asyncio.CancelledError())
+        # Make run_task_streaming raise CancelledError
+        async def mock_stream_with_cancel(*args, **kwargs):
+            yield TaskProgress(delta_content="start", total_content="start", is_final=False)
+            raise asyncio.CancelledError()
+
+        pool.run_task_streaming = mock_stream_with_cancel
 
         context = MagicMock()
         context.build_task_prompt = MagicMock(return_value="test prompt")
@@ -137,7 +143,11 @@ class TestProcessCancelledError:
         permission_handler = MockPermissionHandler()
         crew_config = MagicMock()
         crew_config.output.enabled = False
+        crew_config.output.max_output_size = 100000
         crew_config.max_context_length = 4000
+        crew_config.agents = {
+            "test_agent": MagicMock(max_iterations=20)
+        }
 
         state_manager = CrewStateManager(
             task_names=["test_task"],

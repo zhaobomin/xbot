@@ -71,7 +71,10 @@ class TaskDefinition(BaseModel):
     context_from: list[str] = Field(default_factory=list)  # Upstream task names
     human_review: bool = False  # Require human review after completion
     human_briefing: bool = False  # Allow human to add instructions before execution
-    timeout: int = 600  # Timeout in seconds
+    timeout: int | None = None  # Timeout in seconds, None = smart mode (auto-extend)
+
+    # Task importance
+    critical: bool = False  # If True, failure pauses for user decision
 
     # Output format configuration
     output_format: OutputFormat = OutputFormat.RAW
@@ -109,13 +112,17 @@ class TaskResult:
     task_name: str
     agent_name: str
     output: str  # Agent's raw output
-    status: str  # success | failed | skipped | human_rejected
+    status: str  # success | failed | skipped | human_rejected | partial
     started_at: datetime
     finished_at: datetime
     human_edited_output: str | None = None  # Human-modified output (replaces output for downstream)
     human_annotations: list[str] = field(default_factory=list)  # Human review notes
     human_briefing_input: str | None = None  # Pre-execution human instructions
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    # Execution quality
+    quality: str = "full"  # full | partial | degraded (for soft timeout)
+    extended_count: int = 0  # Number of times timeout was extended
 
     # Output format information
     output_format: OutputFormat = OutputFormat.RAW
