@@ -621,3 +621,92 @@ class TestStateTransitions:
 
         with pytest.raises(InvalidTransitionError):
             state_manager.transition_task("test_task", TaskPhase.RUNNING)
+
+
+class TestOrchestratorCleanup:
+    """Test orchestrator cleanup on cancellation."""
+
+    @pytest.mark.asyncio
+    async def test_finalize_output_called_on_cancellation(self) -> None:
+        """finalize_output should be called even when CancelledError occurs."""
+        from xbot.agent.crew.models import AgentRole
+
+        crew_config = MagicMock()
+        crew_config.name = "test_crew"
+        crew_config.process = ProcessType.sequential
+        crew_config.agents = {
+            "agent1": AgentRole(name="agent1", description="Test", goal="Test")
+        }
+        crew_config.tasks = []
+        crew_config.workspace = "/tmp"
+
+        xbot_config = MagicMock()
+        permission_handler = MockPermissionHandler()
+
+        orchestrator = CrewOrchestrator(
+            crew_config, xbot_config, permission_handler
+        )
+
+        finalize_called = []
+
+        with patch.object(orchestrator, "_get_llm_repair_callable", return_value=None):
+            with patch("xbot.agent.crew.orchestrator.AgentPool") as mock_pool_cls:
+                mock_pool = MagicMock()
+                mock_pool.initialize = AsyncMock()
+                mock_pool.shutdown = AsyncMock()
+
+                mock_process = MagicMock()
+                mock_process.execute = AsyncMock(side_effect=asyncio.CancelledError())
+                mock_process.finalize_output = MagicMock(side_effect=lambda s: finalize_called.append(s))
+
+                mock_pool_cls.return_value = mock_pool
+
+                with patch("xbot.agent.crew.orchestrator.SequentialProcess", return_value=mock_process):
+                    with patch("xbot.agent.crew.orchestrator.CrewStateManager") as mock_state_cls:
+                        mock_state = MagicMock()
+                        mock_state.crew_phase = CrewPhase.ABORTED
+                        mock_state_cls.return_value = mock_state
+
+                        # Should catch CancelledError and re-raise after cleanup
+                        with pytest.raises(asyncio.CancelledError):
+                            await orchestrator.run()
+
+                        # Verify finalize_output was called before re-raise
+                        assert len(finalize_called) == 1
+                        assert finalize_called[0] == "aborted"
+
+                        # Verify shutdown was also called
+                        mock_pool.shutdown.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_pool_shutdown_on_init_failure(self) -> None:
+        """Pool shutdown should be skipped if initialization fails."""
+        crew_config = MagicMock()
+        crew_config.name = "test_crew"
+        crew_config.process = ProcessType.sequential
+        crew_config.agents = {}
+        crew_config.tasks = []
+        crew_config.workspace = "/tmp"
+
+        xbot_config = MagicMock()
+        permission_handler = MockPermissionHandler()
+
+        orchestrator = CrewOrchestrator(
+            crew_config, xbot_config, permission_handler
+        )
+
+        with patch.object(orchestrator, "_get_llm_repair_callable", return_value=None):
+            with patch("xbot.agent.crew.orchestrator.AgentPool") as mock_pool_cls:
+                mock_pool = MagicMock()
+                mock_pool.initialize = AsyncMock(side_effect=RuntimeError("Init failed"))
+                mock_pool.shutdown = AsyncMock()
+
+                mock_pool_cls.return_value = mock_pool
+
+                result = await orchestrator.run()
+
+                # Should return failed result without calling shutdown
+                assert result.status == "failed"
+                assert "Init failed" in result.summary
+                # shutdown should NOT be called since we early return
+                mock_pool.shutdown.assert_not_called()

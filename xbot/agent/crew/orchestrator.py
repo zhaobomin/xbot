@@ -125,6 +125,7 @@ class CrewOrchestrator:
         # Execute
         results: list[TaskResult] = []
         final_status = "completed"  # Default
+        cancelled_error = None
         try:
             results = await process.execute(self.crew_config.tasks)
         except KeyboardInterrupt:
@@ -132,13 +133,13 @@ class CrewOrchestrator:
             state_manager.transition_crew(CrewPhase.ABORTING, "KeyboardInterrupt")
             state_manager.transition_crew(CrewPhase.ABORTED)
             final_status = "aborted"
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as e:
             logger.info("[crew] Cancelled by async cancellation")
             state_manager.transition_crew(CrewPhase.ABORTING, "CancelledError")
             state_manager.transition_crew(CrewPhase.ABORTED)
             final_status = "aborted"
-            # Re-raise to propagate cancellation to caller
-            raise
+            # Store the error to re-raise after cleanup
+            cancelled_error = e
         except Exception as exc:
             logger.exception("[crew] Unhandled exception during execution")
             try:
@@ -178,6 +179,10 @@ class CrewOrchestrator:
 
         # Finalize output persistence
         process.finalize_output(status)
+
+        # Re-raise CancelledError after cleanup is complete
+        if cancelled_error is not None:
+            raise cancelled_error
 
         summary = self._build_summary(results, total_time)
 
