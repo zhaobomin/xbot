@@ -300,6 +300,7 @@ class MessageBus:
             async with self._permission_lock:
                 result = self._permission_results.pop(request_id, None)
                 self._pending_permission_responses.pop(request_id, None)
+                self._permission_requests.pop(request_id, None)  # Fix: clean up request
                 to_remove = [k for k, v in self._session_pending_requests.items() if v == request_id]
                 for k in to_remove:
                     del self._session_pending_requests[k]
@@ -314,6 +315,7 @@ class MessageBus:
         except asyncio.TimeoutError:
             async with self._permission_lock:
                 self._pending_permission_responses.pop(request_id, None)
+                self._permission_requests.pop(request_id, None)  # Fix: clean up request
                 to_remove = [k for k, v in self._session_pending_requests.items() if v == request_id]
                 for k in to_remove:
                     del self._session_pending_requests[k]
@@ -429,6 +431,7 @@ class MessageBus:
         """
         self._pending_permission_responses.pop(request_id, None)
         self._permission_results.pop(request_id, None)
+        self._permission_requests.pop(request_id, None)  # Fix: clean up request
         to_remove = [k for k, v in self._session_pending_requests.items() if v == request_id]
         for k in to_remove:
             del self._session_pending_requests[k]
@@ -450,6 +453,7 @@ class MessageBus:
         async with self._permission_lock:
             self._pending_permission_responses.pop(request_id, None)
             self._permission_results.pop(request_id, None)
+            self._permission_requests.pop(request_id, None)  # Fix: clean up request
             to_remove = [k for k, v in self._session_pending_requests.items() if v == request_id]
             for k in to_remove:
                 del self._session_pending_requests[k]

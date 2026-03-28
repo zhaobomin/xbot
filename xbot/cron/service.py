@@ -48,17 +48,46 @@ def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
 
 
 def _validate_schedule_for_add(schedule: CronSchedule) -> None:
-    """Validate schedule fields that would otherwise create non-runnable jobs."""
+    """Validate schedule fields that would otherwise create non-runnable jobs.
+
+    Raises:
+        ValueError: If the schedule is invalid or would never run.
+    """
     if schedule.tz and schedule.kind != "cron":
         raise ValueError("tz can only be used with cron schedules")
 
-    if schedule.kind == "cron" and schedule.tz:
+    if schedule.kind == "cron":
+        # Validate cron expression
+        if not schedule.expr:
+            raise ValueError("cron schedule requires an expression")
         try:
-            from zoneinfo import ZoneInfo
+            from croniter import croniter
+            # Validate expression is parseable
+            croniter(schedule.expr)
+        except Exception as e:
+            raise ValueError(f"invalid cron expression '{schedule.expr}': {e}") from None
 
-            ZoneInfo(schedule.tz)
-        except Exception:
-            raise ValueError(f"unknown timezone '{schedule.tz}'") from None
+        # Validate timezone
+        if schedule.tz:
+            try:
+                from zoneinfo import ZoneInfo
+                ZoneInfo(schedule.tz)
+            except Exception:
+                raise ValueError(f"unknown timezone '{schedule.tz}'") from None
+
+    elif schedule.kind == "at":
+        # Validate at_ms is provided and in the future
+        if schedule.at_ms is None:
+            raise ValueError("at schedule requires at_ms")
+        if schedule.at_ms <= _now_ms():
+            raise ValueError("at_ms must be in the future")
+
+    elif schedule.kind == "every":
+        # Validate every_ms is positive
+        if not schedule.every_ms or schedule.every_ms <= 0:
+            raise ValueError("every_ms must be positive")
+    else:
+        raise ValueError(f"unknown schedule kind '{schedule.kind}'")
 
 
 class CronService:
@@ -75,6 +104,7 @@ class CronService:
         self._last_mtime: float = 0.0
         self._timer_task: asyncio.Task | None = None
         self._running = False
+        self._load_failed = False  # Track if last load attempt failed
 
     def _load_store(self) -> CronStore:
         """Load jobs from disk. Reloads automatically if file was modified externally."""
@@ -85,6 +115,8 @@ class CronService:
                 self._store = None
         if self._store:
             return self._store
+
+        self._load_failed = False  # Reset flag before load attempt
 
         if self.store_path.exists():
             try:
@@ -121,8 +153,14 @@ class CronService:
                     ))
                 self._store = CronStore(jobs=jobs)
             except Exception as e:
-                logger.warning("Failed to load cron store: {}", e)
-                self._store = CronStore()
+                logger.error("Failed to load cron store from {}: {}. "
+                             "Keeping existing file intact - will retry on next operation.",
+                             self.store_path, e)
+                self._load_failed = True
+                # Return an empty in-memory store, but DO NOT overwrite the file
+                # This prevents data loss from temporary JSON corruption
+                if self._store is None:
+                    self._store = CronStore()
         else:
             self._store = CronStore()
 
@@ -131,6 +169,12 @@ class CronService:
     def _save_store(self) -> None:
         """Save jobs to disk."""
         if not self._store:
+            return
+
+        # Don't save if we're in a failed state (would overwrite good data with empty)
+        if self._load_failed:
+            logger.warning("Skipping save due to previous load failure - "
+                           "fix {} manually or remove it", self.store_path)
             return
 
         self.store_path.parent.mkdir(parents=True, exist_ok=True)
@@ -182,6 +226,8 @@ class CronService:
             tmp_path.unlink(missing_ok=True)
             raise
         self._last_mtime = self.store_path.stat().st_mtime
+        # Clear load failure flag after successful save
+        self._load_failed = False
     
     async def start(self) -> None:
         """Start the cron service."""

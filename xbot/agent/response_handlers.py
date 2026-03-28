@@ -220,6 +220,8 @@ class RuntimeResponseHandlers:
                             tx.set_phase(SessionPhase.IDLE, reason="invalid_answer_max_retries")
                         # Clean up retry count
                         self._runtime._interaction_retry_counts.pop(msg.session_key, None)
+                        # Fix: Clear the pending interaction request to prevent stale state
+                        await self._bus.aclear_interaction_request(request_id)
                         return True
 
                     # Build options list string
