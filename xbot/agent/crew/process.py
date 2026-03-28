@@ -86,9 +86,9 @@ class BaseProcess(ABC):
     # ------------------------------------------------------------------
 
     # Soft timeout configuration
-    SOFT_TIMEOUT_BUFFER = 60  # Seconds to extend when progress detected
-    ACTIVITY_THRESHOLD = 30  # Seconds without output to consider "stuck"
-    MAX_EXTENSIONS = 5  # Maximum number of timeout extensions
+    SOFT_TIMEOUT_BUFFER = 300  # 5 minutes - Seconds to extend when progress detected
+    ACTIVITY_THRESHOLD = 180  # 3 minutes - Seconds without output to consider "stuck"
+    MAX_EXTENSIONS = 10  # Maximum number of timeout extensions
 
     def _estimate_timeout(self, task: TaskDefinition) -> int:
         """Estimate timeout based on task complexity.
