@@ -573,6 +573,39 @@ class ClaudeSDKBackend(AgentBackend):
                 return True
             except asyncio.CancelledError:
                 raise  # Don't retry on cancellation
+            except AttributeError as e:
+                # SDK TaskGroup compatibility issue (Python 3.11+ asyncio.TaskGroup vs anyio.TaskGroup)
+                # This can happen when:
+                # 1. SDK version is incompatible with Python version
+                # 2. anyio version mismatch
+                # 3. Client is already partially destroyed
+                logger.warning(
+                    f"SDK TaskGroup compatibility error during disconnect for session {session_key}{context_msg}: {e}. "
+                    f"This is a known SDK internal issue, client will be garbage collected."
+                )
+                return False  # State already removed by caller, safe to ignore
+            except RuntimeError as e:
+                # anyio cancel scope issue: "Attempted to exit cancel scope in a different task"
+                # This happens when disconnect is called from a different task than the one that created the client
+                if "cancel scope" in str(e).lower():
+                    logger.warning(
+                        f"SDK cancel scope error during disconnect for session {session_key}{context_msg}: {e}. "
+                        f"This is a known anyio issue, client will be garbage collected."
+                    )
+                    return False  # State already removed by caller, safe to ignore
+                # Other RuntimeErrors should be retried
+                last_error = e
+                if attempt < retries:
+                    logger.warning(
+                        f"Client disconnect failed (attempt {attempt + 1}/{retries + 1}) "
+                        f"for session {session_key}{context_msg}: {e}. Retrying..."
+                    )
+                    await asyncio.sleep(0.5)
+                else:
+                    logger.error(
+                        f"Client disconnect failed after {retries + 1} attempts "
+                        f"for session {session_key}{context_msg}: {e}"
+                    )
             except Exception as e:
                 last_error = e
                 if attempt < retries:

@@ -1250,6 +1250,18 @@ def status():
 crew_app = typer.Typer(help="Multi-agent crew orchestration")
 app.add_typer(crew_app, name="crew")
 
+# Add roles subcommand group
+from xbot.agent.crew.cli.role_cmd import app as roles_app
+crew_app.add_typer(roles_app, name="roles", help="Role pool management")
+
+# Add dynamic planning commands
+from xbot.agent.crew.cli.plan_cmd import (
+    crew_plan,
+    crew_run_dynamic,
+)
+crew_app.command("plan")(crew_plan)
+crew_app.command("run-dynamic")(crew_run_dynamic)
+
 
 @crew_app.command("run")
 def crew_run(

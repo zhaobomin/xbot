@@ -1,0 +1,28 @@
+# Role Pool Configuration
+# This file defines default settings and overrides for the role pool.
+
+# Default tier to use when no tier is specified
+default_tier: core
+
+# Global role overrides
+# These are applied after roles are loaded
+overrides:
+  # Example: Increase max_iterations for coder
+  # coder:
+  #   max_iterations: 50
+
+  # Example: Add custom tools to researcher
+  # researcher:
+  #   tools:
+  #     - read_file
+  #     - web_search
+  #     - bash
+
+# Disabled roles (will not be loaded even if in pool)
+disabled: []
+
+# Role aliases (alternative names for roles)
+aliases:
+  # Example: "dev" -> "coder"
+  # dev: coder
+  # developer: coder
