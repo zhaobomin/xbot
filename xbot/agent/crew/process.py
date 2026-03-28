@@ -115,6 +115,12 @@ class BaseProcess(ABC):
                 timeout=task.timeout,
             )
             status = "success"
+        except asyncio.CancelledError:
+            logger.warning(f"[crew] Task '{task.name}' was cancelled")
+            output = f"Task cancelled"
+            status = "cancelled"
+            # Re-raise to let orchestrator handle crew-level cancellation
+            raise
         except asyncio.TimeoutError:
             logger.warning(f"[crew] Task '{task.name}' timed out after {task.timeout}s")
             output = f"Task timed out after {task.timeout} seconds"
@@ -381,6 +387,12 @@ class BaseProcess(ABC):
             )
             status = "success"
             success = True
+        except asyncio.CancelledError:
+            output = f"Redo cancelled"
+            status = "cancelled"
+            success = False
+            # Re-raise to let orchestrator handle crew-level cancellation
+            raise
         except asyncio.TimeoutError:
             output = f"Redo timed out after {task.timeout}s"
             status = "failed"
@@ -682,6 +694,9 @@ class HierarchicalProcess(BaseProcess):
                 timeout=self.crew_config.manager_timeout,
             )
             return self._parse_plan(output)
+        except asyncio.CancelledError:
+            logger.info("[crew] Manager plan generation cancelled")
+            raise
         except Exception:
             logger.exception("[crew] Manager plan generation failed")
             return None

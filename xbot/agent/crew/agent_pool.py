@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 from typing import Any
 
@@ -130,14 +131,28 @@ class AgentPool:
         return content
 
     async def shutdown(self) -> None:
-        """Shutdown all managed backends."""
+        """Shutdown all managed backends.
+
+        Handles CancelledError gracefully: completes shutdown of all backends
+        before re-raising the cancellation to preserve cleanup semantics.
+        """
+        cancelled_error: asyncio.CancelledError | None = None
         for role_name, backend in self._backends.items():
             try:
                 await backend.shutdown()
                 logger.debug(f"[crew-pool] Shut down backend for '{role_name}'")
+            except asyncio.CancelledError as e:
+                # Store the first CancelledError, continue shutting down others
+                if cancelled_error is None:
+                    cancelled_error = e
+                logger.warning(f"[crew-pool] Backend '{role_name}' shutdown cancelled")
             except Exception:
                 logger.exception(f"[crew-pool] Error shutting down backend '{role_name}'")
         self._backends.clear()
+
+        # Re-raise CancelledError after all backends are shut down
+        if cancelled_error is not None:
+            raise cancelled_error
 
     def _build_role_config(self, role: AgentRole) -> AgentsConfig:
         """Build a per-role ``AgentsConfig`` by deep-copying and overriding global settings."""

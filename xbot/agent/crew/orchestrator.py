@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from datetime import datetime
 from pathlib import Path
@@ -131,6 +132,13 @@ class CrewOrchestrator:
             state_manager.transition_crew(CrewPhase.ABORTING, "KeyboardInterrupt")
             state_manager.transition_crew(CrewPhase.ABORTED)
             final_status = "aborted"
+        except asyncio.CancelledError:
+            logger.info("[crew] Cancelled by async cancellation")
+            state_manager.transition_crew(CrewPhase.ABORTING, "CancelledError")
+            state_manager.transition_crew(CrewPhase.ABORTED)
+            final_status = "aborted"
+            # Re-raise to propagate cancellation to caller
+            raise
         except Exception as exc:
             logger.exception("[crew] Unhandled exception during execution")
             try:
