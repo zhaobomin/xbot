@@ -8,12 +8,13 @@ See: https://docs.python.org/3/library/asyncio-exceptions.html#asyncio.Cancelled
 
 import asyncio
 import pytest
+from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from xbot.agent.crew.agent_pool import AgentPool
 from xbot.agent.crew.orchestrator import CrewOrchestrator
 from xbot.agent.crew.process import SequentialProcess
-from xbot.agent.crew.state import CrewPhase, CrewStateManager
+from xbot.agent.crew.state import CrewPhase, CrewStateManager, TaskPhase
 from xbot.agent.crew.models import CrewConfig, TaskDefinition, TaskResult, ProcessType
 
 
@@ -301,3 +302,322 @@ class TestCancelledErrorHierarchy:
 
         # BaseException handler should catch it
         assert caught_by_base
+
+
+class TestRedoTaskBugFixes:
+    """Test fixes for bugs found in _redo_task method."""
+
+    @pytest.mark.asyncio
+    async def test_redo_task_timeout_uses_correct_extended_count(self) -> None:
+        """When redo times out, extended_count should be 0 (not undefined)."""
+        from xbot.agent.crew.agent_pool import TaskProgress
+        from xbot.agent.crew.models import AgentRole
+
+        pool = MagicMock()
+
+        # Simulate a stream that takes longer than timeout
+        async def slow_stream(*args, **kwargs):
+            await asyncio.sleep(10)
+            yield TaskProgress(delta_content="result", total_content="result", is_final=True)
+
+        pool.run_task_streaming = slow_stream
+
+        crew_config = MagicMock()
+        crew_config.agents = {
+            "test_agent": AgentRole(name="test_agent", description="Test", goal="Test")
+        }
+        crew_config.global_context = ""
+        crew_config.max_context_length = 4000
+        crew_config.output.max_output_size = 100000
+
+        state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
+        # Set task to AWAITING_REVIEW first (required for redo)
+        state_manager.force_task_phase("test_task", TaskPhase.AWAITING_REVIEW)
+
+        context = MagicMock()
+        context.build_task_prompt = MagicMock(return_value="test prompt")
+
+        permission_handler = MagicMock()
+        permission_handler.request_interaction = AsyncMock(return_value=MagicMock(content="feedback"))
+
+        process = SequentialProcess(
+            pool=pool,
+            context=context,
+            permission_handler=permission_handler,
+            crew_config=crew_config,
+            state_manager=state_manager,
+        )
+
+        task = TaskDefinition(
+            name="test_task",
+            description="Test",
+            agent="test_agent",
+            timeout=2,  # Hard timeout
+        )
+
+        original_result = TaskResult(
+            task_name="test_task",
+            agent_name="test_agent",
+            output="original output",
+            status="success",
+            started_at=datetime.now(),
+            finished_at=datetime.now(),
+        )
+
+        # Call _redo_task (which will timeout)
+        result, success = await process._redo_task(task, original_result)
+
+        # Verify result is valid (no UnboundLocalError)
+        assert success is False
+        assert result.status == "failed"
+        assert result.extended_count == 0  # Should be 0, not undefined
+        assert result.quality == "full"  # extended_count == 0 means full
+
+    @pytest.mark.asyncio
+    async def test_redo_task_exception_uses_correct_extended_count(self) -> None:
+        """When redo raises exception, extended_count should be 0 (not undefined)."""
+        from xbot.agent.crew.models import AgentRole
+
+        pool = MagicMock()
+
+        # Simulate a stream that raises an exception
+        async def failing_stream(*args, **kwargs):
+            raise RuntimeError("Test error")
+            yield  # Never reached, but needed for async generator
+
+        pool.run_task_streaming = failing_stream
+
+        crew_config = MagicMock()
+        crew_config.agents = {
+            "test_agent": AgentRole(name="test_agent", description="Test", goal="Test")
+        }
+        crew_config.global_context = ""
+        crew_config.max_context_length = 4000
+        crew_config.output.max_output_size = 100000
+
+        state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
+        # Set task to AWAITING_REVIEW first (required for redo)
+        state_manager.force_task_phase("test_task", TaskPhase.AWAITING_REVIEW)
+
+        context = MagicMock()
+        context.build_task_prompt = MagicMock(return_value="test prompt")
+
+        permission_handler = MagicMock()
+        permission_handler.request_interaction = AsyncMock(return_value=MagicMock(content="feedback"))
+
+        process = SequentialProcess(
+            pool=pool,
+            context=context,
+            permission_handler=permission_handler,
+            crew_config=crew_config,
+            state_manager=state_manager,
+        )
+
+        task = TaskDefinition(
+            name="test_task",
+            description="Test",
+            agent="test_agent",
+            timeout=None,
+        )
+
+        original_result = TaskResult(
+            task_name="test_task",
+            agent_name="test_agent",
+            output="original output",
+            status="success",
+            started_at=datetime.now(),
+            finished_at=datetime.now(),
+        )
+
+        # Call _redo_task (which will fail with exception)
+        result, success = await process._redo_task(task, original_result)
+
+        # Verify result is valid (no UnboundLocalError)
+        assert success is False
+        assert result.status == "failed"
+        assert result.extended_count == 0
+        assert result.quality == "full"
+
+
+class TestExecuteWithSoftTimeoutEdgeCases:
+    """Test edge cases in _execute_with_soft_timeout."""
+
+    @pytest.mark.asyncio
+    async def test_cancelled_error_clean_up_stream_task(self) -> None:
+        """CancelledError should properly clean up the stream task."""
+        from xbot.agent.crew.agent_pool import TaskProgress
+        from xbot.agent.crew.models import AgentRole
+
+        pool = MagicMock()
+
+        # Track whether stream was cancelled
+        stream_cancelled = False
+
+        async def cancellable_stream(*args, **kwargs):
+            nonlocal stream_cancelled
+            try:
+                yield TaskProgress(delta_content="start", total_content="start", is_final=False)
+                await asyncio.sleep(100)  # Long sleep
+                yield TaskProgress(delta_content="end", total_content="start end", is_final=True)
+            except asyncio.CancelledError:
+                stream_cancelled = True
+                raise
+
+        pool.run_task_streaming = cancellable_stream
+
+        crew_config = MagicMock()
+        crew_config.agents = {
+            "test_agent": AgentRole(name="test_agent", description="Test", goal="Test")
+        }
+        crew_config.global_context = ""
+        crew_config.max_context_length = 4000
+        crew_config.output.max_output_size = 100000
+
+        state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
+        context = MagicMock()
+        context.build_task_prompt = MagicMock(return_value="test prompt")
+
+        permission_handler = MagicMock()
+
+        process = SequentialProcess(
+            pool=pool,
+            context=context,
+            permission_handler=permission_handler,
+            crew_config=crew_config,
+            state_manager=state_manager,
+        )
+
+        task = TaskDefinition(
+            name="test_task",
+            description="Test",
+            agent="test_agent",
+            timeout=None,
+        )
+
+        # Create a task that will be cancelled
+        async def run_and_cancel():
+            task_coro = process._execute_with_soft_timeout(
+                task=task,
+                prompt="test",
+                session_key="test",
+                initial_timeout=60,
+                use_soft_timeout=True,
+            )
+            exec_task = asyncio.create_task(task_coro)
+            await asyncio.sleep(0.1)  # Let it start
+            exec_task.cancel()
+            try:
+                await exec_task
+            except asyncio.CancelledError:
+                pass
+
+        await run_and_cancel()
+
+        # Give time for cleanup
+        await asyncio.sleep(0.1)
+
+        # Stream should have been cancelled
+        assert stream_cancelled
+
+    @pytest.mark.asyncio
+    async def test_stop_async_iteration_handled(self) -> None:
+        """StopAsyncIteration should be handled correctly."""
+        from xbot.agent.crew.agent_pool import TaskProgress
+        from xbot.agent.crew.models import AgentRole
+
+        pool = MagicMock()
+
+        # Stream that ends early without is_final
+        async def early_end_stream(*args, **kwargs):
+            yield TaskProgress(delta_content="partial", total_content="partial", is_final=False)
+            # Raises StopAsyncIteration implicitly when generator ends
+
+        pool.run_task_streaming = early_end_stream
+
+        crew_config = MagicMock()
+        crew_config.agents = {
+            "test_agent": AgentRole(name="test_agent", description="Test", goal="Test")
+        }
+        crew_config.global_context = ""
+        crew_config.max_context_length = 4000
+        crew_config.output.max_output_size = 100000
+
+        state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
+        context = MagicMock()
+        context.build_task_prompt = MagicMock(return_value="test prompt")
+
+        permission_handler = MagicMock()
+
+        process = SequentialProcess(
+            pool=pool,
+            context=context,
+            permission_handler=permission_handler,
+            crew_config=crew_config,
+            state_manager=state_manager,
+        )
+
+        task = TaskDefinition(
+            name="test_task",
+            description="Test",
+            agent="test_agent",
+            timeout=None,
+        )
+
+        # Should complete without error
+        output, extended_count = await process._execute_with_soft_timeout(
+            task=task,
+            prompt="test",
+            session_key="test",
+            initial_timeout=60,
+            use_soft_timeout=True,
+        )
+
+        assert output == "partial"
+        assert extended_count == 0
+
+
+class TestStateTransitions:
+    """Test state machine transitions."""
+
+    def test_retrying_to_running_transition(self) -> None:
+        """RETRYING should only transition to RUNNING."""
+        state_manager = CrewStateManager(
+            task_names=["test_task"],
+            task_definitions=[],
+        )
+
+        # Force to RETRYING (simulating redo)
+        state_manager.force_task_phase("test_task", TaskPhase.RETRYING)
+
+        # Should be able to transition to RUNNING
+        state_manager.transition_task("test_task", TaskPhase.RUNNING)
+        assert state_manager.get_task_phase("test_task") == TaskPhase.RUNNING
+
+    def test_running_to_failed_after_retrying(self) -> None:
+        """After RETRYING -> RUNNING, should be able to transition to FAILED."""
+        state_manager = CrewStateManager(
+            task_names=["test_task"],
+            task_definitions=[],
+        )
+
+        # Simulate redo flow
+        state_manager.force_task_phase("test_task", TaskPhase.RETRYING)
+        state_manager.transition_task("test_task", TaskPhase.RUNNING)
+        state_manager.transition_task("test_task", TaskPhase.FAILED)
+
+        assert state_manager.get_task_phase("test_task") == TaskPhase.FAILED
+
+    def test_invalid_transition_raises(self) -> None:
+        """Invalid state transitions should raise."""
+        from xbot.agent.crew.state import InvalidTransitionError
+
+        state_manager = CrewStateManager(
+            task_names=["test_task"],
+            task_definitions=[],
+        )
+
+        # COMPLETED is terminal, can't transition
+        state_manager.force_task_phase("test_task", TaskPhase.COMPLETED)
+
+        with pytest.raises(InvalidTransitionError):
+            state_manager.transition_task("test_task", TaskPhase.RUNNING)

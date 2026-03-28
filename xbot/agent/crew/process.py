@@ -568,6 +568,12 @@ class BaseProcess(ABC):
         use_soft_timeout = task.timeout is None
         initial_timeout = task.timeout if task.timeout else self._estimate_timeout(task)
 
+        # Initialize variables that may be overwritten by exceptions
+        output = ""
+        extended_count = 0
+        status = "success"
+        success = True
+
         try:
             output, extended_count = await self._execute_with_soft_timeout(
                 task=task,
@@ -576,8 +582,6 @@ class BaseProcess(ABC):
                 initial_timeout=initial_timeout,
                 use_soft_timeout=use_soft_timeout,
             )
-            status = "success"
-            success = True
         except asyncio.CancelledError:
             output = "Redo cancelled"
             status = "cancelled"
