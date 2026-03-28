@@ -15,6 +15,7 @@ from xbot.agent.crew.context import CrewExecutionContext, load_checkpoint
 from xbot.agent.crew.models import CrewConfig, CrewResult, ProcessType, TaskResult
 from xbot.agent.crew.process import HierarchicalProcess, SequentialProcess
 from xbot.agent.crew.state import CrewPhase, CrewStateManager, TaskPhase
+from xbot.agent.crew.validation import CrewValidator
 from xbot.agent.permission_handler import BasePermissionHandler
 from xbot.config.schema import Config
 
@@ -53,6 +54,37 @@ class CrewOrchestrator:
         """
         started_at = datetime.now()
         wall_start = time.perf_counter()
+
+        # 0. Pre-flight validation (fail fast)
+        # Validate crew config and log warnings
+        config_warnings = CrewValidator.validate_crew_config(self.crew_config)
+        CrewValidator.log_warnings(config_warnings)
+
+        # Validate all tasks upfront
+        available_agents = set(self.crew_config.agents.keys())
+        task_errors = CrewValidator.validate_all_tasks(self.crew_config.tasks, available_agents)
+        if task_errors:
+            # Return early with validation failure
+            error_messages = [e.to_result_message() for e in task_errors]
+            summary = f"Validation failed:\n" + "\n".join(f"  - {m}" for m in error_messages)
+            logger.error(f"[crew] {summary}")
+            return CrewResult(
+                crew_name=self.crew_config.name,
+                task_results=[
+                    TaskResult(
+                        task_name=e.task_name,
+                        agent_name="",
+                        output=e.to_result_message(),
+                        status="failed",
+                        started_at=started_at,
+                        finished_at=datetime.now(),
+                    )
+                    for e in task_errors
+                ],
+                status="failed",
+                total_time=time.perf_counter() - wall_start,
+                summary=summary,
+            )
 
         # Initialise state manager
         task_names = [t.name for t in self.crew_config.tasks]

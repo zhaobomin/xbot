@@ -471,7 +471,8 @@ class TestUnknownAgentHandling:
         result = await process._execute_single_task(task)
 
         assert result.status == "failed"
-        assert "unknown agent" in result.output.lower()
+        assert "unknown_agent" in result.output
+        assert "not found" in result.output.lower()
 
     @pytest.mark.asyncio
     async def test_redo_task_unknown_agent(self) -> None:
@@ -525,7 +526,8 @@ class TestUnknownAgentHandling:
 
         assert success is False
         assert result.status == "failed"
-        assert "unknown agent" in result.output.lower()
+        assert "unknown_agent" in result.output
+        assert "not found" in result.output.lower()
 
 
 class TestSoftTimeoutNoOutputCase:

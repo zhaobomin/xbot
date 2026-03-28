@@ -30,6 +30,7 @@ from xbot.agent.crew.output import (
     should_attempt_repair,
 )
 from xbot.agent.crew.state import CrewStateManager, TaskPhase
+from xbot.agent.crew.validation import CrewValidator, ExecutionPreconditions
 from xbot.agent.permission_handler import BasePermissionHandler
 
 
@@ -125,23 +126,29 @@ class BaseProcess(ABC):
         - If timeout is None: smart mode with auto-extend on progress
         - If timeout is set: traditional hard timeout (backward compatible)
         """
-        # Validate agent exists
-        role = self.crew_config.agents.get(task.agent)
-        if role is None:
-            logger.error(f"[crew] Task '{task.name}' references unknown agent '{task.agent}'")
+        # 0. Validate task (fail fast)
+        task_names = {t.name for t in self.crew_config.tasks}
+        validation_error = CrewValidator.validate_task(
+            task, set(self.crew_config.agents.keys()), task_names
+        )
+        if validation_error:
+            logger.error(f"[crew] Task '{task.name}' validation failed: {validation_error.message}")
             return TaskResult(
                 task_name=task.name,
                 agent_name=task.agent,
-                output=f"Task failed: unknown agent '{task.agent}'",
+                output=validation_error.to_result_message(),
                 status="failed",
                 started_at=datetime.now(),
                 finished_at=datetime.now(),
             )
 
-        # 1. Human briefing (pre-execution)
+        # 1. Get role (validated above)
+        role = self.crew_config.agents[task.agent]
+
+        # 2. Human briefing (pre-execution)
         human_briefing = await self._human_briefing(task)
 
-        # 2. Build prompt
+        # 3. Build prompt
         prompt = self.context.build_task_prompt(
             task, role,
             global_context=self.crew_config.global_context,
@@ -149,15 +156,15 @@ class BaseProcess(ABC):
             max_context_length=self.crew_config.max_context_length,
         )
 
-        # 3. Generate session key
+        # 4. Generate session key
         session_key = f"crew:{self.crew_config.name}:{task.name}:{uuid.uuid4().hex[:8]}"
 
-        # 4. Determine timeout mode
+        # 5. Determine timeout mode
         use_soft_timeout = task.timeout is None
         # Use explicit timeout if set (including 0), otherwise estimate
         initial_timeout = task.timeout if task.timeout is not None else self._estimate_timeout(task)
 
-        # 5. Execute with soft timeout
+        # 6. Execute with soft timeout
         started = datetime.now()
         output = ""
         status = "success"
@@ -550,6 +557,22 @@ class BaseProcess(ABC):
             A tuple of (TaskResult, success: bool) where success indicates
             whether the redo completed successfully.
         """
+        # 0. Validate task (fail fast)
+        task_names = {t.name for t in self.crew_config.tasks}
+        validation_error = CrewValidator.validate_task(
+            task, set(self.crew_config.agents.keys()), task_names
+        )
+        if validation_error:
+            logger.error(f"[crew] Redo task '{task.name}' validation failed: {validation_error.message}")
+            return TaskResult(
+                task_name=task.name,
+                agent_name=task.agent,
+                output=f"Redo failed: {validation_error.to_result_message()}",
+                status="failed",
+                started_at=datetime.now(),
+                finished_at=datetime.now(),
+            ), False
+
         resp = await self.permission_handler.request_interaction(
             kind="question",
             prompt="Enter feedback for the redo (what should be different?):",
@@ -561,17 +584,7 @@ class BaseProcess(ABC):
         self.state_manager.transition_task(task.name, TaskPhase.RETRYING, "human requested redo")
 
         # Build a new prompt with feedback
-        role = self.crew_config.agents.get(task.agent)
-        if role is None:
-            logger.error(f"[crew] Redo task '{task.name}' references unknown agent '{task.agent}'")
-            return TaskResult(
-                task_name=task.name,
-                agent_name=task.agent,
-                output=f"Redo failed: unknown agent '{task.agent}'",
-                status="failed",
-                started_at=datetime.now(),
-                finished_at=datetime.now(),
-            ), False
+        role = self.crew_config.agents[task.agent]
 
         extra_briefing = f"Previous attempt feedback: {feedback}" if feedback else None
         prompt = self.context.build_task_prompt(
