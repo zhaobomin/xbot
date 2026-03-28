@@ -421,13 +421,15 @@ class Test{Feature}ErrorPaths:
 
 **核心模块覆盖率**:
 - validation.py: 100%
+- format.py: 98%
 - resource_manager.py: 87%
 - context.py: 86%
 - orchestrator.py: 78%
 - state.py: 74%
 - process.py: 66%
+- truncate.py: 61%
 
-**测试数量**: 142 tests
+**测试数量**: 216 tests
 
 **已修复的 Bug**:
 1. ✅ 软超时无输出时卡死 → asyncio.shield() 模式
@@ -441,5 +443,15 @@ class Test{Feature}ErrorPaths:
 - tests/test_resource_manager.py (20 tests)
 - tests/test_process_flow.py (33 tests)
 - tests/test_orchestrator_context.py (20 tests)
+- tests/test_output_format.py (43 tests)
+- tests/test_output_truncate.py (31 tests)
 - tests/test_soft_timeout.py (补充边界测试)
 - tests/test_cancelled_error_handling.py (补充清理测试)
+
+### v0.3.18 (2026-03-28)
+
+Output 模块测试补充:
+- format.py: 98% (was 16%)
+- truncate.py: 61% (was 20%)
+
+整体覆盖率: 41% (was 35%)
