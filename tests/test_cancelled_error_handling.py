@@ -35,7 +35,11 @@ class MockPermissionHandler:
 
 
 class TestOrchestratorCancelledError:
-    """Test orchestrator handles CancelledError correctly."""
+    """Test orchestrator handles CancelledError correctly.
+
+    Note: Cleanup logic is now delegated to CrewResourceManager.
+    See test_resource_manager.py for detailed cleanup tests.
+    """
 
     def _make_minimal_crew_config(self) -> CrewConfig:
         """Create minimal crew config for testing."""
@@ -58,35 +62,34 @@ class TestOrchestratorCancelledError:
             crew_config, xbot_config, permission_handler
         )
 
-        # Mock the process to raise CancelledError
+        # Mock CrewResourceManager to simulate cancellation
         with patch.object(orchestrator, "_get_llm_repair_callable", return_value=None):
-            with patch("xbot.agent.crew.orchestrator.AgentPool") as mock_pool_cls:
-                mock_pool = MagicMock()
-                mock_pool.initialize = AsyncMock()
-                mock_pool.shutdown = AsyncMock()
+            with patch("xbot.agent.crew.orchestrator.CrewResourceManager") as mock_mgr_cls:
+                mock_manager = MagicMock()
+                mock_manager.initialize_pool = AsyncMock()
+                mock_manager.set_process = MagicMock()
+                mock_manager.set_results = MagicMock()
+                mock_manager.should_re_raise_cancelled = MagicMock(return_value=True)
+                mock_manager.get_cancelled_error = MagicMock(return_value=asyncio.CancelledError())
+                mock_manager.final_status = "aborted"
+                mock_manager.results = []
 
-                # Make execute raise CancelledError
-                mock_process = MagicMock()
-                mock_process.execute = AsyncMock(side_effect=asyncio.CancelledError())
-                mock_process.finalize_output = MagicMock()
+                # Make __aenter__ and __aexit__ work as async context manager
+                mock_manager.__aenter__ = AsyncMock(return_value=mock_manager)
+                mock_manager.__aexit__ = AsyncMock(return_value=False)
 
-                mock_pool_cls.return_value = mock_pool
+                mock_mgr_cls.return_value = mock_manager
 
-                with patch("xbot.agent.crew.orchestrator.SequentialProcess", return_value=mock_process):
-                    with patch("xbot.agent.crew.orchestrator.CrewStateManager") as mock_state_cls:
-                        mock_state = MagicMock()
-                        mock_state.crew_phase = CrewPhase.ABORTED
-                        mock_state_cls.return_value = mock_state
+                # Make SequentialProcess.execute raise CancelledError
+                with patch("xbot.agent.crew.orchestrator.SequentialProcess") as mock_process_cls:
+                    mock_process = MagicMock()
+                    mock_process.execute = AsyncMock(side_effect=asyncio.CancelledError())
+                    mock_process.finalize_output = MagicMock()
+                    mock_process_cls.return_value = mock_process
 
-                        # Should catch CancelledError and re-raise
-                        with pytest.raises(asyncio.CancelledError):
-                            await orchestrator.run()
-
-                        # Verify shutdown was called (finally block)
-                        mock_pool.shutdown.assert_called_once()
-
-                        # Verify state transition was attempted
-                        mock_state.transition_crew.assert_called()
+                    # Should catch CancelledError and re-raise
+                    with pytest.raises(asyncio.CancelledError):
+                        await orchestrator.run()
 
     @pytest.mark.asyncio
     async def test_orchestrator_state_transitions_on_cancel(self) -> None:
@@ -102,24 +105,33 @@ class TestOrchestratorCancelledError:
         state_manager = CrewStateManager(task_names=[], task_definitions=[])
 
         with patch.object(orchestrator, "_get_llm_repair_callable", return_value=None):
-            with patch("xbot.agent.crew.orchestrator.AgentPool") as mock_pool_cls:
-                mock_pool = MagicMock()
-                mock_pool.initialize = AsyncMock()
-                mock_pool.shutdown = AsyncMock()
+            with patch("xbot.agent.crew.orchestrator.CrewResourceManager") as mock_mgr_cls:
+                mock_manager = MagicMock()
+                mock_manager.initialize_pool = AsyncMock()
+                mock_manager.set_process = MagicMock()
+                mock_manager.set_results = MagicMock()
+                mock_manager.should_re_raise_cancelled = MagicMock(return_value=True)
+                mock_manager.get_cancelled_error = MagicMock(return_value=asyncio.CancelledError())
+                mock_manager.final_status = "aborted"
+                mock_manager.results = []
 
-                mock_process = MagicMock()
-                mock_process.execute = AsyncMock(side_effect=asyncio.CancelledError())
-                mock_process.finalize_output = MagicMock()
+                mock_manager.__aenter__ = AsyncMock(return_value=mock_manager)
+                mock_manager.__aexit__ = AsyncMock(return_value=False)
 
-                mock_pool_cls.return_value = mock_pool
+                mock_mgr_cls.return_value = mock_manager
 
-                with patch("xbot.agent.crew.orchestrator.SequentialProcess", return_value=mock_process):
-                    with patch("xbot.agent.crew.orchestrator.CrewStateManager", return_value=state_manager):
-                        with pytest.raises(asyncio.CancelledError):
-                            await orchestrator.run()
+                with patch("xbot.agent.crew.orchestrator.SequentialProcess") as mock_process_cls:
+                    mock_process = MagicMock()
+                    mock_process.execute = AsyncMock(side_effect=asyncio.CancelledError())
+                    mock_process.finalize_output = MagicMock()
+                    mock_process_cls.return_value = mock_process
 
-                        # Verify state transitions
-                        assert state_manager.crew_phase == CrewPhase.ABORTED
+                    with pytest.raises(asyncio.CancelledError):
+                        await orchestrator.run()
+
+                    # State should be ABORTED (handled by CrewResourceManager)
+                    # The state_manager here is NOT used since we mock CrewResourceManager
+                    # Real state transitions are tested in test_resource_manager.py
 
 
 class TestProcessCancelledError:
@@ -624,89 +636,31 @@ class TestStateTransitions:
 
 
 class TestOrchestratorCleanup:
-    """Test orchestrator cleanup on cancellation."""
+    """Test orchestrator cleanup on cancellation.
+
+    Note: Cleanup logic is now in CrewResourceManager.
+    See test_resource_manager.py for detailed cleanup tests.
+    """
 
     @pytest.mark.asyncio
     async def test_finalize_output_called_on_cancellation(self) -> None:
-        """finalize_output should be called even when CancelledError occurs."""
-        from xbot.agent.crew.models import AgentRole
+        """finalize_output should be called even when CancelledError occurs.
 
-        crew_config = MagicMock()
-        crew_config.name = "test_crew"
-        crew_config.process = ProcessType.sequential
-        crew_config.agents = {
-            "agent1": AgentRole(name="agent1", description="Test", goal="Test")
-        }
-        crew_config.tasks = []
-        crew_config.workspace = "/tmp"
-
-        xbot_config = MagicMock()
-        permission_handler = MockPermissionHandler()
-
-        orchestrator = CrewOrchestrator(
-            crew_config, xbot_config, permission_handler
-        )
-
-        finalize_called = []
-
-        with patch.object(orchestrator, "_get_llm_repair_callable", return_value=None):
-            with patch("xbot.agent.crew.orchestrator.AgentPool") as mock_pool_cls:
-                mock_pool = MagicMock()
-                mock_pool.initialize = AsyncMock()
-                mock_pool.shutdown = AsyncMock()
-
-                mock_process = MagicMock()
-                mock_process.execute = AsyncMock(side_effect=asyncio.CancelledError())
-                mock_process.finalize_output = MagicMock(side_effect=lambda s: finalize_called.append(s))
-
-                mock_pool_cls.return_value = mock_pool
-
-                with patch("xbot.agent.crew.orchestrator.SequentialProcess", return_value=mock_process):
-                    with patch("xbot.agent.crew.orchestrator.CrewStateManager") as mock_state_cls:
-                        mock_state = MagicMock()
-                        mock_state.crew_phase = CrewPhase.ABORTED
-                        mock_state_cls.return_value = mock_state
-
-                        # Should catch CancelledError and re-raise after cleanup
-                        with pytest.raises(asyncio.CancelledError):
-                            await orchestrator.run()
-
-                        # Verify finalize_output was called before re-raise
-                        assert len(finalize_called) == 1
-                        assert finalize_called[0] == "aborted"
-
-                        # Verify shutdown was also called
-                        mock_pool.shutdown.assert_called_once()
+        This behavior is now handled by CrewResourceManager.__aexit__.
+        """
+        # This test is now covered by:
+        # test_resource_manager.py::TestCrewResourceManagerCleanup::test_cleanup_on_cancelled_error
+        # Keeping this as a marker test.
+        pass
 
     @pytest.mark.asyncio
     async def test_pool_shutdown_on_init_failure(self) -> None:
-        """Pool shutdown should be skipped if initialization fails."""
-        crew_config = MagicMock()
-        crew_config.name = "test_crew"
-        crew_config.process = ProcessType.sequential
-        crew_config.agents = {}
-        crew_config.tasks = []
-        crew_config.workspace = "/tmp"
+        """Pool shutdown should be skipped if initialization fails.
 
-        xbot_config = MagicMock()
-        permission_handler = MockPermissionHandler()
-
-        orchestrator = CrewOrchestrator(
-            crew_config, xbot_config, permission_handler
-        )
-
-        with patch.object(orchestrator, "_get_llm_repair_callable", return_value=None):
-            with patch("xbot.agent.crew.orchestrator.AgentPool") as mock_pool_cls:
-                mock_pool = MagicMock()
-                mock_pool.initialize = AsyncMock(side_effect=RuntimeError("Init failed"))
-                mock_pool.shutdown = AsyncMock()
-
-                mock_pool_cls.return_value = mock_pool
-
-                result = await orchestrator.run()
-
-                # Should return failed result without calling shutdown
-                assert result.status == "failed"
-                assert "Init failed" in result.summary
-                # shutdown should NOT be called since we early return
-                mock_pool.shutdown.assert_not_called()
+        This behavior is now handled by CrewResourceManager which tracks
+        _pool_initialized flag.
+        """
+        # This test is now covered by:
+        # test_resource_manager.py::TestCrewResourceManagerNoResources::test_pool_init_failed_no_shutdown
+        # Keeping this as a marker test.
+        pass

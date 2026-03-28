@@ -14,6 +14,7 @@ from xbot.agent.crew.agent_pool import AgentPool
 from xbot.agent.crew.context import CrewExecutionContext, load_checkpoint
 from xbot.agent.crew.models import CrewConfig, CrewResult, ProcessType, TaskResult
 from xbot.agent.crew.process import HierarchicalProcess, SequentialProcess
+from xbot.agent.crew.resource_manager import CrewResourceManager
 from xbot.agent.crew.state import CrewPhase, CrewStateManager, TaskPhase
 from xbot.agent.crew.validation import CrewValidator
 from xbot.agent.permission_handler import BasePermissionHandler
@@ -119,109 +120,80 @@ class CrewOrchestrator:
             except Exception:
                 logger.exception("[crew] Failed to load checkpoint — starting fresh")
 
-        # Initialise agent pool
+        # Initialise state to INITIALIZING
         state_manager.transition_crew(CrewPhase.INITIALIZING)
-        pool = AgentPool(self.crew_config, self.xbot_config, self.permission_handler)
-        try:
-            await pool.initialize(only_roles=only_roles)
-        except Exception as exc:
-            state_manager.transition_crew(CrewPhase.FAILED, str(exc))
-            return CrewResult(
-                crew_name=self.crew_config.name,
-                task_results=[],
-                status="failed",
-                total_time=time.perf_counter() - wall_start,
-                summary=f"Failed to initialise agent pool: {exc}",
-            )
 
-        state_manager.transition_crew(CrewPhase.RUNNING)
-
-        # Select process
-        process_cls = (
-            HierarchicalProcess
-            if self.crew_config.process == ProcessType.hierarchical
-            else SequentialProcess
-        )
-        process = process_cls(
-            pool=pool,
-            context=context,
-            permission_handler=self.permission_handler,
+        # Use resource manager for unified cleanup flow
+        manager = CrewResourceManager(
             crew_config=self.crew_config,
+            xbot_config=self.xbot_config,
+            permission_handler=self.permission_handler,
             state_manager=state_manager,
-            config_path=self.config_path,
             started_at=started_at,
-            on_progress=self.on_progress,
-            llm_repair=self._get_llm_repair_callable(),
         )
 
-        # Execute
-        results: list[TaskResult] = []
-        final_status = "completed"  # Default
-        cancelled_error = None
         try:
-            results = await process.execute(self.crew_config.tasks)
-        except KeyboardInterrupt:
-            logger.info("[crew] Interrupted by user (Ctrl+C)")
-            state_manager.transition_crew(CrewPhase.ABORTING, "KeyboardInterrupt")
-            state_manager.transition_crew(CrewPhase.ABORTED)
-            final_status = "aborted"
-        except asyncio.CancelledError as e:
-            logger.info("[crew] Cancelled by async cancellation")
-            state_manager.transition_crew(CrewPhase.ABORTING, "CancelledError")
-            state_manager.transition_crew(CrewPhase.ABORTED)
-            final_status = "aborted"
-            # Store the error to re-raise after cleanup
-            cancelled_error = e
-        except Exception as exc:
-            logger.exception("[crew] Unhandled exception during execution")
-            try:
-                state_manager.transition_crew(CrewPhase.FAILED, str(exc))
-            except Exception:
-                pass
-            final_status = "failed"
-        finally:
-            await pool.shutdown()
+            async with manager:
+                # Initialize pool within the context (allows checkpoint resume)
+                try:
+                    await manager.initialize_pool(only_roles=only_roles)
+                except Exception as exc:
+                    # Pool init failed - cleanup handled by __aexit__
+                    state_manager.transition_crew(CrewPhase.FAILED, str(exc))
+                    return CrewResult(
+                        crew_name=self.crew_config.name,
+                        task_results=[],
+                        status="failed",
+                        total_time=time.perf_counter() - wall_start,
+                        summary=f"Failed to initialise agent pool: {exc}",
+                    )
 
-        # Determine final status
+                # Select and create process
+                process_cls = (
+                    HierarchicalProcess
+                    if self.crew_config.process == ProcessType.hierarchical
+                    else SequentialProcess
+                )
+                process = process_cls(
+                    pool=manager.pool,
+                    context=context,
+                    permission_handler=self.permission_handler,
+                    crew_config=self.crew_config,
+                    state_manager=state_manager,
+                    config_path=self.config_path,
+                    started_at=started_at,
+                    on_progress=self.on_progress,
+                    llm_repair=self._get_llm_repair_callable(),
+                )
+                manager.set_process(process)
+
+                # Execute tasks
+                results = await process.execute(self.crew_config.tasks)
+                manager.set_results(results)
+
+        except asyncio.CancelledError:
+            # Cleanup already completed in __aexit__
+            # Just return the result with aborted status
+            pass
+        except KeyboardInterrupt:
+            # Cleanup already completed in __aexit__
+            pass
+
+        # Calculate total time after cleanup
         total_time = time.perf_counter() - wall_start
 
-        if state_manager.crew_phase in (CrewPhase.ABORTED,):
-            status = "aborted"
-        elif state_manager.crew_phase == CrewPhase.FAILED:
-            status = "failed"
-        else:
-            # Try to reach COMPLETED through valid transitions
-            if state_manager.crew_phase == CrewPhase.RUNNING:
-                try:
-                    state_manager.transition_crew(CrewPhase.COMPLETING)
-                except Exception:
-                    pass
-            if state_manager.crew_phase == CrewPhase.COMPLETING:
-                try:
-                    state_manager.transition_crew(CrewPhase.COMPLETED)
-                except Exception:
-                    pass
-            # Determine status from task results
-            if any(r.status == "failed" for r in results):
-                status = "failed"
-            elif any(r.status == "human_rejected" for r in results):
-                status = "aborted"
-            else:
-                status = "completed"
+        # Re-raise CancelledError if it was captured
+        if manager.should_re_raise_cancelled():
+            raise manager.get_cancelled_error()
 
-        # Finalize output persistence
-        process.finalize_output(status)
-
-        # Re-raise CancelledError after cleanup is complete
-        if cancelled_error is not None:
-            raise cancelled_error
-
+        # Build summary and return result
+        results = manager.results
         summary = self._build_summary(results, total_time)
 
         return CrewResult(
             crew_name=self.crew_config.name,
             task_results=results,
-            status=status,
+            status=manager.final_status,
             total_time=total_time,
             summary=summary,
         )
