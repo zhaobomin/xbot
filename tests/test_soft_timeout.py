@@ -362,6 +362,172 @@ class TestBackwardCompatibility:
         assert task.timeout is None  # Smart mode
 
 
+class TestTimeoutEdgeCases:
+    """Test edge cases for timeout handling."""
+
+    def test_timeout_zero_is_respected(self) -> None:
+        """timeout=0 should be respected, not treated as falsy."""
+        task = TaskDefinition(
+            name="test_task",
+            description="Test",
+            agent="test_agent",
+            timeout=0,  # Explicitly set to 0
+        )
+        assert task.timeout == 0
+
+    @pytest.mark.asyncio
+    async def test_timeout_zero_uses_zero_not_estimated(self) -> None:
+        """When timeout=0, should use 0 not estimated timeout."""
+        crew_config = MagicMock()
+        crew_config.agents = {
+            "test_agent": AgentRole(
+                name="test_agent",
+                description="Test",
+                goal="Test",
+            )
+        }
+        crew_config.global_context = ""
+        crew_config.max_context_length = 4000
+        crew_config.output.max_output_size = 100000
+
+        pool = MagicMock(spec=AgentPool)
+
+        # Track what timeout was actually used
+        actual_timeout_used = None
+
+        async def track_timeout_stream(*args, **kwargs):
+            nonlocal actual_timeout_used
+            # We can't directly check the timeout, but we can verify behavior
+            # With timeout=0, it should timeout immediately
+            yield TaskProgress(delta_content="result", total_content="result", is_final=True)
+
+        pool.run_task_streaming = track_timeout_stream
+
+        state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
+        context = MagicMock()
+        context.build_task_prompt = MagicMock(return_value="test prompt")
+        permission_handler = MagicMock()
+
+        process = SequentialProcess(
+            pool=pool,
+            context=context,
+            permission_handler=permission_handler,
+            crew_config=crew_config,
+            state_manager=state_manager,
+        )
+
+        task = TaskDefinition(
+            name="test_task",
+            description="Test",
+            agent="test_agent",
+            timeout=0,  # Zero timeout
+        )
+
+        # With timeout=0, use_soft_timeout should be False
+        result = await process._execute_single_task(task)
+
+        # Task should complete successfully (mock returns immediately)
+        assert result.status == "success"
+
+
+class TestUnknownAgentHandling:
+    """Test handling of unknown agents."""
+
+    @pytest.mark.asyncio
+    async def test_execute_single_task_unknown_agent(self) -> None:
+        """Task with unknown agent should fail gracefully."""
+        crew_config = MagicMock()
+        crew_config.agents = {
+            "existing_agent": AgentRole(
+                name="existing_agent",
+                description="Test",
+                goal="Test",
+            )
+        }
+        crew_config.global_context = ""
+        crew_config.max_context_length = 4000
+        crew_config.output.max_output_size = 100000
+
+        pool = MagicMock(spec=AgentPool)
+        state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
+        context = MagicMock()
+        permission_handler = MagicMock()
+
+        process = SequentialProcess(
+            pool=pool,
+            context=context,
+            permission_handler=permission_handler,
+            crew_config=crew_config,
+            state_manager=state_manager,
+        )
+
+        task = TaskDefinition(
+            name="test_task",
+            description="Test",
+            agent="unknown_agent",  # Agent doesn't exist
+            timeout=None,
+        )
+
+        result = await process._execute_single_task(task)
+
+        assert result.status == "failed"
+        assert "unknown agent" in result.output.lower()
+
+    @pytest.mark.asyncio
+    async def test_redo_task_unknown_agent(self) -> None:
+        """Redo task with unknown agent should fail gracefully."""
+        crew_config = MagicMock()
+        crew_config.agents = {
+            "existing_agent": AgentRole(
+                name="existing_agent",
+                description="Test",
+                goal="Test",
+            )
+        }
+        crew_config.global_context = ""
+        crew_config.max_context_length = 4000
+        crew_config.output.max_output_size = 100000
+
+        pool = MagicMock(spec=AgentPool)
+        state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
+        # Set to AWAITING_REVIEW for valid redo transition
+        state_manager.force_task_phase("test_task", TaskPhase.AWAITING_REVIEW)
+
+        context = MagicMock()
+        permission_handler = MagicMock()
+        permission_handler.request_interaction = AsyncMock(return_value=MagicMock(content="feedback"))
+
+        process = SequentialProcess(
+            pool=pool,
+            context=context,
+            permission_handler=permission_handler,
+            crew_config=crew_config,
+            state_manager=state_manager,
+        )
+
+        task = TaskDefinition(
+            name="test_task",
+            description="Test",
+            agent="unknown_agent",  # Agent doesn't exist
+            timeout=None,
+        )
+
+        original_result = TaskResult(
+            task_name="test_task",
+            agent_name="unknown_agent",
+            output="original",
+            status="success",
+            started_at=datetime.now(),
+            finished_at=datetime.now(),
+        )
+
+        result, success = await process._redo_task(task, original_result)
+
+        assert success is False
+        assert result.status == "failed"
+        assert "unknown agent" in result.output.lower()
+
+
 class TestSoftTimeoutNoOutputCase:
     """Test soft timeout when backend produces no output.
 

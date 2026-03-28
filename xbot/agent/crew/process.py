@@ -125,7 +125,18 @@ class BaseProcess(ABC):
         - If timeout is None: smart mode with auto-extend on progress
         - If timeout is set: traditional hard timeout (backward compatible)
         """
-        role = self.crew_config.agents[task.agent]
+        # Validate agent exists
+        role = self.crew_config.agents.get(task.agent)
+        if role is None:
+            logger.error(f"[crew] Task '{task.name}' references unknown agent '{task.agent}'")
+            return TaskResult(
+                task_name=task.name,
+                agent_name=task.agent,
+                output=f"Task failed: unknown agent '{task.agent}'",
+                status="failed",
+                started_at=datetime.now(),
+                finished_at=datetime.now(),
+            )
 
         # 1. Human briefing (pre-execution)
         human_briefing = await self._human_briefing(task)
@@ -143,7 +154,8 @@ class BaseProcess(ABC):
 
         # 4. Determine timeout mode
         use_soft_timeout = task.timeout is None
-        initial_timeout = task.timeout if task.timeout else self._estimate_timeout(task)
+        # Use explicit timeout if set (including 0), otherwise estimate
+        initial_timeout = task.timeout if task.timeout is not None else self._estimate_timeout(task)
 
         # 5. Execute with soft timeout
         started = datetime.now()
@@ -549,7 +561,18 @@ class BaseProcess(ABC):
         self.state_manager.transition_task(task.name, TaskPhase.RETRYING, "human requested redo")
 
         # Build a new prompt with feedback
-        role = self.crew_config.agents[task.agent]
+        role = self.crew_config.agents.get(task.agent)
+        if role is None:
+            logger.error(f"[crew] Redo task '{task.name}' references unknown agent '{task.agent}'")
+            return TaskResult(
+                task_name=task.name,
+                agent_name=task.agent,
+                output=f"Redo failed: unknown agent '{task.agent}'",
+                status="failed",
+                started_at=datetime.now(),
+                finished_at=datetime.now(),
+            ), False
+
         extra_briefing = f"Previous attempt feedback: {feedback}" if feedback else None
         prompt = self.context.build_task_prompt(
             task, role,
@@ -566,7 +589,8 @@ class BaseProcess(ABC):
 
         # Determine timeout mode (same as _execute_single_task)
         use_soft_timeout = task.timeout is None
-        initial_timeout = task.timeout if task.timeout else self._estimate_timeout(task)
+        # Use explicit timeout if set (including 0), otherwise estimate
+        initial_timeout = task.timeout if task.timeout is not None else self._estimate_timeout(task)
 
         # Initialize variables that may be overwritten by exceptions
         output = ""
