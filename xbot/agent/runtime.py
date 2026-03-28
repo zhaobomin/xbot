@@ -174,6 +174,24 @@ class AgentRuntime:
         # Note: Task registration happens in run() when creating the task.
         # When _dispatch is called directly (tests), there's no task registration.
 
+        # === 诊断日志: 请求入口 ===
+        current_phase = self._state_coordinator.get_phase(msg.session_key)
+        has_pending_permission = False
+        has_pending_interaction = False
+        if self.bus is not None:
+            has_pending_permission = bool(
+                self.bus.get_pending_request_for_session(msg.session_key)
+            )
+            has_pending_interaction = bool(
+                self.bus.get_pending_interaction_for_session(msg.session_key)
+            )
+        prompt_preview = msg.content[:50].replace('\n', ' ') if msg.content else ""
+        logger.info(
+            f"[Dispatch] session={msg.session_key}, phase={current_phase.value}, "
+            f"pending_i={has_pending_interaction}, pending_p={has_pending_permission}, "
+            f'prompt="{prompt_preview}..."'
+        )
+
         try:
             # Start atomic dispatch session
             async with self._state_coordinator.transaction(

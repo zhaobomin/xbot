@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import uuid
 import time
 from datetime import datetime
 from pathlib import Path
@@ -123,6 +124,7 @@ class ClaudeSDKBackend(AgentBackend):
         self._client_last_used: dict[str, float] = {}  # Track last usage time for TTL cleanup
         self._client_models: dict[str, str] = {}  # Track model used for each client (for model change detection)
         self._active_task_ids: dict[str, str] = {}
+        self._active_request_ids: dict[str, str] = {}  # Track request IDs for request-response validation
         self._session_commands: dict[str, list[str]] = {}
         self._delegation_traces: list[DelegationTrace] = []
         self._delegation_traces_lock = asyncio.Lock()
@@ -529,16 +531,43 @@ class ClaudeSDKBackend(AgentBackend):
         every eviction / shutdown / error path stays in sync.  The caller is
         responsible for disconnecting the returned client.
         """
+        # === 诊断日志: 状态清理 ===
+        had_client = session_key in self._clients
+        had_task_id = session_key in self._active_task_ids
+        had_sdk_sid = False
+        if self.sessions:
+            session = self.sessions.get(session_key)
+            if session and session.metadata.get("sdk_session_id"):
+                had_sdk_sid = True
+
         client = self._clients.pop(session_key, None)
         self._client_last_used.pop(session_key, None)
         self._client_models.pop(session_key, None)
         self._client_skills_versions.pop(session_key, None)
         self._session_commands.pop(session_key, None)
         self._active_task_ids.pop(session_key, None)
+        self._active_request_ids.pop(session_key, None)  # Clear request ID tracking
         # Clear session context for compact notifications
         session_contexts = self._shared_resources.get("_session_contexts")
         if session_contexts is not None:
+            # Clear both session_key and sdk_session_id mappings
             session_contexts.pop(session_key, None)
+            # Also clear sdk_session_id mapping if we can find it
+            if had_sdk_sid and self.sessions:
+                session = self.sessions.get(session_key)
+                if session:
+                    sdk_sid = session.metadata.get("sdk_session_id")
+                    if sdk_sid and sdk_sid in session_contexts:
+                        session_contexts.pop(sdk_sid, None)
+                        logger.debug(f"[State Cleanup] Also cleared sdk_sid mapping: {sdk_sid}")
+
+        # Log state cleanup for debugging
+        if had_client or had_task_id:
+            logger.info(
+                f"[State Cleanup] session={session_key}, removed_client={had_client}, "
+                f"removed_task={had_task_id}, had_sdk_sid={had_sdk_sid}"
+            )
+
         return client
 
     async def _safe_disconnect_client(
@@ -684,8 +713,16 @@ class ClaudeSDKBackend(AgentBackend):
         prompt: str,
         media: list[str],
         session_id: str,
+        request_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        """Yield a single user message with image blocks and/or file references."""
+        """Yield a single user message with image blocks and/or file references.
+
+        Args:
+            prompt: The text prompt
+            media: List of media file paths
+            session_id: SDK session identifier
+            request_id: Optional request ID for request-response tracking
+        """
         file_ref_blocks, image_paths = self._build_file_content_blocks(media)
         image_blocks = self._build_image_content_blocks(image_paths)
 
@@ -695,12 +732,19 @@ class ClaudeSDKBackend(AgentBackend):
             content: str | list[dict[str, Any]] = prompt
         else:
             content = all_blocks + [{"type": "text", "text": prompt}]
-        yield {
+
+        message = {
             "type": "user",
             "message": {"role": "user", "content": content},
             "parent_tool_use_id": None,
             "session_id": session_id,
         }
+
+        # Add request_id (uuid) for request-response tracking
+        if request_id:
+            message["uuid"] = request_id
+
+        yield message
 
     async def _cleanup_stale_clients_unlocked(self) -> list[tuple["ClaudeSDKClient", str]]:
         """Remove clients that have been idle longer than TTL.
@@ -950,6 +994,17 @@ class ClaudeSDKBackend(AgentBackend):
 
         session = self.sessions.get_or_create(context.session_key) if self.sessions else None
 
+        # === 诊断日志: Backend 处理入口 ===
+        sdk_session_id = session.metadata.get("sdk_session_id") if session else None
+        active_task_id = self._active_task_ids.get(context.session_key)
+        reconnect_pending = session.metadata.get("_reconnect_pending") if session else None
+        prompt_preview = context.prompt[:50].replace('\n', ' ') if context.prompt else ""
+        logger.info(
+            f"[Backend] session={context.session_key}, sdk_sid={sdk_session_id or 'none'}, "
+            f"task_id={active_task_id or 'none'}, reconnect={reconnect_pending or False}, "
+            f'prompt="{prompt_preview}..."'
+        )
+
         # If SDK session ID already exists from previous turn, also map it
         # This ensures hooks can find context when SDK returns the UUID instead of session_key
         if session is not None:
@@ -959,7 +1014,24 @@ class ClaudeSDKBackend(AgentBackend):
 
         # Check for reconnect pending state from previous error
         reconnect_hint = None
-        if session is not None and session.metadata.pop("_reconnect_pending", None):
+        fresh_start = False
+
+        # 首先检查是否需要强制新会话（不可恢复错误后）
+        if session is not None and session.metadata.pop("_fresh_start_required", None):
+            fresh_start = True
+            # 清除sdk_session_id，强制开始新会话
+            old_sdk_sid = session.metadata.pop("sdk_session_id", None)
+            session.metadata.pop("_last_error", None)
+            session.metadata.pop("_error_timestamp", None)
+            session.metadata.pop("_fallback_error", None)
+            self.sessions.save(session)
+            logger.info(
+                f"[Backend] session={context.session_key} requires fresh start, "
+                f"cleared sdk_session_id={old_sdk_sid or 'none'}"
+            )
+            reconnect_hint = "🔄 会话已重置，开始新的对话..."
+
+        elif session is not None and session.metadata.pop("_reconnect_pending", None):
             # Session had a previous error, attempting recovery
             last_error = session.metadata.pop("_last_error", "")
             session.metadata.pop("_error_timestamp", None)
@@ -1047,13 +1119,21 @@ class ClaudeSDKBackend(AgentBackend):
                 )
                 logger.info(f"[Backend Process] Sending query to SDK for session={context.session_key}")
                 _query_session_id = self._query_session_id(context.session_key, session)
+
+                # Generate request ID for request-response tracking
+                request_id = str(uuid.uuid4())
+                self._active_request_ids[context.session_key] = request_id
+                logger.debug(f"[Request Tracking] session={context.session_key}, request_id={request_id}")
+
                 if context.media:
                     logger.info(f"[Backend Process] Multimodal query with {len(context.media)} media file(s)")
                     await client.query(
-                        self._build_multimodal_query(prompt, context.media, _query_session_id),
+                        self._build_multimodal_query(prompt, context.media, _query_session_id, request_id),
                         session_id=_query_session_id,
                     )
                 else:
+                    # For non-media queries, we can't set uuid via string prompt
+                    # The SDK will generate its own uuid
                     await client.query(prompt, session_id=_query_session_id)
                 logger.info(f"[Backend Process] Query sent, waiting for response for session={context.session_key}")
 
@@ -1102,11 +1182,33 @@ class ClaudeSDKBackend(AgentBackend):
                                 session.metadata["sdk_session_id"] = sdk_session_id
                                 self.sessions.save(session)
                     if isinstance(message, TaskStartedMessage) and message.task_id:
+                        # === 诊断日志: TaskStarted ===
+                        prev_task_id = self._active_task_ids.get(context.session_key)
+                        logger.info(
+                            f"[SDK TaskStarted] session={context.session_key}, task_id={message.task_id}, "
+                            f"prev_task_id={prev_task_id or 'none'}"
+                        )
                         self._active_task_ids[context.session_key] = message.task_id
                     if (
                         isinstance(message, TaskNotificationMessage)
                         and message.status in {"completed", "failed", "stopped"}
                     ):
+                        # === 诊断日志 + Task ID验证: TaskNotification 终态 ===
+                        current_task_id = self._active_task_ids.get(context.session_key)
+                        matches_active = current_task_id == message.task_id if message.task_id else False
+                        logger.info(
+                            f"[SDK Notification] session={context.session_key}, task_id={message.task_id}, "
+                            f"status={message.status}, matches_active={matches_active}"
+                        )
+                        # 如果task_id不匹配当前活跃任务，可能是过时任务的通知
+                        if message.task_id and current_task_id and not matches_active:
+                            logger.warning(
+                                f"[SDK Notification] Stale task notification detected: "
+                                f"session={context.session_key}, received_task={message.task_id}, "
+                                f"expected_task={current_task_id}. Ignoring."
+                            )
+                            # 不清理active_task_ids，因为这不是当前任务的通知
+                            continue
                         self._active_task_ids.pop(context.session_key, None)
                     if (
                         isinstance(message, TaskNotificationMessage)
@@ -1126,7 +1228,30 @@ class ClaudeSDKBackend(AgentBackend):
                             user_cancelled = True  # Mark as cancelled to skip retry
                             break
                     if is_terminal_result:
+                        # === 诊断日志: ResultMessage ===
+                        current_task_id = self._active_task_ids.get(context.session_key)
+                        expected_request_id = self._active_request_ids.get(context.session_key)
+                        received_uuid = getattr(message, 'uuid', None)
+
+                        logger.info(
+                            f"[SDK Result] session={context.session_key}, task_id={current_task_id or 'none'}, "
+                            f"request_id={expected_request_id or 'none'}, received_uuid={received_uuid or 'none'}, "
+                            f"is_error={message.is_error if hasattr(message, 'is_error') else 'N/A'}"
+                        )
+
+                        # Validate request ID if we have one (only for multimodal queries)
+                        if expected_request_id and received_uuid:
+                            if received_uuid != expected_request_id:
+                                logger.warning(
+                                    f"[Request Tracking] UUID mismatch: session={context.session_key}, "
+                                    f"expected={expected_request_id}, received={received_uuid}. "
+                                    f"This might be a stale response."
+                                )
+                                # Note: We don't ignore the result because SDK might generate new UUIDs
+                                # The warning helps diagnose issues
+
                         self._active_task_ids.pop(context.session_key, None)
+                        self._active_request_ids.pop(context.session_key, None)  # Clear request ID
                         if session is not None and message.session_id:
                             session.metadata["sdk_session_id"] = message.session_id
                             self.sessions.save(session)
@@ -1194,8 +1319,24 @@ class ClaudeSDKBackend(AgentBackend):
                     asyncio.create_task(_safe_consolidate())
 
         except Exception as e:
+            # === 诊断日志: 错误恢复 ===
+            error_type = type(e).__name__
             client = self._remove_client_state(context.session_key)
             await self._safe_disconnect_client(client, context.session_key, context="error recovery")
+
+            # Determine if this is a recoverable error
+            # Recoverable: network/timeout issues - preserve sdk_session_id for reconnection
+            # Non-recoverable: state errors, cancellations - clear sdk_session_id for fresh start
+            recoverable_errors = {
+                "ConnectionError", "TimeoutError", "asyncio.TimeoutError",
+                "ConnectionResetError", "BrokenPipeError",
+            }
+            is_recoverable = error_type in recoverable_errors
+
+            logger.info(
+                f"[Error Recovery] session={context.session_key}, error={error_type}: {str(e)[:100]}, "
+                f"action={'preserve' if is_recoverable else 'clear'}, sdk_sid_preserved={is_recoverable}"
+            )
 
             # Don't immediately clear sdk_session_id - preserve context for potential recovery
             # Instead, mark the session as needing recovery
@@ -1203,6 +1344,9 @@ class ClaudeSDKBackend(AgentBackend):
                 session.metadata["_reconnect_pending"] = True
                 session.metadata["_last_error"] = str(e)[:500]
                 session.metadata["_error_timestamp"] = datetime.now().isoformat()
+                # For non-recoverable errors, mark for fresh start instead of recovery
+                if not is_recoverable:
+                    session.metadata["_fresh_start_required"] = True
                 self.sessions.save(session)
 
             logger.exception("Error in Claude SDK backend")
@@ -1262,6 +1406,16 @@ class ClaudeSDKBackend(AgentBackend):
                                 isinstance(message, TaskNotificationMessage)
                                 and message.status in {"completed", "failed", "stopped"}
                             ):
+                                # === Fallback 路径 Task ID 验证 ===
+                                current_task_id = self._active_task_ids.get(context.session_key)
+                                matches_active = current_task_id == message.task_id if message.task_id else False
+                                if message.task_id and current_task_id and not matches_active:
+                                    logger.warning(
+                                        f"[Fallback Notification] Stale task notification detected: "
+                                        f"session={context.session_key}, received_task={message.task_id}, "
+                                        f"expected_task={current_task_id}. Ignoring."
+                                    )
+                                    continue
                                 self._active_task_ids.pop(context.session_key, None)
                             if is_terminal_result:
                                 self._active_task_ids.pop(context.session_key, None)
@@ -1430,7 +1584,6 @@ class ClaudeSDKBackend(AgentBackend):
             if bus is None:
                 return None
             from xbot.bus.queue import InteractionRequest
-            import uuid
 
             # Build metadata with valid_options for answer validation
             metadata_dict = dict(context.metadata or {})
@@ -1575,7 +1728,6 @@ class ClaudeSDKBackend(AgentBackend):
 
             # Wait for ResultMessage to get usage info (with timeout)
             from claude_agent_sdk import ResultMessage
-            import asyncio
 
             try:
                 async with asyncio.timeout(3.0):
@@ -1597,9 +1749,14 @@ class ClaudeSDKBackend(AgentBackend):
         finally:
             # Always remove client to force fresh connection on next request
             # This prevents state inconsistency after interrupt
-            self._clients.pop(session_key, None)
-            self._active_task_ids.pop(session_key, None)
-            logger.debug(f"Removed client for session {session_key} after interrupt")
+            # Use _remove_client_state for unified cleanup
+            client_to_disconnect = self._remove_client_state(session_key)
+            if client_to_disconnect:
+                # Disconnect in background to avoid blocking
+                asyncio.create_task(
+                    self._safe_disconnect_client(client_to_disconnect, session_key, context="interrupt")
+                )
+            logger.info(f"[State Cleanup] session={session_key} cleaned up after interrupt")
 
         return {"interrupted": True, "usage": usage_info}
 
@@ -1680,10 +1837,12 @@ class ClaudeSDKBackend(AgentBackend):
         if client is not None and task_id:
             try:
                 await client.stop_task(task_id)
+                logger.info(f"[Reset Session] session={session_key}, stopped task={task_id}")
             except Exception:
                 logger.debug("Failed to stop active task while resetting session state")
         if client is not None:
             await self._safe_disconnect_client(client, session_key, context="force reset session state")
+        logger.info(f"[Reset Session] session={session_key} client state reset complete")
 
     def get_tools_summary(self) -> str:
         """Get a summary of available tools and capabilities."""

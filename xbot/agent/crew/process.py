@@ -936,15 +936,54 @@ class HierarchicalProcess(BaseProcess):
 
     @staticmethod
     def _parse_plan(output: str) -> list[str] | None:
-        """Extract a JSON array of task names from manager output."""
-        # Try to find a JSON array in the output
-        match = re.search(r'\[.*?\]', output, re.DOTALL)
-        if not match:
-            return None
+        """Extract a JSON array of task names from manager output.
+
+        Uses bracket counting to find complete JSON arrays, handling
+        cases where array elements contain bracket characters.
+        """
+        # First, try to parse the entire output as JSON
         try:
-            plan = json.loads(match.group())
+            plan = json.loads(output.strip())
             if isinstance(plan, list) and all(isinstance(x, str) for x in plan):
                 return plan
         except json.JSONDecodeError:
             pass
+
+        # Find JSON array using bracket counting
+        # This handles arrays containing strings with brackets
+        start_idx = output.find('[')
+        if start_idx == -1:
+            return None
+
+        bracket_count = 0
+        in_string = False
+        escape_next = False
+
+        for i, char in enumerate(output[start_idx:], start_idx):
+            if escape_next:
+                escape_next = False
+                continue
+            if char == '\\' and in_string:
+                escape_next = True
+                continue
+            if char == '"' and not escape_next:
+                in_string = not in_string
+            elif not in_string:
+                if char == '[':
+                    bracket_count += 1
+                elif char == ']':
+                    bracket_count -= 1
+                    if bracket_count == 0:
+                        # Found complete array
+                        try:
+                            plan = json.loads(output[start_idx:i + 1])
+                            if isinstance(plan, list) and all(isinstance(x, str) for x in plan):
+                                return plan
+                        except json.JSONDecodeError:
+                            pass
+                        # Continue searching for another valid array
+                        start_idx = output.find('[', i + 1)
+                        if start_idx == -1:
+                            return None
+
         return None

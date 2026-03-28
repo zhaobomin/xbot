@@ -116,6 +116,14 @@ class RuntimeResponseHandlers:
         is_interaction_keyword = is_response_keyword(content)
 
         request_id = self._bus.get_pending_interaction_for_session(msg.session_key)
+
+        # === 诊断日志: 交互响应处理 ===
+        current_phase = self._state_coordinator.get_phase(msg.session_key)
+        logger.info(
+            f"[Interaction] session={msg.session_key}, request_id={request_id or 'none'}, "
+            f"phase={current_phase.value}, action=handle_start"
+        )
+
         if not request_id:
             if is_interaction_keyword:
                 await self._bus.publish_outbound(
@@ -128,7 +136,6 @@ class RuntimeResponseHandlers:
                 return True
             return False
 
-        current_phase = self._state_coordinator.get_phase(msg.session_key)
         if current_phase not in {
             SessionPhase.WAITING_INTERACTION,
             SessionPhase.IDLE,
@@ -274,10 +281,16 @@ class RuntimeResponseHandlers:
 
         logger.info(f"Interaction response submitted: action={action}, request={request_id}")
 
+        # === 诊断日志: 状态转换 ===
+        old_phase = self._state_coordinator.get_phase(msg.session_key)
         async with self._state_coordinator.transaction(
             msg.session_key, validate_on_commit=False
         ) as tx:
             tx.set_phase(SessionPhase.RUNNING, reason="interaction_response_submitted")
+        logger.info(
+            f"[Interaction] session={msg.session_key}, request_id={request_id}, "
+            f"transition={old_phase.value}->RUNNING"
+        )
 
         # Clean up retry count on success
         if hasattr(self._runtime, '_interaction_retry_counts'):

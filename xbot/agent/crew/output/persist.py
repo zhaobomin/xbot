@@ -341,14 +341,17 @@ class OutputPersister:
                 try:
                     with open(manifest_path, encoding="utf-8") as f:
                         data = json.load(f)
-                    started = datetime.fromisoformat(data.get("started_at", ""))
+                    started_str = data.get("started_at", "")
+                    if not started_str:
+                        continue  # Skip if no valid timestamp
+                    started = datetime.fromisoformat(started_str)
                     if started.timestamp() < cutoff:
                         logger.info(f"[crew-output] Removing old run: {run_path.name}")
                         # Remove directory
                         import shutil
                         shutil.rmtree(run_path)
-                except Exception:
-                    pass
+                except (ValueError, KeyError, json.JSONDecodeError):
+                    pass  # Invalid manifest, skip
 
 
 def create_persister(
