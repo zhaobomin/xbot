@@ -360,3 +360,138 @@ class TestBackwardCompatibility:
             # No timeout specified - defaults to None
         )
         assert task.timeout is None  # Smart mode
+
+
+class TestSoftTimeoutNoOutputCase:
+    """Test soft timeout when backend produces no output.
+
+    This tests the fix for a bug where the soft timeout mechanism failed to
+    trigger when the backend didn't produce any output events. The async for
+    loop was blocking on waiting for progress events, so timeout checks
+    were never executed.
+
+    The fix uses asyncio.shield() to protect the stream task from being
+    cancelled by wait_for(), allowing timeout checks to work even when
+    no output is produced.
+    """
+
+    @pytest.mark.asyncio
+    async def test_timeout_triggers_when_no_output(self) -> None:
+        """Timeout should trigger even when backend produces no output."""
+        crew_config = MagicMock()
+        crew_config.agents = {
+            "test_agent": AgentRole(
+                name="test_agent",
+                description="Test",
+                goal="Test",
+            )
+        }
+        crew_config.global_context = ""
+        crew_config.max_context_length = 4000
+        crew_config.output.max_output_size = 100000
+
+        pool = MagicMock(spec=AgentPool)
+
+        # Simulate a backend that takes longer than timeout to produce first output
+        async def slow_stream(*args, **kwargs):
+            await asyncio.sleep(10)  # Longer than timeout
+            yield TaskProgress(delta_content="result", total_content="result", is_final=True)
+
+        pool.run_task_streaming = slow_stream
+
+        state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
+        context = MagicMock()
+        permission_handler = MagicMock()
+
+        process = SequentialProcess(
+            pool=pool,
+            context=context,
+            permission_handler=permission_handler,
+            crew_config=crew_config,
+            state_manager=state_manager,
+        )
+
+        task = TaskDefinition(
+            name="test_task",
+            description="Test",
+            agent="test_agent",
+            timeout=None,  # Smart mode
+        )
+
+        # With the fix, should timeout quickly (not wait 10s)
+        import time
+        start = time.monotonic()
+
+        with pytest.raises(asyncio.TimeoutError):
+            await process._execute_with_soft_timeout(
+                task=task,
+                prompt="test",
+                session_key="test",
+                initial_timeout=2,  # 2 second timeout
+                use_soft_timeout=True,
+            )
+
+        elapsed = time.monotonic() - start
+        # Should timeout around 2s, not 10s
+        assert elapsed < 5, f"Timeout took {elapsed}s, expected ~2s"
+
+    @pytest.mark.asyncio
+    async def test_stream_not_cancelled_on_extension(self) -> None:
+        """Stream should continue after timeout extension (not cancelled)."""
+        crew_config = MagicMock()
+        crew_config.agents = {
+            "test_agent": AgentRole(
+                name="test_agent",
+                description="Test",
+                goal="Test",
+            )
+        }
+        crew_config.global_context = ""
+        crew_config.max_context_length = 4000
+        crew_config.output.max_output_size = 100000
+
+        pool = MagicMock(spec=AgentPool)
+
+        # Simulate a backend that pauses longer than initial timeout
+        async def stream_with_pause(*args, **kwargs):
+            yield TaskProgress(delta_content="start", total_content="start", is_final=False)
+            await asyncio.sleep(1)
+            yield TaskProgress(delta_content=" working", total_content="start working", is_final=False)
+            await asyncio.sleep(10)  # Pause longer than timeout
+            yield TaskProgress(delta_content=" done", total_content="start working done", is_final=True)
+
+        pool.run_task_streaming = stream_with_pause
+
+        state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
+        context = MagicMock()
+        permission_handler = MagicMock()
+
+        process = SequentialProcess(
+            pool=pool,
+            context=context,
+            permission_handler=permission_handler,
+            crew_config=crew_config,
+            state_manager=state_manager,
+        )
+
+        task = TaskDefinition(
+            name="test_task",
+            description="Test",
+            agent="test_agent",
+            timeout=None,
+        )
+
+        # With short timeout but ACTIVITY_THRESHOLD=180s, should extend and complete
+        result = await process._execute_with_soft_timeout(
+            task=task,
+            prompt="test",
+            session_key="test",
+            initial_timeout=5,  # 5 second initial timeout
+            use_soft_timeout=True,
+        )
+
+        output, extended_count = result
+
+        # Should complete with full output (stream not cancelled)
+        assert output == "start working done"
+        assert extended_count >= 1  # At least one extension

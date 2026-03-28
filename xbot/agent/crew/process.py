@@ -250,6 +250,10 @@ class BaseProcess(ABC):
     ) -> tuple[str, int]:
         """Execute task with soft timeout and progress detection.
 
+        Uses asyncio.shield() to protect stream_task from being cancelled
+        during timeout checks, allowing the stream to continue even when
+        wait_for raises TimeoutError.
+
         Args:
             task: Task definition
             prompt: Full prompt
@@ -265,46 +269,110 @@ class BaseProcess(ABC):
         start_time = time.monotonic()
         deadline = start_time + initial_timeout
         extended_count = 0
-        last_activity_time = start_time
+        last_activity_time: float | None = None  # None means no output yet
         output = ""
 
-        async for progress in self.pool.run_task_streaming(task.agent, prompt, session_key):
+        # Create the async iterator
+        stream = self.pool.run_task_streaming(task.agent, prompt, session_key)
+
+        # Create task for first progress event
+        stream_task = asyncio.create_task(stream.__anext__())
+
+        while True:
             current_time = time.monotonic()
+            remaining = deadline - current_time
 
-            # Update last activity time when we get content
-            if progress.delta_content:
-                last_activity_time = current_time
+            # Calculate wait timeout (max ACTIVITY_THRESHOLD to ensure regular checks)
+            wait_timeout = max(0.1, min(remaining, self.ACTIVITY_THRESHOLD))
 
-            # Update output
-            output = progress.total_content
+            try:
+                # Use shield() to protect stream_task from being cancelled by wait_for
+                progress = await asyncio.wait_for(asyncio.shield(stream_task), wait_timeout)
 
-            # Check timeout
-            if current_time > deadline:
+                # Got progress event
+                current_time = time.monotonic()
+
+                # Update last activity time when we get content
+                if progress.delta_content:
+                    last_activity_time = current_time
+
+                # Update output
+                output = progress.total_content
+
+                # Task completed
+                if progress.is_final:
+                    return output, extended_count
+
+                # Create new task for next progress event
+                stream_task = asyncio.create_task(stream.__anext__())
+
+            except asyncio.TimeoutError:
+                # wait_for timed out, but stream_task is NOT cancelled (shielded)
+                current_time = time.monotonic()
+
                 if use_soft_timeout and extended_count < self.MAX_EXTENSIONS:
-                    # Check if we have recent activity
-                    time_since_activity = current_time - last_activity_time
-
-                    if time_since_activity < self.ACTIVITY_THRESHOLD:
-                        # Task is making progress, extend timeout
-                        extended_count += 1
-                        deadline += self.SOFT_TIMEOUT_BUFFER
-                        logger.info(
-                            f"[crew] Task '{task.name}' has progress, "
-                            f"extending timeout by {self.SOFT_TIMEOUT_BUFFER}s "
-                            f"(extension #{extended_count})"
-                        )
+                    # Only extend if we've had output activity
+                    if last_activity_time is not None:
+                        time_since_activity = current_time - last_activity_time
+                        if time_since_activity < self.ACTIVITY_THRESHOLD:
+                            # Recent activity, extend timeout
+                            extended_count += 1
+                            deadline += self.SOFT_TIMEOUT_BUFFER
+                            logger.info(
+                                f"[crew] Task '{task.name}' has progress, "
+                                f"extending timeout by {self.SOFT_TIMEOUT_BUFFER}s "
+                                f"(extension #{extended_count})"
+                            )
+                            # Continue loop, stream_task is still pending (shielded)
+                            continue
+                        else:
+                            # Had output but stopped for too long
+                            logger.warning(
+                                f"[crew] Task '{task.name}' appears stuck "
+                                f"(no output for {time_since_activity:.0f}s), stopping"
+                            )
+                            # Cancel stream_task before raising
+                            stream_task.cancel()
+                            try:
+                                await stream_task
+                            except (asyncio.CancelledError, asyncio.TimeoutError):
+                                pass
+                            raise asyncio.TimeoutError()
                     else:
-                        # No recent activity, task is stuck
+                        # Never received any output - startup failure
                         logger.warning(
-                            f"[crew] Task '{task.name}' appears stuck "
-                            f"(no output for {time_since_activity:.0f}s), stopping"
+                            f"[crew] Task '{task.name}' failed to start "
+                            f"(no output for {current_time - start_time:.0f}s), stopping"
                         )
+                        # Cancel stream_task before raising
+                        stream_task.cancel()
+                        try:
+                            await stream_task
+                        except (asyncio.CancelledError, asyncio.TimeoutError):
+                            pass
                         raise asyncio.TimeoutError()
                 else:
                     # Hard timeout or max extensions reached
+                    # Cancel stream_task before raising
+                    stream_task.cancel()
+                    try:
+                        await stream_task
+                    except (asyncio.CancelledError, asyncio.TimeoutError):
+                        pass
                     raise asyncio.TimeoutError()
 
-        return output, extended_count
+            except StopAsyncIteration:
+                # Stream ended normally
+                return output, extended_count
+
+            except asyncio.CancelledError:
+                # Outer cancellation - need to clean up stream_task
+                stream_task.cancel()
+                try:
+                    await stream_task
+                except (asyncio.CancelledError, asyncio.TimeoutError):
+                    pass
+                raise
 
     # ------------------------------------------------------------------
     # Human intervention
