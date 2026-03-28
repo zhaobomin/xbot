@@ -325,6 +325,16 @@ class MessageBus:
                 decision="deny",
                 reason="Timeout waiting for user response",
             )
+        except asyncio.CancelledError:
+            # Clean up on cancellation
+            async with self._permission_lock:
+                self._pending_permission_responses.pop(request_id, None)
+                self._permission_results.pop(request_id, None)
+                self._permission_requests.pop(request_id, None)
+                to_remove = [k for k, v in self._session_pending_requests.items() if v == request_id]
+                for k in to_remove:
+                    del self._session_pending_requests[k]
+            raise
 
     async def wait_interaction_response(
         self,
@@ -366,6 +376,16 @@ class MessageBus:
                 action="cancel",
                 content="Timeout waiting for user response",
             )
+        except asyncio.CancelledError:
+            # Clean up on cancellation
+            async with self._interaction_lock:
+                self._pending_interaction_responses.pop(request_id, None)
+                self._interaction_results.pop(request_id, None)
+                self._interaction_requests.pop(request_id, None)
+                to_remove = [k for k, v in self._session_pending_interactions.items() if v == request_id]
+                for k in to_remove:
+                    del self._session_pending_interactions[k]
+            raise
 
     async def submit_permission_response(self, resp: PermissionResponse) -> bool:
         """提交权限响应（从用户消息解析后调用）。
@@ -510,6 +530,7 @@ class MessageBus:
             if request_id:
                 self._pending_permission_responses.pop(request_id, None)
                 self._permission_results.pop(request_id, None)
+                self._permission_requests.pop(request_id, None)  # Fix: clean up request
                 del self._session_pending_requests[session_key]
                 cleared_permission = True
 
