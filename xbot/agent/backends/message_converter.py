@@ -11,7 +11,11 @@ from typing import TYPE_CHECKING, Any
 from loguru import logger
 
 from xbot.agent.capabilities import canonical_tool_name
-from xbot.agent.event_formatter import format_compact_event, format_task_notification
+from xbot.agent.event_formatter import (
+    format_compact_event,
+    format_rate_limit_event,
+    format_task_notification,
+)
 from xbot.agent.protocol import AgentResponse
 
 if TYPE_CHECKING:
@@ -22,6 +26,7 @@ if TYPE_CHECKING:
 try:
     from claude_agent_sdk.types import (
         AssistantMessage,
+        RateLimitEvent,
         ResultMessage,
         StreamEvent,
         SystemMessage,
@@ -91,6 +96,8 @@ class MessageConverter:
             return self._convert_system_message(message)
         elif isinstance(message, ResultMessage):
             return self._convert_result_message(message)
+        elif isinstance(message, RateLimitEvent):
+            return self._convert_rate_limit_event(message)
         return None
 
     def _convert_system_message(self, message: "SystemMessage") -> AgentResponse | None:
@@ -288,6 +295,21 @@ class MessageConverter:
                 "stop_reason": message.stop_reason,
                 "num_turns": message.num_turns,
                 "total_cost_usd": message.total_cost_usd,
+            },
+        )
+
+    def _convert_rate_limit_event(self, message: "RateLimitEvent") -> AgentResponse:
+        """Convert RateLimitEvent to AgentResponse."""
+        return AgentResponse(
+            content="",
+            progress_texts=[format_rate_limit_event(message.rate_limit_info)],
+            raw_message=message,
+            event_type="rate_limit",
+            event_data={
+                "status": getattr(message.rate_limit_info, "status", None),
+                "rate_limit_type": getattr(message.rate_limit_info, "rate_limit_type", None),
+                "resets_at": getattr(message.rate_limit_info, "resets_at", None),
+                "utilization": getattr(message.rate_limit_info, "utilization", None),
             },
         )
 

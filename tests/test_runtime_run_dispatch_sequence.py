@@ -10,6 +10,7 @@ import pytest
 from xbot.agent.runtime import AgentRuntime, SessionPhase, SessionStateMachine
 from xbot.agent.state_checker import StateConsistencyChecker
 from xbot.agent.state_coordinator import SessionStateCoordinator
+from xbot.agent.session_store import SessionStore
 from xbot.bus.events import InboundMessage, OutboundMessage
 
 
@@ -49,6 +50,7 @@ class _MockRuntimeForRun:
         self._running = False
         self._active_tasks: dict[str, list[asyncio.Task]] = {}
         self._session_locks: dict[str, asyncio.Lock] = {}
+        self._session_store = SessionStore()
         self._state_machine = SessionStateMachine()
         self._state_check_enabled = False
         self.sessions = None
@@ -62,7 +64,7 @@ class _MockRuntimeForRun:
         self.router._backend._active_task_ids = {}
         self.router._backend._client_last_used = {}
         self._state_checker = StateConsistencyChecker(self)
-        self._state_coordinator = SessionStateCoordinator(self)
+        self._state_coordinator = SessionStateCoordinator(self, self._session_store)
 
     async def initialize(self) -> None:
         return None

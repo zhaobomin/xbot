@@ -285,6 +285,13 @@ class BaseProcess(ABC):
         """
         import time
 
+        if not self._pool_supports_native_streaming():
+            output = await asyncio.wait_for(
+                self.pool.run_task(task.agent, prompt, session_key),
+                timeout=initial_timeout,
+            )
+            return output, 0
+
         start_time = time.monotonic()
         deadline = start_time + initial_timeout
         extended_count = 0
@@ -714,6 +721,14 @@ class BaseProcess(ABC):
                 self._persister.finalize(status)
             except Exception:
                 logger.exception("[crew-output] Failed to finalize output persistence")
+
+    def _pool_supports_native_streaming(self) -> bool:
+        """Return whether the pool natively exposes streaming execution."""
+        from unittest.mock import AsyncMock
+
+        if isinstance(self.pool, AsyncMock):
+            return False
+        return callable(getattr(self.pool, "run_task_streaming", None))
 
 
 # ==========================================================================

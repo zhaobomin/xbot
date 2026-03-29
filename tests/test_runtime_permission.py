@@ -5,6 +5,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from xbot.agent.session_store import SessionStore
 from xbot.bus.events import InboundMessage
 from xbot.bus.queue import InteractionRequest, MessageBus, PermissionResponse
 
@@ -32,8 +33,9 @@ class TestRuntimePermissionResponse:
         runtime._state_machine = SessionStateMachine()
         runtime._active_tasks = {}
         runtime._session_locks = {}
+        runtime._session_store = SessionStore()
         runtime._state_checker = StateConsistencyChecker(runtime)
-        runtime._state_coordinator = SessionStateCoordinator(runtime)
+        runtime._state_coordinator = SessionStateCoordinator(runtime, runtime._session_store)
 
         runtime._handle_permission_response = AgentRuntime._handle_permission_response.__get__(runtime, AgentRuntime)
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
@@ -283,8 +285,9 @@ class TestRuntimePermissionResponse:
         runtime._state_machine = SessionStateMachine()
         runtime._active_tasks = {}
         runtime._session_locks = {}
+        runtime._session_store = SessionStore()
         runtime._state_checker = StateConsistencyChecker(runtime)
-        runtime._state_coordinator = SessionStateCoordinator(runtime)
+        runtime._state_coordinator = SessionStateCoordinator(runtime, runtime._session_store)
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
 
         await bus.publish_interaction_request(
@@ -325,8 +328,9 @@ class TestRuntimePermissionResponse:
         runtime._state_machine = SessionStateMachine()
         runtime._active_tasks = {}
         runtime._session_locks = {}
+        runtime._session_store = SessionStore()
         runtime._state_checker = StateConsistencyChecker(runtime)
-        runtime._state_coordinator = SessionStateCoordinator(runtime)
+        runtime._state_coordinator = SessionStateCoordinator(runtime, runtime._session_store)
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
 
         await bus.publish_interaction_request(
@@ -363,8 +367,9 @@ class TestRuntimePermissionResponse:
         runtime._state_machine = SessionStateMachine()
         runtime._active_tasks = {}
         runtime._session_locks = {}
+        runtime._session_store = SessionStore()
         runtime._state_checker = StateConsistencyChecker(runtime)
-        runtime._state_coordinator = SessionStateCoordinator(runtime)
+        runtime._state_coordinator = SessionStateCoordinator(runtime, runtime._session_store)
         runtime._handle_permission_response = AgentRuntime._handle_permission_response.__get__(runtime, AgentRuntime)
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
 
@@ -413,8 +418,9 @@ class TestRuntimePermissionResponse:
         runtime._state_machine = SessionStateMachine()
         runtime._active_tasks = {}
         runtime._session_locks = {}
+        runtime._session_store = SessionStore()
         runtime._state_checker = StateConsistencyChecker(runtime)
-        runtime._state_coordinator = SessionStateCoordinator(runtime)
+        runtime._state_coordinator = SessionStateCoordinator(runtime, runtime._session_store)
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
 
         await bus.publish_interaction_request(
@@ -457,8 +463,9 @@ class TestRuntimePermissionResponse:
         runtime._state_machine = SessionStateMachine()
         runtime._active_tasks = {}
         runtime._session_locks = {}
+        runtime._session_store = SessionStore()
         runtime._state_checker = StateConsistencyChecker(runtime)
-        runtime._state_coordinator = SessionStateCoordinator(runtime)
+        runtime._state_coordinator = SessionStateCoordinator(runtime, runtime._session_store)
         runtime._handle_interaction_response = AgentRuntime._handle_interaction_response.__get__(runtime, AgentRuntime)
 
         await bus.publish_interaction_request(

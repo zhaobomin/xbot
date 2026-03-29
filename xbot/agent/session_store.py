@@ -68,7 +68,7 @@ class SessionEntry:
 
     # === Runtime state ===
     tasks: list[asyncio.Task] = field(default_factory=list)
-    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    lock: asyncio.Lock | None = field(default_factory=asyncio.Lock)
 
     # === State machine ===
     phase: SessionPhase = SessionPhase.IDLE
@@ -126,6 +126,25 @@ class SessionStore:
     def list_sdk_ids(self) -> set[str]:
         """List all SDK session IDs."""
         return set(self._sdk_id_index.keys())
+
+    def set_sdk_session_id(self, session_key: str, sdk_session_id: str | None) -> bool:
+        """Set SDK session ID and maintain reverse index."""
+        entry = self._entries.get(session_key)
+        if not entry:
+            return False
+
+        old_sdk_id = entry.sdk_session_id
+        if old_sdk_id and old_sdk_id != sdk_session_id:
+            self._sdk_id_index.pop(old_sdk_id, None)
+
+        entry.sdk_session_id = sdk_session_id
+        if sdk_session_id:
+            self._sdk_id_index[sdk_session_id] = session_key
+        return True
+
+    def clear_sdk_session_id(self, session_key: str) -> bool:
+        """Clear SDK session ID and reverse index."""
+        return self.set_sdk_session_id(session_key, None)
 
     def exists(self, session_key: str) -> bool:
         """Check if session exists."""
@@ -377,6 +396,7 @@ class SessionStore:
         if not entry:
             return False
 
+        setattr(task, "_xbot_session_key", session_key)
         entry.tasks.append(task)
         logger.debug(f"SessionStore: registered task for {session_key}")
         return True
@@ -408,6 +428,28 @@ class SessionStore:
         if not entry:
             return []
         return [t for t in entry.tasks if not t.done()]
+
+    def get_lock(self, session_key: str) -> asyncio.Lock | None:
+        """Get the current lock object for a session."""
+        entry = self._entries.get(session_key)
+        if not entry:
+            return None
+        return entry.lock
+
+    def get_or_create_lock(self, session_key: str) -> asyncio.Lock:
+        """Get or create the lock object for a session."""
+        entry = self.get_or_create(session_key)
+        if entry.lock is None:
+            entry.lock = asyncio.Lock()
+        return entry.lock
+
+    def release_lock(self, session_key: str) -> bool:
+        """Release lock ownership for a session while keeping the entry."""
+        entry = self._entries.get(session_key)
+        if not entry or entry.lock is None:
+            return False
+        entry.lock = None
+        return True
 
     async def cancel_all_tasks(self, session_key: str) -> int:
         """Cancel all active tasks for a session.
@@ -528,5 +570,6 @@ class SessionStore:
         return entry.model
 
     def has_lock(self, session_key: str) -> bool:
-        """Check if session has entry (lock is always in entry)."""
-        return session_key in self._entries
+        """Check if session currently has an attached lock object."""
+        entry = self._entries.get(session_key)
+        return entry is not None and entry.lock is not None

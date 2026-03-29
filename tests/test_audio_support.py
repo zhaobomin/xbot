@@ -144,7 +144,6 @@ def _make_flac() -> bytes:
     return b"fLaC\x00\x00\x00\x00" + b"\x00" * 100
 
 
-@pytest.mark.skip(reason="_build_audio_content_blocks method not implemented yet")
 class TestBuildAudioContentBlocks:
     """Tests for ClaudeSDKBackend._build_audio_content_blocks."""
 
@@ -347,7 +346,6 @@ class TestDetectAudioMime:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.skip(reason="Audio content block support not implemented yet")
 class TestBuildMultimodalQueryAudio:
     """Tests for ClaudeSDKBackend._build_multimodal_query with audio."""
 

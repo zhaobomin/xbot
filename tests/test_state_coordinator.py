@@ -4,6 +4,7 @@ import pytest
 import asyncio
 from unittest.mock import MagicMock
 
+from xbot.agent.session_store import SessionStore
 from xbot.agent.state_coordinator import SessionStateCoordinator, CoordinatorStats
 from xbot.agent.runtime import SessionPhase, SessionStateMachine
 
@@ -42,7 +43,7 @@ class TestSessionStateCoordinatorInit:
 
     def test_init(self, mock_runtime):
         """测试初始化"""
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
 
         assert coordinator._runtime is mock_runtime
         assert isinstance(coordinator._stats, CoordinatorStats)
@@ -55,7 +56,7 @@ class TestSessionStateCoordinatorPhaseRead:
         """测试获取阶段"""
         mock_runtime._state_machine.get_phase.return_value = SessionPhase.IDLE
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         phase = coordinator.get_phase("test:1")
 
         assert phase == SessionPhase.IDLE
@@ -65,7 +66,7 @@ class TestSessionStateCoordinatorPhaseRead:
         """测试多次获取阶段"""
         mock_runtime._state_machine.get_phase.return_value = SessionPhase.RUNNING
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         coordinator.get_phase("test:1")
         coordinator.get_phase("test:2")
 
@@ -76,7 +77,7 @@ class TestSessionStateCoordinatorPhaseRead:
         mock_state = MagicMock()
         mock_runtime._state_machine.get_state.return_value = mock_state
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         state = coordinator.get_state("test:1")
 
         assert state is mock_state
@@ -86,7 +87,7 @@ class TestSessionStateCoordinatorPhaseRead:
         mock_runtime._state_machine._states = {"test:1": MagicMock()}
         mock_runtime._state_machine.has_session.side_effect = lambda key: key in mock_runtime._state_machine._states
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         assert coordinator.has_session("test:1") is True
 
     def test_has_session_false(self, mock_runtime):
@@ -94,7 +95,7 @@ class TestSessionStateCoordinatorPhaseRead:
         mock_runtime._state_machine._states = {}
         mock_runtime._state_machine.has_session.side_effect = lambda key: key in mock_runtime._state_machine._states
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         assert coordinator.has_session("test:1") is False
 
 
@@ -106,7 +107,7 @@ class TestSessionStateCoordinatorTransition:
         mock_runtime._state_machine.get_phase.return_value = SessionPhase.IDLE
         mock_runtime._state_machine.transition.return_value = True
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         result = coordinator.transition(
             "test:1", SessionPhase.RUNNING, reason="start"
         )
@@ -120,7 +121,7 @@ class TestSessionStateCoordinatorTransition:
         mock_runtime._state_machine.get_phase.return_value = SessionPhase.IDLE
         mock_runtime._state_machine.transition.return_value = False
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         result = coordinator.transition(
             "test:1", SessionPhase.WAITING_PERMISSION, reason="test"
         )
@@ -133,7 +134,7 @@ class TestSessionStateCoordinatorTransition:
         mock_runtime._state_machine.get_phase.return_value = SessionPhase.ERROR
         mock_runtime._state_machine.force_transition.return_value = True
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         result = coordinator.force_transition(
             "test:1", SessionPhase.IDLE, reason="recovery"
         )
@@ -147,28 +148,28 @@ class TestSessionStateCoordinatorTasks:
 
     def test_register_task(self, mock_runtime):
         """测试注册任务"""
-        mock_runtime._active_tasks = {}
-
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
 
         task = MagicMock(spec=asyncio.Task)
         task.get_name.return_value = "test-task"
 
         coordinator.register_task("test:1", task)
 
-        assert "test:1" in mock_runtime._active_tasks
-        assert task in mock_runtime._active_tasks["test:1"]
+        entry = mock_runtime._session_store.get("test:1")
+        assert entry is not None
+        assert task in entry.tasks
         assert coordinator._stats.tasks_created == 1
 
     def test_unregister_task(self, mock_runtime):
         """测试注销任务"""
         task = MagicMock(spec=asyncio.Task)
-        mock_runtime._active_tasks = {"test:1": [task]}
+        entry = mock_runtime._session_store.get_or_create("test:1")
+        entry.tasks = [task]
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         coordinator.unregister_task("test:1", task)
 
-        assert task not in mock_runtime._active_tasks["test:1"]
+        assert task not in entry.tasks
         assert coordinator._stats.tasks_completed == 1
 
     def test_get_active_tasks(self, mock_runtime):
@@ -179,9 +180,10 @@ class TestSessionStateCoordinatorTasks:
         active_task = MagicMock(spec=asyncio.Task)
         active_task.done.return_value = False
 
-        mock_runtime._active_tasks = {"test:1": [done_task, active_task]}
+        entry = mock_runtime._session_store.get_or_create("test:1")
+        entry.tasks = [done_task, active_task]
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         tasks = coordinator.get_active_tasks("test:1")
 
         assert len(tasks) == 1
@@ -189,9 +191,7 @@ class TestSessionStateCoordinatorTasks:
 
     def test_get_active_tasks_empty(self, mock_runtime):
         """测试获取活跃任务 - 空的"""
-        mock_runtime._active_tasks = {}
-
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         tasks = coordinator.get_active_tasks("test:1")
 
         assert tasks == []
@@ -200,16 +200,15 @@ class TestSessionStateCoordinatorTasks:
         """测试有活跃任务"""
         active_task = MagicMock(spec=asyncio.Task)
         active_task.done.return_value = False
-        mock_runtime._active_tasks = {"test:1": [active_task]}
+        entry = mock_runtime._session_store.get_or_create("test:1")
+        entry.tasks = [active_task]
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         assert coordinator.has_active_tasks("test:1") is True
 
     def test_has_active_tasks_false(self, mock_runtime):
         """测试无活跃任务"""
-        mock_runtime._active_tasks = {}
-
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         assert coordinator.has_active_tasks("test:1") is False
 
     def test_cancel_active_tasks(self, mock_runtime):
@@ -221,21 +220,20 @@ class TestSessionStateCoordinatorTasks:
         task2 = MagicMock(spec=asyncio.Task)
         task2.done.return_value = True
 
-        mock_runtime._active_tasks = {"test:1": [task1, task2]}
+        entry = mock_runtime._session_store.get_or_create("test:1")
+        entry.tasks = [task1, task2]
 
-        coordinator = SessionStateCoordinator(mock_runtime)
-        cancelled = coordinator.cancel_active_tasks("test:1")
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
+        cancelled = asyncio.run(coordinator.cancel_active_tasks("test:1"))
 
         assert cancelled == 1
         task1.cancel.assert_called_once()
-        assert "test:1" not in mock_runtime._active_tasks
+        assert entry.tasks == []
 
     def test_cancel_active_tasks_no_tasks(self, mock_runtime):
         """测试取消活跃任务 - 无任务"""
-        mock_runtime._active_tasks = {}
-
-        coordinator = SessionStateCoordinator(mock_runtime)
-        cancelled = coordinator.cancel_active_tasks("test:1")
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
+        cancelled = asyncio.run(coordinator.cancel_active_tasks("test:1"))
 
         assert cancelled == 0
 
@@ -245,21 +243,19 @@ class TestSessionStateCoordinatorLocks:
 
     def test_get_lock_create(self, mock_runtime):
         """测试创建锁"""
-        mock_runtime._session_locks = {}
-
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         lock = coordinator.get_lock("test:1")
 
         assert lock is not None
-        assert "test:1" in mock_runtime._session_locks
+        assert mock_runtime._session_store.has_lock("test:1") is True
         assert coordinator._stats.locks_created == 1
 
     def test_get_lock_existing(self, mock_runtime):
         """测试获取已存在的锁"""
         existing_lock = asyncio.Lock()
-        mock_runtime._session_locks = {"test:1": existing_lock}
+        mock_runtime._session_store.get_or_create("test:1").lock = existing_lock
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         lock = coordinator.get_lock("test:1")
 
         assert lock is existing_lock
@@ -267,36 +263,32 @@ class TestSessionStateCoordinatorLocks:
 
     def test_release_lock(self, mock_runtime):
         """测试释放锁"""
-        mock_runtime._session_locks = {"test:1": asyncio.Lock()}
+        mock_runtime._session_store.get_or_create("test:1")
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         result = coordinator.release_lock("test:1")
 
         assert result is True
-        assert "test:1" not in mock_runtime._session_locks
+        assert mock_runtime._session_store.has_lock("test:1") is False
         assert coordinator._stats.locks_released == 1
 
     def test_release_lock_not_exists(self, mock_runtime):
         """测试释放不存在的锁"""
-        mock_runtime._session_locks = {}
-
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         result = coordinator.release_lock("test:1")
 
         assert result is False
 
     def test_has_lock_true(self, mock_runtime):
         """测试锁存在"""
-        mock_runtime._session_locks = {"test:1": asyncio.Lock()}
+        mock_runtime._session_store.get_or_create("test:1")
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         assert coordinator.has_lock("test:1") is True
 
     def test_has_lock_false(self, mock_runtime):
         """测试锁不存在"""
-        mock_runtime._session_locks = {}
-
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         assert coordinator.has_lock("test:1") is False
 
 
@@ -312,19 +304,19 @@ class TestSessionStateCoordinatorCleanup:
         task = MagicMock(spec=asyncio.Task)
         task.done.return_value = False
         task.cancel = MagicMock()
-        mock_runtime._active_tasks = {"test:1": [task]}
+        entry = mock_runtime._session_store.get_or_create("test:1")
+        entry.tasks = [task]
+        entry.lock = asyncio.Lock()
 
-        mock_runtime._session_locks = {"test:1": asyncio.Lock()}
-
-        coordinator = SessionStateCoordinator(mock_runtime)
-        result = coordinator.cleanup_session("test:1")
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
+        result = asyncio.run(coordinator.cleanup_session("test:1"))
 
         assert result["tasks_cancelled"] == 1
         assert result["lock_released"] is True
         assert result["state_cleared"] is True
         assert "test:1" not in mock_runtime._state_machine._states
-        assert "test:1" not in mock_runtime._active_tasks
-        assert "test:1" not in mock_runtime._session_locks
+        assert entry.tasks == []
+        assert entry.lock is None
 
 
 class TestSessionStateCoordinatorStats:
@@ -332,7 +324,7 @@ class TestSessionStateCoordinatorStats:
 
     def test_get_stats(self, mock_runtime):
         """测试获取统计"""
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         coordinator._stats.phase_transitions = 5
 
         stats = coordinator.get_stats()
@@ -341,7 +333,7 @@ class TestSessionStateCoordinatorStats:
 
     def test_reset_stats(self, mock_runtime):
         """测试重置统计"""
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         coordinator._stats.phase_transitions = 10
 
         coordinator.reset_stats()
@@ -359,7 +351,7 @@ class TestSessionStateCoordinatorConsistency:
         snapshot.inconsistencies = []
         mock_runtime._state_checker.check_session.return_value = snapshot
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         is_consistent, issues = coordinator.check_consistency("test:1")
 
         assert is_consistent is True
@@ -372,7 +364,7 @@ class TestSessionStateCoordinatorConsistency:
         snapshot.inconsistencies = ["Issue 1", "Issue 2"]
         mock_runtime._state_checker.check_session.return_value = snapshot
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         is_consistent, issues = coordinator.check_consistency("test:1")
 
         assert is_consistent is False
@@ -388,7 +380,7 @@ class TestSessionStateCoordinatorExport:
         snapshot.to_dict.return_value = {"phase": "idle"}
         mock_runtime._state_checker.check_session.return_value = snapshot
 
-        coordinator = SessionStateCoordinator(mock_runtime)
+        coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
         result = coordinator.export_state("test:1")
 
         assert result == {"phase": "idle"}
@@ -414,6 +406,7 @@ def mock_runtime():
 
     runtime._active_tasks = {}
     runtime._session_locks = {}
+    runtime._session_store = SessionStore()
 
     state_checker = MagicMock()
     state_checker.check_session = MagicMock()
@@ -432,6 +425,7 @@ def mock_runtime_with_state_machine():
     runtime._state_machine = SessionStateMachine()
     runtime._active_tasks = {}
     runtime._session_locks = {}
+    runtime._session_store = SessionStore()
 
     state_checker = MagicMock()
     snapshot = MagicMock()

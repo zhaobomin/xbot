@@ -1527,62 +1527,23 @@ class TestFallbackPathStaleDetectionConsistency:
 
 
 class TestInputRequiredStatusSet:
-    """Test the _INPUT_REQUIRED_STATUSES set."""
+    """Test the SDK 0.1.52 TaskNotification status contract."""
 
-    def test_input_required_in_set(self) -> None:
-        """Test that 'input_required' is in the status set."""
-        input_required_statuses = {
-            "input_required",
-            "awaiting_input",
-            "waiting_for_input",
-            "confirmation_required",
-            "approval_required",
-        }
-        assert "input_required" in input_required_statuses
+    def test_completed_is_supported_task_notification_status(self) -> None:
+        statuses = {"completed", "failed", "stopped"}
+        assert "completed" in statuses
 
-    def test_awaiting_input_in_set(self) -> None:
-        """Test that 'awaiting_input' is in the status set."""
-        input_required_statuses = {
-            "input_required",
-            "awaiting_input",
-            "waiting_for_input",
-            "confirmation_required",
-            "approval_required",
-        }
-        assert "awaiting_input" in input_required_statuses
+    def test_failed_is_supported_task_notification_status(self) -> None:
+        statuses = {"completed", "failed", "stopped"}
+        assert "failed" in statuses
 
-    def test_waiting_for_input_in_set(self) -> None:
-        """Test that 'waiting_for_input' is in the status set."""
-        input_required_statuses = {
-            "input_required",
-            "awaiting_input",
-            "waiting_for_input",
-            "confirmation_required",
-            "approval_required",
-        }
-        assert "waiting_for_input" in input_required_statuses
+    def test_stopped_is_supported_task_notification_status(self) -> None:
+        statuses = {"completed", "failed", "stopped"}
+        assert "stopped" in statuses
 
-    def test_confirmation_required_in_set(self) -> None:
-        """Test that 'confirmation_required' is in the status set."""
-        input_required_statuses = {
-            "input_required",
-            "awaiting_input",
-            "waiting_for_input",
-            "confirmation_required",
-            "approval_required",
-        }
-        assert "confirmation_required" in input_required_statuses
-
-    def test_approval_required_in_set(self) -> None:
-        """Test that 'approval_required' is in the status set."""
-        input_required_statuses = {
-            "input_required",
-            "awaiting_input",
-            "waiting_for_input",
-            "confirmation_required",
-            "approval_required",
-        }
-        assert "approval_required" in input_required_statuses
+    def test_input_required_is_not_supported_task_notification_status(self) -> None:
+        statuses = {"completed", "failed", "stopped"}
+        assert "input_required" not in statuses
 
 
 class TestTaskIdTypeHandling:

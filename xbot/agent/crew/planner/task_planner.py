@@ -106,7 +106,7 @@ class TaskPlanner:
                     dependencies=dependencies,
                     expected_output=item.get("expected_output") or "",
                     timeout=timeout,
-                    human_review=LLMValidator.validate_boolean(item.get("human_review")),
+                    human_review=self._parse_human_review(item.get("human_review")),
                 ))
             else:
                 skipped_tasks += 1
@@ -119,6 +119,10 @@ class TaskPlanner:
             logger.warning(f"Total {skipped_tasks} task(s) skipped due to missing agents")
 
         return tasks
+
+    def _parse_human_review(self, value: object) -> bool:
+        """Parse legacy human_review values using the unified validator."""
+        return LLMValidator.validate_boolean(value)
 
     def _heuristic_planning(
         self,

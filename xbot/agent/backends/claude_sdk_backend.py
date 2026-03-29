@@ -35,7 +35,7 @@ from xbot.config.provider_registry import get_provider_spec
 from xbot.config.sdk_resolver import detect_provider_from_model, resolve_sdk_provider_and_model
 from xbot.config.schema import AgentsConfig, ProviderConfig
 from xbot.session.manager import SessionManager
-from xbot.utils.helpers import detect_image_mime
+from xbot.utils.helpers import detect_audio_mime, detect_image_mime
 from xbot.utils.file_reader import FileType, classify_file, format_file_reference
 
 if TYPE_CHECKING:
@@ -93,13 +93,6 @@ class ClaudeSDKBackend(AgentBackend):
     """
 
     name = "claude_sdk"
-    _INPUT_REQUIRED_STATUSES = {
-        "input_required",
-        "awaiting_input",
-        "waiting_for_input",
-        "confirmation_required",
-        "approval_required",
-    }
     _MAX_QUERY_RETRIES = 3  # Max retries when SDK returns stale task notifications instead of ResultMessage
 
     # Default client pool constants (can be overridden by config)
@@ -168,29 +161,43 @@ class ClaudeSDKBackend(AgentBackend):
 
     # === SessionStore helper methods ===
 
+    def _uses_session_store(self) -> bool:
+        """Return whether SessionStore-backed state is active."""
+        return bool(getattr(self, "_use_session_store", False) and getattr(self, "_session_store", None))
+
+    def _get_session_contexts(self) -> dict[str, Any]:
+        """Return legacy session context mapping."""
+        return getattr(self, "_shared_resources", {}).setdefault("_session_contexts", {})
+
+    def _get_sdk_session_index(self) -> dict[str, str]:
+        """Return legacy reverse SDK session index."""
+        if not hasattr(self, "_sdk_session_ids"):
+            self._sdk_session_ids = {}
+        return self._sdk_session_ids
+
     def _get_entry(self, session_key: str) -> "SessionEntry | None":
         """Get SessionEntry from SessionStore or return None."""
-        if self._use_session_store and self._session_store:
+        if self._uses_session_store():
             return self._session_store.get(session_key)
         return None
 
     def _get_or_create_entry(self, session_key: str) -> "SessionEntry":
         """Get or create SessionEntry from SessionStore."""
-        if self._use_session_store and self._session_store:
+        if self._uses_session_store():
             return self._session_store.get_or_create(session_key)
         # Fallback - shouldn't happen when _use_session_store is True
         raise RuntimeError("SessionStore not available")
 
     def _get_model_from_entry(self, session_key: str) -> str | None:
         """Get model name from SessionEntry or legacy dict."""
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_entry(session_key)
             return entry.model if entry else None
         return self._client_models.get(session_key)
 
     def _set_model_in_entry(self, session_key: str, model: str) -> None:
         """Set model name in SessionEntry or legacy dict."""
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_or_create_entry(session_key)
             entry.model = model
         else:
@@ -198,14 +205,14 @@ class ClaudeSDKBackend(AgentBackend):
 
     def _get_skills_version_from_entry(self, session_key: str) -> str | None:
         """Get skills version from SessionEntry or legacy dict."""
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_entry(session_key)
             return entry.skills_version if entry else None
         return self._client_skills_versions.get(session_key)
 
     def _set_skills_version_in_entry(self, session_key: str, version: str | None) -> None:
         """Set skills version in SessionEntry or legacy dict."""
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_or_create_entry(session_key)
             entry.skills_version = version
         else:
@@ -213,14 +220,14 @@ class ClaudeSDKBackend(AgentBackend):
 
     def _get_commands_from_entry(self, session_key: str) -> list[str]:
         """Get commands list from SessionEntry or legacy dict."""
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_entry(session_key)
             return entry.commands if entry else []
         return self._session_commands.get(session_key, [])
 
     def _set_commands_in_entry(self, session_key: str, commands: list[str]) -> None:
         """Set commands list in SessionEntry or legacy dict."""
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_or_create_entry(session_key)
             entry.commands = commands
         else:
@@ -228,14 +235,14 @@ class ClaudeSDKBackend(AgentBackend):
 
     def _get_last_used_from_entry(self, session_key: str) -> float | None:
         """Get last used timestamp from SessionEntry or legacy dict."""
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_entry(session_key)
             return entry.last_used if entry else None
         return self._client_last_used.get(session_key)
 
     def _touch_entry(self, session_key: str) -> None:
         """Update last_used timestamp in SessionEntry or legacy dict."""
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_entry(session_key)
             if entry:
                 entry.touch()
@@ -244,14 +251,14 @@ class ClaudeSDKBackend(AgentBackend):
 
     def _get_task_id_from_entry(self, session_key: str) -> str | None:
         """Get active task ID from SessionEntry or legacy dict."""
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_entry(session_key)
             return entry.task_id if entry else None
         return self._active_task_ids.get(session_key)
 
     def _set_task_id_in_entry(self, session_key: str, task_id: str | None) -> None:
         """Set active task ID in SessionEntry or legacy dict."""
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_or_create_entry(session_key)
             entry.task_id = task_id
         else:
@@ -262,14 +269,14 @@ class ClaudeSDKBackend(AgentBackend):
 
     def _get_request_id_from_entry(self, session_key: str) -> str | None:
         """Get request ID from SessionEntry or legacy dict."""
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_entry(session_key)
             return entry.request_id if entry else None
         return self._active_request_ids.get(session_key)
 
     def _set_request_id_in_entry(self, session_key: str, request_id: str | None) -> None:
         """Set request ID in SessionEntry or legacy dict."""
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_or_create_entry(session_key)
             entry.request_id = request_id
         else:
@@ -280,14 +287,14 @@ class ClaudeSDKBackend(AgentBackend):
 
     def _get_client_from_entry(self, session_key: str) -> "ClaudeSDKClient | None":
         """Get SDK client from SessionEntry or legacy dict."""
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_entry(session_key)
             return entry.client if entry else None
         return self._clients.get(session_key)
 
     def _set_client_in_entry(self, session_key: str, client: "ClaudeSDKClient") -> None:
         """Set SDK client in SessionEntry or legacy dict."""
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_or_create_entry(session_key)
             entry.client = client
         else:
@@ -295,7 +302,7 @@ class ClaudeSDKBackend(AgentBackend):
 
     def _has_client_in_entry(self, session_key: str) -> bool:
         """Check if session has client in SessionEntry or legacy dict."""
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_entry(session_key)
             return entry is not None and entry.client is not None
         return session_key in self._clients
@@ -303,11 +310,21 @@ class ClaudeSDKBackend(AgentBackend):
     # === SDK session ID and context helpers ===
 
     def _get_sdk_session_id_from_entry(self, session_key: str) -> str | None:
-        """Get SDK session ID from SessionEntry."""
-        if self._use_session_store:
+        """Get SDK session ID from SessionEntry or legacy mappings."""
+        if self._uses_session_store():
             entry = self._get_entry(session_key)
             return entry.sdk_session_id if entry else None
-        return None  # Legacy mode doesn't have this
+
+        session_contexts = self._get_session_contexts()
+        value = session_contexts.get(session_key)
+        if isinstance(value, str):
+            return value
+
+        for sdk_session_id, mapped_session_key in self._get_sdk_session_index().items():
+            if mapped_session_key == session_key:
+                return sdk_session_id
+
+        return None
 
     async def _set_sdk_session_id_in_entry(
         self, session_key: str, sdk_session_id: str | None
@@ -316,20 +333,9 @@ class ClaudeSDKBackend(AgentBackend):
 
         Also syncs to session.metadata for persistence.
         """
-        if self._use_session_store:
-            entry = self._get_or_create_entry(session_key)
-            old_sdk_id = entry.sdk_session_id
-
-            # Clear old index if exists
-            if old_sdk_id and old_sdk_id != sdk_session_id:
-                self._session_store._sdk_id_index.pop(old_sdk_id, None)
-
-            # Set new value
-            entry.sdk_session_id = sdk_session_id
-
-            # Update index
-            if sdk_session_id:
-                self._session_store._sdk_id_index[sdk_session_id] = session_key
+        if self._uses_session_store():
+            self._get_or_create_entry(session_key)
+            self._session_store.set_sdk_session_id(session_key, sdk_session_id)
 
             # Sync to session.metadata for persistence
             if self.sessions:
@@ -340,19 +346,47 @@ class ClaudeSDKBackend(AgentBackend):
                     else:
                         session.metadata.pop("sdk_session_id", None)
                     self.sessions.save(session)
+            return
+
+        session_contexts = self._get_session_contexts()
+        sdk_session_ids = self._get_sdk_session_index()
+
+        old_sdk_id = self._get_sdk_session_id_from_entry(session_key)
+        if old_sdk_id and old_sdk_id != sdk_session_id:
+            sdk_session_ids.pop(old_sdk_id, None)
+            if session_contexts.get(session_key) == old_sdk_id:
+                session_contexts.pop(session_key, None)
+            if isinstance(session_contexts.get(old_sdk_id), tuple):
+                session_contexts.pop(old_sdk_id, None)
+
+        if sdk_session_id:
+            session_contexts[session_key] = sdk_session_id
+            sdk_session_ids[sdk_session_id] = session_key
+        else:
+            if session_contexts.get(session_key) == old_sdk_id or isinstance(session_contexts.get(session_key), str):
+                session_contexts.pop(session_key, None)
+
+        if self.sessions:
+            session = self.sessions.get(session_key)
+            if session:
+                if sdk_session_id:
+                    session.metadata["sdk_session_id"] = sdk_session_id
+                else:
+                    session.metadata.pop("sdk_session_id", None)
+                self.sessions.save(session)
 
     def _get_context_by_session_key(self, session_key: str) -> tuple[str, str] | None:
         """Get (channel, chat_id) context by session_key.
 
         Uses SessionStore if available, falls back to _session_contexts.
         """
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_entry(session_key)
             if entry and entry.channel and entry.chat_id:
                 return (entry.channel, entry.chat_id)
 
         # Fallback to _session_contexts
-        session_contexts = self._shared_resources.get("_session_contexts", {})
+        session_contexts = self._get_session_contexts()
         result = session_contexts.get(session_key)
         return result if isinstance(result, tuple) else None
 
@@ -361,13 +395,13 @@ class ClaudeSDKBackend(AgentBackend):
 
         Uses SessionStore's _sdk_id_index if available, falls back to _session_contexts.
         """
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._session_store.get_by_sdk_id(sdk_session_id)
             if entry and entry.channel and entry.chat_id:
                 return (entry.channel, entry.chat_id)
 
         # Fallback to _session_contexts
-        session_contexts = self._shared_resources.get("_session_contexts", {})
+        session_contexts = self._get_session_contexts()
         result = session_contexts.get(sdk_session_id)
         return result if isinstance(result, tuple) else None
 
@@ -376,13 +410,13 @@ class ClaudeSDKBackend(AgentBackend):
 
         Also updates _session_contexts for backward compatibility during migration.
         """
-        if self._use_session_store:
+        if self._uses_session_store():
             entry = self._get_or_create_entry(session_key)
             entry.channel = channel
             entry.chat_id = chat_id
 
         # Also update _session_contexts for backward compatibility
-        session_contexts = self._shared_resources.setdefault("_session_contexts", {})
+        session_contexts = self._get_session_contexts()
         session_contexts[session_key] = (channel, chat_id)
 
     def _set_sdk_context_mapping(self, sdk_session_id: str, channel: str, chat_id: str) -> None:
@@ -391,7 +425,7 @@ class ClaudeSDKBackend(AgentBackend):
         In SessionStore mode, updates the entry's sdk_session_id.
         Also updates _session_contexts for backward compatibility.
         """
-        if self._use_session_store:
+        if self._uses_session_store():
             # Find entry by context and set sdk_session_id
             for session_key in self._session_store.list_keys():
                 entry = self._session_store.get(session_key)
@@ -405,8 +439,83 @@ class ClaudeSDKBackend(AgentBackend):
                     break
 
         # Also update _session_contexts for backward compatibility
-        session_contexts = self._shared_resources.setdefault("_session_contexts", {})
+        session_contexts = self._get_session_contexts()
         session_contexts[sdk_session_id] = (channel, chat_id)
+
+    def _resolve_sdk_session_id(self, session_key: str) -> str | None:
+        """Resolve SDK session ID from entry, metadata, or legacy mappings."""
+        sdk_session_id = self._get_sdk_session_id_from_entry(session_key)
+        if sdk_session_id:
+            return sdk_session_id
+
+        session_contexts = self._get_session_contexts()
+        legacy_sdk_id = session_contexts.get(session_key)
+        if isinstance(legacy_sdk_id, str):
+            return legacy_sdk_id
+
+        for candidate_sdk_id, mapped_session_key in self._get_sdk_session_index().items():
+            if mapped_session_key == session_key:
+                return candidate_sdk_id
+
+        if self.sessions:
+            session = self.sessions.get(session_key)
+            if session:
+                sdk_session_id = session.metadata.get("sdk_session_id")
+                if sdk_session_id:
+                    return sdk_session_id
+
+        return None
+
+    def _clear_legacy_tracking_state(self, session_key: str, sdk_session_id: str | None) -> None:
+        """Clear legacy tracking dictionaries for a session."""
+        self._clients.pop(session_key, None)
+        self._client_last_used.pop(session_key, None)
+        self._client_models.pop(session_key, None)
+        self._client_skills_versions.pop(session_key, None)
+        self._session_commands.pop(session_key, None)
+        self._active_task_ids.pop(session_key, None)
+        self._active_request_ids.pop(session_key, None)
+
+        session_contexts = self._get_session_contexts()
+        session_contexts.pop(session_key, None)
+
+        if sdk_session_id:
+            self._get_sdk_session_index().pop(sdk_session_id, None)
+            if isinstance(session_contexts.get(sdk_session_id), tuple):
+                session_contexts.pop(sdk_session_id, None)
+
+    async def _clear_sdk_session_state(
+        self,
+        session_key: str,
+        sdk_session_id: str | None,
+        *,
+        persist_metadata: bool = True,
+    ) -> None:
+        """Clear SDK session state from SessionStore or legacy dicts."""
+        if self._uses_session_store():
+            entry = self._get_or_create_entry(session_key)
+            entry.client = None
+            entry.model = ""
+            entry.skills_version = None
+            entry.commands = []
+            entry.task_id = None
+            entry.request_id = None
+            entry.tasks.clear()
+
+        self._clear_legacy_tracking_state(session_key, sdk_session_id)
+
+        if persist_metadata:
+            await self._set_sdk_session_id_in_entry(session_key, None)
+            if self.sessions:
+                session = self.sessions.get(session_key)
+                if session:
+                    session.metadata.pop("sdk_session_id", None)
+                    self.sessions.save(session)
+        else:
+            if self._uses_session_store():
+                entry = self._get_entry(session_key)
+                if entry:
+                    self._session_store.clear_sdk_session_id(session_key)
 
     async def initialize(self, config: AgentsConfig, shared_resources: dict[str, Any]) -> None:
         """Initialize the backend.
@@ -734,7 +843,7 @@ class ClaudeSDKBackend(AgentBackend):
             clients_to_disconnect.extend((c, k, "TTL expiry") for c, k in stale_clients)
 
             # Evict LRU client if at capacity
-            if self._use_session_store:
+            if self._uses_session_store():
                 # Count sessions with clients
                 client_count = sum(
                     1 for k in self._session_store.list_keys()
@@ -804,7 +913,7 @@ class ClaudeSDKBackend(AgentBackend):
 
         # Get client and clear all state
         client = None
-        if self._use_session_store:
+        if self._uses_session_store():
             # Use SessionStore - clear entry state
             entry = self._get_entry(session_key)
             if entry:
@@ -817,10 +926,7 @@ class ClaudeSDKBackend(AgentBackend):
                 entry.request_id = None
                 entry.tasks.clear()  # Clear tasks list
                 # Clear SDK session ID and update index
-                old_sdk_id = entry.sdk_session_id
-                if old_sdk_id:
-                    self._session_store._sdk_id_index.pop(old_sdk_id, None)
-                entry.sdk_session_id = None
+                self._session_store.clear_sdk_session_id(session_key)
                 entry.touch()  # Update last_used
         else:
             # Legacy dict cleanup
@@ -940,6 +1046,8 @@ class ClaudeSDKBackend(AgentBackend):
 
     _MAX_IMAGE_BYTES = 20 * 1024 * 1024  # Anthropic 20 MB limit
     _SUPPORTED_IMAGE_MIMES = {"image/png", "image/jpeg", "image/gif", "image/webp"}
+    _MAX_AUDIO_BYTES = 25 * 1024 * 1024  # Anthropic audio limit
+    _SUPPORTED_AUDIO_MIMES = {"audio/mp3", "audio/wav", "audio/ogg", "audio/flac", "audio/mp4"}
 
     def _build_image_content_blocks(self, media: list[str]) -> list[dict[str, Any]]:
         """Convert local image files to Anthropic-format image content blocks."""
@@ -967,31 +1075,67 @@ class ClaudeSDKBackend(AgentBackend):
             })
         return blocks
 
-    def _build_file_content_blocks(
-        self, media: list[str]
-    ) -> tuple[list[dict[str, Any]], list[str]]:
-        """Classify media into file reference blocks and image paths.
+    def _build_audio_content_blocks(self, media: list[str]) -> list[dict[str, Any]]:
+        """Convert local audio files to Anthropic-format audio content blocks."""
+        blocks: list[dict[str, Any]] = []
+        for path in media:
+            p = Path(path)
+            if not p.is_file():
+                logger.warning("Audio file not found, skipping: {}", path)
+                continue
+            if p.stat().st_size > self._MAX_AUDIO_BYTES:
+                logger.warning("Audio too large (>25 MB), skipping: {}", path)
+                continue
+            raw = p.read_bytes()
+            mime = detect_audio_mime(raw[:12])
+            if not mime or mime not in self._SUPPORTED_AUDIO_MIMES:
+                logger.warning("Unsupported audio format ({}), skipping: {}", mime, path)
+                continue
+            blocks.append({
+                "type": "audio",
+                "source": {
+                    "type": "base64",
+                    "media_type": mime,
+                    "data": base64.b64encode(raw).decode(),
+                },
+            })
+        return blocks
 
-        Returns ``(file_ref_blocks, image_paths)`` where *file_ref_blocks*
+    def _classify_media_paths(
+        self, media: list[str]
+    ) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+        """Classify media into file references, image paths, and audio paths.
+
+        Returns ``(file_ref_blocks, image_paths, audio_paths)`` where *file_ref_blocks*
         is a list of text content blocks containing path references for
-        non-image files, and *image_paths* is the subset that should be
-        sent as base64 image content blocks.
+        regular files, while *image_paths* and *audio_paths* are the subsets
+        that should be sent as base64 content blocks.
         """
         image_paths: list[str] = []
+        audio_paths: list[str] = []
         file_refs: list[str] = []
         for path in media:
             ft = classify_file(path)
             if ft is FileType.IMAGE:
                 image_paths.append(path)
+            elif ft is FileType.AUDIO:
+                audio_paths.append(path)
             else:
                 ref = format_file_reference(path)
                 file_refs.append(ref)
                 logger.info("[Backend] File reference: {}", ref)
         if not file_refs:
-            return [], image_paths
+            return [], image_paths, audio_paths
         header = "用户附加了以下文件，你可以通过工具读取或修改这些文件:"
         block_text = header + "\n" + "\n".join(file_refs)
-        return [{"type": "text", "text": block_text}], image_paths
+        return [{"type": "text", "text": block_text}], image_paths, audio_paths
+
+    def _build_file_content_blocks(
+        self, media: list[str]
+    ) -> tuple[list[dict[str, Any]], list[str]]:
+        """Backward-compatible wrapper returning file refs and image paths."""
+        file_ref_blocks, image_paths, _audio_paths = self._classify_media_paths(media)
+        return file_ref_blocks, image_paths
 
     async def _build_multimodal_query(
         self,
@@ -1006,10 +1150,11 @@ class ClaudeSDKBackend(AgentBackend):
             media: List of media file paths
             session_id: SDK session identifier
         """
-        file_ref_blocks, image_paths = self._build_file_content_blocks(media)
+        file_ref_blocks, image_paths, audio_paths = self._classify_media_paths(media)
         image_blocks = self._build_image_content_blocks(image_paths)
+        audio_blocks = self._build_audio_content_blocks(audio_paths)
 
-        all_blocks = image_blocks + file_ref_blocks
+        all_blocks = image_blocks + audio_blocks + file_ref_blocks
         if not all_blocks:
             # Everything failed – fall back to plain text
             content: str | list[dict[str, Any]] = prompt
@@ -1037,7 +1182,7 @@ class ClaudeSDKBackend(AgentBackend):
         now = time.time()
         stale_keys = []
 
-        if self._use_session_store:
+        if self._uses_session_store():
             # Use SessionStore for TTL cleanup
             for session_key in self._session_store.list_keys():
                 entry = self._session_store.get(session_key)
@@ -1073,7 +1218,7 @@ class ClaudeSDKBackend(AgentBackend):
         """
         # Find sessions with clients
         client_sessions = {}
-        if self._use_session_store:
+        if self._uses_session_store():
             for session_key in self._session_store.list_keys():
                 entry = self._session_store.get(session_key)
                 if entry and entry.client is not None:
@@ -1164,7 +1309,7 @@ class ClaudeSDKBackend(AgentBackend):
             return session.metadata["sdk_session_id"]
         return context_session_key
 
-    def _record_delegation_trace(
+    async def _record_delegation_trace(
         self,
         session_key: str,
         decision: HandoffDecision,
@@ -1177,16 +1322,11 @@ class ClaudeSDKBackend(AgentBackend):
             reason=decision.reason,
             candidates=list(decision.candidate_agents),
         )
-        
-        async def _add_trace():
-            async with self._delegation_traces_lock:
-                self._delegation_traces.append(trace)
-                # Keep only last 100 traces
-                if len(self._delegation_traces) > 100:
-                    self._delegation_traces = self._delegation_traces[-100:]
-        
-        # Fire and forget
-        asyncio.create_task(_add_trace())
+
+        async with self._delegation_traces_lock:
+            self._delegation_traces.append(trace)
+            if len(self._delegation_traces) > 100:
+                self._delegation_traces = self._delegation_traces[-100:]
         
         logger.info(
             f"Delegation decision: session={session_key}, mode={decision.mode}, "
@@ -1382,7 +1522,7 @@ class ClaudeSDKBackend(AgentBackend):
                 decision = self._handoff_policy.decide(context.prompt)
                 
                 # Record delegation trace
-                self._record_delegation_trace(context.session_key, decision)
+                await self._record_delegation_trace(context.session_key, decision)
                 
                 yield AgentResponse(
                     content="",
@@ -1397,8 +1537,6 @@ class ClaudeSDKBackend(AgentBackend):
             # We need to retry the query in such cases, with a limit to avoid infinite loops
             query_retry = 0
             received_result = False
-            user_cancelled = False  # Track if user cancelled during input_required
-
             while query_retry < self._MAX_QUERY_RETRIES:
                 client = await self._get_or_create_client(context.session_key)
                 query_sent_at = time.perf_counter()
@@ -1508,39 +1646,6 @@ class ClaudeSDKBackend(AgentBackend):
                             )
                             continue
                         self._set_task_id_in_entry(context.session_key, None)
-                    if (
-                        isinstance(message, TaskNotificationMessage)
-                        and str(message.status or "").lower() in self._INPUT_REQUIRED_STATUSES
-                    ):
-                        # Check if this message belongs to current request (stale message detection)
-                        # A message is stale if:
-                        # 1. message.task_id exists AND
-                        # 2. current_task_id exists AND they don't match, OR
-                        # 3. current_task_id is None (no TaskStarted received for this request yet)
-                        current_task_id = self._get_task_id_from_entry(context.session_key)
-                        if message.task_id and (
-                            current_task_id is None or message.task_id != current_task_id
-                        ):
-                            logger.warning(
-                                f"[SDK Notification] Stale input_required ignored: "
-                                f"session={context.session_key}, received_task={message.task_id}, "
-                                f"expected_task={current_task_id or 'none'}"
-                            )
-                            continue
-
-                        user_input = await self._wait_for_user_input(context, message)
-                        if user_input:
-                            await client.query(
-                                user_input,
-                                session_id=self._query_session_id(context.session_key, session),
-                            )
-                        else:
-                            # User cancelled or no actionable input: end current turn to avoid
-                            # holding the session lock while the SDK waits for further input.
-                            # Also reset client/task state to avoid dirty carry-over into next turn.
-                            await self._reset_session_client_state(context.session_key)
-                            user_cancelled = True  # Mark as cancelled to skip retry
-                            break
                     if is_terminal_result:
                         # === 诊断日志: ResultMessage ===
                         current_task_id = self._get_task_id_from_entry(context.session_key)
@@ -1556,10 +1661,7 @@ class ClaudeSDKBackend(AgentBackend):
                             # This also syncs to session.metadata and saves
                             await self._set_sdk_session_id_in_entry(context.session_key, message.session_id)
 
-                    if self._message_converter:
-                        response = self._message_converter.convert(message)
-                    else:
-                        response = self._convert_message_legacy(message)
+                    response = self._message_converter.convert(message) if self._message_converter else None
 
                     if response:
                         # Accumulate content: delta content or final content
@@ -1575,10 +1677,6 @@ class ClaudeSDKBackend(AgentBackend):
                 # After async for loop ends, check if we got a ResultMessage
                 if received_result:
                     break  # Got valid result, exit retry loop
-
-                # If user cancelled during input_required, don't retry
-                if user_cancelled:
-                    break  # User cancelled, exit retry loop
 
                 # No ResultMessage received - likely stale task notification
                 query_retry += 1
@@ -1718,28 +1816,6 @@ class ClaudeSDKBackend(AgentBackend):
                                     )
                                     continue
                                 self._set_task_id_in_entry(context.session_key, None)
-                            if (
-                                isinstance(message, TaskNotificationMessage)
-                                and str(message.status or "").lower() in self._INPUT_REQUIRED_STATUSES
-                            ):
-                                # Check if this message belongs to current request (stale message detection)
-                                # A message is stale if message.task_id exists and current_task_id is None or doesn't match
-                                current_task_id = self._get_task_id_from_entry(context.session_key)
-                                if message.task_id and (
-                                    current_task_id is None or message.task_id != current_task_id
-                                ):
-                                    logger.warning(
-                                        f"[Fallback Notification] Stale input_required ignored: "
-                                        f"session={context.session_key}, received_task={message.task_id}, "
-                                        f"expected_task={current_task_id or 'none'}"
-                                    )
-                                    continue
-                                # Fallback path doesn't handle input_required, log and continue
-                                logger.warning(
-                                    f"[Fallback] input_required not supported in fallback path: "
-                                    f"session={context.session_key}, task_id={message.task_id}"
-                                )
-                                continue
                             if is_terminal_result:
                                 self._set_task_id_in_entry(context.session_key, None)
                                 if session is not None and message.session_id:
@@ -1747,10 +1823,7 @@ class ClaudeSDKBackend(AgentBackend):
                                     # This also syncs to session.metadata and saves
                                     await self._set_sdk_session_id_in_entry(context.session_key, message.session_id)
                             
-                            if self._message_converter:
-                                response = self._message_converter.convert(message)
-                            else:
-                                response = self._convert_message_legacy(message)
+                            response = self._message_converter.convert(message) if self._message_converter else None
                                 
                             if response:
                                 # Accumulate content: delta content or final content
@@ -1809,155 +1882,22 @@ class ClaudeSDKBackend(AgentBackend):
         context: AgentContext,
         message: "TaskNotificationMessage",
     ) -> str | None:
-        """Ask user for input when SDK task enters input-required state."""
-        import json
-
-        summary = str(message.summary or "").strip()
-        prompt = summary or "Task requires your input. Please reply to continue."
-        if not summary:
-            prompt = f"Task `{message.task_id or ''}` requires your input. Please reply to continue.".strip()
-
-        status = str(message.status or "").lower()
-        
-        # Extract options from AskUserQuestion if available
-        options = []
-        question_headers = []
-        multi_select = False
-        
-        # Try to extract questions from task_result or summary
-        task_result = getattr(message, "task_result", None)
-        if task_result:
-            try:
-                # Check if this is an AskUserQuestion tool call
-                if isinstance(task_result, dict):
-                    questions = task_result.get("questions", [])
-                    if isinstance(questions, list):
-                        for q in questions:
-                            if isinstance(q, dict):
-                                header = q.get("header", "")
-                                if header:
-                                    question_headers.append(header)
-                                for opt in q.get("options", []):
-                                    if isinstance(opt, dict):
-                                        # Prefer label, fallback to value if label is missing
-                                        option_value = opt.get("label") or opt.get("value")
-                                        if option_value:
-                                            options.append(option_value)
-                                if q.get("multiSelect", False):
-                                    multi_select = True
-            except (TypeError, AttributeError, json.JSONDecodeError):
-                pass
-        
-        # Also try to parse from summary if it looks like JSON
-        if not options and summary.startswith("{"):
-            try:
-                data = json.loads(summary)
-                questions = data.get("questions", [])
-                if isinstance(questions, list):
-                    for q in questions:
-                        if isinstance(q, dict):
-                            header = q.get("header", "")
-                            if header:
-                                question_headers.append(header)
-                            for opt in q.get("options", []):
-                                if isinstance(opt, dict):
-                                    # Prefer label, fallback to value if label is missing
-                                    option_value = opt.get("label") or opt.get("value")
-                                    if option_value:
-                                        options.append(option_value)
-                            if q.get("multiSelect", False):
-                                multi_select = True
-            except (json.JSONDecodeError, TypeError):
-                pass
-
-        # Determine interaction kind and suggestions
-        if status == "approval_required":
-            interaction_kind = "approval"
-            suggestions = ["允许", "拒绝"]
-        elif status == "confirmation_required":
-            interaction_kind = "confirmation"
-            suggestions = ["确认", "取消"]
-        else:
-            interaction_kind = "question"
-            # Use extracted options as suggestions if available
-            if options:
-                suggestions = options
-            else:
-                suggestions = ["继续", "取消"]
-
-        timeout = float(getattr(getattr(self.sdk_config, "permission", None), "timeout", 300.0))
-        response = None
-        if self._permission_handler and hasattr(self._permission_handler, "request_interaction"):
-            response = await self._permission_handler.request_interaction(
-                kind=interaction_kind,
-                prompt=prompt,
-                suggestions=suggestions,
-                session_key=context.session_key,
-                channel=context.channel,
-                chat_id=context.chat_id,
-                metadata=dict(context.metadata or {}),
-                timeout=timeout,
-            )
-        else:
-            bus = self._shared_resources.get("bus")
-            if bus is None:
-                return None
-            from xbot.bus.queue import InteractionRequest
-
-            # Build metadata with valid_options for answer validation
-            metadata_dict = dict(context.metadata or {})
-            if options:
-                metadata_dict["valid_options"] = options
-            if question_headers:
-                metadata_dict["question_headers"] = question_headers
-            metadata_dict["multi_select"] = multi_select
-
-            request = InteractionRequest(
-                request_id=str(uuid.uuid4()),
-                session_key=context.session_key,
-                channel=context.channel,
-                chat_id=context.chat_id,
-                kind=interaction_kind,
-                prompt=prompt,
-                suggestions=suggestions,
-                metadata=metadata_dict,
-            )
-            await bus.publish_interaction_request(request)
-            response = await bus.wait_interaction_response(request.request_id, timeout=timeout)
-
-        if response is None:
-            return None
-
-        content = (response.content or "").strip()
-
-        if response.action in {"cancel", "deny"}:
-            task_id = self._get_task_id_from_entry(context.session_key)
-            if task_id:
-                client = self._get_client_from_entry(context.session_key)
-                if client is not None:
-                    try:
-                        await client.stop_task(task_id)
-                    except Exception:
-                        logger.debug("Failed to stop task after user cancelled interaction")
-            return None
-
-        if interaction_kind == "approval" and response.action == "allow" and not content:
-            return "allow"
-        if interaction_kind == "confirmation" and response.action == "confirm" and not content:
-            return "confirm"
-        if not content:
-            return None
-        return content
-
-    def _convert_message_legacy(self, message: Any) -> AgentResponse | None:
-        """Legacy message converter for backward compatibility."""
-        if self._message_converter:
-            return self._message_converter.convert(message)
-        return None
+        """TaskNotification-based interactive input is unsupported in SDK 0.1.52."""
+        raise NotImplementedError(
+            "Interactive input is hook-based in claude-agent-sdk 0.1.52; "
+            "TaskNotificationMessage no longer enters input-required states."
+        )
 
     async def shutdown(self) -> None:
         """Shutdown the backend."""
-        for session_key in list(self._clients):
+        session_keys = set(self._clients)
+        if self._uses_session_store():
+            session_keys.update(
+                key
+                for key in self._session_store.list_keys()
+                if (entry := self._session_store.get(key)) is not None and entry.client is not None
+            )
+        for session_key in session_keys:
             client = self._remove_client_state(session_key)
             await self._safe_disconnect_client(client, session_key, context="shutdown")
         # Clear session contexts for compact notifications
@@ -2071,10 +2011,7 @@ class ClaudeSDKBackend(AgentBackend):
             # Use _remove_client_state for unified cleanup
             client_to_disconnect = self._remove_client_state(session_key)
             if client_to_disconnect:
-                # Disconnect in background to avoid blocking
-                asyncio.create_task(
-                    self._safe_disconnect_client(client_to_disconnect, session_key, context="interrupt")
-                )
+                await self._safe_disconnect_client(client_to_disconnect, session_key, context="interrupt")
             logger.info(f"[State Cleanup] session={session_key} cleaned up after interrupt")
 
         return {"interrupted": True, "usage": usage_info}
@@ -2182,7 +2119,7 @@ class ClaudeSDKBackend(AgentBackend):
             agent_names = sorted(self.sdk_config.agents.keys())
         handoff = f"handoff_agents={','.join(agent_names)}" if agent_names else "handoff_agents=0"
         # Count sessions with clients
-        if self._use_session_store:
+        if self._uses_session_store():
             client_count = sum(1 for k in self._session_store.list_keys() if self._session_store.get(k) and self._session_store.get(k).client)
         else:
             client_count = len(self._clients)
@@ -2460,15 +2397,15 @@ class ClaudeSDKBackend(AgentBackend):
             - sdk_session_id: The SDK session ID that was deleted
             - error: Error message if failed
         """
-        # Get SDK session ID from session metadata or entry
-        sdk_session_id = self._get_sdk_session_id_from_entry(session_key)
+        if not session_key:
+            return {
+                "deleted": False,
+                "sdk_session_id": None,
+                "error": "No SDK session found",
+            }
 
-        if not sdk_session_id:
-            # Try to get from session metadata
-            if self.sessions:
-                session = self.sessions.get(session_key)
-                if session:
-                    sdk_session_id = session.metadata.get("sdk_session_id")
+        async with self._clients_lock:
+            sdk_session_id = self._resolve_sdk_session_id(session_key)
 
         if not sdk_session_id:
             return {
@@ -2481,24 +2418,8 @@ class ClaudeSDKBackend(AgentBackend):
             from claude_agent_sdk import delete_session
 
             delete_session(sdk_session_id)
-
-            # Clear tracking state
-            await self._set_sdk_session_id_in_entry(session_key, None)
-
-            logger.info(f"[SDK Session] Deleted SDK session {sdk_session_id} for {session_key}")
-
-            return {
-                "deleted": True,
-                "sdk_session_id": sdk_session_id,
-                "error": None,
-            }
-
         except FileNotFoundError:
-            return {
-                "deleted": True,  # Already gone is success
-                "sdk_session_id": sdk_session_id,
-                "error": None,
-            }
+            pass
         except Exception as e:
             logger.error(f"[SDK Session] Failed to delete SDK session: {e}")
             return {
@@ -2507,17 +2428,28 @@ class ClaudeSDKBackend(AgentBackend):
                 "error": str(e),
             }
 
+        async with self._clients_lock:
+            await self._clear_sdk_session_state(session_key, sdk_session_id)
+
+        logger.info(f"[SDK Session] Deleted SDK session {sdk_session_id} for {session_key}")
+
+        return {
+            "deleted": True,
+            "sdk_session_id": sdk_session_id,
+            "error": None,
+        }
+
     async def fork_sdk_session(
         self,
         session_key: str,
-        message_id: str | None = None,
+        up_to_message_id: str | None = None,
         title: str | None = None,
     ) -> dict[str, Any]:
         """Fork an SDK session into a new branch.
 
         Args:
             session_key: The session key to fork
-            message_id: Optional message ID to fork up to
+            up_to_message_id: Optional message ID to fork up to
             title: Optional title for the forked session
 
         Returns:
@@ -2526,18 +2458,24 @@ class ClaudeSDKBackend(AgentBackend):
             - new_sdk_session_id: The new SDK session ID
             - error: Error message if failed
         """
-        sdk_session_id = self._get_sdk_session_id_from_entry(session_key)
+        if not session_key:
+            return {
+                "forked": False,
+                "original_sdk_session_id": None,
+                "new_sdk_session_id": None,
+                "new_session_key": None,
+                "error": "No SDK session found",
+            }
 
-        if not sdk_session_id:
-            if self.sessions:
-                session = self.sessions.get(session_key)
-                if session:
-                    sdk_session_id = session.metadata.get("sdk_session_id")
+        async with self._clients_lock:
+            sdk_session_id = self._resolve_sdk_session_id(session_key)
 
         if not sdk_session_id:
             return {
                 "forked": False,
+                "original_sdk_session_id": None,
                 "new_sdk_session_id": None,
+                "new_session_key": None,
                 "error": "No SDK session found",
             }
 
@@ -2546,31 +2484,73 @@ class ClaudeSDKBackend(AgentBackend):
 
             result = fork_session(
                 sdk_session_id,
-                up_to_message_id=message_id,
+                up_to_message_id=up_to_message_id,
                 title=title,
             )
-
-            logger.info(
-                f"[SDK Session] Forked SDK session {sdk_session_id} -> {result.session_id}"
-            )
-
-            return {
-                "forked": True,
-                "new_sdk_session_id": result.session_id,
-                "error": None,
-            }
-
         except Exception as e:
             logger.error(f"[SDK Session] Failed to fork SDK session: {e}")
             return {
                 "forked": False,
+                "original_sdk_session_id": sdk_session_id,
                 "new_sdk_session_id": None,
+                "new_session_key": None,
                 "error": str(e),
             }
 
+        new_sdk_session_id = result.session_id
+        new_session_key = f"{session_key}_fork_{uuid.uuid4().hex[:8]}"
+        original_context = self._get_context_by_session_key(session_key)
+
+        async with self._clients_lock:
+            if self._uses_session_store():
+                new_entry = self._get_or_create_entry(new_session_key)
+                if original_context:
+                    new_entry.channel, new_entry.chat_id = original_context
+                self._session_store.set_sdk_session_id(new_session_key, new_sdk_session_id)
+            else:
+                self._get_session_contexts()[new_session_key] = new_sdk_session_id
+                self._get_sdk_session_index()[new_sdk_session_id] = new_session_key
+
+            if self.sessions:
+                try:
+                    session = self.sessions.get_or_create(new_session_key)
+                    session.metadata["sdk_session_id"] = new_sdk_session_id
+                    session.metadata["forked_from"] = session_key
+                    session.metadata["forked_up_to"] = up_to_message_id
+                    session.metadata["forked_at"] = datetime.now().isoformat()
+                    self.sessions.save(session)
+                except Exception as e:
+                    if self._uses_session_store():
+                        entry = self._get_entry(new_session_key)
+                        if entry:
+                            self._session_store.clear_sdk_session_id(new_session_key)
+                    else:
+                        self._get_session_contexts().pop(new_session_key, None)
+                        self._get_sdk_session_index().pop(new_sdk_session_id, None)
+                    logger.error(f"[SDK Session] Failed to persist fork metadata: {e}")
+                    return {
+                        "forked": False,
+                        "original_sdk_session_id": sdk_session_id,
+                        "new_sdk_session_id": None,
+                        "new_session_key": new_session_key,
+                        "error": f"Failed to save fork metadata: {e}",
+                    }
+
+        logger.info(
+            f"[SDK Session] Forked SDK session {sdk_session_id} -> {new_sdk_session_id}"
+        )
+
+        return {
+            "forked": True,
+            "original_sdk_session_id": sdk_session_id,
+            "new_sdk_session_id": new_sdk_session_id,
+            "new_session_key": new_session_key,
+            "error": None,
+        }
+
     async def list_sdk_sessions(
         self,
-        limit: int = 50,
+        limit: int = 10,
         offset: int = 0,
     ) -> dict[str, Any]:
         """List SDK sessions.
@@ -2585,6 +2565,9 @@ class ClaudeSDKBackend(AgentBackend):
             - has_more: True if more sessions available
             - error: Error message if failed
         """
+        limit = max(1, min(limit, 100))
+        offset = max(offset, 0)
+
         try:
             from claude_agent_sdk import list_sessions
 
@@ -2595,16 +2578,18 @@ class ClaudeSDKBackend(AgentBackend):
             for s in sessions[:limit]:
                 session_list.append({
                     "session_id": s.session_id,
-                    "title": s.title,
-                    "created_at": s.created_at.isoformat() if s.created_at else None,
-                    "updated_at": s.updated_at.isoformat() if s.updated_at else None,
-                    "message_count": s.message_count,
+                    "title": s.custom_title or s.summary,
+                    "created_at": datetime.fromtimestamp(s.created_at).isoformat() if s.created_at else None,
+                    "updated_at": datetime.fromtimestamp(s.last_modified).isoformat() if s.last_modified else None,
+                    "file_size": s.file_size,
                 })
 
             has_more = len(sessions) > limit
 
             return {
                 "sessions": session_list,
+                "limit": limit,
+                "offset": offset,
                 "has_more": has_more,
                 "error": None,
             }
@@ -2613,6 +2598,8 @@ class ClaudeSDKBackend(AgentBackend):
             logger.error(f"[SDK Session] Failed to list SDK sessions: {e}")
             return {
                 "sessions": [],
+                "limit": limit,
+                "offset": offset,
                 "has_more": False,
                 "error": str(e),
             }

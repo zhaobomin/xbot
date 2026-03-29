@@ -156,6 +156,7 @@ class AgentRuntime:
                 msg.session_key, SessionPhase.RUNNING, reason="dispatch_start"
             )
             task = asyncio.create_task(self._dispatch(msg))
+            AgentRuntime._tag_task_for_session(task, msg.session_key)
             self._state_coordinator.register_task(msg.session_key, task)
             task.add_done_callback(self._make_task_done_callback(msg.session_key))
 
@@ -323,16 +324,34 @@ class AgentRuntime:
     ) -> OutboundMessage | None:
         cmd = msg.content.strip().lower()
 
-        # Handle /clear, /new, /reset locally (not supported by non-Claude models)
+        # Handle local slash aliases without forwarding to the SDK.
         if cmd in ("/clear", "/new", "/reset"):
             logger.info(f"[Local Command] Clearing session locally: {cmd!r} (session={msg.session_key})")
             await self._do_clear_session(msg.session_key)
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content="♻️ Context cleared. Starting fresh!\n📌 Use `!stop` to stop tasks without clearing context.",
+                content="♻️ Session cleared. Starting fresh!\n📌 Use `!stop` to stop tasks without clearing context.",
                 metadata=msg.metadata or {},
             )
+        if cmd == "/help":
+            await self.initialize()
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=await self._help_text(msg.session_key),
+                metadata=msg.metadata or {},
+            )
+        if cmd == "/state":
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=self._session_diagnostics_text(msg.session_key),
+                metadata=msg.metadata or {},
+            )
+        if cmd == "/restart":
+            self._spawn_background_task(self._do_restart(), "restart")
+            return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="Restarting...")
 
         # Debug: Log slash commands going to SDK
         if cmd.startswith("/"):
@@ -356,7 +375,7 @@ class AgentRuntime:
                 metadata=msg.metadata or {},
             )
         if cmd == "!restart":
-            asyncio.create_task(self._do_restart())
+            self._spawn_background_task(self._do_restart(), "restart")
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="Restarting...")
         if cmd == "!stop":
             # !stop: 停止当前任务，保留上下文
@@ -425,11 +444,14 @@ class AgentRuntime:
 
             # Default: delete SDK session file (unless --soft)
             if not soft_reset:
-                delete_result = await self.router.backend.delete_sdk_session(msg.session_key)
-                if delete_result["deleted"]:
-                    parts.append("🗑️ SDK context deleted. Fresh start!")
-                elif delete_result.get("error") and delete_result["error"] != "No SDK session found":
-                    parts.append(f"⚠️ SDK delete: {delete_result['error']}")
+                if hasattr(self.router.backend, "delete_sdk_session"):
+                    delete_result = await self.router.backend.delete_sdk_session(msg.session_key)
+                    if delete_result["deleted"]:
+                        parts.append("🗑️ SDK context deleted. Fresh start!")
+                    elif delete_result.get("error") and delete_result["error"] != "No SDK session found":
+                        parts.append(f"⚠️ SDK delete: {delete_result['error']}")
+                else:
+                    parts.append("📌 Backend does not expose SDK session deletion; state reset only.")
             else:
                 parts.append("📌 SDK context preserved (--soft).")
 
@@ -620,12 +642,10 @@ class AgentRuntime:
             all_current_tasks = asyncio.all_tasks()
             orphaned_tasks = []
             for task in all_current_tasks:
-                # Check if task's coroutine name or str representation contains session_key
-                coro = task.get_coro()
-                if coro and session_key in str(coro):
-                    # Also check if it's not already in our tracking
-                    if task not in tasks:
-                        orphaned_tasks.append(task)
+                if task in tasks or task.done():
+                    continue
+                if AgentRuntime._task_belongs_to_session(task, session_key):
+                    orphaned_tasks.append(task)
 
             if orphaned_tasks:
                 logger.warning(
@@ -716,6 +736,16 @@ class AgentRuntime:
             self._sync_session_phase(session_key)
 
         return _on_task_done
+
+    @staticmethod
+    def _tag_task_for_session(task: asyncio.Task, session_key: str) -> None:
+        """Attach stable session metadata to a task for later cleanup."""
+        setattr(task, "_xbot_session_key", session_key)
+
+    @staticmethod
+    def _task_belongs_to_session(task: asyncio.Task, session_key: str) -> bool:
+        """Check whether a task belongs to a session based on explicit metadata."""
+        return getattr(task, "_xbot_session_key", None) == session_key
 
     def _set_session_phase(self, session_key: str, phase: SessionPhase, *, reason: str = "") -> None:
         """Set session phase using coordinator."""
@@ -1084,15 +1114,20 @@ class AgentRuntime:
             "",
             "Runtime controls:",
             "!help — Show this help",
+            "/help — Show this help",
             "!stop — Stop current task (preserves context)",
             "!reset — Full reset, delete all context and SDK session",
+            "/reset — Local reset alias",
             "        --soft: Keep SDK context, only clear state",
             "!state — Show runtime session diagnostics",
+            "/state — Local diagnostics alias",
             "!restart — Restart the bot process",
+            "/restart — Runtime restart alias",
             "!ver — Show version and build info",
             "",
             "Context controls:",
             "/clear — Clear conversation context (start fresh)",
+            "/new — Clear session locally and start fresh",
             "/compact — Compact context (summarize history)",
             "",
             "SDK commands (forwarded):",
@@ -1161,6 +1196,12 @@ class AgentRuntime:
         subcmd = parts[1] if len(parts) > 1 else ""
 
         if subcmd == "list":
+            if not hasattr(self.router.backend, "list_sdk_sessions"):
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="❌ Current backend does not support SDK session listing.",
+                )
             # !session list [limit=10] [offset=0]
             limit = 10
             offset = 0
@@ -1207,6 +1248,12 @@ class AgentRuntime:
             )
 
         elif subcmd == "delete":
+            if not hasattr(self.router.backend, "delete_sdk_session"):
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="❌ Current backend does not support SDK session deletion.",
+                )
             # !session delete [session_key]
             target = parts[2] if len(parts) > 2 else msg.session_key
 
@@ -1233,8 +1280,12 @@ class AgentRuntime:
 
                 if result["deleted"]:
                     sdk_id = result.get("sdk_session_id", "unknown")
-                    # Clear session state after successful delete
-                    self._state_coordinator.clear(target)
+                    self._state_coordinator.transition(
+                        target,
+                        SessionPhase.IDLE,
+                        reason="delete_complete",
+                        force=True,
+                    )
                     return OutboundMessage(
                         channel=msg.channel,
                         chat_id=msg.chat_id,
@@ -1258,23 +1309,25 @@ class AgentRuntime:
 
         elif subcmd == "info":
             # !session info - show current session's SDK info
-            # Get SDK session ID from backend
-            session_contexts = getattr(self.router.backend, "_shared_resources", {}).get("_session_contexts", {})
-            sdk_session_id = session_contexts.get(msg.session_key)
+            target = parts[2] if len(parts) > 2 else msg.session_key
+            sdk_session_id = None
+            resolver = getattr(self.router.backend, "_resolve_sdk_session_id", None)
+            if callable(resolver):
+                sdk_session_id = resolver(target)
 
             if not sdk_session_id and self.sessions:
-                session = self.sessions.get(msg.session_key)
+                session = self.sessions.get(target)
                 if session:
                     sdk_session_id = session.metadata.get("sdk_session_id")
 
-            lines = [f"📋 Session Info: `{msg.session_key}`"]
+            lines = [f"📋 Session Info: `{target}`"]
             if sdk_session_id:
                 lines.append(f"  SDK Session ID: `{sdk_session_id}`")
             else:
                 lines.append("  SDK Session ID: (none)")
 
             # Show current phase
-            phase = self._state_coordinator.get_phase(msg.session_key)
+            phase = self._state_coordinator.get_phase(target)
             lines.append(f"  Phase: {phase.value}")
 
             return OutboundMessage(
@@ -1284,6 +1337,12 @@ class AgentRuntime:
             )
 
         elif subcmd == "fork":
+            if not hasattr(self.router.backend, "fork_sdk_session"):
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="❌ Current backend does not support SDK session forking.",
+                )
             # !session fork [msg_id] [title]
             # Check if session is busy before forking
             phase = self._state_coordinator.get_phase(msg.session_key)
@@ -1405,3 +1464,22 @@ class AgentRuntime:
             logger.warning("Restart cleanup error (continuing): {}", e)
 
         os.execv(sys.executable, [sys.executable, "-m", "xbot"] + sys.argv[1:])
+
+    def _record_background_task_error(self, task_name: str, exc: BaseException) -> None:
+        """Record background task failure without leaking unhandled-task warnings."""
+        logger.warning("Background task '{}' failed: {}", task_name, exc)
+
+    def _spawn_background_task(self, coro: Coroutine[Any, Any, Any], task_name: str) -> asyncio.Task:
+        """Create a background task and always retrieve exceptions."""
+        task = asyncio.create_task(coro)
+
+        def _done(done_task: asyncio.Task) -> None:
+            try:
+                done_task.result()
+            except asyncio.CancelledError:
+                return
+            except Exception as exc:
+                self._record_background_task_error(task_name, exc)
+
+        task.add_done_callback(_done)
+        return task

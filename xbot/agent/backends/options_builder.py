@@ -158,18 +158,35 @@ class OptionsBuilder:
                     logger.warning("[Compact Notification] No bus available for session: {}", session_key)
                     return
 
-                # Look up channel and chat_id for this session
+                # Look up channel and chat_id for this session via backend helper first.
+                context_info = None
+                runtime = self._shared_resources.get("runtime")
+                backend = getattr(runtime, "backend", None) if runtime is not None else None
+                resolver = getattr(backend, "_get_context_by_session_key", None)
+                if callable(resolver):
+                    try:
+                        context_info = resolver(session_key)
+                    except Exception as e:
+                        logger.debug(
+                            "[Compact Notification] Backend context resolver failed for '{}': {}",
+                            session_key,
+                            e,
+                        )
+
+                # Fallback to legacy mapping during transition.
                 session_contexts = self._shared_resources.get("_session_contexts", {})
+                if context_info is None:
+                    context_info = session_contexts.get(session_key)
 
                 # DEBUG: Log all available session keys for troubleshooting
                 logger.info(
-                    "[Compact Notification] Looking up session_key='{}' in _session_contexts. "
-                    "Available keys: {}",
+                    "[Compact Notification] Looking up session_key='{}'. "
+                    "Resolved context={} available legacy keys={}",
                     session_key,
+                    context_info,
                     list(session_contexts.keys()),
                 )
 
-                context_info = session_contexts.get(session_key)
                 if context_info is None:
                     logger.warning(
                         "[Compact Notification] No context info for session_key='{}'. "

@@ -148,6 +148,30 @@ class TestClaudeSDKBackendShutdown:
 
             assert len(backend._clients) == 0
 
+    @pytest.mark.asyncio
+    async def test_shutdown_clears_session_store_clients(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.session_store import SessionStore
+
+        backend = ClaudeSDKBackend()
+        backend._session_store = SessionStore()
+        backend._use_session_store = True
+        entry1 = backend._session_store.get_or_create("s1")
+        entry2 = backend._session_store.get_or_create("s2")
+        client1 = MagicMock()
+        client1.disconnect = AsyncMock()
+        client2 = MagicMock()
+        client2.disconnect = AsyncMock()
+        entry1.client = client1
+        entry2.client = client2
+
+        await backend.shutdown()
+
+        client1.disconnect.assert_awaited_once()
+        client2.disconnect.assert_awaited_once()
+        assert backend._session_store.get("s1").client is None
+        assert backend._session_store.get("s2").client is None
+
 
 class TestClaudeSDKBackendResetSession:
     """Tests for session reset behavior."""
@@ -357,6 +381,63 @@ class TestOptionsBuilder:
             json_str = json.dumps(mcp_servers)
             assert "test_server" in json_str
             assert "npx" in json_str
+
+    @pytest.mark.asyncio
+    async def test_build_hooks_compact_notification_prefers_backend_context_helper(self):
+        """Compact notification should resolve context via backend helper before legacy dict."""
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+
+            outbound_calls = []
+
+            class _Bus:
+                async def publish_outbound(self, message):
+                    outbound_calls.append(message)
+
+            class _Backend:
+                def _get_context_by_session_key(self, session_key: str):
+                    if session_key == "session:1":
+                        return ("feishu", "chat-1")
+                    return None
+
+            class _Runtime:
+                backend = _Backend()
+
+            sdk_config = MagicMock()
+            sdk_config.hooks = {}
+            sdk_config.compact_notify = True
+
+            builder = OptionsBuilder(
+                shared_resources={
+                    "bus": _Bus(),
+                    "runtime": _Runtime(),
+                    "_session_contexts": {},
+                },
+                sdk_config=sdk_config,
+                skill_converter=None,
+                tool_adapter=None,
+                sessions=None,
+                context_builder=None,
+                handoff_policy=None,
+                capability_policy=None,
+            )
+
+            hooks = builder._build_hooks()
+            compact_handler = hooks["PreCompact"][0]["hooks"][0]
+
+            compact_handler.message_callback("session:1", "compacted")
+            await asyncio.sleep(0)
+
+            assert len(outbound_calls) == 1
+            assert outbound_calls[0].channel == "feishu"
+            assert outbound_calls[0].chat_id == "chat-1"
+            assert outbound_calls[0].content == "compacted"
 
     def test_get_model_name_normalizes_legacy_prefix(self):
         with patch.dict(
@@ -680,10 +761,7 @@ class TestDelegationTrace:
                 candidate_agents=("agent1",),
             )
 
-            backend._record_delegation_trace("test_session", decision)
-
-            # Wait for async task
-            await asyncio.sleep(0.1)
+            await backend._record_delegation_trace("test_session", decision)
 
             traces = backend.get_delegation_traces()
             assert len(traces) == 1
@@ -737,10 +815,7 @@ class TestDelegationTrace:
 
             # Add 150 traces
             for i in range(150):
-                backend._record_delegation_trace(f"session_{i}", decision)
-
-            # Wait for all async tasks
-            await asyncio.sleep(0.5)
+                await backend._record_delegation_trace(f"session_{i}", decision)
 
             # Should be limited to 100
             assert len(backend._delegation_traces) == 100
@@ -807,6 +882,7 @@ class TestInterruptSession:
 
             mock_client = MagicMock()
             mock_client.interrupt = AsyncMock()
+            mock_client.disconnect = AsyncMock()
             # Mock receive_messages to return empty async iterator
             async def mock_receive_messages():
                 return
@@ -819,6 +895,40 @@ class TestInterruptSession:
             mock_client.interrupt.assert_awaited_once()
             # Client should be removed after interrupt
             assert "test_session" not in backend._clients
+            mock_client.disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_interrupt_session_clears_session_store_state(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.session_store import SessionStore
+
+        backend = ClaudeSDKBackend()
+        backend._session_store = SessionStore()
+        backend._use_session_store = True
+        entry = backend._session_store.get_or_create("test_session")
+        mock_client = MagicMock()
+        mock_client.interrupt = AsyncMock()
+        mock_client.disconnect = AsyncMock()
+
+        async def mock_receive_messages():
+            return
+            yield
+
+        mock_client.receive_messages = mock_receive_messages
+        entry.client = mock_client
+        backend._session_store.set_sdk_session_id("test_session", "sdk_1")
+        entry.tasks = [MagicMock()]
+        entry.task_id = "task_1"
+        entry.request_id = "req_1"
+
+        result = await backend.interrupt_session("test_session")
+
+        assert result["interrupted"] is True
+        assert entry.client is None
+        assert entry.tasks == []
+        assert entry.task_id is None
+        assert entry.request_id is None
+        assert backend._session_store.get_by_sdk_id("sdk_1") is None
 
     @pytest.mark.asyncio
     async def test_interrupt_session_exception(self):
@@ -1266,7 +1376,7 @@ class TestSessionStateReset:
 
 class TestInputRequiredRecoveryFlow:
     @pytest.mark.asyncio
-    async def test_new_turn_can_continue_after_input_required_without_user_reply(self):
+    async def test_new_turn_retries_after_non_terminal_notification_without_old_input_flow(self):
         from claude_agent_sdk.types import ResultMessage, TaskNotificationMessage, TaskStartedMessage
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
         from xbot.agent.protocol import AgentContext
@@ -1276,7 +1386,6 @@ class TestInputRequiredRecoveryFlow:
         backend._message_converter = None
         backend._permission_handler = MagicMock()
         backend._permission_handler.clear_session_context = MagicMock()
-        backend._wait_for_user_input = AsyncMock(return_value=None)  # simulate user did not reply
 
         client1 = MagicMock()
         client1.query = AsyncMock(return_value=None)
@@ -1296,9 +1405,9 @@ class TestInputRequiredRecoveryFlow:
                 subtype="task_notification",
                 data={},
                 task_id="task-stuck",
-                status="input_required",
+                status="failed",
                 output_file="",
-                summary="need user input",
+                summary="stale task notification",
                 uuid="u2",
                 session_id="s1",
             )
@@ -1324,21 +1433,18 @@ class TestInputRequiredRecoveryFlow:
 
         client2.receive_response = _receive_2
 
-        backend._get_or_create_client = AsyncMock(side_effect=[client1, client2])  # type: ignore[method-assign]
+        backend._get_or_create_client = AsyncMock(side_effect=[client1, client2, client2])  # type: ignore[method-assign]
 
         context = AgentContext(session_key="telegram:456", prompt="first task")
         _ = [msg async for msg in backend.process(context)]
 
-        # first round should be cleaned up, not leave stale active task/client
-        client1.stop_task.assert_awaited_once_with("task-stuck")
-        client1.disconnect.assert_awaited_once()
-        assert "telegram:456" not in backend._active_task_ids
+        client1.stop_task.assert_not_awaited()
 
         context2 = AgentContext(session_key="telegram:456", prompt="second task")
         _ = [msg async for msg in backend.process(context2)]
 
-        assert backend._get_or_create_client.await_count == 2
-        client2.query.assert_awaited_once()
+        assert backend._get_or_create_client.await_count == 3
+        assert client2.query.await_count == 2
 
 
 class TestMessageConverterEnhancements:
@@ -1449,174 +1555,48 @@ class TestMessageConverterEnhancements:
 
 
 class TestBackendInputRequiredInteraction:
-    """Tests for SDK input_required interaction behavior."""
+    """Tests for the removed TaskNotification input-required flow."""
 
     @pytest.mark.asyncio
-    async def test_wait_for_user_input_maps_approval_required_to_approval_kind(self):
+    async def test_wait_for_user_input_is_explicitly_unsupported(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
         from xbot.agent.protocol import AgentContext
 
         backend = ClaudeSDKBackend()
-        backend.sdk_config = MagicMock()
-        backend.sdk_config.permission = MagicMock(timeout=3.0)
-        backend._shared_resources = {}
-        backend._clients = {}
-        backend._active_task_ids = {}
-
-        handler = MagicMock()
-        handler.request_interaction = AsyncMock(
-            return_value=type("Resp", (), {"action": "allow", "content": ""})()
-        )
-        backend._permission_handler = handler
-
-        msg = type(
-            "TaskNotificationMessage",
-            (),
-            {"summary": "请确认授权", "task_id": "t1", "status": "approval_required"},
-        )()
         context = AgentContext(session_key="s1", prompt="p", channel="telegram", chat_id="c1", metadata={})
-
-        result = await backend._wait_for_user_input(context, msg)
-
-        assert result == "allow"
-        handler.request_interaction.assert_awaited_once()
-        kwargs = handler.request_interaction.await_args.kwargs
-        assert kwargs["kind"] == "approval"
-        assert kwargs["suggestions"] == ["允许", "拒绝"]
-
-    @pytest.mark.asyncio
-    async def test_wait_for_user_input_uses_handler_without_bus(self):
-        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.protocol import AgentContext
-
-        backend = ClaudeSDKBackend()
-        backend.sdk_config = MagicMock()
-        backend.sdk_config.permission = MagicMock(timeout=3.0)
-        backend._shared_resources = {}  # no bus
-        backend._clients = {}
-        backend._active_task_ids = {}
-
-        handler = MagicMock()
-        handler.request_interaction = AsyncMock(
-            return_value=type("Resp", (), {"action": "reply", "content": "继续"})()
-        )
-        backend._permission_handler = handler
-
         msg = type(
             "TaskNotificationMessage",
             (),
-            {"summary": "需要你输入", "task_id": "t2", "status": "input_required"},
+            {"summary": "需要确认", "task_id": "task-1", "status": "approval_required"},
         )()
-        context = AgentContext(session_key="s2", prompt="p", channel="cli", chat_id="direct", metadata={})
 
-        result = await backend._wait_for_user_input(context, msg)
+        with pytest.raises(NotImplementedError):
+            await backend._wait_for_user_input(context, msg)
 
-        assert result == "继续"
 
-    @pytest.mark.asyncio
-    async def test_wait_for_user_input_maps_confirmation_required(self):
-        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.protocol import AgentContext
+class TestMessageConverterRateLimit:
+    def test_convert_rate_limit_event_is_visible(self):
+        from claude_agent_sdk import RateLimitEvent, RateLimitInfo
+        from xbot.agent.backends.claude_sdk_backend import MessageConverter
 
-        backend = ClaudeSDKBackend()
-        backend.sdk_config = MagicMock()
-        backend.sdk_config.permission = MagicMock(timeout=3.0)
-        backend._shared_resources = {}
-        backend._clients = {}
-        backend._active_task_ids = {}
-
-        handler = MagicMock()
-        handler.request_interaction = AsyncMock(
-            return_value=type("Resp", (), {"action": "confirm", "content": ""})()
+        converter = MessageConverter(handoff_policy=None, capabilities=None, config=None)
+        msg = RateLimitEvent(
+            rate_limit_info=RateLimitInfo(
+                status="rejected",
+                resets_at=int(datetime(2026, 3, 30, 12, 0, 0).timestamp()),
+                rate_limit_type="five_hour",
+                utilization=0.95,
+            ),
+            uuid="u1",
+            session_id="s1",
         )
-        backend._permission_handler = handler
 
-        msg = type(
-            "TaskNotificationMessage",
-            (),
-            {"summary": "请确认继续", "task_id": "t-confirm", "status": "confirmation_required"},
-        )()
-        context = AgentContext(session_key="s-confirm", prompt="p", channel="telegram", chat_id="c1", metadata={})
+        response = converter.convert(msg)
 
-        result = await backend._wait_for_user_input(context, msg)
-
-        assert result == "confirm"
-        kwargs = handler.request_interaction.await_args.kwargs
-        assert kwargs["kind"] == "confirmation"
-        assert kwargs["suggestions"] == ["确认", "取消"]
-
-    @pytest.mark.asyncio
-    async def test_wait_for_user_input_cancel_stops_active_task(self):
-        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.protocol import AgentContext
-
-        backend = ClaudeSDKBackend()
-        backend.sdk_config = MagicMock()
-        backend.sdk_config.permission = MagicMock(timeout=3.0)
-        backend._shared_resources = {}
-        backend._active_task_ids = {"s-cancel": "task-1"}
-
-        mock_client = MagicMock()
-        mock_client.stop_task = AsyncMock(return_value=None)
-        backend._clients = {"s-cancel": mock_client}
-
-        handler = MagicMock()
-        handler.request_interaction = AsyncMock(
-            return_value=type("Resp", (), {"action": "cancel", "content": ""})()
-        )
-        backend._permission_handler = handler
-
-        msg = type(
-            "TaskNotificationMessage",
-            (),
-            {"summary": "需要确认", "task_id": "task-1", "status": "confirmation_required"},
-        )()
-        context = AgentContext(session_key="s-cancel", prompt="p", channel="telegram", chat_id="c1", metadata={})
-
-        result = await backend._wait_for_user_input(context, msg)
-
-        assert result is None
-        mock_client.stop_task.assert_awaited_once_with("task-1")
-
-    @pytest.mark.asyncio
-    async def test_wait_for_user_input_falls_back_to_bus_when_handler_missing(self):
-        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.protocol import AgentContext
-        from xbot.bus.queue import InteractionRequest, InteractionResponse
-
-        backend = ClaudeSDKBackend()
-        backend.sdk_config = MagicMock()
-        backend.sdk_config.permission = MagicMock(timeout=1.0)
-        backend._permission_handler = None
-        backend._clients = {}
-        backend._active_task_ids = {}
-
-        mock_bus = MagicMock()
-        mock_bus.publish_interaction_request = AsyncMock(return_value=None)
-        mock_bus.wait_interaction_response = AsyncMock(
-            return_value=InteractionResponse(
-                request_id="ir-1",
-                session_key="s-bus",
-                action="reply",
-                content="继续",
-            )
-        )
-        backend._shared_resources = {"bus": mock_bus}
-
-        msg = type(
-            "TaskNotificationMessage",
-            (),
-            {"summary": "请输入后续", "task_id": "task-bus", "status": "input_required"},
-        )()
-        context = AgentContext(session_key="s-bus", prompt="p", channel="telegram", chat_id="c1", metadata={})
-
-        result = await backend._wait_for_user_input(context, msg)
-
-        assert result == "继续"
-        mock_bus.publish_interaction_request.assert_awaited_once()
-        req = mock_bus.publish_interaction_request.await_args.args[0]
-        assert isinstance(req, InteractionRequest)
-        assert req.kind == "question"
+        assert response is not None
+        assert response.event_type == "rate_limit"
+        assert response.progress_texts
+        assert "rate limited" in response.progress_texts[0].lower()
 
 
 class TestClaudeSDKBackendConsolidationCall:

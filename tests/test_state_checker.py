@@ -3,6 +3,7 @@
 import pytest
 import asyncio
 
+from xbot.agent.session_store import SessionStore
 from xbot.agent.state_checker import (
     StateConsistencyChecker,
     CONSISTENCY_RULES,
@@ -86,7 +87,7 @@ class TestStateConsistencyCheckerCapture:
         """测试捕获有活跃任务的状态"""
         # 模拟活跃任务
         task = asyncio.create_task(asyncio.sleep(100))
-        mock_runtime._active_tasks["test:session"] = [task]
+        mock_runtime._session_store.get_or_create("test:session").tasks = [task]
 
         try:
             checker = StateConsistencyChecker(mock_runtime)
@@ -176,7 +177,7 @@ class TestStateConsistencyCheckerDetection:
     async def test_detect_idle_with_active_tasks(self, mock_runtime):
         """测试检测 IDLE 状态但有活跃任务"""
         task = asyncio.create_task(asyncio.sleep(100))
-        mock_runtime._active_tasks["test:session"] = [task]
+        mock_runtime._session_store.get_or_create("test:session").tasks = [task]
 
         try:
             checker = StateConsistencyChecker(mock_runtime)
@@ -238,8 +239,8 @@ class TestStateConsistencyCheckerAllSessions:
         """测试获取所有 session key"""
         # 添加一些 session
         mock_runtime._state_machine.get_state("state:1")
-        mock_runtime._active_tasks["task:1"] = []
-        mock_runtime._session_locks["lock:1"] = asyncio.Lock()
+        mock_runtime._session_store.get_or_create("task:1").tasks = []
+        mock_runtime._session_store.get_or_create("lock:1").lock = asyncio.Lock()
         mock_runtime.router._backend._clients["client:1"] = "mock"
 
         checker = StateConsistencyChecker(mock_runtime)
@@ -257,8 +258,6 @@ class TestStateConsistencyCheckerAllSessions:
 def mock_runtime():
     """创建模拟的 AgentRuntime"""
     from unittest.mock import MagicMock, AsyncMock
-    import asyncio
-
     runtime = MagicMock(spec=AgentRuntime)
 
     # 状态机
@@ -270,6 +269,7 @@ def mock_runtime():
 
     # Session locks
     runtime._session_locks = {}
+    runtime._session_store = SessionStore()
 
     # Router 和 Backend
     router = MagicMock()
@@ -277,6 +277,10 @@ def mock_runtime():
     backend._clients = {}
     backend._active_task_ids = {}
     backend._client_last_used = {}
+    backend._use_session_store = False
+    backend._has_client_in_entry = lambda session_key: session_key in backend._clients
+    backend._get_task_id_from_entry = lambda session_key: backend._active_task_ids.get(session_key)
+    backend._get_last_used_from_entry = lambda session_key: backend._client_last_used.get(session_key)
     router._backend = backend
     runtime.router = router
 
@@ -299,6 +303,6 @@ def mock_runtime():
 
     # 状态协调器（供 checker 通过公开接口访问状态）
     from xbot.agent.state_coordinator import SessionStateCoordinator
-    runtime._state_coordinator = SessionStateCoordinator(runtime)
+    runtime._state_coordinator = SessionStateCoordinator(runtime, runtime._session_store)
 
     return runtime

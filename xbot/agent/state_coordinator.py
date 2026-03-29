@@ -46,6 +46,10 @@ class CoordinatorStats:
     tasks_created: int = 0
     tasks_completed: int = 0
 
+    # 锁统计
+    locks_created: int = 0
+    locks_released: int = 0
+
 
 class SessionStateCoordinator:
     """会话状态协调器。
@@ -315,9 +319,11 @@ class SessionStateCoordinator:
         Returns:
             会话锁
         """
-        # Auto-create entry if not exists
-        entry = self._session_store.get_or_create(session_key)
-        return entry.lock
+        had_lock = self._session_store.has_lock(session_key)
+        lock = self._session_store.get_or_create_lock(session_key)
+        if not had_lock:
+            self._stats.locks_created += 1
+        return lock
 
     def release_lock(self, session_key: str) -> bool:
         """释放并移除会话锁。
@@ -328,8 +334,10 @@ class SessionStateCoordinator:
         Returns:
             锁是否存在并被移除
         """
-        # SessionStore locks are tied to entries, deleted via session_store.delete
-        return self._session_store.has_lock(session_key)
+        released = self._session_store.release_lock(session_key)
+        if released:
+            self._stats.locks_released += 1
+        return released
 
     def has_lock(self, session_key: str) -> bool:
         """检查会话是否有锁。

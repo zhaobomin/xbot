@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 
@@ -57,3 +58,28 @@ def format_usage_summary(usage: dict[str, Any] | None) -> str | None:
         return f"Usage: input {input_tokens:,} tokens, output {output_tokens:,} tokens"
     return None
 
+
+def format_rate_limit_event(rate_limit_info: Any) -> str:
+    """Format rate limit events for user-visible progress."""
+    status = str(getattr(rate_limit_info, "status", "") or "").lower()
+    rate_limit_type = getattr(rate_limit_info, "rate_limit_type", None)
+    utilization = getattr(rate_limit_info, "utilization", None)
+    resets_at = getattr(rate_limit_info, "resets_at", None)
+
+    status_label = {
+        "allowed": "Rate limit check",
+        "allowed_warning": "Rate limit warning",
+        "rejected": "Rate limited",
+    }.get(status, "Rate limit update")
+
+    details: list[str] = []
+    if rate_limit_type:
+        details.append(f"type={rate_limit_type}")
+    if isinstance(utilization, (int, float)):
+        details.append(f"utilization={utilization:.0%}")
+    if isinstance(resets_at, int):
+        details.append(f"resets_at={datetime.fromtimestamp(resets_at).isoformat()}")
+
+    if details:
+        return f"{status_label}. {'; '.join(details)}."
+    return f"{status_label}. Please retry later."

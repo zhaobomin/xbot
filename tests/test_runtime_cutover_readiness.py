@@ -13,6 +13,7 @@ import pytest
 from xbot.agent.runtime import AgentRuntime, SessionPhase, SessionStateMachine
 from xbot.agent.state_checker import StateConsistencyChecker
 from xbot.agent.state_coordinator import SessionStateCoordinator
+from xbot.agent.session_store import SessionStore
 from xbot.bus.events import InboundMessage, OutboundMessage
 
 
@@ -73,6 +74,7 @@ class _RuntimeHarness:
         self._running = False
         self._active_tasks: dict[str, list[asyncio.Task]] = {}
         self._session_locks: dict[str, asyncio.Lock] = {}
+        self._session_store = SessionStore()
         self._state_machine = SessionStateMachine()
         self._state_check_enabled = False
         self.sessions = None
@@ -84,7 +86,7 @@ class _RuntimeHarness:
         self.router._backend = _BackendStub(_clients={}, _active_task_ids={}, _client_last_used={})
         self.router.backend = self.router._backend
         self._state_checker = StateConsistencyChecker(self)
-        self._state_coordinator = SessionStateCoordinator(self)
+        self._state_coordinator = SessionStateCoordinator(self, self._session_store)
 
     async def initialize(self) -> None:
         return None
@@ -126,7 +128,7 @@ async def _run_until_quiet(runtime: _RuntimeHarness, session_keys: set[str], tim
         deadline = asyncio.get_event_loop().time() + timeout_s
         while asyncio.get_event_loop().time() < deadline:
             await asyncio.sleep(0.01)
-            if all(not runtime._active_tasks.get(s) for s in session_keys):
+            if all(not runtime._state_coordinator.get_active_tasks(s) for s in session_keys):
                 runtime._running = False
                 return
         runtime._running = False
@@ -192,7 +194,7 @@ async def test_terminate_race_with_running_dispatch_recovers_idle() -> None:
     runtime._handle_message = _handle_message
 
     task = asyncio.create_task(runtime._dispatch(msg))
-    runtime._active_tasks.setdefault(msg.session_key, []).append(task)
+    runtime._state_coordinator.register_task(msg.session_key, task)
     runtime._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="dispatch_started")
     task.add_done_callback(runtime._make_task_done_callback(msg.session_key))
 
@@ -203,7 +205,7 @@ async def test_terminate_race_with_running_dispatch_recovers_idle() -> None:
 
     assert state["cancelled"] >= 1
     assert runtime.get_session_phase(msg.session_key) == SessionPhase.IDLE
-    assert runtime._active_tasks.get(msg.session_key) in (None, [])
+    assert runtime._state_coordinator.get_active_tasks(msg.session_key) == []
 
 
 @pytest.mark.asyncio
@@ -214,8 +216,8 @@ async def test_hard_reset_clears_state_and_lock() -> None:
     _bind(runtime)
 
     runtime._state_machine.force_transition(session_key, SessionPhase.RUNNING, reason="seed")
-    runtime._session_locks[session_key] = asyncio.Lock()
-    runtime._active_tasks[session_key] = []
+    runtime._state_coordinator.get_lock(session_key)
+    runtime._session_store.get_or_create(session_key).tasks = []
 
     result = await runtime._terminate_session(session_key, hard_reset=True)
 
@@ -224,7 +226,7 @@ async def test_hard_reset_clears_state_and_lock() -> None:
     assert session_key in runtime._state_machine._states
     assert runtime._state_machine.get_phase(session_key) == SessionPhase.IDLE
     assert runtime._state_machine.get_state(session_key).transition_count == 0
-    assert session_key not in runtime._session_locks
+    assert runtime._state_coordinator.has_lock(session_key) is False
 
 
 @pytest.mark.asyncio
@@ -235,14 +237,14 @@ async def test_backend_client_cleanup_running_session_cleans_state() -> None:
     _bind(runtime)
 
     runtime._state_machine.force_transition(session_key, SessionPhase.RUNNING, reason="seed")
-    runtime._active_tasks[session_key] = [MagicMock()]
-    runtime._session_locks[session_key] = asyncio.Lock()
+    runtime._session_store.get_or_create(session_key).tasks = [MagicMock()]
+    runtime._state_coordinator.get_lock(session_key)
 
     await runtime._on_backend_client_cleanup(session_key)
 
     assert runtime.get_session_phase(session_key) == SessionPhase.IDLE
-    assert session_key not in runtime._active_tasks
-    assert session_key not in runtime._session_locks
+    assert runtime._state_coordinator.get_active_tasks(session_key) == []
+    assert runtime._state_coordinator.has_lock(session_key) is False
 
 
 @pytest.mark.asyncio
@@ -253,15 +255,15 @@ async def test_backend_client_cleanup_idle_session_noop() -> None:
     _bind(runtime)
 
     runtime._state_machine.force_transition(session_key, SessionPhase.IDLE, reason="seed")
-    runtime._active_tasks[session_key] = []
-    runtime._session_locks[session_key] = asyncio.Lock()
+    runtime._session_store.get_or_create(session_key).tasks = []
+    runtime._state_coordinator.get_lock(session_key)
 
     await runtime._on_backend_client_cleanup(session_key)
 
     assert runtime.get_session_phase(session_key) == SessionPhase.IDLE
     # Idle path should not force cleanup
-    assert session_key in runtime._active_tasks
-    assert session_key in runtime._session_locks
+    assert runtime._session_store.get(session_key) is not None
+    assert runtime._state_coordinator.has_lock(session_key) is True
 
 
 @pytest.mark.asyncio
@@ -283,7 +285,7 @@ async def test_run_burst_same_session_converges_idle() -> None:
     await _run_until_quiet(runtime, {session_key}, timeout_s=6.0)
 
     assert runtime.get_session_phase(session_key) == SessionPhase.IDLE
-    assert runtime._active_tasks.get(session_key) in (None, [])
+    assert runtime._state_coordinator.get_active_tasks(session_key) == []
 
 
 @pytest.mark.asyncio

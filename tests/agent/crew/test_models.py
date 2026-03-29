@@ -60,7 +60,7 @@ class TestTaskDefinition:
         assert task.context_from == []
         assert task.human_review is False
         assert task.human_briefing is False
-        assert task.timeout == 600
+        assert task.timeout is None
 
     def test_task_with_dependencies(self):
         """Create task with upstream dependencies."""

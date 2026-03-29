@@ -154,6 +154,108 @@ async def test_router_runtime_slash_help_is_local_compat_entry(tmp_path) -> None
 
 
 @pytest.mark.asyncio
+async def test_router_runtime_slash_state_is_local_alias(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("/state")
+
+    assert "session: cli:direct" in response.lower()
+    assert "phase: idle" in response.lower()
+    assert response != "echo:/state"
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_session_commands_fail_gracefully_without_sdk_session_api(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("!session list")
+    assert "does not support sdk session listing" in response.lower()
+
+    response = await runtime.process_direct("!session delete")
+    assert "does not support sdk session deletion" in response.lower()
+
+    response = await runtime.process_direct("!session fork")
+    assert "does not support sdk session forking" in response.lower()
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_session_info_uses_target_session_key(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+    backend._resolve_sdk_session_id = lambda session_key: {
+        "cli:direct": "sdk_current",
+        "cli:other": "sdk_other",
+    }.get(session_key)
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("!session info cli:other")
+
+    assert "cli:other" in response
+    assert "sdk_other" in response
+
+
+@pytest.mark.asyncio
 async def test_router_runtime_compact_routes_to_backend(tmp_path) -> None:
     from xbot.agent.runtime import AgentRuntime
     from xbot.bus.queue import MessageBus
@@ -282,6 +384,42 @@ async def test_router_runtime_new_is_local_clear(tmp_path) -> None:
     assert "Session cleared" in response
     # Backend is initialized during _do_clear_session -> backend.reset_session
     assert backend.initialized is True
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_restart_background_errors_are_retrieved(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    AgentRouter._backends = {"claude_sdk": _FakeBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    errors: list[Exception] = []
+
+    async def _boom() -> None:
+        raise RuntimeError("restart failed")
+
+    runtime._do_restart = _boom  # type: ignore[method-assign]
+    runtime._record_background_task_error = lambda name, exc: errors.append(exc)  # type: ignore[method-assign]
+
+    response = await runtime.process_direct("!restart")
+    await asyncio.sleep(0)
+    await asyncio.sleep(0)
+
+    assert response == "Restarting..."
+    assert len(errors) == 1
+    assert str(errors[0]) == "restart failed"
 
 
 @pytest.mark.asyncio

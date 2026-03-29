@@ -1054,8 +1054,7 @@ class TestGoalAnalyzerComplexityValidation:
         analysis = analyzer.parse_llm_response(response)
         # Invalid complexity should not crash, use default
         assert analysis is not None
-        # Currently uses the raw value - potential bug
-        assert analysis.complexity in ["simple", "medium", "complex", "super_complex"]
+        assert analysis.complexity == "medium"
 
     def test_parse_with_invalid_process(self):
         """Invalid process should fall back to default."""
@@ -1063,8 +1062,7 @@ class TestGoalAnalyzerComplexityValidation:
         response = '{"summary": "test", "suggested_process": "parallel"}'
         analysis = analyzer.parse_llm_response(response)
         assert analysis is not None
-        # Currently uses the raw value - potential bug
-        assert analysis.suggested_process in ["sequential", "hierarchical", "parallel"]
+        assert analysis.suggested_process == "sequential"
 
     def test_parse_with_estimated_tasks_zero(self):
         """estimated_tasks=0 should be handled properly."""
@@ -1072,8 +1070,7 @@ class TestGoalAnalyzerComplexityValidation:
         response = '{"summary": "test", "estimated_tasks": 0}'
         analysis = analyzer.parse_llm_response(response)
         assert analysis is not None
-        # Currently 0 is replaced with 3 due to `or 3`
-        assert analysis.estimated_tasks == 3  # Bug: should be 0 or clamped
+        assert analysis.estimated_tasks == 1
 
     def test_parse_with_estimated_tasks_negative(self):
         """Negative estimated_tasks should be handled."""
@@ -1081,8 +1078,7 @@ class TestGoalAnalyzerComplexityValidation:
         response = '{"summary": "test", "estimated_tasks": -5}'
         analysis = analyzer.parse_llm_response(response)
         assert analysis is not None
-        # Negative becomes 3 due to `or 3`
-        assert analysis.estimated_tasks == 3
+        assert analysis.estimated_tasks == 1
 
 
 # ---------------------------------------------------------------------------
@@ -1113,8 +1109,7 @@ class TestRoleCreatorLoadRoleFromFile:
         path.unlink()  # Clean up
 
         assert role is not None
-        # Currently 0 is replaced with 30 due to `or 30`
-        assert role.max_iterations == 30  # Bug: should be 0
+        assert role.max_iterations == 1
 
     def test_load_role_with_zero_timeout_multiplier(self):
         """timeout_multiplier=0.0 should not be replaced."""
@@ -1137,8 +1132,7 @@ class TestRoleCreatorLoadRoleFromFile:
         path.unlink()  # Clean up
 
         assert role is not None
-        # Currently 0.0 is replaced with 1.0 due to `or 1.0`
-        assert role.timeout_multiplier == 1.0  # Bug: should be 0.0
+        assert role.timeout_multiplier == 0.1
 
 
 # ---------------------------------------------------------------------------
@@ -1171,8 +1165,7 @@ class TestRolePoolManagerLoadRole:
         try:
             manager.load()
             role = manager.get_pool().get_role('zero_iter_role')
-            # Currently 0 is replaced with 30
-            assert role.max_iterations == 30  # Bug behavior
+            assert role.max_iterations == 1
         finally:
             path.unlink()
 

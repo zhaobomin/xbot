@@ -77,6 +77,30 @@ class TestDeleteSdkSessionLockProtection:
         assert result["deleted"] is False
         assert result["error"] == "No SDK session found"
 
+    @pytest.mark.asyncio
+    async def test_delete_clears_session_store_tasks_and_index(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.session_store import SessionStore
+
+        backend = ClaudeSDKBackend()
+        backend._clients_lock = asyncio.Lock()
+        backend._session_store = SessionStore()
+        backend._use_session_store = True
+        entry = backend._session_store.get_or_create("test_session")
+        entry.sdk_session_id = "sdk_123"
+        backend._session_store.set_sdk_session_id("test_session", "sdk_123")
+        entry.tasks = [MagicMock(), MagicMock()]
+        backend._shared_resources = {"_session_contexts": {"test_session": ("telegram", "1"), "sdk_123": ("telegram", "1")}}
+        backend.sessions = None
+
+        with patch("claude_agent_sdk.delete_session") as mock_delete:
+            mock_delete.return_value = None
+            result = await backend.delete_sdk_session("test_session")
+
+        assert result["deleted"] is True
+        assert backend._session_store.get("test_session").tasks == []
+        assert backend._session_store.get_by_sdk_id("sdk_123") is None
+
 
 class TestForkSdkSessionLockProtection:
     """Tests for fork_sdk_session lock protection."""
@@ -242,3 +266,28 @@ class TestBidirectionalMappingConsistency:
             # Both mappings should exist
             assert session_contexts.get(new_key) == "sdk_new"
             assert backend._sdk_session_ids.get("sdk_new") == new_key
+
+
+class TestSessionStoreSdkIndexHelpers:
+    def test_set_sdk_session_id_updates_reverse_index(self):
+        from xbot.agent.session_store import SessionStore
+
+        store = SessionStore()
+        store.get_or_create("session_a")
+
+        store.set_sdk_session_id("session_a", "sdk_1")
+
+        assert store.get("session_a").sdk_session_id == "sdk_1"
+        assert store.get_by_sdk_id("sdk_1") is store.get("session_a")
+
+    def test_clear_sdk_session_id_removes_reverse_index(self):
+        from xbot.agent.session_store import SessionStore
+
+        store = SessionStore()
+        store.get_or_create("session_a")
+        store.set_sdk_session_id("session_a", "sdk_1")
+
+        store.clear_sdk_session_id("session_a")
+
+        assert store.get("session_a").sdk_session_id is None
+        assert store.get_by_sdk_id("sdk_1") is None
