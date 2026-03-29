@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "crew_config_path": "",
+  "crew_name": "test_crew",
+  "crew_phase": "running",
+  "started_at": "2026-03-28T12:27:09.919271",
+  "checkpoint_at": "2026-03-28T12:27:09.919368",
+  "completed_tasks": [],
+  "next_task": null
+}

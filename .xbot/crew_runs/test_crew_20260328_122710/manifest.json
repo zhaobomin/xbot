@@ -1,0 +1,11 @@
+{
+  "crew_name": "test_crew",
+  "run_id": "test_crew_20260328_122710",
+  "started_at": "2026-03-28T12:27:10.079112",
+  "finished_at": null,
+  "status": "running",
+  "total_time": 0.0,
+  "tasks": [],
+  "variables": {},
+  "config_path": null
+}
