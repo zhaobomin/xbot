@@ -50,6 +50,7 @@ if TYPE_CHECKING:
         TaskProgressMessage,
         TaskStartedMessage,
     )
+    from xbot.agent.session_store import SessionEntry, SessionStore
 
 # Try to import Claude SDK
 try:
@@ -140,6 +141,10 @@ class ClaudeSDKBackend(AgentBackend):
         self._skill_manager: Any = None
         self._client_skills_versions: dict[str, str | None] = {}  # Track skills version per client
 
+        # SessionStore reference for unified state management
+        self._session_store: "SessionStore | None" = None
+        self._use_session_store: bool = False  # Feature flag for gradual migration
+
     @property
     def max_clients(self) -> int:
         """Get max clients from config or use default."""
@@ -160,6 +165,248 @@ class ClaudeSDKBackend(AgentBackend):
         if self.sdk_config and hasattr(self.sdk_config, "client_disconnect_retries"):
             return self.sdk_config.client_disconnect_retries
         return self.DEFAULT_DISCONNECT_RETRIES
+
+    # === SessionStore helper methods ===
+
+    def _get_entry(self, session_key: str) -> "SessionEntry | None":
+        """Get SessionEntry from SessionStore or return None."""
+        if self._use_session_store and self._session_store:
+            return self._session_store.get(session_key)
+        return None
+
+    def _get_or_create_entry(self, session_key: str) -> "SessionEntry":
+        """Get or create SessionEntry from SessionStore."""
+        if self._use_session_store and self._session_store:
+            return self._session_store.get_or_create(session_key)
+        # Fallback - shouldn't happen when _use_session_store is True
+        raise RuntimeError("SessionStore not available")
+
+    def _get_model_from_entry(self, session_key: str) -> str | None:
+        """Get model name from SessionEntry or legacy dict."""
+        if self._use_session_store:
+            entry = self._get_entry(session_key)
+            return entry.model if entry else None
+        return self._client_models.get(session_key)
+
+    def _set_model_in_entry(self, session_key: str, model: str) -> None:
+        """Set model name in SessionEntry or legacy dict."""
+        if self._use_session_store:
+            entry = self._get_or_create_entry(session_key)
+            entry.model = model
+        else:
+            self._client_models[session_key] = model
+
+    def _get_skills_version_from_entry(self, session_key: str) -> str | None:
+        """Get skills version from SessionEntry or legacy dict."""
+        if self._use_session_store:
+            entry = self._get_entry(session_key)
+            return entry.skills_version if entry else None
+        return self._client_skills_versions.get(session_key)
+
+    def _set_skills_version_in_entry(self, session_key: str, version: str | None) -> None:
+        """Set skills version in SessionEntry or legacy dict."""
+        if self._use_session_store:
+            entry = self._get_or_create_entry(session_key)
+            entry.skills_version = version
+        else:
+            self._client_skills_versions[session_key] = version
+
+    def _get_commands_from_entry(self, session_key: str) -> list[str]:
+        """Get commands list from SessionEntry or legacy dict."""
+        if self._use_session_store:
+            entry = self._get_entry(session_key)
+            return entry.commands if entry else []
+        return self._session_commands.get(session_key, [])
+
+    def _set_commands_in_entry(self, session_key: str, commands: list[str]) -> None:
+        """Set commands list in SessionEntry or legacy dict."""
+        if self._use_session_store:
+            entry = self._get_or_create_entry(session_key)
+            entry.commands = commands
+        else:
+            self._session_commands[session_key] = commands
+
+    def _get_last_used_from_entry(self, session_key: str) -> float | None:
+        """Get last used timestamp from SessionEntry or legacy dict."""
+        if self._use_session_store:
+            entry = self._get_entry(session_key)
+            return entry.last_used if entry else None
+        return self._client_last_used.get(session_key)
+
+    def _touch_entry(self, session_key: str) -> None:
+        """Update last_used timestamp in SessionEntry or legacy dict."""
+        if self._use_session_store:
+            entry = self._get_entry(session_key)
+            if entry:
+                entry.touch()
+        else:
+            self._client_last_used[session_key] = time.time()
+
+    def _get_task_id_from_entry(self, session_key: str) -> str | None:
+        """Get active task ID from SessionEntry or legacy dict."""
+        if self._use_session_store:
+            entry = self._get_entry(session_key)
+            return entry.task_id if entry else None
+        return self._active_task_ids.get(session_key)
+
+    def _set_task_id_in_entry(self, session_key: str, task_id: str | None) -> None:
+        """Set active task ID in SessionEntry or legacy dict."""
+        if self._use_session_store:
+            entry = self._get_or_create_entry(session_key)
+            entry.task_id = task_id
+        else:
+            if task_id is not None:
+                self._active_task_ids[session_key] = task_id
+            else:
+                self._active_task_ids.pop(session_key, None)
+
+    def _get_request_id_from_entry(self, session_key: str) -> str | None:
+        """Get request ID from SessionEntry or legacy dict."""
+        if self._use_session_store:
+            entry = self._get_entry(session_key)
+            return entry.request_id if entry else None
+        return self._active_request_ids.get(session_key)
+
+    def _set_request_id_in_entry(self, session_key: str, request_id: str | None) -> None:
+        """Set request ID in SessionEntry or legacy dict."""
+        if self._use_session_store:
+            entry = self._get_or_create_entry(session_key)
+            entry.request_id = request_id
+        else:
+            if request_id is not None:
+                self._active_request_ids[session_key] = request_id
+            else:
+                self._active_request_ids.pop(session_key, None)
+
+    def _get_client_from_entry(self, session_key: str) -> "ClaudeSDKClient | None":
+        """Get SDK client from SessionEntry or legacy dict."""
+        if self._use_session_store:
+            entry = self._get_entry(session_key)
+            return entry.client if entry else None
+        return self._clients.get(session_key)
+
+    def _set_client_in_entry(self, session_key: str, client: "ClaudeSDKClient") -> None:
+        """Set SDK client in SessionEntry or legacy dict."""
+        if self._use_session_store:
+            entry = self._get_or_create_entry(session_key)
+            entry.client = client
+        else:
+            self._clients[session_key] = client
+
+    def _has_client_in_entry(self, session_key: str) -> bool:
+        """Check if session has client in SessionEntry or legacy dict."""
+        if self._use_session_store:
+            entry = self._get_entry(session_key)
+            return entry is not None and entry.client is not None
+        return session_key in self._clients
+
+    # === SDK session ID and context helpers ===
+
+    def _get_sdk_session_id_from_entry(self, session_key: str) -> str | None:
+        """Get SDK session ID from SessionEntry."""
+        if self._use_session_store:
+            entry = self._get_entry(session_key)
+            return entry.sdk_session_id if entry else None
+        return None  # Legacy mode doesn't have this
+
+    async def _set_sdk_session_id_in_entry(
+        self, session_key: str, sdk_session_id: str | None
+    ) -> None:
+        """Set SDK session ID in SessionEntry and update index.
+
+        Also syncs to session.metadata for persistence.
+        """
+        if self._use_session_store:
+            entry = self._get_or_create_entry(session_key)
+            old_sdk_id = entry.sdk_session_id
+
+            # Clear old index if exists
+            if old_sdk_id and old_sdk_id != sdk_session_id:
+                self._session_store._sdk_id_index.pop(old_sdk_id, None)
+
+            # Set new value
+            entry.sdk_session_id = sdk_session_id
+
+            # Update index
+            if sdk_session_id:
+                self._session_store._sdk_id_index[sdk_session_id] = session_key
+
+            # Sync to session.metadata for persistence
+            if self.sessions:
+                session = self.sessions.get(session_key)
+                if session:
+                    if sdk_session_id:
+                        session.metadata["sdk_session_id"] = sdk_session_id
+                    else:
+                        session.metadata.pop("sdk_session_id", None)
+                    self.sessions.save(session)
+
+    def _get_context_by_session_key(self, session_key: str) -> tuple[str, str] | None:
+        """Get (channel, chat_id) context by session_key.
+
+        Uses SessionStore if available, falls back to _session_contexts.
+        """
+        if self._use_session_store:
+            entry = self._get_entry(session_key)
+            if entry and entry.channel and entry.chat_id:
+                return (entry.channel, entry.chat_id)
+
+        # Fallback to _session_contexts
+        session_contexts = self._shared_resources.get("_session_contexts", {})
+        result = session_contexts.get(session_key)
+        return result if isinstance(result, tuple) else None
+
+    def _get_context_by_sdk_id(self, sdk_session_id: str) -> tuple[str, str] | None:
+        """Get (channel, chat_id) context by SDK session ID.
+
+        Uses SessionStore's _sdk_id_index if available, falls back to _session_contexts.
+        """
+        if self._use_session_store:
+            entry = self._session_store.get_by_sdk_id(sdk_session_id)
+            if entry and entry.channel and entry.chat_id:
+                return (entry.channel, entry.chat_id)
+
+        # Fallback to _session_contexts
+        session_contexts = self._shared_resources.get("_session_contexts", {})
+        result = session_contexts.get(sdk_session_id)
+        return result if isinstance(result, tuple) else None
+
+    def _set_context_in_entry(self, session_key: str, channel: str, chat_id: str) -> None:
+        """Set channel and chat_id in SessionEntry.
+
+        Also updates _session_contexts for backward compatibility during migration.
+        """
+        if self._use_session_store:
+            entry = self._get_or_create_entry(session_key)
+            entry.channel = channel
+            entry.chat_id = chat_id
+
+        # Also update _session_contexts for backward compatibility
+        session_contexts = self._shared_resources.setdefault("_session_contexts", {})
+        session_contexts[session_key] = (channel, chat_id)
+
+    def _set_sdk_context_mapping(self, sdk_session_id: str, channel: str, chat_id: str) -> None:
+        """Set SDK session ID to context mapping.
+
+        In SessionStore mode, updates the entry's sdk_session_id.
+        Also updates _session_contexts for backward compatibility.
+        """
+        if self._use_session_store:
+            # Find entry by context and set sdk_session_id
+            for session_key in self._session_store.list_keys():
+                entry = self._session_store.get(session_key)
+                if entry and entry.channel == channel and entry.chat_id == chat_id:
+                    # Use sync version since we're in sync context
+                    old_sdk_id = entry.sdk_session_id
+                    if old_sdk_id and old_sdk_id != sdk_session_id:
+                        self._session_store._sdk_id_index.pop(old_sdk_id, None)
+                    entry.sdk_session_id = sdk_session_id
+                    self._session_store._sdk_id_index[sdk_session_id] = session_key
+                    break
+
+        # Also update _session_contexts for backward compatibility
+        session_contexts = self._shared_resources.setdefault("_session_contexts", {})
+        session_contexts[sdk_session_id] = (channel, chat_id)
 
     async def initialize(self, config: AgentsConfig, shared_resources: dict[str, Any]) -> None:
         """Initialize the backend.
@@ -321,6 +568,12 @@ class ClaudeSDKBackend(AgentBackend):
             config=self._shared_resources.get("config"),
         )
 
+        # Get SessionStore reference for unified state management
+        self._session_store = shared_resources.get("session_store")
+        if self._session_store:
+            self._use_session_store = True
+            logger.info("Backend using SessionStore for session state management")
+
         logger.info(f"Claude SDK backend initialized with provider: {provider_name}")
         logger.info(f"Claude SDK capabilities: {self.get_tools_summary()}")
 
@@ -453,16 +706,16 @@ class ClaudeSDKBackend(AgentBackend):
             current_skills_version = self._skill_manager.version if self._skill_manager else None
 
             # Check if client exists and model/skills haven't changed
-            if session_key in self._clients:
-                cached_model = self._client_models.get(session_key)
-                cached_skills = self._client_skills_versions.get(session_key)
+            if self._has_client_in_entry(session_key):
+                cached_model = self._get_model_from_entry(session_key)
+                cached_skills = self._get_skills_version_from_entry(session_key)
                 model_ok = cached_model == current_model
                 skills_ok = cached_skills == current_skills_version
 
                 if model_ok and skills_ok:
-                    self._client_last_used[session_key] = time.time()
+                    self._touch_entry(session_key)
                     logger.debug(f"[Client] Reusing existing client for session={session_key}, model={current_model}")
-                    return self._clients[session_key]
+                    return self._get_client_from_entry(session_key)
                 else:
                     # Model or skills changed, need to recreate client
                     reasons = []
@@ -481,7 +734,15 @@ class ClaudeSDKBackend(AgentBackend):
             clients_to_disconnect.extend((c, k, "TTL expiry") for c, k in stale_clients)
 
             # Evict LRU client if at capacity
-            if len(self._clients) >= self.max_clients:
+            if self._use_session_store:
+                # Count sessions with clients
+                client_count = sum(
+                    1 for k in self._session_store.list_keys()
+                    if self._session_store.get(k) and self._session_store.get(k).client
+                )
+            else:
+                client_count = len(self._clients)
+            if client_count >= self.max_clients:
                 evicted_client, evicted_key = await self._evict_lru_client_unlocked()
                 if evicted_client is not None:
                     clients_to_disconnect.append((evicted_client, evicted_key, "LRU eviction"))
@@ -505,10 +766,11 @@ class ClaudeSDKBackend(AgentBackend):
             total_time = time.perf_counter() - client_start
             logger.info(f"[Client] Total client creation took {total_time:.2f}s for session={session_key}")
 
-            self._clients[session_key] = client
-            self._client_last_used[session_key] = time.time()
-            self._client_models[session_key] = current_model  # Track the model used
-            self._client_skills_versions[session_key] = current_skills_version  # Track skills version
+            # Store client and metadata using helper methods
+            self._set_client_in_entry(session_key, client)
+            self._touch_entry(session_key)
+            self._set_model_in_entry(session_key, current_model)
+            self._set_skills_version_in_entry(session_key, current_skills_version)
             logger.info(f"[Client] Client created for session={session_key}, model={current_model}")
 
         # Disconnect old clients outside the lock
@@ -522,7 +784,7 @@ class ClaudeSDKBackend(AgentBackend):
                 except Exception as e:
                     logger.debug(f"Error in backend client cleanup callback: {e}")
 
-        return self._clients[session_key]
+        return self._get_client_from_entry(session_key)
 
     def _remove_client_state(self, session_key: str) -> "ClaudeSDKClient | None":
         """Remove all tracked state for a session and return the client (if any).
@@ -532,21 +794,44 @@ class ClaudeSDKBackend(AgentBackend):
         responsible for disconnecting the returned client.
         """
         # === 诊断日志: 状态清理 ===
-        had_client = session_key in self._clients
-        had_task_id = session_key in self._active_task_ids
+        had_client = self._has_client_in_entry(session_key)
+        had_task_id = self._get_task_id_from_entry(session_key) is not None
         had_sdk_sid = False
         if self.sessions:
             session = self.sessions.get(session_key)
             if session and session.metadata.get("sdk_session_id"):
                 had_sdk_sid = True
 
-        client = self._clients.pop(session_key, None)
-        self._client_last_used.pop(session_key, None)
-        self._client_models.pop(session_key, None)
-        self._client_skills_versions.pop(session_key, None)
-        self._session_commands.pop(session_key, None)
-        self._active_task_ids.pop(session_key, None)
-        self._active_request_ids.pop(session_key, None)  # Clear request ID tracking
+        # Get client and clear all state
+        client = None
+        if self._use_session_store:
+            # Use SessionStore - clear entry state
+            entry = self._get_entry(session_key)
+            if entry:
+                client = entry.client
+                entry.client = None
+                entry.model = ""
+                entry.skills_version = None
+                entry.commands = []
+                entry.task_id = None
+                entry.request_id = None
+                entry.tasks.clear()  # Clear tasks list
+                # Clear SDK session ID and update index
+                old_sdk_id = entry.sdk_session_id
+                if old_sdk_id:
+                    self._session_store._sdk_id_index.pop(old_sdk_id, None)
+                entry.sdk_session_id = None
+                entry.touch()  # Update last_used
+        else:
+            # Legacy dict cleanup
+            client = self._clients.pop(session_key, None)
+            self._client_last_used.pop(session_key, None)
+            self._client_models.pop(session_key, None)
+            self._client_skills_versions.pop(session_key, None)
+            self._session_commands.pop(session_key, None)
+            self._active_task_ids.pop(session_key, None)
+            self._active_request_ids.pop(session_key, None)  # Clear request ID tracking
+
         # Clear session context for compact notifications
         session_contexts = self._shared_resources.get("_session_contexts")
         if session_contexts is not None:
@@ -713,7 +998,6 @@ class ClaudeSDKBackend(AgentBackend):
         prompt: str,
         media: list[str],
         session_id: str,
-        request_id: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Yield a single user message with image blocks and/or file references.
 
@@ -721,7 +1005,6 @@ class ClaudeSDKBackend(AgentBackend):
             prompt: The text prompt
             media: List of media file paths
             session_id: SDK session identifier
-            request_id: Optional request ID for request-response tracking
         """
         file_ref_blocks, image_paths = self._build_file_content_blocks(media)
         image_blocks = self._build_image_content_blocks(image_paths)
@@ -740,10 +1023,6 @@ class ClaudeSDKBackend(AgentBackend):
             "session_id": session_id,
         }
 
-        # Add request_id (uuid) for request-response tracking
-        if request_id:
-            message["uuid"] = request_id
-
         yield message
 
     async def _cleanup_stale_clients_unlocked(self) -> list[tuple["ClaudeSDKClient", str]]:
@@ -756,10 +1035,21 @@ class ClaudeSDKBackend(AgentBackend):
             Caller is responsible for disconnecting these clients outside the lock.
         """
         now = time.time()
-        stale_keys = [
-            key for key, last_used in self._client_last_used.items()
-            if now - last_used > self.client_ttl_seconds
-        ]
+        stale_keys = []
+
+        if self._use_session_store:
+            # Use SessionStore for TTL cleanup
+            for session_key in self._session_store.list_keys():
+                entry = self._session_store.get(session_key)
+                if entry and entry.client is not None:
+                    if now - entry.last_used > self.client_ttl_seconds:
+                        stale_keys.append(session_key)
+        else:
+            # Legacy dict cleanup
+            stale_keys = [
+                key for key, last_used in self._client_last_used.items()
+                if now - last_used > self.client_ttl_seconds
+            ]
 
         clients_to_disconnect = []
         for key in stale_keys:
@@ -781,11 +1071,21 @@ class ClaudeSDKBackend(AgentBackend):
             Tuple of (client, session_key) that was evicted.
             Caller is responsible for disconnecting the client outside the lock.
         """
-        if not self._client_last_used:
+        # Find sessions with clients
+        client_sessions = {}
+        if self._use_session_store:
+            for session_key in self._session_store.list_keys():
+                entry = self._session_store.get(session_key)
+                if entry and entry.client is not None:
+                    client_sessions[session_key] = entry.last_used
+        else:
+            client_sessions = {k: v for k, v in self._client_last_used.items() if k in self._clients}
+
+        if not client_sessions:
             return None, None
 
         # Find the oldest (LRU) client
-        lru_key = min(self._client_last_used, key=self._client_last_used.get)
+        lru_key = min(client_sessions, key=client_sessions.get)
 
         client = self._remove_client_state(lru_key)
 
@@ -807,7 +1107,7 @@ class ClaudeSDKBackend(AgentBackend):
                 f"SDK server info keys for session {session_key}: {sorted(info.keys())}"
             )
         logger.info(f"Discovered {len(commands)} SDK slash commands for session {session_key}: {commands}")
-        self._session_commands[session_key] = commands
+        self._set_commands_in_entry(session_key, commands)
 
     @staticmethod
     def _extract_slash_commands(info: Any) -> list[str]:
@@ -922,12 +1222,11 @@ class ClaudeSDKBackend(AgentBackend):
         logger.info(f"[Backend Process] Starting process for session={context.session_key}, prompt_preview={context.prompt[:50]!r}")
 
         # Store session context for compact notifications
-        # Maps session_key to (channel, chat_id) tuple
-        # This ensures hooks can find the context when processing messages
+        # Use helper method that handles both SessionStore and legacy dict
+        self._set_context_in_entry(context.session_key, context.channel, context.chat_id)
+
+        # Size limiting for backward compatibility dict
         session_contexts = self._shared_resources.setdefault("_session_contexts", {})
-        context_tuple = (context.channel, context.chat_id)
-        session_contexts[context.session_key] = context_tuple
-        # Prevent unbounded growth: keep only the most recent entries
         _MAX_SESSION_CONTEXTS = 500
         if len(session_contexts) > _MAX_SESSION_CONTEXTS:
             # Remove oldest entries (dict preserves insertion order in Python 3.7+)
@@ -996,7 +1295,7 @@ class ClaudeSDKBackend(AgentBackend):
 
         # === 诊断日志: Backend 处理入口 ===
         sdk_session_id = session.metadata.get("sdk_session_id") if session else None
-        active_task_id = self._active_task_ids.get(context.session_key)
+        active_task_id = self._get_task_id_from_entry(context.session_key)
         reconnect_pending = session.metadata.get("_reconnect_pending") if session else None
         prompt_preview = context.prompt[:50].replace('\n', ' ') if context.prompt else ""
         logger.info(
@@ -1120,15 +1419,13 @@ class ClaudeSDKBackend(AgentBackend):
                 logger.info(f"[Backend Process] Sending query to SDK for session={context.session_key}")
                 _query_session_id = self._query_session_id(context.session_key, session)
 
-                # Generate request ID for request-response tracking
-                request_id = str(uuid.uuid4())
-                self._active_request_ids[context.session_key] = request_id
-                logger.debug(f"[Request Tracking] session={context.session_key}, request_id={request_id}")
+                # Clear task_id before new request to detect stale messages
+                self._set_task_id_in_entry(context.session_key, None)
 
                 if context.media:
                     logger.info(f"[Backend Process] Multimodal query with {len(context.media)} media file(s)")
                     await client.query(
-                        self._build_multimodal_query(prompt, context.media, _query_session_id, request_id),
+                        self._build_multimodal_query(prompt, context.media, _query_session_id),
                         session_id=_query_session_id,
                     )
                 else:
@@ -1166,7 +1463,7 @@ class ClaudeSDKBackend(AgentBackend):
                             list(message.data.keys()) if isinstance(message.data, dict) else "N/A",
                             message.data,
                         )
-                        self._session_commands[context.session_key] = commands
+                        self._set_commands_in_entry(context.session_key, commands)
 
                         # Try to extract session_id from init message for early mapping
                         # This ensures hooks can find context from the first message
@@ -1183,37 +1480,55 @@ class ClaudeSDKBackend(AgentBackend):
                                 self.sessions.save(session)
                     if isinstance(message, TaskStartedMessage) and message.task_id:
                         # === 诊断日志: TaskStarted ===
-                        prev_task_id = self._active_task_ids.get(context.session_key)
+                        prev_task_id = self._get_task_id_from_entry(context.session_key)
                         logger.info(
                             f"[SDK TaskStarted] session={context.session_key}, task_id={message.task_id}, "
                             f"prev_task_id={prev_task_id or 'none'}"
                         )
-                        self._active_task_ids[context.session_key] = message.task_id
+                        self._set_task_id_in_entry(context.session_key, message.task_id)
                     if (
                         isinstance(message, TaskNotificationMessage)
                         and message.status in {"completed", "failed", "stopped"}
                     ):
                         # === 诊断日志 + Task ID验证: TaskNotification 终态 ===
-                        current_task_id = self._active_task_ids.get(context.session_key)
+                        current_task_id = self._get_task_id_from_entry(context.session_key)
                         matches_active = current_task_id == message.task_id if message.task_id else False
                         logger.info(
                             f"[SDK Notification] session={context.session_key}, task_id={message.task_id}, "
                             f"status={message.status}, matches_active={matches_active}"
                         )
-                        # 如果task_id不匹配当前活跃任务，可能是过时任务的通知
-                        if message.task_id and current_task_id and not matches_active:
+                        # Stale detection: if message.task_id and task_ids don't match
+                        # or current_task_id is None (no TaskStarted received for this request)
+                        if message.task_id and (
+                            current_task_id is None or message.task_id != current_task_id
+                        ):
                             logger.warning(
                                 f"[SDK Notification] Stale task notification detected: "
                                 f"session={context.session_key}, received_task={message.task_id}, "
-                                f"expected_task={current_task_id}. Ignoring."
+                                f"expected_task={current_task_id or 'none'}. Ignoring."
                             )
-                            # 不清理active_task_ids，因为这不是当前任务的通知
                             continue
-                        self._active_task_ids.pop(context.session_key, None)
+                        self._set_task_id_in_entry(context.session_key, None)
                     if (
                         isinstance(message, TaskNotificationMessage)
                         and str(message.status or "").lower() in self._INPUT_REQUIRED_STATUSES
                     ):
+                        # Check if this message belongs to current request (stale message detection)
+                        # A message is stale if:
+                        # 1. message.task_id exists AND
+                        # 2. current_task_id exists AND they don't match, OR
+                        # 3. current_task_id is None (no TaskStarted received for this request yet)
+                        current_task_id = self._get_task_id_from_entry(context.session_key)
+                        if message.task_id and (
+                            current_task_id is None or message.task_id != current_task_id
+                        ):
+                            logger.warning(
+                                f"[SDK Notification] Stale input_required ignored: "
+                                f"session={context.session_key}, received_task={message.task_id}, "
+                                f"expected_task={current_task_id or 'none'}"
+                            )
+                            continue
+
                         user_input = await self._wait_for_user_input(context, message)
                         if user_input:
                             await client.query(
@@ -1229,38 +1544,18 @@ class ClaudeSDKBackend(AgentBackend):
                             break
                     if is_terminal_result:
                         # === 诊断日志: ResultMessage ===
-                        current_task_id = self._active_task_ids.get(context.session_key)
-                        expected_request_id = self._active_request_ids.get(context.session_key)
-                        received_uuid = getattr(message, 'uuid', None)
+                        current_task_id = self._get_task_id_from_entry(context.session_key)
 
                         logger.info(
                             f"[SDK Result] session={context.session_key}, task_id={current_task_id or 'none'}, "
-                            f"request_id={expected_request_id or 'none'}, received_uuid={received_uuid or 'none'}, "
                             f"is_error={message.is_error if hasattr(message, 'is_error') else 'N/A'}"
                         )
 
-                        # Validate request ID if we have one (only for multimodal queries)
-                        if expected_request_id and received_uuid:
-                            if received_uuid != expected_request_id:
-                                logger.warning(
-                                    f"[Request Tracking] UUID mismatch: session={context.session_key}, "
-                                    f"expected={expected_request_id}, received={received_uuid}. "
-                                    f"This might be a stale response."
-                                )
-                                # Note: We don't ignore the result because SDK might generate new UUIDs
-                                # The warning helps diagnose issues
-
-                        self._active_task_ids.pop(context.session_key, None)
-                        self._active_request_ids.pop(context.session_key, None)  # Clear request ID
+                        self._set_task_id_in_entry(context.session_key, None)
                         if session is not None and message.session_id:
-                            session.metadata["sdk_session_id"] = message.session_id
-                            self.sessions.save(session)
-                            # Also update session_contexts mapping for SDK session ID
-                            # This ensures hooks can find context when SDK returns the UUID
-                            session_contexts = self._shared_resources.get("_session_contexts")
-                            if session_contexts is not None:
-                                context_tuple = (context.channel, context.chat_id)
-                                session_contexts[message.session_id] = context_tuple
+                            # Update SDK session ID mapping using helper method
+                            # This also syncs to session.metadata and saves
+                            await self._set_sdk_session_id_in_entry(context.session_key, message.session_id)
 
                     if self._message_converter:
                         response = self._message_converter.convert(message)
@@ -1386,7 +1681,7 @@ class ClaudeSDKBackend(AgentBackend):
                                     commands,
                                     message.data,
                                 )
-                                self._session_commands[context.session_key] = commands
+                                self._set_commands_in_entry(context.session_key, commands)
                                 # Early mapping for hooks
                                 sdk_session_id = message.data.get("session_id") if isinstance(message.data, dict) else None
                                 if sdk_session_id:
@@ -1394,39 +1689,58 @@ class ClaudeSDKBackend(AgentBackend):
                                         "[SDK Init Fallback] Found session_id='{}', mapping to context",
                                         sdk_session_id,
                                     )
-                                    session_contexts = self._shared_resources.get("_session_contexts")
-                                    if session_contexts is not None:
-                                        session_contexts[sdk_session_id] = (context.channel, context.chat_id)
-                                    if session is not None:
-                                        session.metadata["sdk_session_id"] = sdk_session_id
-                                        self.sessions.save(session)
+                                    # Use helper method for SDK session ID mapping
+                                    # This also syncs to session.metadata and saves
+                                    await self._set_sdk_session_id_in_entry(context.session_key, sdk_session_id)
                             if isinstance(message, TaskStartedMessage) and message.task_id:
-                                self._active_task_ids[context.session_key] = message.task_id
+                                self._set_task_id_in_entry(context.session_key, message.task_id)
                             if (
                                 isinstance(message, TaskNotificationMessage)
                                 and message.status in {"completed", "failed", "stopped"}
                             ):
                                 # === Fallback 路径 Task ID 验证 ===
-                                current_task_id = self._active_task_ids.get(context.session_key)
+                                current_task_id = self._get_task_id_from_entry(context.session_key)
                                 matches_active = current_task_id == message.task_id if message.task_id else False
-                                if message.task_id and current_task_id and not matches_active:
+                                # Stale detection: if message.task_id and task_ids don't match
+                                # or current_task_id is None (no TaskStarted received for this request)
+                                if message.task_id and (
+                                    current_task_id is None or message.task_id != current_task_id
+                                ):
                                     logger.warning(
                                         f"[Fallback Notification] Stale task notification detected: "
                                         f"session={context.session_key}, received_task={message.task_id}, "
-                                        f"expected_task={current_task_id}. Ignoring."
+                                        f"expected_task={current_task_id or 'none'}. Ignoring."
                                     )
                                     continue
-                                self._active_task_ids.pop(context.session_key, None)
+                                self._set_task_id_in_entry(context.session_key, None)
+                            if (
+                                isinstance(message, TaskNotificationMessage)
+                                and str(message.status or "").lower() in self._INPUT_REQUIRED_STATUSES
+                            ):
+                                # Check if this message belongs to current request (stale message detection)
+                                # A message is stale if message.task_id exists and current_task_id is None or doesn't match
+                                current_task_id = self._get_task_id_from_entry(context.session_key)
+                                if message.task_id and (
+                                    current_task_id is None or message.task_id != current_task_id
+                                ):
+                                    logger.warning(
+                                        f"[Fallback Notification] Stale input_required ignored: "
+                                        f"session={context.session_key}, received_task={message.task_id}, "
+                                        f"expected_task={current_task_id or 'none'}"
+                                    )
+                                    continue
+                                # Fallback path doesn't handle input_required, log and continue
+                                logger.warning(
+                                    f"[Fallback] input_required not supported in fallback path: "
+                                    f"session={context.session_key}, task_id={message.task_id}"
+                                )
+                                continue
                             if is_terminal_result:
-                                self._active_task_ids.pop(context.session_key, None)
+                                self._set_task_id_in_entry(context.session_key, None)
                                 if session is not None and message.session_id:
-                                    session.metadata["sdk_session_id"] = message.session_id
-                                    self.sessions.save(session)
-                                    # Also update session_contexts mapping for SDK session ID
-                                    session_contexts = self._shared_resources.get("_session_contexts")
-                                    if session_contexts is not None:
-                                        context_tuple = (context.channel, context.chat_id)
-                                        session_contexts[message.session_id] = context_tuple
+                                    # Use helper method for SDK session ID mapping
+                                    # This also syncs to session.metadata and saves
+                                    await self._set_sdk_session_id_in_entry(context.session_key, message.session_id)
                             
                             if self._message_converter:
                                 response = self._message_converter.convert(message)
@@ -1612,9 +1926,9 @@ class ClaudeSDKBackend(AgentBackend):
         content = (response.content or "").strip()
 
         if response.action in {"cancel", "deny"}:
-            task_id = self._active_task_ids.get(context.session_key)
+            task_id = self._get_task_id_from_entry(context.session_key)
             if task_id:
-                client = self._clients.get(context.session_key)
+                client = self._get_client_from_entry(context.session_key)
                 if client is not None:
                     try:
                         await client.stop_task(task_id)
@@ -1668,7 +1982,7 @@ class ClaudeSDKBackend(AgentBackend):
 
     async def get_session_commands(self, session_key: str) -> list[str]:
         """Return discovered SDK slash commands for a session."""
-        cached = self._session_commands.get(session_key)
+        cached = self._get_commands_from_entry(session_key)
         if not cached:
             try:
                 client = await self._get_or_create_client(session_key)
@@ -1680,7 +1994,7 @@ class ClaudeSDKBackend(AgentBackend):
                     f"Failed to discover SDK slash commands for session {session_key}: {e}"
                 )
                 return []
-        commands = list(self._session_commands.get(session_key, []))
+        commands = self._get_commands_from_entry(session_key)
         if not commands:
             logger.warning(
                 f"SDK slash commands empty for session {session_key}; /help will use fallback commands"
@@ -1689,15 +2003,15 @@ class ClaudeSDKBackend(AgentBackend):
 
     async def stop_active_task(self, session_key: str) -> bool:
         """Stop the latest active SDK task for a session."""
-        task_id = self._active_task_ids.get(session_key)
+        task_id = self._get_task_id_from_entry(session_key)
         if not task_id:
             return False
-        client = self._clients.get(session_key)
+        client = self._get_client_from_entry(session_key)
         if client is None:
             return False
         try:
             await client.stop_task(task_id)
-            self._active_task_ids.pop(session_key, None)
+            self._set_task_id_in_entry(session_key, None)
             logger.info(f"Stopped SDK task for session {session_key}: {task_id}")
             return True
         except Exception as e:
@@ -1716,7 +2030,7 @@ class ClaudeSDKBackend(AgentBackend):
         Returns:
             Dict with 'interrupted' bool and 'usage' dict (if available)
         """
-        client = self._clients.get(session_key)
+        client = self._get_client_from_entry(session_key)
         if client is None:
             return {"interrupted": False, "usage": None}
 
@@ -1832,7 +2146,7 @@ class ClaudeSDKBackend(AgentBackend):
 
     async def _reset_session_client_state(self, session_key: str) -> None:
         """Reset SDK client/task state for a session after incomplete interaction."""
-        task_id = self._active_task_ids.get(session_key)
+        task_id = self._get_task_id_from_entry(session_key)
         client = self._remove_client_state(session_key)
         if client is not None and task_id:
             try:
@@ -1862,8 +2176,13 @@ class ClaudeSDKBackend(AgentBackend):
         if self.sdk_config and self.sdk_config.agents:
             agent_names = sorted(self.sdk_config.agents.keys())
         handoff = f"handoff_agents={','.join(agent_names)}" if agent_names else "handoff_agents=0"
+        # Count sessions with clients
+        if self._use_session_store:
+            client_count = sum(1 for k in self._session_store.list_keys() if self._session_store.get(k) and self._session_store.get(k).client)
+        else:
+            client_count = len(self._clients)
         runtime = (
-            f"connected_sessions={len(self._clients)} | "
+            f"connected_sessions={client_count} | "
             f"local_tools={len(self._tool_adapter._tools) if self._tool_adapter else 0}"
         )
         return f"{capability_summary} | {policy_summary} | {handoff} | {runtime}"
