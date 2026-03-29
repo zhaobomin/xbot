@@ -144,6 +144,23 @@ class AgentBackend(ABC):
         """Get available slash commands for a session (optional)."""
         return []
 
+    async def get_context_usage(self, session_key: str) -> dict[str, Any]:
+        """Get current context window usage for a session (optional).
+
+        Returns detailed breakdown of token usage including:
+        - categories: Token usage by category (system prompt, tools, messages, etc.)
+        - totalTokens: Total tokens in context
+        - maxTokens: Effective maximum tokens
+        - percentage: Percent of context used
+        - mcpTools: Per-tool token breakdown
+        - memoryFiles: Per-file token breakdown
+        - agents: Per-agent token breakdown
+
+        Returns:
+            Dict with context usage info, or empty dict if not supported
+        """
+        return {}
+
     def get_tools_summary(self) -> str:
         """Get a summary of available tools (optional).
 

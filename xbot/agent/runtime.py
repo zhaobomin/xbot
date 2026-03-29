@@ -22,6 +22,7 @@ from xbot.agent.model_manager import ModelManager
 from xbot.agent.protocol import AgentContext
 from xbot.agent.response_handlers import RuntimeResponseHandlers
 from xbot.agent.router import AgentRouter, register_default_backends
+from xbot.agent.session_store import SessionStore
 from xbot.agent.state_checker import StateConsistencyChecker
 from xbot.agent.state_coordinator import SessionStateCoordinator
 from xbot.agent.state_machine import (
@@ -80,19 +81,22 @@ class AgentRuntime:
             Path(self.shared_resources.get("workspace", config.agents.defaults.workspace))
         )
         self._running = False
-        self._active_tasks: dict[str, list[asyncio.Task]] = {}
-        self._session_locks: dict[str, asyncio.Lock] = {}
+
         # Use state machine for session state management
         self._state_machine = SessionStateMachine(
             on_transition=self._on_state_transition
         )
+
+        # Session store for unified task and lock management
+        self._session_store = SessionStore()
+        self.shared_resources["session_store"] = self._session_store  # 让 backend 可以访问
 
         # State consistency checker (for debugging and monitoring)
         self._state_checker = StateConsistencyChecker(self)
         self._state_check_enabled = True  # Feature flag for state checking
 
         # Session state coordinator (unified state management)
-        self._state_coordinator = SessionStateCoordinator(self)
+        self._state_coordinator = SessionStateCoordinator(self, self._session_store)
         self._response_handlers = RuntimeResponseHandlers(self)
 
         # Retry count tracking for interaction responses (max 3 retries for invalid answers)
@@ -326,7 +330,7 @@ class AgentRuntime:
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content="♻️ Session cleared. Starting fresh!",
+                content="♻️ Context cleared. Starting fresh!\n📌 Use `!stop` to stop tasks without clearing context.",
                 metadata=msg.metadata or {},
             )
 
@@ -355,6 +359,7 @@ class AgentRuntime:
             asyncio.create_task(self._do_restart())
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="Restarting...")
         if cmd == "!stop":
+            # !stop: 停止当前任务，保留上下文
             await self.initialize()
             state = await self._terminate_session(msg.session_key, hard_reset=False)
 
@@ -376,6 +381,7 @@ class AgentRuntime:
             content_parts = []
             if parts:
                 content_parts.append(f"🛑 Stopped {' and '.join(parts)}.")
+                content_parts.append("📌 Context preserved. Continue conversation or use `!reset` to clear.")
             else:
                 content_parts.append("No active task to stop.")
 
@@ -391,7 +397,12 @@ class AgentRuntime:
                     )
 
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(content_parts))
-        if cmd == "!reset":
+        if cmd == "!reset" or cmd.startswith("!reset "):
+            # !reset: 完全重置，删除所有状态和 SDK 文件
+            # --soft: 仅清理状态，保留 SDK 上下文
+            reset_args = msg.content.strip().lower().split()
+            soft_reset = "--soft" in reset_args or "-s" in reset_args
+
             await self.initialize()
             state = await self._terminate_session(msg.session_key, hard_reset=True)
 
@@ -412,7 +423,19 @@ class AgentRuntime:
             if details:
                 parts.append(f"Cleared: {', '.join(details)}.")
 
+            # Default: delete SDK session file (unless --soft)
+            if not soft_reset:
+                delete_result = await self.router.backend.delete_sdk_session(msg.session_key)
+                if delete_result["deleted"]:
+                    parts.append("🗑️ SDK context deleted. Fresh start!")
+                elif delete_result.get("error") and delete_result["error"] != "No SDK session found":
+                    parts.append(f"⚠️ SDK delete: {delete_result['error']}")
+            else:
+                parts.append("📌 SDK context preserved (--soft).")
+
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="\n".join(parts))
+        if cmd.startswith("!session"):
+            return await self._handle_session_command(msg)
         if cmd == "!state":
             return OutboundMessage(
                 channel=msg.channel,
@@ -474,7 +497,7 @@ class AgentRuntime:
         usage: dict[str, Any] | None = None
         logger.info(f"[Runtime] Starting router.process for session={msg.session_key}, prompt={normalized_prompt[:50]!r}")
         async for response in self.router.process(context):
-            logger.info(f"[Runtime] Received response from router for session={msg.session_key}")
+            logger.debug(f"[Runtime] Received response from router for session={msg.session_key}")
             if response.progress_texts:
                 for text in response.progress_texts:
                     if text:
@@ -639,7 +662,7 @@ class AgentRuntime:
         async with self._state_coordinator.transaction(
             session_key, validate_on_commit=False
         ) as tx:
-            # Release lock (coordinator handles _session_locks deletion)
+            # Release lock (coordinator handles lock cleanup)
             tx.release_lock()
 
             # Set final phase (always IDLE, even for hard_reset)
@@ -676,7 +699,7 @@ class AgentRuntime:
     def _make_task_done_callback(self, session_key: str) -> Callable[[asyncio.Task], None]:
         """Create a done callback for task cleanup.
 
-        Returns a callback that removes the task from _active_tasks when done.
+        Returns a callback that removes the task from session store when done.
         This avoids the lambda capture issue where the task references itself.
         Also syncs the session phase after task removal to ensure correct state.
         """
@@ -1060,12 +1083,19 @@ class AgentRuntime:
             "🐈 xbot command reference:",
             "",
             "Runtime controls:",
-            "!help or /help — Show available commands",
-            "!stop or /stop — Stop the current task",
-            "!reset or /reset — Hard reset current session state",
-            "!state or /state — Show runtime session diagnostics",
-            "!restart or /restart — Restart the bot process",
+            "!help — Show this help",
+            "!stop — Stop current task (preserves context)",
+            "!reset — Full reset, delete all context and SDK session",
+            "        --soft: Keep SDK context, only clear state",
+            "!state — Show runtime session diagnostics",
+            "!restart — Restart the bot process",
             "!ver — Show version and build info",
+            "",
+            "Context controls:",
+            "/clear — Clear conversation context (start fresh)",
+            "/compact — Compact context (summarize history)",
+            "",
+            "SDK commands (forwarded):",
         ]
 
         # Add workspace commands if any
@@ -1119,6 +1149,222 @@ class AgentRuntime:
 
         return ", ".join(_fmt(tc) for tc in tool_calls)
 
+    async def _handle_session_command(self, msg: InboundMessage) -> OutboundMessage:
+        """Handle !session commands for SDK session management.
+
+        Commands:
+            !session list [limit] [offset]  - List SDK sessions
+            !session delete [session_key]   - Delete SDK session file
+            !session info [session_key]     - Show session info
+        """
+        parts = msg.content.strip().split()
+        subcmd = parts[1] if len(parts) > 1 else ""
+
+        if subcmd == "list":
+            # !session list [limit=10] [offset=0]
+            limit = 10
+            offset = 0
+            try:
+                if len(parts) > 2:
+                    limit = int(parts[2])
+                if len(parts) > 3:
+                    offset = int(parts[3])
+            except ValueError:
+                pass
+
+            # Cap limits
+            limit = min(max(limit, 1), 100)
+            offset = max(offset, 0)
+
+            result = await self.router.backend.list_sdk_sessions(limit, offset)
+
+            if result.get("error"):
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=f"❌ Failed to list sessions: {result['error']}",
+                )
+
+            sessions = result.get("sessions", [])
+            if not sessions:
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="📋 No SDK sessions found.",
+                )
+
+            lines = [f"📋 SDK Sessions ({len(sessions)} shown):"]
+            for i, s in enumerate(sessions, 1):
+                session_id = s.get("session_id", "unknown")[:12]
+                title = s.get("title", "Untitled")[:30]
+                msg_count = s.get("message_count", 0)
+                lines.append(f"  {i}. `{session_id}...` \"{title}\" ({msg_count} msgs)")
+
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="\n".join(lines),
+            )
+
+        elif subcmd == "delete":
+            # !session delete [session_key]
+            target = parts[2] if len(parts) > 2 else msg.session_key
+
+            # Check if session is busy before deleting
+            phase = self._state_coordinator.get_phase(target)
+            if self._state_coordinator.is_busy(target):
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=f"❌ Cannot delete session in {phase.value} state. Wait for it to finish.",
+                )
+
+            # Transition to DELETING state before operation
+            if not self._state_coordinator.transition(target, SessionPhase.DELETING, reason="delete_sdk_session"):
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=f"❌ Failed to transition to deleting state.",
+                )
+
+            try:
+                # Delete SDK session
+                result = await self.router.backend.delete_sdk_session(target)
+
+                if result["deleted"]:
+                    sdk_id = result.get("sdk_session_id", "unknown")
+                    # Clear session state after successful delete
+                    self._state_coordinator.clear(target)
+                    return OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=f"✅ SDK session deleted.\n🗑️ SDK ID: `{sdk_id}`",
+                    )
+                else:
+                    error = result.get("error", "Unknown error")
+                    # Return to IDLE on failure
+                    self._state_coordinator.transition(target, SessionPhase.ERROR, reason=f"delete_failed: {error}", force=True)
+                    self._state_coordinator.transition(target, SessionPhase.IDLE, reason="delete_failed_recovery", force=True)
+                    return OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=f"❌ Failed to delete SDK session: {error}",
+                    )
+            except Exception as e:
+                # Return to ERROR then IDLE on exception
+                self._state_coordinator.transition(target, SessionPhase.ERROR, reason=f"delete_exception: {e}", force=True)
+                self._state_coordinator.transition(target, SessionPhase.IDLE, reason="delete_exception_recovery", force=True)
+                raise
+
+        elif subcmd == "info":
+            # !session info - show current session's SDK info
+            # Get SDK session ID from backend
+            session_contexts = getattr(self.router.backend, "_shared_resources", {}).get("_session_contexts", {})
+            sdk_session_id = session_contexts.get(msg.session_key)
+
+            if not sdk_session_id and self.sessions:
+                session = self.sessions.get(msg.session_key)
+                if session:
+                    sdk_session_id = session.metadata.get("sdk_session_id")
+
+            lines = [f"📋 Session Info: `{msg.session_key}`"]
+            if sdk_session_id:
+                lines.append(f"  SDK Session ID: `{sdk_session_id}`")
+            else:
+                lines.append("  SDK Session ID: (none)")
+
+            # Show current phase
+            phase = self._state_coordinator.get_phase(msg.session_key)
+            lines.append(f"  Phase: {phase.value}")
+
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content="\n".join(lines),
+            )
+
+        elif subcmd == "fork":
+            # !session fork [msg_id] [title]
+            # Check if session is busy before forking
+            phase = self._state_coordinator.get_phase(msg.session_key)
+            if self._state_coordinator.is_busy(msg.session_key):
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=f"❌ Cannot fork session in {phase.value} state. Wait for it to finish.",
+                )
+
+            # Transition to FORKING state before operation
+            if not self._state_coordinator.transition(msg.session_key, SessionPhase.FORKING, reason="fork_sdk_session"):
+                return OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=f"❌ Failed to transition to forking state.",
+                )
+
+            msg_id = None
+            title = None
+
+            # Parse arguments
+            for part in parts[2:]:
+                if part.startswith('"') or part.startswith("'"):
+                    # Title in quotes
+                    title = part.strip('"\'')
+                elif not msg_id:
+                    msg_id = part
+
+            try:
+                # Fork SDK session
+                result = await self.router.backend.fork_sdk_session(
+                    msg.session_key,
+                    up_to_message_id=msg_id,
+                    title=title,
+                )
+
+                if result["forked"]:
+                    new_key = result.get("new_session_key", "unknown")
+                    new_sdk = result.get("new_sdk_session_id", "unknown")
+                    # Return to IDLE after successful fork
+                    self._state_coordinator.transition(msg.session_key, SessionPhase.IDLE, reason="fork_complete")
+                    return OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=f"✅ Session forked!\n"
+                                f"📌 New session: `{new_key}`\n"
+                                f"🆔 SDK ID: `{new_sdk}`\n"
+                                f"Continue with: `/continue {new_sdk}`",
+                    )
+                else:
+                    error = result.get("error", "Unknown error")
+                    # Return to IDLE on failure
+                    self._state_coordinator.transition(msg.session_key, SessionPhase.ERROR, reason=f"fork_failed: {error}", force=True)
+                    self._state_coordinator.transition(msg.session_key, SessionPhase.IDLE, reason="fork_failed_recovery", force=True)
+                    return OutboundMessage(
+                        channel=msg.channel,
+                        chat_id=msg.chat_id,
+                        content=f"❌ Failed to fork session: {error}",
+                    )
+            except Exception as e:
+                # Return to ERROR then IDLE on exception
+                self._state_coordinator.transition(msg.session_key, SessionPhase.ERROR, reason=f"fork_exception: {e}", force=True)
+                self._state_coordinator.transition(msg.session_key, SessionPhase.IDLE, reason="fork_exception_recovery", force=True)
+                raise
+
+        else:
+            # Show help
+            help_text = """📋 Session Commands:
+  !session list [limit] [offset]  - List SDK sessions
+  !session delete [key]           - Delete SDK session file
+  !session fork [msg_id] [title]  - Fork session from message
+  !session info                   - Show current session info
+
+  !reset --hard                   - Reset and delete SDK file"""
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=help_text,
+            )
+
     async def _do_clear_session(self, session_key: str) -> None:
         """Clear session context by resetting backend session.
 
@@ -1126,6 +1372,15 @@ class AgentRuntime:
         that don't support SDK's built-in slash commands.
         """
         try:
+            # Delete SDK session file completely (including ~/.claude/projects/.../*.jsonl)
+            # This ensures the context is truly cleared, not just disconnected
+            if hasattr(self.router.backend, "delete_sdk_session"):
+                result = await self.router.backend.delete_sdk_session(session_key)
+                if result.get("deleted") or result.get("error") == "No SDK session found":
+                    logger.info(f"Session SDK file deleted: {session_key}")
+                else:
+                    logger.warning(f"Failed to delete SDK session: {result.get('error')}")
+
             # Reset backend session (disconnects SDK client, clears session data)
             if hasattr(self.router.backend, "reset_session"):
                 await self.router.backend.reset_session(session_key)

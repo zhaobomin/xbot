@@ -55,6 +55,10 @@ class SkillsLoader:
         self.scoped_workspace_skills = workspace / ".xbot" / "skills"
         self.personal_skills = Path.home() / ".xbot" / "skills"
         self.builtin_skills = builtin_skills_dir or BUILTIN_SKILLS_DIR
+        # Cache for skill triggers to avoid repeated YAML parsing
+        self._triggers_cache: dict[str, SkillTriggers] = {}
+        # Track skill file modification times for cache invalidation
+        self._triggers_cache_mtime: dict[str, float] = {}
 
     def list_skills(self, filter_unavailable: bool = True) -> list[dict[str, str]]:
         """
@@ -326,6 +330,7 @@ class SkillsLoader:
         """Get trigger configuration for a skill.
 
         Parses the 'triggers' and 'excludes' sections from frontmatter.
+        Results are cached for performance.
 
         Example frontmatter:
         ---
@@ -339,14 +344,57 @@ class SkillsLoader:
             patterns: ["skip review"]
         ---
         """
+        # Get skill file path for cache validation
+        skill_info = None
+        for s in self.list_skills(filter_unavailable=False):
+            if s["name"] == name:
+                skill_info = s
+                break
+
+        skill_path = Path(skill_info["path"]) if skill_info else None
+
+        # Check cache validity
+        if skill_path and skill_path.exists():
+            current_mtime = skill_path.stat().st_mtime
+            cached_mtime = self._triggers_cache_mtime.get(name, 0)
+
+            # Return cached result if file hasn't changed
+            if name in self._triggers_cache and current_mtime == cached_mtime:
+                return self._triggers_cache[name]
+
+            # Update cache mtime
+            self._triggers_cache_mtime[name] = current_mtime
+
+        # Check if we have a cached result (even without file)
+        if name in self._triggers_cache:
+            return self._triggers_cache[name]
+
+        # Parse and cache
         meta = self._get_full_metadata(name)
         if not meta:
-            return SkillTriggers()
+            result = SkillTriggers()
+            self._triggers_cache[name] = result
+            return result
 
         triggers = self._parse_trigger_list(meta.get("triggers", []))
         excludes = self._parse_trigger_list(meta.get("excludes", []))
 
-        return SkillTriggers(triggers=triggers, excludes=excludes)
+        result = SkillTriggers(triggers=triggers, excludes=excludes)
+        self._triggers_cache[name] = result
+        return result
+
+    def invalidate_triggers_cache(self, name: str | None = None) -> None:
+        """Invalidate the triggers cache.
+
+        Args:
+            name: Optional skill name to invalidate. If None, clears all cache.
+        """
+        if name is not None:
+            self._triggers_cache.pop(name, None)
+            self._triggers_cache_mtime.pop(name, None)
+        else:
+            self._triggers_cache.clear()
+            self._triggers_cache_mtime.clear()
 
     def _parse_trigger_list(self, raw_list: Any) -> list[TriggerCondition]:
         """Parse a list of trigger definitions into TriggerCondition objects."""

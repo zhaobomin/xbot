@@ -27,6 +27,73 @@ def detect_image_mime(data: bytes) -> str | None:
     return None
 
 
+def detect_audio_mime(data: bytes) -> str | None:
+    """Detect audio MIME type from magic bytes.
+
+    Supports common audio formats:
+    - MP3: MPEG Audio frame sync (0xFF 0xF*)
+    - WAV: RIFF....WAVE
+    - OGG: OggS
+    - FLAC: fLaC
+    - M4A/MP4: ftyp with audio brands
+
+    Args:
+        data: Audio file bytes (at least 12 bytes recommended)
+
+    Returns:
+        MIME type string or None if not recognized
+    """
+    if len(data) < 2:
+        return None
+
+    # MP3: MPEG Audio frame sync
+    # Valid patterns: 0xFF followed by 0xF2-0xFF (varies by MPEG version/layer)
+    # Common: 0xFF 0xFB (MPEG1 Layer III), 0xFF 0xFA (MPEG1 Layer III VBR)
+    if data[0] == 0xFF and (data[1] & 0xE0) == 0xE0:
+        # Frame sync: 11 bits set (0xFF + upper 3 bits of second byte)
+        return "audio/mp3"
+
+    if len(data) < 4:
+        return None
+
+    # WAV: RIFF....WAVE (needs at least 12 bytes)
+    if data[:4] == b"RIFF":
+        if len(data) >= 12 and data[8:12] == b"WAVE":
+            return "audio/wav"
+        return None
+
+    # OGG: OggS
+    if data[:4] == b"OggS":
+        return "audio/ogg"
+
+    # FLAC: fLaC
+    if data[:4] == b"fLaC":
+        return "audio/flac"
+
+    # M4A/MP4: ftyp box followed by brand
+    # Format: 4-byte size + "ftyp" + brand (e.g., "M4A ", "mp42")
+    if len(data) >= 8 and data[4:8] == b"ftyp":
+        if len(data) < 11:
+            return None
+        # Get brand (4 bytes after "ftyp")
+        brand = data[8:12] if len(data) >= 12 else data[8:11] + b" "
+
+        # Audio-specific brands (M4A, M4B, F4A, F4B)
+        if brand[:3] in (b"M4A", b"M4B", b"F4A", b"F4B"):
+            return "audio/mp4"
+
+        # Brands that could be audio-only MP4
+        if brand in (b"mp41", b"mp42", b"isom", b"iso2", b"MSNV"):
+            # These are generic MP4 - could be audio or video
+            # Return audio/mp4 for compatibility (Claude will handle appropriately)
+            return "audio/mp4"
+
+        # Video-specific brands - don't classify as audio
+        # avc1, mp4v, etc. are typically video containers
+
+    return None
+
+
 def ensure_dir(path: Path) -> Path:
     """Ensure directory exists, return it."""
     path.mkdir(parents=True, exist_ok=True)

@@ -70,7 +70,7 @@ class ClaudeSDKAgentConfig(Base):
     """
 
     max_turns: int = 40
-    permission_mode: Literal["default", "acceptEdits", "plan", "bypassPermissions"] = "acceptEdits"
+    permission_mode: Literal["default", "acceptEdits", "plan", "bypassPermissions", "dontAsk"] = "acceptEdits"
     agents: dict[str, "AgentDefinition"] | None = None
     hooks: dict[str, list] | None = None
     permission: PermissionConfig = Field(default_factory=PermissionConfig)

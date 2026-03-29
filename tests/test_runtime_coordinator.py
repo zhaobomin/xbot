@@ -97,8 +97,13 @@ def mock_runtime_with_coordinator():
     # State checker
     runtime._state_checker = StateConsistencyChecker(runtime)
 
+    # Session store
+    from xbot.agent.session_store import SessionStore
+    session_store = SessionStore()
+    runtime._session_store = session_store
+
     # State coordinator
-    runtime._state_coordinator = SessionStateCoordinator(runtime)
+    runtime._state_coordinator = SessionStateCoordinator(runtime, session_store)
 
     # 绑定方法
     runtime.get_session_state = AgentRuntime.get_session_state.__get__(runtime, AgentRuntime)

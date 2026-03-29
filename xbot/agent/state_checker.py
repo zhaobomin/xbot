@@ -134,11 +134,16 @@ class StateConsistencyChecker:
         active_tasks = coordinator.get_active_tasks(session_key)
         has_lock = coordinator.has_lock(session_key)
 
-        # 获取 Backend 状态
+        # 获取 Backend 状态（使用 helper methods 以支持 SessionStore）
         backend = self._runtime.router._backend
-        has_client = session_key in backend._clients if backend else False
-        task_id = backend._active_task_ids.get(session_key) if backend else None
-        last_used = backend._client_last_used.get(session_key) if backend else None
+        if backend:
+            has_client = backend._has_client_in_entry(session_key)
+            task_id = backend._get_task_id_from_entry(session_key)
+            last_used = backend._get_last_used_from_entry(session_key)
+        else:
+            has_client = False
+            task_id = None
+            last_used = None
 
         # 获取 Bus 状态
         bus = self._runtime.bus
@@ -213,9 +218,9 @@ class StateConsistencyChecker:
         """
         keys: set[str] = set(self._runtime._state_coordinator.list_tracked_session_keys())
 
-        # 从 backend 获取
+        # 从 backend 获取 legacy dict keys（仅在 _use_session_store=False 时需要）
         backend = self._runtime.router._backend
-        if backend:
+        if backend and not getattr(backend, '_use_session_store', False):
             keys.update(backend._clients.keys())
             keys.update(backend._active_task_ids.keys())
 

@@ -10,6 +10,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from xbot.agent.state_coordinator import SessionStateCoordinator
+from xbot.agent.session_store import SessionStore
 from xbot.agent.state_machine import SessionPhase
 from xbot.bus.events import InboundMessage
 from xbot.bus.queue import MessageBus
@@ -50,7 +51,9 @@ class TestOrphanTaskScanning:
         # Create a minimal mock runtime
         runtime = MagicMock()
         runtime.bus = shared_resources["bus"]
-        runtime._state_coordinator = SessionStateCoordinator(runtime)
+        session_store = SessionStore()
+        runtime._session_store = session_store
+        runtime._state_coordinator = SessionStateCoordinator(runtime, session_store)
         runtime.router = MagicMock()
         runtime.router.backend = MagicMock()
 
@@ -186,7 +189,9 @@ class TestTaskTrackingIntegration:
 
         runtime = MagicMock()
         runtime.bus = shared_resources["bus"]
-        runtime._state_coordinator = SessionStateCoordinator(runtime)
+        session_store = SessionStore()
+        runtime._session_store = session_store
+        runtime._state_coordinator = SessionStateCoordinator(runtime, session_store)
 
         # Mock all backend operations
         runtime.router = MagicMock()

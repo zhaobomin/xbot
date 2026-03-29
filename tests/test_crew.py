@@ -212,7 +212,8 @@ class TestLoadCrewConfig:
         config = load_crew_config(p)
         assert config.process == ProcessType.sequential
         assert config.verbose is False
-        assert config.tasks[0].timeout == 600
+        # timeout defaults to None (smart mode auto-extend)
+        assert config.tasks[0].timeout is None
         assert config.tasks[0].human_review is False
         assert config.tasks[0].human_briefing is False
 
@@ -524,15 +525,37 @@ class TestCheckpoint:
 
 def _mock_pool(outputs: dict[str, str] | None = None):
     """Create a mock AgentPool that returns predetermined outputs."""
+    from dataclasses import dataclass
+
     default_output = "mock output"
     pool = AsyncMock()
+
+    @dataclass
+    class MockProgress:
+        delta_content: str
+        total_content: str
+        is_final: bool
 
     async def run_task(role_name: str, prompt: str, session_key: str) -> str:
         if outputs and role_name in outputs:
             return outputs[role_name]
         return default_output
 
+    async def run_task_streaming(role_name: str, prompt: str, session_key: str):
+        """Mock streaming that yields progress events."""
+        output = default_output
+        if outputs and role_name in outputs:
+            output = outputs[role_name]
+
+        # Yield a progress event with the output
+        yield MockProgress(
+            delta_content=output,
+            total_content=output,
+            is_final=True,
+        )
+
     pool.run_task = AsyncMock(side_effect=run_task)
+    pool.run_task_streaming = run_task_streaming
     return pool
 
 
@@ -606,6 +629,13 @@ class TestSequentialProcess:
 
         pool = _mock_pool()
         pool.run_task = AsyncMock(side_effect=RuntimeError("boom"))
+
+        # Also make streaming fail
+        async def failing_stream(*args, **kwargs):
+            raise RuntimeError("boom")
+            yield  # pragma: no cover
+
+        pool.run_task_streaming = failing_stream
         ctx = CrewExecutionContext()
         perm = _mock_permission()
 

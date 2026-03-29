@@ -2443,3 +2443,176 @@ class ClaudeSDKBackend(AgentBackend):
             tool_choice=tool_choice,
             max_tokens=2048,
         )
+
+    # === SDK Session Management ===
+
+    async def delete_sdk_session(self, session_key: str) -> dict[str, Any]:
+        """Delete an SDK session file.
+
+        This removes the SDK session's JSONL file permanently.
+
+        Args:
+            session_key: The session key (e.g., "telegram:123456")
+
+        Returns:
+            Dict with keys:
+            - deleted: True if successful
+            - sdk_session_id: The SDK session ID that was deleted
+            - error: Error message if failed
+        """
+        # Get SDK session ID from session metadata or entry
+        sdk_session_id = self._get_sdk_session_id_from_entry(session_key)
+
+        if not sdk_session_id:
+            # Try to get from session metadata
+            if self.sessions:
+                session = self.sessions.get(session_key)
+                if session:
+                    sdk_session_id = session.metadata.get("sdk_session_id")
+
+        if not sdk_session_id:
+            return {
+                "deleted": False,
+                "sdk_session_id": None,
+                "error": "No SDK session found",
+            }
+
+        try:
+            from claude_agent_sdk import delete_session
+
+            delete_session(sdk_session_id)
+
+            # Clear tracking state
+            await self._set_sdk_session_id_in_entry(session_key, None)
+
+            logger.info(f"[SDK Session] Deleted SDK session {sdk_session_id} for {session_key}")
+
+            return {
+                "deleted": True,
+                "sdk_session_id": sdk_session_id,
+                "error": None,
+            }
+
+        except FileNotFoundError:
+            return {
+                "deleted": True,  # Already gone is success
+                "sdk_session_id": sdk_session_id,
+                "error": None,
+            }
+        except Exception as e:
+            logger.error(f"[SDK Session] Failed to delete SDK session: {e}")
+            return {
+                "deleted": False,
+                "sdk_session_id": sdk_session_id,
+                "error": str(e),
+            }
+
+    async def fork_sdk_session(
+        self,
+        session_key: str,
+        message_id: str | None = None,
+        title: str | None = None,
+    ) -> dict[str, Any]:
+        """Fork an SDK session into a new branch.
+
+        Args:
+            session_key: The session key to fork
+            message_id: Optional message ID to fork up to
+            title: Optional title for the forked session
+
+        Returns:
+            Dict with keys:
+            - forked: True if successful
+            - new_sdk_session_id: The new SDK session ID
+            - error: Error message if failed
+        """
+        sdk_session_id = self._get_sdk_session_id_from_entry(session_key)
+
+        if not sdk_session_id:
+            if self.sessions:
+                session = self.sessions.get(session_key)
+                if session:
+                    sdk_session_id = session.metadata.get("sdk_session_id")
+
+        if not sdk_session_id:
+            return {
+                "forked": False,
+                "new_sdk_session_id": None,
+                "error": "No SDK session found",
+            }
+
+        try:
+            from claude_agent_sdk import fork_session
+
+            result = fork_session(
+                sdk_session_id,
+                up_to_message_id=message_id,
+                title=title,
+            )
+
+            logger.info(
+                f"[SDK Session] Forked SDK session {sdk_session_id} -> {result.session_id}"
+            )
+
+            return {
+                "forked": True,
+                "new_sdk_session_id": result.session_id,
+                "error": None,
+            }
+
+        except Exception as e:
+            logger.error(f"[SDK Session] Failed to fork SDK session: {e}")
+            return {
+                "forked": False,
+                "new_sdk_session_id": None,
+                "error": str(e),
+            }
+
+    async def list_sdk_sessions(
+        self,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> dict[str, Any]:
+        """List SDK sessions.
+
+        Args:
+            limit: Maximum number of sessions to return
+            offset: Number of sessions to skip
+
+        Returns:
+            Dict with keys:
+            - sessions: List of session info dicts
+            - has_more: True if more sessions available
+            - error: Error message if failed
+        """
+        try:
+            from claude_agent_sdk import list_sessions
+
+            sessions = list_sessions(limit=limit + 1, offset=offset)
+
+            # Convert to dict format
+            session_list = []
+            for s in sessions[:limit]:
+                session_list.append({
+                    "session_id": s.session_id,
+                    "title": s.title,
+                    "created_at": s.created_at.isoformat() if s.created_at else None,
+                    "updated_at": s.updated_at.isoformat() if s.updated_at else None,
+                    "message_count": s.message_count,
+                })
+
+            has_more = len(sessions) > limit
+
+            return {
+                "sessions": session_list,
+                "has_more": has_more,
+                "error": None,
+            }
+
+        except Exception as e:
+            logger.error(f"[SDK Session] Failed to list SDK sessions: {e}")
+            return {
+                "sessions": [],
+                "has_more": False,
+                "error": str(e),
+            }

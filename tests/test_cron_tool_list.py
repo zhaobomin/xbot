@@ -181,14 +181,17 @@ def test_list_every_job_milliseconds(tmp_path) -> None:
 
 
 def test_list_at_job_shows_iso_timestamp(tmp_path) -> None:
+    import time
     tool = _make_tool(tmp_path)
+    # Use a future timestamp (1 hour from now)
+    future_at_ms = int(time.time() * 1000) + 3600000
     tool._cron.add_job(
         name="One-shot",
-        schedule=CronSchedule(kind="at", at_ms=1773684000000),
+        schedule=CronSchedule(kind="at", at_ms=future_at_ms),
         message="fire",
     )
     result = tool._list_jobs()
-    assert "at 2026-" in result
+    assert "at 202" in result  # Should show a date starting with 202
 
 
 def test_list_shows_last_run_state(tmp_path) -> None:

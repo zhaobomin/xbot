@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 from xbot.agent.runtime import AgentRuntime, SessionPhase, SessionStateMachine
 from xbot.agent.state_checker import StateConsistencyChecker
 from xbot.agent.state_coordinator import SessionStateCoordinator
+from xbot.agent.session_store import SessionStore
 from xbot.bus.events import InboundMessage, OutboundMessage
 
 
@@ -168,8 +169,12 @@ def runtime_with_dispatch():
     # State checker
     runtime._state_checker = StateConsistencyChecker(runtime)
 
+    # Session store
+    session_store = SessionStore()
+    runtime._session_store = session_store
+
     # State coordinator
-    runtime._state_coordinator = SessionStateCoordinator(runtime)
+    runtime._state_coordinator = SessionStateCoordinator(runtime, session_store)
 
     # Bind methods from AgentRuntime
     runtime._bus_progress = AgentRuntime._bus_progress.__get__(runtime, MockRuntime)

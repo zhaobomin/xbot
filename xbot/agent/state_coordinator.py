@@ -10,7 +10,7 @@
 使用方式:
     from xbot.agent.state_coordinator import SessionStateCoordinator
 
-    coordinator = SessionStateCoordinator(runtime)
+    coordinator = SessionStateCoordinator(runtime, session_store)
 
     # 读取状态
     phase = coordinator.get_phase("session:1")
@@ -27,9 +27,11 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from loguru import logger
 
+from xbot.agent.state_machine import SessionPhase
+
 if TYPE_CHECKING:
     from xbot.agent.runtime import AgentRuntime
-    from xbot.agent.state_machine import SessionPhase
+    from xbot.agent.session_store import SessionStore
 
 
 @dataclass
@@ -44,33 +46,33 @@ class CoordinatorStats:
     tasks_created: int = 0
     tasks_completed: int = 0
 
-    # 锁统计
-    locks_created: int = 0
-    locks_released: int = 0
-
 
 class SessionStateCoordinator:
     """会话状态协调器。
 
     统一管理会话状态、活跃任务和会话锁。
+    所有任务和锁操作委托给 SessionStore。
 
     Attributes:
         runtime: AgentRuntime 实例
         stats: 统计信息
+        session_store: SessionStore 实例
     """
 
-    def __init__(self, runtime: AgentRuntime):
+    def __init__(
+        self,
+        runtime: AgentRuntime,
+        session_store: SessionStore,
+    ):
         """初始化协调器。
 
         Args:
             runtime: AgentRuntime 实例
+            session_store: SessionStore 实例
         """
         self._runtime = runtime
         self._stats = CoordinatorStats()
-
-        # 引用 runtime 的状态组件
-        # 注意：初始阶段这些引用已经存在于 runtime 中
-        # 协调器只是提供统一访问接口
+        self._session_store = session_store
 
     # === 状态读取操作 ===
 
@@ -84,11 +86,7 @@ class SessionStateCoordinator:
             当前 SessionPhase
         """
         self._stats.phase_reads += 1
-
-        # 委托给现有状态机
-        phase = self._runtime._state_machine.get_phase(session_key)
-
-        return phase
+        return self._runtime._state_machine.get_phase(session_key)
 
     def get_state(self, session_key: str) -> Any:
         """获取会话状态。
@@ -119,8 +117,7 @@ class SessionStateCoordinator:
     def list_tracked_session_keys(self) -> set[str]:
         """获取协调器已跟踪的全部 session key。"""
         keys = set(self.list_state_session_keys())
-        keys.update(self._runtime._active_tasks.keys())
-        keys.update(self._runtime._session_locks.keys())
+        keys.update(self._session_store.list_keys())
         return keys
 
     # === 状态变更操作 ===
@@ -144,11 +141,7 @@ class SessionStateCoordinator:
         Returns:
             转换是否成功
         """
-        from xbot.agent.state_machine import SessionPhase
-
         old_phase = self.get_phase(session_key)
-
-        # 委托给现有状态机
         success = self._runtime._state_machine.transition(
             session_key, to_phase, reason=reason, force=force
         )
@@ -175,7 +168,6 @@ class SessionStateCoordinator:
             总是返回 True
         """
         self._stats.phase_transitions += 1
-
         return self._runtime._state_machine.force_transition(
             session_key, to_phase, reason=reason
         )
@@ -189,9 +181,11 @@ class SessionStateCoordinator:
             session_key: 会话标识
             task: 异步任务
         """
-        self._stats.tasks_created += 1
-        tasks = self._runtime._active_tasks.setdefault(session_key, [])
-        tasks.append(task)
+        # Auto-create entry if not exists, then register task
+        self._session_store.get_or_create(session_key)
+        success = self._session_store.register_task(session_key, task)
+        if success:
+            self._stats.tasks_created += 1
 
     def unregister_task(self, session_key: str, task: asyncio.Task) -> None:
         """注销活跃任务。
@@ -200,9 +194,7 @@ class SessionStateCoordinator:
             session_key: 会话标识
             task: 异步任务
         """
-        tasks = self._runtime._active_tasks.get(session_key)
-        if tasks and task in tasks:
-            tasks.remove(task)
+        if self._session_store.unregister_task(session_key, task):
             self._stats.tasks_completed += 1
 
     def get_active_tasks(self, session_key: str) -> list[asyncio.Task]:
@@ -214,8 +206,7 @@ class SessionStateCoordinator:
         Returns:
             活跃任务列表
         """
-        tasks = self._runtime._active_tasks.get(session_key, [])
-        return [t for t in tasks if not t.done()]
+        return self._session_store.get_active_tasks(session_key)
 
     def has_active_tasks(self, session_key: str) -> bool:
         """检查会话是否有活跃任务。
@@ -228,7 +219,26 @@ class SessionStateCoordinator:
         """
         return len(self.get_active_tasks(session_key)) > 0
 
-    def cancel_active_tasks(self, session_key: str) -> int:
+    def is_busy(self, session_key: str) -> bool:
+        """检查会话是否处于忙碌状态。
+
+        忙碌状态包括：
+        - 有活跃任务
+        - 阶段不是 IDLE
+
+        Args:
+            session_key: 会话标识
+
+        Returns:
+            是否忙碌
+        """
+        phase = self.get_phase(session_key)
+        has_tasks = self.has_active_tasks(session_key)
+        is_idle = phase == SessionPhase.IDLE
+
+        return has_tasks or not is_idle
+
+    async def cancel_active_tasks(self, session_key: str) -> int:
         """取消会话的所有活跃任务。
 
         Args:
@@ -237,15 +247,8 @@ class SessionStateCoordinator:
         Returns:
             取消的任务数量
         """
-        tasks = self._runtime._active_tasks.pop(session_key, [])
-        cancelled = 0
-
-        for task in tasks:
-            if not task.done():
-                task.cancel()
-                cancelled += 1
-                self._stats.tasks_completed += 1
-
+        cancelled = await self._session_store.cancel_all_tasks(session_key)
+        self._stats.tasks_completed += cancelled
         return cancelled
 
     def pop_active_tasks(self, session_key: str) -> list[asyncio.Task]:
@@ -259,7 +262,12 @@ class SessionStateCoordinator:
         Returns:
             活跃任务列表（可能包含已完成的任务）
         """
-        return self._runtime._active_tasks.pop(session_key, [])
+        entry = self._session_store.get(session_key)
+        if entry:
+            tasks = list(entry.tasks)
+            entry.tasks.clear()
+            return tasks
+        return []
 
     def clear_task_list(self, session_key: str) -> list[asyncio.Task]:
         """清除任务列表条目。
@@ -272,7 +280,12 @@ class SessionStateCoordinator:
         Returns:
             被移除的任务列表
         """
-        return self._runtime._active_tasks.pop(session_key, [])
+        entry = self._session_store.get(session_key)
+        if entry:
+            tasks = list(entry.tasks)
+            entry.tasks.clear()
+            return tasks
+        return []
 
     def cleanup_empty_task_list(self, session_key: str) -> bool:
         """清理空的任务列表。
@@ -285,9 +298,9 @@ class SessionStateCoordinator:
         Returns:
             是否移除了空列表
         """
-        tasks = self._runtime._active_tasks.get(session_key)
-        if not tasks:  # Empty list or None
-            self._runtime._active_tasks.pop(session_key, None)
+        entry = self._session_store.get(session_key)
+        if entry and not entry.tasks:
+            entry.tasks.clear()
             return True
         return False
 
@@ -302,12 +315,9 @@ class SessionStateCoordinator:
         Returns:
             会话锁
         """
-        if session_key not in self._runtime._session_locks:
-            self._stats.locks_created += 1
-
-        lock = self._runtime._session_locks.setdefault(session_key, asyncio.Lock())
-
-        return lock
+        # Auto-create entry if not exists
+        entry = self._session_store.get_or_create(session_key)
+        return entry.lock
 
     def release_lock(self, session_key: str) -> bool:
         """释放并移除会话锁。
@@ -318,12 +328,8 @@ class SessionStateCoordinator:
         Returns:
             锁是否存在并被移除
         """
-        if session_key in self._runtime._session_locks:
-            del self._runtime._session_locks[session_key]
-            self._stats.locks_released += 1
-
-            return True
-        return False
+        # SessionStore locks are tied to entries, deleted via session_store.delete
+        return self._session_store.has_lock(session_key)
 
     def has_lock(self, session_key: str) -> bool:
         """检查会话是否有锁。
@@ -334,13 +340,12 @@ class SessionStateCoordinator:
         Returns:
             是否有锁
         """
-        return session_key in self._runtime._session_locks
+        return self._session_store.has_lock(session_key)
 
     def get_lock_object(self, session_key: str) -> asyncio.Lock:
         """获取锁对象用于 async with。
 
-        与 get_lock 不同，此方法用于获取已存在的锁对象，
-        如果不存在则创建一个新锁。
+        与 get_lock 相同，用于获取已存在的锁对象。
 
         Args:
             session_key: 会话标识
@@ -352,7 +357,7 @@ class SessionStateCoordinator:
 
     # === 会话生命周期 ===
 
-    def cleanup_session(self, session_key: str) -> dict[str, Any]:
+    async def cleanup_session(self, session_key: str) -> dict[str, Any]:
         """清理会话的所有状态。
 
         Args:
@@ -362,7 +367,7 @@ class SessionStateCoordinator:
             清理信息字典
         """
         result = {
-            "tasks_cancelled": self.cancel_active_tasks(session_key),
+            "tasks_cancelled": await self.cancel_active_tasks(session_key),
             "lock_released": self.release_lock(session_key),
             "state_cleared": self._runtime._state_machine.has_session(session_key),
         }
@@ -408,11 +413,7 @@ class SessionStateCoordinator:
         Returns:
             (is_consistent, issues) 元组
         """
-        from xbot.agent.state_machine import SessionPhase
-
         issues = []
-
-        # 获取状态快照
         snapshot = self._runtime._state_checker.check_session(session_key)
 
         if not snapshot.is_consistent():

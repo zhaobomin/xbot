@@ -83,7 +83,7 @@ class AgentRouter:
 
         logger.info(f"[Router] Calling backend.process for session={context.session_key}")
         async for response in self._backend.process(context):
-            logger.info(f"[Router] Yielding response for session={context.session_key}")
+            logger.debug(f"[Router] Yielding response for session={context.session_key}")
             yield response
 
     async def shutdown(self) -> None:

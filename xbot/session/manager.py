@@ -176,6 +176,24 @@ class SessionManager:
                 except Exception:
                     pass
 
+    def get(self, key: str) -> Session | None:
+        """
+        Get an existing session without creating a new one.
+
+        Args:
+            key: Session key (usually channel:chat_id).
+
+        Returns:
+            The session if it exists, None otherwise.
+        """
+        if key in self._cache:
+            return self._cache[key]
+
+        session = self._load(key)
+        if session is not None:
+            self._cache[key] = session
+        return session
+
     def get_or_create(self, key: str) -> Session:
         """
         Get an existing session or create a new one.
