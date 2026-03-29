@@ -10,6 +10,8 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
+from loguru import logger
+
 
 class SessionPhase(str, Enum):
     """Session lifecycle phases.
@@ -21,6 +23,8 @@ class SessionPhase(str, Enum):
     - WAITING_INTERACTION: Agent is waiting for user input
     - STOPPING: Session is being stopped
     - RESETTING: Session is being reset
+    - DELETING: Session SDK file is being deleted
+    - FORKING: Session is being forked
     - ERROR: Session encountered an error
     """
 
@@ -30,7 +34,26 @@ class SessionPhase(str, Enum):
     WAITING_INTERACTION = "waiting_interaction"
     STOPPING = "stopping"
     RESETTING = "resetting"
+    DELETING = "deleting"
+    FORKING = "forking"
     ERROR = "error"
+
+
+# Terminal states that cannot transition to normal operational states
+FINAL_STATES: set[SessionPhase] = {
+    SessionPhase.ERROR,
+}
+
+# States that indicate an ongoing operation (not safe to start new work)
+BUSY_STATES: set[SessionPhase] = {
+    SessionPhase.RUNNING,
+    SessionPhase.WAITING_PERMISSION,
+    SessionPhase.WAITING_INTERACTION,
+    SessionPhase.STOPPING,
+    SessionPhase.RESETTING,
+    SessionPhase.DELETING,
+    SessionPhase.FORKING,
+}
 
 
 # Valid state transitions: {from_phase: {to_phase1, to_phase2, ...}}
@@ -43,6 +66,8 @@ VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
         SessionPhase.WAITING_INTERACTION,  # Edge case: handling stale pending request
         SessionPhase.STOPPING,
         SessionPhase.RESETTING,
+        SessionPhase.DELETING,  # Delete SDK session from idle
+        SessionPhase.FORKING,  # Fork SDK session from idle
         SessionPhase.ERROR,
     },
     SessionPhase.RUNNING: {
@@ -74,6 +99,14 @@ VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
     SessionPhase.RESETTING: {
         SessionPhase.IDLE,
         SessionPhase.ERROR,
+    },
+    SessionPhase.DELETING: {
+        SessionPhase.IDLE,  # Delete succeeded
+        SessionPhase.ERROR,  # Delete failed
+    },
+    SessionPhase.FORKING: {
+        SessionPhase.IDLE,  # Fork succeeded
+        SessionPhase.ERROR,  # Fork failed
     },
     SessionPhase.ERROR: {
         SessionPhase.IDLE,
@@ -134,6 +167,7 @@ class SessionStateMachine:
             SessionState for this session (creates new if not exists)
         """
         if session_key not in self._states:
+            logger.debug(f"Creating new session state: {session_key}")
             self._states[session_key] = SessionState()
         return self._states[session_key]
 
@@ -167,8 +201,6 @@ class SessionStateMachine:
         Returns:
             True if transition succeeded, False otherwise
         """
-        from loguru import logger
-
         state = self.get_state(session_key)
         from_phase = state.phase
 
@@ -181,7 +213,8 @@ class SessionStateMachine:
             state.reason = reason
             state.transition_count += 1
             logger.debug(
-                f"Session state reason update: {session_key} {from_phase.value} (reason: {reason})"
+                f"Session state reason update: {session_key} "
+                f"{from_phase.value} (reason={reason}, count={state.transition_count})"
             )
             if self._on_transition:
                 self._on_transition(session_key, from_phase, to_phase, reason)
@@ -193,8 +226,9 @@ class SessionStateMachine:
             allowed_targets = VALID_TRANSITIONS.get(from_phase, set())
             if to_phase not in allowed_targets:
                 logger.warning(
-                    f"Invalid state transition: {from_phase.value} -> {to_phase.value} "
-                    f"(session={session_key}, reason={reason})"
+                    f"Invalid state transition rejected: {session_key} "
+                    f"{from_phase.value} -> {to_phase.value} "
+                    f"(reason={reason}, current_count={state.transition_count})"
                 )
                 return False
 
@@ -205,9 +239,10 @@ class SessionStateMachine:
         state.transition_count += 1
 
         # Log transition
-        from loguru import logger
         logger.debug(
-            f"Session state transition: {session_key} {from_phase.value} -> {to_phase.value} ({reason})"
+            f"Session state transition: {session_key} "
+            f"{from_phase.value} -> {to_phase.value} "
+            f"(reason={reason}, count={state.transition_count})"
         )
 
         # Callback
@@ -229,10 +264,23 @@ class SessionStateMachine:
         Returns:
             Always True (for consistency with transition())
         """
-        from loguru import logger
-
         state = self.get_state(session_key)
         from_phase = state.phase
+
+        # Handle same phase case (same as transition method)
+        if from_phase == to_phase and state.reason == reason:
+            return True
+
+        if from_phase == to_phase:
+            state.reason = reason
+            state.transition_count += 1
+            logger.debug(
+                f"Session state reason update (forced): {session_key} "
+                f"{from_phase.value} (reason={reason}, count={state.transition_count})"
+            )
+            if self._on_transition:
+                self._on_transition(session_key, from_phase, to_phase, reason)
+            return True
 
         state.previous_phase = from_phase
         state.phase = to_phase
@@ -240,7 +288,9 @@ class SessionStateMachine:
         state.transition_count += 1
 
         logger.debug(
-            f"Session state transition (forced): {session_key} {from_phase.value} -> {to_phase.value} ({reason})"
+            f"Session state transition (forced): {session_key} "
+            f"{from_phase.value} -> {to_phase.value} "
+            f"(reason={reason}, count={state.transition_count})"
         )
 
         if self._on_transition:
@@ -255,7 +305,14 @@ class SessionStateMachine:
             session_key: Session identifier
         """
         if session_key in self._states:
+            old_state = self._states[session_key]
+            logger.debug(
+                f"Resetting session state: {session_key} "
+                f"(was: {old_state.phase.value}, transitions: {old_state.transition_count})"
+            )
             self._states[session_key] = SessionState()
+        else:
+            logger.debug(f"Reset skipped for non-existent session: {session_key}")
 
     def clear(self, session_key: str) -> None:
         """Remove session state entirely.
@@ -263,7 +320,15 @@ class SessionStateMachine:
         Args:
             session_key: Session identifier
         """
-        self._states.pop(session_key, None)
+        if session_key in self._states:
+            old_state = self._states[session_key]
+            logger.debug(
+                f"Clearing session state: {session_key} "
+                f"(was: {old_state.phase.value}, transitions: {old_state.transition_count})"
+            )
+            self._states.pop(session_key, None)
+        else:
+            logger.debug(f"Clear skipped for non-existent session: {session_key}")
 
     def has_session(self, session_key: str) -> bool:
         """Check whether a session state already exists.
@@ -309,3 +374,36 @@ class SessionStateMachine:
             True if session is in RUNNING phase
         """
         return self.get_phase(session_key) == SessionPhase.RUNNING
+
+    def is_busy(self, session_key: str) -> bool:
+        """Check if session is in a busy state (not safe to start new work).
+
+        Args:
+            session_key: Session identifier
+
+        Returns:
+            True if session is in any busy phase (running, stopping, resetting, etc.)
+        """
+        return self.get_phase(session_key) in BUSY_STATES
+
+    def is_final(self, session_key: str) -> bool:
+        """Check if session is in a final state.
+
+        Args:
+            session_key: Session identifier
+
+        Returns:
+            True if session is in a final state (error)
+        """
+        return self.get_phase(session_key) in FINAL_STATES
+
+    def can_start_operation(self, session_key: str) -> bool:
+        """Check if a new operation can be started.
+
+        Args:
+            session_key: Session identifier
+
+        Returns:
+            True if session is IDLE and can start a new operation
+        """
+        return self.is_idle(session_key)
