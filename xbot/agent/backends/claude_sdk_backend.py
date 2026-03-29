@@ -1309,7 +1309,7 @@ class ClaudeSDKBackend(AgentBackend):
         if session is not None:
             existing_sdk_id = session.metadata.get("sdk_session_id")
             if existing_sdk_id:
-                session_contexts[existing_sdk_id] = context_tuple
+                session_contexts[existing_sdk_id] = (context.channel, context.chat_id)
 
         # Check for reconnect pending state from previous error
         reconnect_hint = None
@@ -1473,7 +1473,7 @@ class ClaudeSDKBackend(AgentBackend):
                                 "[SDK Init] Found session_id in init message: sdk_session_id='{}', mapping to context",
                                 sdk_session_id,
                             )
-                            session_contexts[sdk_session_id] = context_tuple
+                            session_contexts[sdk_session_id] = (context.channel, context.chat_id)
                             # Also save to session metadata
                             if session is not None:
                                 session.metadata["sdk_session_id"] = sdk_session_id
@@ -1492,10 +1492,9 @@ class ClaudeSDKBackend(AgentBackend):
                     ):
                         # === 诊断日志 + Task ID验证: TaskNotification 终态 ===
                         current_task_id = self._get_task_id_from_entry(context.session_key)
-                        matches_active = current_task_id == message.task_id if message.task_id else False
                         logger.info(
                             f"[SDK Notification] session={context.session_key}, task_id={message.task_id}, "
-                            f"status={message.status}, matches_active={matches_active}"
+                            f"status={message.status}, current_task_id={current_task_id or 'none'}"
                         )
                         # Stale detection: if message.task_id and task_ids don't match
                         # or current_task_id is None (no TaskStarted received for this request)
@@ -1662,6 +1661,9 @@ class ClaudeSDKBackend(AgentBackend):
                         include_agents=False,
                     )
                     try:
+                        # Clear task_id before fallback request for consistency
+                        self._set_task_id_in_entry(context.session_key, None)
+
                         fallback_prompt = (
                             "[Runtime Policy]\n"
                             "Continue on the main agent. Do not use specialist handoff for this retry.\n\n"
@@ -1700,7 +1702,10 @@ class ClaudeSDKBackend(AgentBackend):
                             ):
                                 # === Fallback 路径 Task ID 验证 ===
                                 current_task_id = self._get_task_id_from_entry(context.session_key)
-                                matches_active = current_task_id == message.task_id if message.task_id else False
+                                logger.info(
+                                    f"[Fallback Notification] session={context.session_key}, task_id={message.task_id}, "
+                                    f"status={message.status}, current_task_id={current_task_id or 'none'}"
+                                )
                                 # Stale detection: if message.task_id and task_ids don't match
                                 # or current_task_id is None (no TaskStarted received for this request)
                                 if message.task_id and (

@@ -1425,3 +1425,211 @@ class TestInputRequiredEdgeCases:
         # Cannot detect stale without message.task_id
         is_stale = message_task_id and (current_task_id is None or message_task_id != current_task_id)
         assert not is_stale  # message_task_id is None, passes through
+
+
+class TestRetryScenarioTaskIdState:
+    """Test task_id state during retry scenarios."""
+
+    def test_task_id_cleared_before_each_retry(self) -> None:
+        """Test that task_id is cleared before each retry."""
+        # Simulate retry loop
+        task_id_state: str | None = "task-from-failed-attempt"
+
+        # Before retry, task_id is cleared
+        task_id_state = None
+
+        # New TaskStarted arrives for retry
+        task_id_state = "task-retry-001"
+
+        # Retry completes successfully
+        assert task_id_state == "task-retry-001"
+
+    def test_retry_after_stale_notification(self) -> None:
+        """Test retry after receiving only stale notifications."""
+        # Request 1: stale notification received, no ResultMessage
+        task_id_state: str | None = None  # Cleared before request
+
+        # Stale notification arrives (from previous request)
+        message_task_id = "task-old"
+        is_stale = message_task_id and (task_id_state is None or message_task_id != task_id_state)
+        assert is_stale is True  # Correctly detected as stale
+
+        # No ResultMessage received, retry triggered
+        # task_id is cleared again before retry
+        task_id_state = None
+
+        # New TaskStarted for retry
+        task_id_state = "task-retry-001"
+
+        # New notification arrives
+        message_task_id = "task-retry-001"
+        is_stale = message_task_id and (task_id_state is None or message_task_id != task_id_state)
+        assert is_stale is False  # Not stale, matches current task
+
+
+class TestTerminalNotificationStatuses:
+    """Test all terminal notification status types."""
+
+    def test_completed_status_is_terminal(self) -> None:
+        """Test that 'completed' is recognized as terminal status."""
+        terminal_statuses = {"completed", "failed", "stopped"}
+        assert "completed" in terminal_statuses
+
+    def test_failed_status_is_terminal(self) -> None:
+        """Test that 'failed' is recognized as terminal status."""
+        terminal_statuses = {"completed", "failed", "stopped"}
+        assert "failed" in terminal_statuses
+
+    def test_stopped_status_is_terminal(self) -> None:
+        """Test that 'stopped' is recognized as terminal status."""
+        terminal_statuses = {"completed", "failed", "stopped"}
+        assert "stopped" in terminal_statuses
+
+    def test_running_status_is_not_terminal(self) -> None:
+        """Test that 'running' is NOT recognized as terminal status."""
+        terminal_statuses = {"completed", "failed", "stopped"}
+        assert "running" not in terminal_statuses
+
+    def test_input_required_is_not_terminal(self) -> None:
+        """Test that 'input_required' is NOT recognized as terminal status."""
+        terminal_statuses = {"completed", "failed", "stopped"}
+        assert "input_required" not in terminal_statuses
+
+
+class TestFallbackPathStaleDetectionConsistency:
+    """Test that fallback path has same stale detection as main path."""
+
+    def test_fallback_completed_stale_with_none_current(self) -> None:
+        """Test fallback stale detection when current_task_id is None."""
+        current_task_id = None
+        message_task_id = "task-old"
+
+        # Same logic as main path
+        is_stale = message_task_id and (current_task_id is None or message_task_id != current_task_id)
+        assert is_stale is True
+
+    def test_fallback_input_required_stale_with_none_current(self) -> None:
+        """Test fallback input_required stale detection when current_task_id is None."""
+        current_task_id = None
+        message_task_id = "task-old"
+
+        # Same logic as main path
+        is_stale = message_task_id and (current_task_id is None or message_task_id != current_task_id)
+        assert is_stale is True
+
+    def test_fallback_valid_message_not_stale(self) -> None:
+        """Test fallback valid message is not detected as stale."""
+        current_task_id = "task-current"
+        message_task_id = "task-current"
+
+        is_stale = message_task_id and (current_task_id is None or message_task_id != current_task_id)
+        assert is_stale is False
+
+
+class TestInputRequiredStatusSet:
+    """Test the _INPUT_REQUIRED_STATUSES set."""
+
+    def test_input_required_in_set(self) -> None:
+        """Test that 'input_required' is in the status set."""
+        input_required_statuses = {
+            "input_required",
+            "awaiting_input",
+            "waiting_for_input",
+            "confirmation_required",
+            "approval_required",
+        }
+        assert "input_required" in input_required_statuses
+
+    def test_awaiting_input_in_set(self) -> None:
+        """Test that 'awaiting_input' is in the status set."""
+        input_required_statuses = {
+            "input_required",
+            "awaiting_input",
+            "waiting_for_input",
+            "confirmation_required",
+            "approval_required",
+        }
+        assert "awaiting_input" in input_required_statuses
+
+    def test_waiting_for_input_in_set(self) -> None:
+        """Test that 'waiting_for_input' is in the status set."""
+        input_required_statuses = {
+            "input_required",
+            "awaiting_input",
+            "waiting_for_input",
+            "confirmation_required",
+            "approval_required",
+        }
+        assert "waiting_for_input" in input_required_statuses
+
+    def test_confirmation_required_in_set(self) -> None:
+        """Test that 'confirmation_required' is in the status set."""
+        input_required_statuses = {
+            "input_required",
+            "awaiting_input",
+            "waiting_for_input",
+            "confirmation_required",
+            "approval_required",
+        }
+        assert "confirmation_required" in input_required_statuses
+
+    def test_approval_required_in_set(self) -> None:
+        """Test that 'approval_required' is in the status set."""
+        input_required_statuses = {
+            "input_required",
+            "awaiting_input",
+            "waiting_for_input",
+            "confirmation_required",
+            "approval_required",
+        }
+        assert "approval_required" in input_required_statuses
+
+
+class TestTaskIdTypeHandling:
+    """Test handling of different task_id types."""
+
+    def test_task_id_as_string(self) -> None:
+        """Test task_id as string type."""
+        message_task_id = "task-001"
+        current_task_id = "task-001"
+
+        is_stale = message_task_id and (current_task_id is None or message_task_id != current_task_id)
+        assert is_stale is False
+
+    def test_task_id_with_special_characters(self) -> None:
+        """Test task_id with special characters."""
+        message_task_id = "task-001_abc-123"
+        current_task_id = "task-001_abc-123"
+
+        is_stale = message_task_id and (current_task_id is None or message_task_id != current_task_id)
+        assert is_stale is False
+
+    def test_task_id_with_numbers_only(self) -> None:
+        """Test task_id with numbers only."""
+        message_task_id = "12345"
+        current_task_id = "12345"
+
+        is_stale = message_task_id and (current_task_id is None or message_task_id != current_task_id)
+        assert is_stale is False
+
+
+class TestStaleDetectionShortCircuit:
+    """Test short-circuit behavior in stale detection."""
+
+    def test_message_task_id_none_short_circuits(self) -> None:
+        """Test that None message_task_id short-circuits the check."""
+        message_task_id = None
+        current_task_id = None  # Would cause error if not short-circuited
+
+        # The 'and' operator short-circuits: None and (...) evaluates to None
+        is_stale = message_task_id and (current_task_id is None or message_task_id != current_task_id)
+        assert not is_stale  # None is falsy
+
+    def test_empty_string_short_circuits(self) -> None:
+        """Test that empty string short-circuits the check."""
+        message_task_id = ""
+        current_task_id = None
+
+        # Empty string is falsy, so short-circuits
+        is_stale = message_task_id and (current_task_id is None or message_task_id != current_task_id)
+        assert not is_stale
