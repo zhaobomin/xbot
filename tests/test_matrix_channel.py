@@ -172,6 +172,17 @@ def _make_config(**kwargs) -> MatrixConfig:
     )
 
 
+def test_configure_nio_logging_bridge_routes_to_unified_logger() -> None:
+    nio_logger = matrix_module.get_logger("nio")
+    nio_logger.handlers = [object()]
+    nio_logger.propagate = False
+
+    matrix_module._configure_nio_logging_bridge()
+
+    assert nio_logger.handlers == []
+    assert nio_logger.propagate is True
+
+
 @pytest.mark.asyncio
 async def test_start_skips_load_store_when_device_id_missing(
     monkeypatch, tmp_path

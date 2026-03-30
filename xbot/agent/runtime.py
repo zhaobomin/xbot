@@ -115,7 +115,10 @@ class AgentRuntime:
         Raises:
             RuntimeError: If the router/backend has not been initialized yet.
         """
-        return self.router.backend
+        backend = self.router._backend
+        if backend is None:
+            raise RuntimeError("Backend not initialized. Call initialize() first.")
+        return backend
 
     @property
     def tools(self) -> "ToolRegistry | None":

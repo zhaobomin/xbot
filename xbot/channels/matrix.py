@@ -126,7 +126,7 @@ def _build_matrix_text_content(text: str) -> dict[str, object]:
 
 def _configure_nio_logging_bridge() -> None:
     """Route matrix-nio logs through the stdlib logging pipeline."""
-    nio_logger = logging.getLogger("nio")
+    nio_logger = get_logger("nio")
     nio_logger.handlers = []
     nio_logger.propagate = True
 

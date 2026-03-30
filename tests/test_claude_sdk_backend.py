@@ -441,9 +441,11 @@ class TestClaudeSDKBackendLifecycle:
         client.query = AsyncMock()
 
         async def _receive():
+            from claude_agent_sdk.types import UserMessage
+            yield UserMessage(content="hello", parent_tool_use_id=None)
             yield MagicMock()
 
-        client.receive_response = _receive
+        client.receive_messages = _receive
         client.disconnect = AsyncMock()
         backend._get_or_create_client = AsyncMock(return_value=client)  # type: ignore[method-assign]
         backend.sessions = None
@@ -531,7 +533,7 @@ class TestClaudeSDKBackendToolContext:
                 if False:
                     yield None
 
-            mock_client.receive_response = _empty_receive
+            mock_client.receive_messages = _empty_receive
             backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
             backend.sessions = None
 
@@ -1309,6 +1311,8 @@ class TestStopActiveTask:
         mock_client.query = AsyncMock()
 
         async def _receive():
+            from claude_agent_sdk.types import UserMessage
+            yield UserMessage(content="hello", parent_tool_use_id=None)
             yield TaskStartedMessage(
                 subtype="task_started",
                 data={},
@@ -1336,7 +1340,7 @@ class TestStopActiveTask:
                 session_id="s1",
             )
 
-        mock_client.receive_response = _receive
+        mock_client.receive_messages = _receive
         backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
 
         context = AgentContext(session_key="test_session", prompt="hello")
@@ -1358,6 +1362,8 @@ class TestStopActiveTask:
         mock_client.query = AsyncMock()
 
         async def _receive():
+            from claude_agent_sdk.types import UserMessage
+            yield UserMessage(content="hello", parent_tool_use_id=None)
             yield TaskStartedMessage(
                 subtype="task_started",
                 data={},
@@ -1375,7 +1381,7 @@ class TestStopActiveTask:
                 session_id="s1",
             )
 
-        mock_client.receive_response = _receive
+        mock_client.receive_messages = _receive
         backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
 
         context = AgentContext(session_key="test_session", prompt="hello")
@@ -1396,6 +1402,8 @@ class TestStopActiveTask:
         mock_client.query = AsyncMock()
 
         async def _receive():
+            from claude_agent_sdk.types import UserMessage
+            yield UserMessage(content="hello", parent_tool_use_id=None)
             yield ResultMessage(
                 subtype="success",
                 duration_ms=1,
@@ -1406,9 +1414,9 @@ class TestStopActiveTask:
                 result="done",
             )
             # Must never be reached once ResultMessage is handled.
-            raise AssertionError("receive_response should stop after ResultMessage")
+            raise AssertionError("receive_messages should stop after ResultMessage")
 
-        mock_client.receive_response = _receive
+        mock_client.receive_messages = _receive
         backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
 
         context = AgentContext(session_key="test_session", prompt="hello")
@@ -1684,6 +1692,8 @@ class TestInputRequiredRecoveryFlow:
         client1.disconnect = AsyncMock(return_value=None)
 
         async def _receive_1():
+            from claude_agent_sdk.types import UserMessage
+            yield UserMessage(content="first task", parent_tool_use_id=None)
             yield TaskStartedMessage(
                 subtype="task_started",
                 data={},
@@ -1703,7 +1713,7 @@ class TestInputRequiredRecoveryFlow:
                 session_id="s1",
             )
 
-        client1.receive_response = _receive_1
+        client1.receive_messages = _receive_1
         backend._clients["telegram:456"] = client1
 
         client2 = MagicMock()
@@ -1712,6 +1722,8 @@ class TestInputRequiredRecoveryFlow:
         client2.disconnect = AsyncMock(return_value=None)
 
         async def _receive_2():
+            from claude_agent_sdk.types import UserMessage
+            yield UserMessage(content="second task", parent_tool_use_id=None)
             yield ResultMessage(
                 subtype="success",
                 duration_ms=1,
@@ -1722,7 +1734,7 @@ class TestInputRequiredRecoveryFlow:
                 result="next task done",
             )
 
-        client2.receive_response = _receive_2
+        client2.receive_messages = _receive_2
 
         backend._get_or_create_client = AsyncMock(side_effect=[client1, client2, client2])  # type: ignore[method-assign]
 
