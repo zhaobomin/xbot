@@ -6,7 +6,9 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.agent.tools.base import Tool
 from xbot.agent.tools.registry import ToolRegistry
@@ -55,7 +57,7 @@ class MCPToolWrapper(Tool):
                 timeout=self._tool_timeout,
             )
         except asyncio.TimeoutError:
-            logger.warning("MCP tool '{}' timed out after {}s", self._name, self._tool_timeout)
+            logger.warning("MCP tool '%s' timed out after %ss", self._name, self._tool_timeout)
             return f"(MCP tool call timed out after {self._tool_timeout}s)"
         except asyncio.CancelledError:
             # MCP SDK's anyio cancel scopes can leak CancelledError on timeout/failure.
@@ -63,11 +65,11 @@ class MCPToolWrapper(Tool):
             task = asyncio.current_task()
             if task is not None and task.cancelling() > 0:
                 raise
-            logger.warning("MCP tool '{}' was cancelled by server/SDK", self._name)
+            logger.warning("MCP tool '%s' was cancelled by server/SDK", self._name)
             return "(MCP tool call was cancelled)"
         except Exception as exc:
             logger.exception(
-                "MCP tool '{}' failed: {}: {}",
+                "MCP tool '%s' failed: %s: %s",
                 self._name,
                 type(exc).__name__,
                 exc,
@@ -85,7 +87,7 @@ class MCPToolWrapper(Tool):
 
 async def _connect_single_mcp_server(
     name: str,
-    cfg: dict,
+    cfg: Any,
     registry: ToolRegistry,
 ) -> MCPServerConnection:
     """Connect to a single MCP server with isolated error handling.
@@ -110,7 +112,7 @@ async def _connect_single_mcp_server(
             elif cfg.url:
                 transport_type = "sse" if cfg.url.rstrip("/").endswith("/sse") else "streamableHttp"
             else:
-                logger.warning("MCP server '{}': no command or url configured, skipping", name)
+                logger.warning("MCP server '%s': no command or url configured, skipping", name)
                 conn.error = "No command or url configured"
                 return conn
 
@@ -148,7 +150,7 @@ async def _connect_single_mcp_server(
                 streamable_http_client(cfg.url, http_client=http_client)
             )
         else:
-            logger.warning("MCP server '{}': unknown transport type '{}'", name, transport_type)
+            logger.warning("MCP server '%s': unknown transport type '%s'", name, transport_type)
             conn.error = f"Unknown transport type: {transport_type}"
             return conn
 
@@ -173,14 +175,14 @@ async def _connect_single_mcp_server(
                 and wrapped_name not in enabled_tools
             ):
                 logger.debug(
-                    "MCP: skipping tool '{}' from server '{}' (not in enabledTools)",
+                    "MCP: skipping tool '%s' from server '%s' (not in enabledTools)",
                     wrapped_name,
                     name,
                 )
                 continue
             wrapper = MCPToolWrapper(conn.session, name, tool_def, tool_timeout=cfg.tool_timeout)
             registry.register(wrapper)
-            logger.debug("MCP: registered tool '{}' from server '{}'", wrapper.name, name)
+            logger.debug("MCP: registered tool '%s' from server '%s'", wrapper.name, name)
             registered_count += 1
             if enabled_tools:
                 if tool_def.name in enabled_tools:
@@ -192,8 +194,8 @@ async def _connect_single_mcp_server(
             unmatched_enabled_tools = sorted(enabled_tools - matched_enabled_tools)
             if unmatched_enabled_tools:
                 logger.warning(
-                    "MCP server '{}': enabledTools entries not found: {}. Available raw names: {}. "
-                    "Available wrapped names: {}",
+                    "MCP server '%s': enabledTools entries not found: %s. Available raw names: %s. "
+                    "Available wrapped names: %s",
                     name,
                     ", ".join(unmatched_enabled_tools),
                     ", ".join(available_raw_names) or "(none)",
@@ -202,11 +204,11 @@ async def _connect_single_mcp_server(
 
         conn.tools_registered = registered_count
         conn.connected = True
-        logger.info("MCP server '{}': connected, {} tools registered", name, registered_count)
+        logger.info("MCP server '%s': connected, %s tools registered", name, registered_count)
 
     except Exception as e:
         conn.error = f"{type(e).__name__}: {str(e)}"
-        logger.error("MCP server '{}': failed to connect: {}", name, conn.error)
+        logger.error("MCP server '%s': failed to connect: %s", name, conn.error)
         # Cleanup stack if connection failed
         try:
             await conn.stack.aclose()
@@ -234,6 +236,9 @@ async def connect_mcp_servers(
     ]
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
+    for result in results:
+        if isinstance(result, MCPServerConnection) and result.connected:
+            stack.push_async_callback(result.stack.aclose)
 
     # Log summary
     connected_count = sum(1 for r in results if isinstance(r, MCPServerConnection) and r.connected)
@@ -241,7 +246,7 @@ async def connect_mcp_servers(
 
     if failed_count > 0:
         logger.warning(
-            "MCP: {} servers connected, {} servers failed",
+            "MCP: %s servers connected, %s servers failed",
             connected_count,
             failed_count,
         )

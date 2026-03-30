@@ -17,7 +17,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.utils.helpers import ensure_dir
 
@@ -35,9 +37,6 @@ def _patch_sqlite3() -> bool:
             try:
                 import pysqlite3
                 sys.modules['sqlite3'] = pysqlite3
-                # Re-import to get the patched version
-                import importlib
-                importlib.reload(sys.modules.get('sqlite3', sqlite3))
                 logger.debug(f"sqlite3 patched with pysqlite3")
                 return True
             except ImportError:

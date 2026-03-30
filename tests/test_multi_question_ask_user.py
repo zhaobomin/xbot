@@ -69,12 +69,12 @@ class TestParseAnswers:
         ]
         question_options_map = [["Yes", "No"], ["OK", "Cancel"]]
 
-        # Space-separated input: "Yes OK" matches "Yes" as a valid option
+        # Space-separated input stays as raw text for the first answer
         answers = handler._parse_answers("Yes OK", questions, question_options_map)
 
-        # "Yes" is matched as first answer, "OK" is matched from the remaining
+        # No comma means only one raw answer is captured
         assert len(answers) == 2
-        assert answers[0]["answer"] == "Yes"  # Matched from "Yes OK"
+        assert answers[0]["answer"] == "Yes OK"
         assert answers[1]["answer"] == ""  # No second answer provided (no comma)
 
     def test_parse_answers_with_whitespace(self, handler):

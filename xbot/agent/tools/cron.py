@@ -111,7 +111,7 @@ class CronTool(Tool):
 
             try:
                 ZoneInfo(tz)
-            except (KeyError, Exception):
+            except Exception:
                 return f"Error: unknown timezone '{tz}'"
 
         # Build schedule

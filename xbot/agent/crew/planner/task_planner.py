@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
 from collections import defaultdict, deque
 
@@ -17,8 +16,9 @@ from xbot.agent.crew.planner.models import (
 from xbot.agent.crew.planner.prompts import TASK_PLANNING_PROMPT
 from xbot.agent.crew.planner.utils import LLMResponseParser
 from xbot.agent.crew.planner.validators import LLMValidator
+from xbot.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class TaskPlanner:

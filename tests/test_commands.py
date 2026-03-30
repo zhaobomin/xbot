@@ -1,7 +1,9 @@
+import asyncio
 import json
 import re
 import shutil
 from pathlib import Path
+from typing import Any
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 import pytest
@@ -612,6 +614,122 @@ def test_gateway_uses_config_directory_for_cron_store(monkeypatch, tmp_path: Pat
 
     assert isinstance(result.exception, _StopGateway)
     assert seen["cron_store"] == config_file.parent / "cron" / "jobs.json"
+
+
+def test_gateway_cron_callback_uses_managed_direct(monkeypatch, tmp_path: Path) -> None:
+    config_file = tmp_path / "instance" / "config.json"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("{}")
+
+    from xbot.cron.types import CronJob, CronPayload, CronSchedule
+
+    config = Config()
+    seen: dict[str, Any] = {}
+
+    class _FakeCronService:
+        def __init__(self, _store_path: Path) -> None:
+            seen["cron"] = self
+            self.on_job = None
+
+        def status(self) -> dict[str, int]:
+            return {"jobs": 0}
+
+    class _FakeChannelManager:
+        def __init__(self, _config, _bus) -> None:
+            self.enabled_channels = []
+
+    runtime = MagicMock()
+    runtime.tools = {}
+    runtime.process_managed_direct = AsyncMock(return_value="managed-response")
+    runtime.process_direct = AsyncMock(return_value="direct-response")
+    original_asyncio_run = asyncio.run
+
+    def _abort_run(coro):
+        coro.close()
+        raise _StopGateway("stop")
+
+    monkeypatch.setattr("xbot.config.loader.set_config_path", lambda _path: None)
+    monkeypatch.setattr("xbot.config.loader.load_config", lambda _path=None: config)
+    monkeypatch.setattr("xbot.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("xbot.bus.queue.MessageBus", lambda: object())
+    monkeypatch.setattr("xbot.session.manager.SessionManager", lambda _workspace: object())
+    monkeypatch.setattr("xbot.cron.service.CronService", _FakeCronService)
+    monkeypatch.setattr("xbot.cli.commands._make_agent_runtime", lambda **_kwargs: runtime)
+    monkeypatch.setattr("xbot.channels.manager.ChannelManager", _FakeChannelManager)
+    monkeypatch.setattr("xbot.cli.commands.asyncio.run", _abort_run)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+
+    assert isinstance(result.exception, _StopGateway)
+    job = CronJob(
+        id="job-1",
+        name="test job",
+        schedule=CronSchedule(kind="every", every_ms=1000),
+        payload=CronPayload(message="run task", deliver=False, channel="cli", to="direct"),
+    )
+    callback = seen["cron"].on_job
+    assert callback is not None
+    original_asyncio_run(callback(job))
+    runtime.process_managed_direct.assert_awaited_once()
+    runtime.process_direct.assert_not_awaited()
+
+
+def test_gateway_heartbeat_uses_managed_direct(monkeypatch, tmp_path: Path) -> None:
+    config_file = tmp_path / "instance" / "config.json"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("{}")
+
+    config = Config()
+    seen: dict[str, Any] = {}
+
+    class _FakeCronService:
+        def __init__(self, _store_path: Path) -> None:
+            self.on_job = None
+
+        def status(self) -> dict[str, int]:
+            return {"jobs": 0}
+
+    class _FakeChannelManager:
+        def __init__(self, _config, _bus) -> None:
+            self.enabled_channels = []
+
+    runtime = MagicMock()
+    runtime.tools = {}
+    runtime.process_managed_direct = AsyncMock(return_value="managed-response")
+    runtime.process_direct = AsyncMock(return_value="direct-response")
+    runtime.backend = MagicMock()
+    runtime.backend.call_for_auxiliary = AsyncMock()
+    original_asyncio_run = asyncio.run
+
+    from xbot.heartbeat.service import HeartbeatService as _RealHeartbeatService
+
+    def _capture_heartbeat(*args, **kwargs):
+        seen["heartbeat"] = kwargs
+        return _RealHeartbeatService(*args, **kwargs)
+
+    monkeypatch.setattr("xbot.config.loader.set_config_path", lambda _path: None)
+    monkeypatch.setattr("xbot.config.loader.load_config", lambda _path=None: config)
+    monkeypatch.setattr("xbot.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("xbot.bus.queue.MessageBus", lambda: object())
+    monkeypatch.setattr("xbot.session.manager.SessionManager", lambda _workspace: MagicMock(list_sessions=lambda: []))
+    monkeypatch.setattr("xbot.cron.service.CronService", _FakeCronService)
+    monkeypatch.setattr("xbot.cli.commands._make_agent_runtime", lambda **_kwargs: runtime)
+    monkeypatch.setattr("xbot.channels.manager.ChannelManager", _FakeChannelManager)
+    monkeypatch.setattr("xbot.heartbeat.service.HeartbeatService", _capture_heartbeat)
+    def _abort_run(coro):
+        coro.close()
+        raise _StopGateway("stop")
+
+    monkeypatch.setattr("xbot.cli.commands.asyncio.run", _abort_run)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+
+    assert isinstance(result.exception, _StopGateway)
+    on_execute = seen["heartbeat"]["on_execute"]
+    assert on_execute is not None
+    original_asyncio_run(on_execute("do heartbeat"))
+    runtime.process_managed_direct.assert_awaited_once()
+    runtime.process_direct.assert_not_awaited()
 
 
 def test_gateway_uses_configured_port_when_cli_flag_is_missing(monkeypatch, tmp_path: Path) -> None:

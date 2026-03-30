@@ -31,16 +31,24 @@ def _git_info() -> dict[str, str]:
 
 
 _boot_time = datetime.now(timezone.utc)
-_git = _git_info()
+_git: dict[str, str] | None = None
+
+
+def _get_cached_git_info() -> dict[str, str]:
+    global _git
+    if _git is None:
+        _git = _git_info()
+    return _git
 
 
 def version_text() -> str:
     """Return a formatted version info string for the !ver command."""
-    commit = _git.get("commit", "unknown")
-    dirty = _git.get("dirty", "")
-    branch = _git.get("branch", "unknown")
-    commit_time = _git.get("commit_time", "")
-    commit_msg = _git.get("commit_msg", "")
+    git_info = _get_cached_git_info()
+    commit = git_info.get("commit", "unknown")
+    dirty = git_info.get("dirty", "")
+    branch = git_info.get("branch", "unknown")
+    commit_time = git_info.get("commit_time", "")
+    commit_msg = git_info.get("commit_msg", "")
 
     boot_local = _boot_time.astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
 

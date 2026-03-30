@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from datetime import datetime
 from pathlib import Path
 
@@ -10,8 +9,9 @@ import yaml
 
 from xbot.agent.crew.planner.models import CrewPlan, RoleDefinition, TaskPlan
 from xbot.agent.crew.planner.utils import RoleConverter
+from xbot.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ConfigGenerator:

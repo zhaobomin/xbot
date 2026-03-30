@@ -5,7 +5,9 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
@@ -57,9 +59,9 @@ class ChannelManager:
                 channel = cls(section, self.bus)
                 channel.transcription_api_key = groq_key
                 self.channels[name] = channel
-                logger.info("{} channel enabled", cls.display_name)
+                logger.info("%s channel enabled", cls.display_name)
             except Exception as e:
-                logger.warning("{} channel not available: {}", name, e)
+                logger.warning("%s channel not available: %s", name, e)
 
         self._validate_allow_from()
 
@@ -76,7 +78,7 @@ class ChannelManager:
         try:
             await channel.start()
         except Exception as e:
-            logger.error("Failed to start channel {}: {}", name, e)
+            logger.error("Failed to start channel %s: %s", name, e)
 
     async def start_all(self) -> None:
         """Start all channels and the outbound dispatcher."""
@@ -90,7 +92,7 @@ class ChannelManager:
         # Start channels
         tasks = []
         for name, channel in self.channels.items():
-            logger.info("Starting {} channel...", name)
+            logger.info("Starting %s channel...", name)
             tasks.append(asyncio.create_task(self._start_channel(name, channel)))
 
         # Wait for all to complete (they should run forever)
@@ -112,9 +114,9 @@ class ChannelManager:
         for name, channel in self.channels.items():
             try:
                 await channel.stop()
-                logger.info("Stopped {} channel", name)
+                logger.info("Stopped %s channel", name)
             except Exception as e:
-                logger.error("Error stopping {}: {}", name, e)
+                logger.error("Error stopping %s: %s", name, e)
 
     async def _dispatch_outbound(self) -> None:
         """Dispatch outbound messages to the appropriate channel."""
@@ -153,13 +155,13 @@ class ChannelManager:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.exception("Unexpected error in outbound dispatcher: {}", e)
+                logger.exception("Unexpected error in outbound dispatcher: %s", e)
                 continue  # 继续运行，不退出
 
     async def _send_with_channel(self, msg: OutboundMessage, content: str | None = None) -> None:
         channel = self.channels.get(msg.channel)
         if channel is None:
-            logger.warning("Unknown channel: {}", msg.channel)
+            logger.warning("Unknown channel: %s", msg.channel)
             return
         payload = msg if content is None else OutboundMessage(
             channel=msg.channel,
@@ -172,7 +174,7 @@ class ChannelManager:
         try:
             await channel.send(payload)
         except Exception as e:
-            logger.error("Error sending to {}: {}", msg.channel, e)
+            logger.error("Error sending to %s: %s", msg.channel, e)
 
     def get_channel(self, name: str) -> BaseChannel | None:
         """Get a channel by name."""

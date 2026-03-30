@@ -6,7 +6,6 @@ from xbot.config.schema import MCPServerConfig
 from xbot.agent.capabilities.catalog import CapabilityCatalog, canonical_tool_name
 from xbot.agent.capabilities.policy import CapabilityPolicy
 from xbot.agent.capabilities.skills_loader import SkillsLoader
-from xbot.agent.capabilities.skill_to_mcp import SkillToMCPConverter
 
 
 def _write_skill(root: Path, name: str, body: str) -> None:
@@ -132,6 +131,8 @@ def test_capability_catalog_only_exposes_tool_exposable_skills_as_tools(tmp_path
 
 
 def test_skill_to_mcp_converter_only_converts_tool_exposable_skills(tmp_path, monkeypatch) -> None:
+    import xbot.agent.capabilities.skill_to_mcp as skill_to_mcp
+
     workspace_skills = tmp_path / "skills"
     _write_skill(
         workspace_skills,
@@ -150,7 +151,7 @@ def test_skill_to_mcp_converter_only_converts_tool_exposable_skills(tmp_path, mo
         lambda **kwargs: kwargs,
     )
 
-    converter = SkillToMCPConverter(str(tmp_path))
+    converter = skill_to_mcp.SkillToMCPConverter(str(tmp_path))
     servers = converter.convert_all_skills()
 
     assert set(servers) == {"skills"}

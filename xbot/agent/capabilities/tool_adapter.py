@@ -4,7 +4,6 @@ This module adapts xbot's Tool implementations to MCP tools
 for use with Claude SDK backend.
 """
 
-import logging
 import threading
 from pathlib import Path
 from typing import Any
@@ -17,8 +16,9 @@ from xbot.agent.tools.message import MessageTool
 from xbot.agent.tools.cron import CronTool
 from xbot.agent.tools.memory import MemoryTool
 from xbot.agent.tools.skill_loader import LoadSkillContentTool
+from xbot.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Try to import SDK components
 try:
@@ -27,7 +27,7 @@ try:
     SDK_AVAILABLE = True
 except ImportError:
     SDK_AVAILABLE = False
-    logger.warning("claude-agent-sdk not installed. Tool adapter will be limited.")
+    logger.debug("claude-agent-sdk not installed. Tool adapter will be limited.")
 
 
 class ToolAdapter:
@@ -268,7 +268,6 @@ class ToolAdapter:
                     "session_key": session_key,
                     "message_id": message_id,
                 }
-                context = self._tool_context[session_key]
             else:
                 # Fallback to global context for backward compatibility
                 self._tool_context["_global"] = {
@@ -277,7 +276,6 @@ class ToolAdapter:
                     "session_key": session_key,
                     "message_id": message_id,
                 }
-                context = self._tool_context["_global"]
 
             # Update tool contexts
             for name, args in {

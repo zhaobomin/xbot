@@ -14,9 +14,12 @@ Key Features:
 from __future__ import annotations
 
 from dataclasses import dataclass
+import threading
 from typing import Any
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -58,6 +61,7 @@ class SessionContextManager:
 
     def __init__(self):
         """Initialize the context manager."""
+        self._lock = threading.RLock()
         # session_key -> SessionContext
         self._session_key_to_context: dict[str, SessionContext] = {}
         # sdk_session_id -> SessionContext
@@ -80,23 +84,24 @@ class SessionContextManager:
             sdk_session_id: The SDK session identifier (may be None initially)
             context: The session context containing channel and chat_id
         """
-        # Clear any existing mappings for this session_key
-        self._clear_session_key_mappings(session_key)
+        with self._lock:
+            # Clear any existing mappings for this session_key
+            self._clear_session_key_mappings(session_key)
 
-        # Set new mappings
-        self._session_key_to_context[session_key] = context
-        if sdk_session_id:
-            self._sdk_session_id_to_context[sdk_session_id] = context
-            self._session_key_to_sdk_id[session_key] = sdk_session_id
-            self._sdk_id_to_session_key[sdk_session_id] = session_key
+            # Set new mappings
+            self._session_key_to_context[session_key] = context
+            if sdk_session_id:
+                self._sdk_session_id_to_context[sdk_session_id] = context
+                self._session_key_to_sdk_id[session_key] = sdk_session_id
+                self._sdk_id_to_session_key[sdk_session_id] = session_key
 
-        logger.debug(
-            f"[SessionContextManager] Set mapping: session_key={session_key}, "
-            f"sdk_sid={sdk_session_id or 'none'}, context=({context.channel}, {context.chat_id})"
-        )
+            logger.debug(
+                f"[SessionContextManager] Set mapping: session_key={session_key}, "
+                f"sdk_sid={sdk_session_id or 'none'}, context=({context.channel}, {context.chat_id})"
+            )
 
-        # Enforce size limit
-        self._enforce_size_limit()
+            # Enforce size limit
+            self._enforce_size_limit()
 
     def update_sdk_session_id(
         self,
@@ -111,29 +116,30 @@ class SessionContextManager:
             session_key: The xbot session identifier
             sdk_session_id: The new SDK session identifier
         """
-        context = self._session_key_to_context.get(session_key)
-        if context is None:
-            logger.warning(
-                f"[SessionContextManager] Cannot update sdk_sid: "
-                f"session_key={session_key} not found"
+        with self._lock:
+            context = self._session_key_to_context.get(session_key)
+            if context is None:
+                logger.warning(
+                    f"[SessionContextManager] Cannot update sdk_sid: "
+                    f"session_key={session_key} not found"
+                )
+                return
+
+            # Clear old sdk_session_id mapping if exists
+            old_sdk_id = self._session_key_to_sdk_id.get(session_key)
+            if old_sdk_id:
+                self._sdk_session_id_to_context.pop(old_sdk_id, None)
+                self._sdk_id_to_session_key.pop(old_sdk_id, None)
+
+            # Set new mapping
+            self._sdk_session_id_to_context[sdk_session_id] = context
+            self._session_key_to_sdk_id[session_key] = sdk_session_id
+            self._sdk_id_to_session_key[sdk_session_id] = session_key
+
+            logger.debug(
+                f"[SessionContextManager] Updated sdk_sid: session_key={session_key}, "
+                f"old_sdk_sid={old_sdk_id or 'none'}, new_sdk_sid={sdk_session_id}"
             )
-            return
-
-        # Clear old sdk_session_id mapping if exists
-        old_sdk_id = self._session_key_to_sdk_id.get(session_key)
-        if old_sdk_id:
-            self._sdk_session_id_to_context.pop(old_sdk_id, None)
-            self._sdk_id_to_session_key.pop(old_sdk_id, None)
-
-        # Set new mapping
-        self._sdk_session_id_to_context[sdk_session_id] = context
-        self._session_key_to_sdk_id[session_key] = sdk_session_id
-        self._sdk_id_to_session_key[sdk_session_id] = session_key
-
-        logger.debug(
-            f"[SessionContextManager] Updated sdk_sid: session_key={session_key}, "
-            f"old_sdk_sid={old_sdk_id or 'none'}, new_sdk_sid={sdk_session_id}"
-        )
 
     def get_by_session_key(self, session_key: str) -> SessionContext | None:
         """Get context by session_key.
@@ -144,7 +150,8 @@ class SessionContextManager:
         Returns:
             SessionContext if found, None otherwise
         """
-        return self._session_key_to_context.get(session_key)
+        with self._lock:
+            return self._session_key_to_context.get(session_key)
 
     def get_by_sdk_session_id(self, sdk_session_id: str) -> SessionContext | None:
         """Get context by SDK session ID.
@@ -155,7 +162,8 @@ class SessionContextManager:
         Returns:
             SessionContext if found, None otherwise
         """
-        return self._sdk_session_id_to_context.get(sdk_session_id)
+        with self._lock:
+            return self._sdk_session_id_to_context.get(sdk_session_id)
 
     def get_context(self, identifier: str) -> SessionContext | None:
         """Get context by either session_key or sdk_session_id.
@@ -167,11 +175,12 @@ class SessionContextManager:
             SessionContext if found, None otherwise
         """
         # Try session_key first
-        ctx = self._session_key_to_context.get(identifier)
-        if ctx:
-            return ctx
-        # Fall back to sdk_session_id
-        return self._sdk_session_id_to_context.get(identifier)
+        with self._lock:
+            ctx = self._session_key_to_context.get(identifier)
+            if ctx:
+                return ctx
+            # Fall back to sdk_session_id
+            return self._sdk_session_id_to_context.get(identifier)
 
     def get_session_key_by_sdk_id(self, sdk_session_id: str) -> str | None:
         """Get session_key by SDK session ID.
@@ -182,7 +191,8 @@ class SessionContextManager:
         Returns:
             session_key if found, None otherwise
         """
-        return self._sdk_id_to_session_key.get(sdk_session_id)
+        with self._lock:
+            return self._sdk_id_to_session_key.get(sdk_session_id)
 
     def clear(self, session_key: str) -> bool:
         """Clear all mappings for a session.
@@ -193,24 +203,25 @@ class SessionContextManager:
         Returns:
             True if any mappings were cleared, False otherwise
         """
-        had_mappings = session_key in self._session_key_to_context
+        with self._lock:
+            had_mappings = session_key in self._session_key_to_context
 
-        # Clear session_key mapping
-        self._session_key_to_context.pop(session_key, None)
+            # Clear session_key mapping
+            self._session_key_to_context.pop(session_key, None)
 
-        # Clear associated sdk_session_id mappings
-        sdk_id = self._session_key_to_sdk_id.pop(session_key, None)
-        if sdk_id:
-            self._sdk_session_id_to_context.pop(sdk_id, None)
-            self._sdk_id_to_session_key.pop(sdk_id, None)
+            # Clear associated sdk_session_id mappings
+            sdk_id = self._session_key_to_sdk_id.pop(session_key, None)
+            if sdk_id:
+                self._sdk_session_id_to_context.pop(sdk_id, None)
+                self._sdk_id_to_session_key.pop(sdk_id, None)
 
-        if had_mappings:
-            logger.debug(
-                f"[SessionContextManager] Cleared mapping: session_key={session_key}, "
-                f"sdk_sid={sdk_id or 'none'}"
-            )
+            if had_mappings:
+                logger.debug(
+                    f"[SessionContextManager] Cleared mapping: session_key={session_key}, "
+                    f"sdk_sid={sdk_id or 'none'}"
+                )
 
-        return had_mappings
+            return had_mappings
 
     def clear_by_sdk_session_id(self, sdk_session_id: str) -> bool:
         """Clear all mappings by SDK session ID.
@@ -221,21 +232,22 @@ class SessionContextManager:
         Returns:
             True if any mappings were cleared, False otherwise
         """
-        session_key = self._sdk_id_to_session_key.get(sdk_session_id)
-        if session_key:
-            return self.clear(session_key)
+        with self._lock:
+            session_key = self._sdk_id_to_session_key.get(sdk_session_id)
+            if session_key:
+                return self.clear(session_key)
 
-        # Just clear the sdk_session_id mapping if no session_key found
-        had_mapping = sdk_session_id in self._sdk_session_id_to_context
-        self._sdk_session_id_to_context.pop(sdk_session_id, None)
-        self._sdk_id_to_session_key.pop(sdk_session_id, None)
+            # Just clear the sdk_session_id mapping if no session_key found
+            had_mapping = sdk_session_id in self._sdk_session_id_to_context
+            self._sdk_session_id_to_context.pop(sdk_session_id, None)
+            self._sdk_id_to_session_key.pop(sdk_session_id, None)
 
-        if had_mapping:
-            logger.debug(
-                f"[SessionContextManager] Cleared mapping by sdk_sid: {sdk_session_id}"
-            )
+            if had_mapping:
+                logger.debug(
+                    f"[SessionContextManager] Cleared mapping by sdk_sid: {sdk_session_id}"
+                )
 
-        return had_mapping
+            return had_mapping
 
     def _clear_session_key_mappings(self, session_key: str) -> None:
         """Clear existing mappings for a session_key (internal use)."""
@@ -267,15 +279,18 @@ class SessionContextManager:
 
     def list_session_keys(self) -> list[str]:
         """List all session keys."""
-        return list(self._session_key_to_context.keys())
+        with self._lock:
+            return list(self._session_key_to_context.keys())
 
     def list_sdk_session_ids(self) -> list[str]:
         """List all SDK session IDs."""
-        return list(self._sdk_session_id_to_context.keys())
+        with self._lock:
+            return list(self._sdk_session_id_to_context.keys())
 
     def size(self) -> int:
         """Get the number of sessions."""
-        return len(self._session_key_to_context)
+        with self._lock:
+            return len(self._session_key_to_context)
 
     def __len__(self) -> int:
         """Get the number of sessions."""
@@ -283,7 +298,8 @@ class SessionContextManager:
 
     def __contains__(self, session_key: str) -> bool:
         """Check if a session exists."""
-        return session_key in self._session_key_to_context
+        with self._lock:
+            return session_key in self._session_key_to_context
 
 
 # Convenience functions for backward compatibility with dict-like access

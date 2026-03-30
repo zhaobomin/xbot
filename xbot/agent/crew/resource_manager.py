@@ -16,7 +16,9 @@ import asyncio
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from xbot.agent.crew.agent_pool import AgentPool

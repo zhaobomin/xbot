@@ -208,6 +208,73 @@ class TestAnswerValidation:
         assert runtime._interaction_retry_counts.get("telegram:oc_123") is None
 
     @pytest.mark.asyncio
+    async def test_suggested_mode_accepts_custom_answer(self, handler, runtime, mock_transaction):
+        """Suggested mode should allow free-text answers outside suggestions."""
+        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime._state_coordinator.transaction.return_value = mock_transaction
+
+        request = InteractionRequest(
+            request_id="req-123",
+            session_key="telegram:oc_123",
+            channel="telegram",
+            chat_id="oc_123",
+            kind="question",
+            prompt="请输入应用名",
+            suggestions=["xbot", "xbot-prod", "Other"],
+            metadata={
+                "valid_options": ["xbot", "xbot-prod", "Other"],
+                "validation_mode": "suggested",
+            },
+        )
+        await runtime.bus.publish_interaction_request(request)
+
+        msg = InboundMessage(
+            channel="telegram",
+            sender_id="user123",
+            chat_id="oc_123",
+            content="xbot-ubuntu",
+        )
+
+        result = await handler.handle_interaction_response(msg, retry_count=0)
+
+        assert result is True
+        assert runtime._interaction_retry_counts.get("telegram:oc_123") is None
+
+    @pytest.mark.asyncio
+    async def test_suggested_mode_normalizes_matching_answer(self, handler, runtime, mock_transaction):
+        """Suggested mode should still normalize when user input matches a suggestion."""
+        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime._state_coordinator.transaction.return_value = mock_transaction
+
+        request = InteractionRequest(
+            request_id="req-123",
+            session_key="telegram:oc_123",
+            channel="telegram",
+            chat_id="oc_123",
+            kind="question",
+            prompt="选择方案",
+            suggestions=["xbot", "xbot-prod"],
+            metadata={
+                "valid_options": ["xbot", "xbot-prod"],
+                "validation_mode": "suggested",
+            },
+        )
+        await runtime.bus.publish_interaction_request(request)
+
+        msg = InboundMessage(
+            channel="telegram",
+            sender_id="user123",
+            chat_id="oc_123",
+            content="  XBOT  ",
+        )
+
+        result = await handler.handle_interaction_response(msg, retry_count=0)
+
+        assert result is True
+        response = runtime.bus._interaction_results["req-123"]
+        assert response.content == "xbot"
+
+    @pytest.mark.asyncio
     async def test_no_valid_options_metadata(self, handler, runtime, mock_transaction):
         """Test interaction without valid_options skips validation."""
         runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION

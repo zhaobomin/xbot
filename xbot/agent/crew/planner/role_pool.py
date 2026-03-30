@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import logging
 from pathlib import Path
 from typing import Any
 
@@ -16,8 +15,9 @@ from xbot.agent.crew.planner.models import (
     RoleTier,
 )
 from xbot.agent.crew.planner.validators import LLMValidator
+from xbot.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Default role pool directory
 ROLE_POOL_DIR = Path(__file__).parent.parent / "role_pool"
@@ -222,14 +222,55 @@ class RolePoolManager:
                 continue
 
             role = self._roles[role_name]
+            role_data = {
+                "name": role.name,
+                "display_name": role.display_name,
+                "description": role.description,
+                "goal": role.goal,
+                "backstory": role.backstory,
+                "tier": role.tier.value if hasattr(role.tier, "value") else role.tier,
+                "capabilities": [cap.value if hasattr(cap, "value") else cap for cap in role.capabilities],
+                "tools": role.tools,
+                "tool_restrictions": role.tool_restrictions,
+                "max_iterations": role.max_iterations,
+                "timeout_multiplier": role.timeout_multiplier,
+                "tags": role.tags,
+                "examples": role.examples,
+            }
+
             for key, value in overrides.items():
-                if hasattr(role, key):
-                    setattr(role, key, value)
+                if key in role_data:
+                    role_data[key] = value
                     logger.debug(f"Applied override to {role_name}.{key}")
                 else:
                     logger.warning(
                         f"Unknown attribute '{key}' in override for role '{role_name}'"
                     )
+
+            capabilities = []
+            for cap_str in (role_data.get("capabilities") or []):
+                try:
+                    capabilities.append(Capability(cap_str))
+                except ValueError:
+                    logger.warning(
+                        f"Unknown capability '{cap_str}' in override for role '{role_name}'"
+                    )
+
+            self._roles[role_name] = RoleDefinition(
+                name=role_data["name"],
+                display_name=role_data.get("display_name") or role_data["name"],
+                description=role_data.get("description") or "",
+                goal=role_data.get("goal") or "",
+                backstory=role_data.get("backstory") or "",
+                tier=RoleTier(role_data["tier"]),
+                capabilities=capabilities,
+                tools=role_data.get("tools"),
+                tool_restrictions=role_data.get("tool_restrictions"),
+                max_iterations=LLMValidator.validate_max_iterations(role_data.get("max_iterations")),
+                timeout_multiplier=LLMValidator.validate_timeout_multiplier(role_data.get("timeout_multiplier")),
+                tags=LLMValidator.validate_string_list(role_data.get("tags")),
+                examples=LLMValidator.validate_string_list(role_data.get("examples")),
+            )
 
     def get_pool(self) -> RolePool:
         """Get the loaded role pool.

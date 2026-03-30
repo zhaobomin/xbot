@@ -8,7 +8,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.agent.crew.agent_pool import AgentPool
 from xbot.agent.crew.context import CrewExecutionContext, load_checkpoint

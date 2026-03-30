@@ -9,7 +9,6 @@ This module provides functionality to:
 from __future__ import annotations
 
 import json
-import logging
 import re
 from pathlib import Path
 from typing import Any
@@ -25,8 +24,9 @@ from xbot.agent.crew.planner.models import (
     RoleTier,
 )
 from xbot.agent.crew.planner.validators import LLMValidator
+from xbot.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class RoleCreator:

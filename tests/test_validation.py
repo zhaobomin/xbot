@@ -387,18 +387,16 @@ class TestValidationWarningsLogging:
         CrewValidator.log_warnings([])
         # No exception should be raised
 
-    def test_log_warnings_multiple(self):
-        """Multiple warnings should all be logged.
-
-        Note: loguru logs cannot be captured with pytest caplog.
-        We just verify the function doesn't raise an exception.
-        """
+    def test_log_warnings_multiple(self, caplog):
+        """Multiple warnings should be captured by the unified logging pipeline."""
+        caplog.set_level("WARNING")
         warnings = [
             ValidationWarning("Warning 1"),
             ValidationWarning("Warning 2"),
         ]
         CrewValidator.log_warnings(warnings)
-        # Function should complete without exception
+        assert "Warning 1" in caplog.text
+        assert "Warning 2" in caplog.text
 
 
 class TestBoundaryValues:

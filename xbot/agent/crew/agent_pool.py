@@ -7,7 +7,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.agent.crew.models import AgentRole, CrewConfig
 from xbot.agent.protocol import AgentContext

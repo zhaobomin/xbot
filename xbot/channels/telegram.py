@@ -8,7 +8,9 @@ import time
 import unicodedata
 from typing import Any, Literal
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 from pydantic import Field
 from telegram import BotCommand, ReplyParameters, Update
 from telegram.error import Conflict, TimedOut
@@ -285,13 +287,13 @@ class TelegramChannel(BaseChannel):
         bot_info = await self._app.bot.get_me()
         self._bot_user_id = getattr(bot_info, "id", None)
         self._bot_username = getattr(bot_info, "username", None)
-        logger.info("Telegram bot @{} connected", bot_info.username)
+        logger.info("Telegram bot @%s connected", bot_info.username)
 
         try:
             await self._app.bot.set_my_commands(self.BOT_COMMANDS)
             logger.debug("Telegram bot commands registered")
         except Exception as e:
-            logger.warning("Failed to register bot commands: {}", e)
+            logger.warning("Failed to register bot commands: %s", e)
 
         # Start polling (this runs until stopped)
         await self._app.updater.start_polling(
@@ -352,7 +354,7 @@ class TelegramChannel(BaseChannel):
         try:
             chat_id = int(msg.chat_id)
         except ValueError:
-            logger.error("Invalid chat_id: {}", msg.chat_id)
+            logger.error("Invalid chat_id: %s", msg.chat_id)
             return
         reply_to_message_id = msg.metadata.get("message_id")
         message_thread_id = msg.metadata.get("message_thread_id")
@@ -404,7 +406,7 @@ class TelegramChannel(BaseChannel):
                     )
             except Exception as e:
                 filename = media_path.rsplit("/", 1)[-1]
-                logger.error("Failed to send media {}: {}", media_path, e)
+                logger.error("Failed to send media %s: %s", media_path, e)
                 await self._app.bot.send_message(
                     chat_id=chat_id,
                     text=f"[Failed to send: {filename}]",
@@ -433,7 +435,7 @@ class TelegramChannel(BaseChannel):
                     raise
                 delay = _SEND_RETRY_BASE_DELAY * (2 ** (attempt - 1))
                 logger.warning(
-                    "Telegram timeout (attempt {}/{}), retrying in {:.1f}s",
+                    "Telegram timeout (attempt %s/%s), retrying in %.1fs",
                     attempt, _SEND_MAX_RETRIES, delay,
                 )
                 await asyncio.sleep(delay)
@@ -455,7 +457,7 @@ class TelegramChannel(BaseChannel):
                 **(thread_kwargs or {}),
             )
         except Exception as e:
-            logger.warning("HTML parse failed, falling back to plain text: {}", e)
+            logger.warning("HTML parse failed, falling back to plain text: %s", e)
             try:
                 await self._call_with_retry(
                     self._app.bot.send_message,
@@ -587,12 +589,12 @@ class TelegramChannel(BaseChannel):
             if media_type in ("voice", "audio"):
                 transcription = await self.transcribe_audio(file_path)
                 if transcription:
-                    logger.info("Transcribed {}: {}...", media_type, transcription[:50])
+                    logger.info("Transcribed %s: %s...", media_type, transcription[:50])
                     return [path_str], [f"[transcription: {transcription}]"]
                 return [path_str], [f"[{media_type}: {path_str}]"]
             return [path_str], [f"[{media_type}: {path_str}]"]
         except Exception as e:
-            logger.warning("Failed to download message media: {}", e)
+            logger.warning("Failed to download message media: %s", e)
             if add_failure_content:
                 return [], [f"[{media_type}: download failed]"]
             return [], []
@@ -720,7 +722,7 @@ class TelegramChannel(BaseChannel):
         media_paths.extend(current_media_paths)
         content_parts.extend(current_media_parts)
         if current_media_paths:
-            logger.debug("Downloaded message media to {}", current_media_paths[0])
+            logger.debug("Downloaded message media to %s", current_media_paths[0])
 
         # Reply context: text and/or media from the replied-to message
         reply = getattr(message, "reply_to_message", None)
@@ -729,13 +731,13 @@ class TelegramChannel(BaseChannel):
             reply_media, reply_media_parts = await self._download_message_media(reply)
             if reply_media:
                 media_paths = reply_media + media_paths
-                logger.debug("Attached replied-to media: {}", reply_media[0])
+                logger.debug("Attached replied-to media: %s", reply_media[0])
             tag = reply_ctx or (f"[Reply to: {reply_media_parts[0]}]" if reply_media_parts else None)
             if tag:
                 content_parts.insert(0, tag)
         content = "\n".join(content_parts) if content_parts else "[empty message]"
 
-        logger.debug("Telegram message from {}: {}...", sender_id, content[:50])
+        logger.debug("Telegram message from %s: %s...", sender_id, content[:50])
 
         str_chat_id = str(chat_id)
         metadata = self._build_message_metadata(message, user)
@@ -810,7 +812,7 @@ class TelegramChannel(BaseChannel):
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            logger.debug("Typing indicator stopped for {}: {}", chat_id, e)
+            logger.debug("Typing indicator stopped for %s: %s", chat_id, e)
 
     async def _on_error(self, update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Log polling / handler errors instead of silently swallowing them."""
@@ -821,7 +823,7 @@ class TelegramChannel(BaseChannel):
             )
             await self.stop()
             return
-        logger.error("Telegram error: {}", context.error)
+        logger.error("Telegram error: %s", context.error)
 
     def _get_extension(
         self,

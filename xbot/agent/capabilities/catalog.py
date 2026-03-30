@@ -4,9 +4,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-import re
 from typing import Any
 
+from xbot.agent.capabilities.skill_parsing import extract_action_tool_names, parse_skill_document, strip_frontmatter
 from xbot.agent.capabilities.skills_loader import SkillsLoader
 
 _TOOL_ALIASES = {
@@ -61,6 +61,7 @@ class CapabilityCatalog:
     def __init__(self, workspace: str | Path, builtin_skills_dir: Path | None = None):
         self.workspace = Path(workspace)
         self.skills = SkillsLoader(self.workspace, builtin_skills_dir=builtin_skills_dir)
+        self._skill_tool_name_cache: dict[tuple[bool, tuple[tuple[str, float], ...]], set[str]] = {}
 
     def list_skills(self, *, include_unavailable: bool = False) -> list[SkillCapability]:
         records = self.skills.list_skills(filter_unavailable=not include_unavailable)
@@ -133,30 +134,40 @@ class CapabilityCatalog:
         return "tool"
 
     def skill_tool_names(self, *, include_unavailable: bool = False) -> set[str]:
+        records = self.skills.list_skills(filter_unavailable=not include_unavailable)
+        fingerprint = tuple(
+            sorted(
+                (
+                    record["path"],
+                    Path(record["path"]).stat().st_mtime if Path(record["path"]).exists() else -1.0,
+                )
+                for record in records
+            )
+        )
+        cache_key = (include_unavailable, fingerprint)
+        cached = self._skill_tool_name_cache.get(cache_key)
+        if cached is not None:
+            return set(cached)
+
         names: set[str] = set()
-        for capability in self.list_skills(include_unavailable=include_unavailable):
-            if not capability.tool_exposable:
+        for record in records:
+            path = Path(record["path"])
+            if not path.exists():
                 continue
-            content = Path(capability.path).read_text(encoding="utf-8")
-            body = self._strip_frontmatter(content)
-            action_names = re.findall(r"###\s+(\w+)\s*\n([^#]+)", body)
-            added = False
-            for action_name, _ in action_names:
-                if action_name.lower() in {"overview", "description", "usage", "example", "note", "notes"}:
-                    continue
-                names.add(f"{capability.name}_{action_name.lower()}")
-                added = True
-            if not added:
-                names.add(f"skill_{capability.name.replace('-', '_')}")
+            parsed = parse_skill_document(path.read_text(encoding="utf-8"))
+            tool_exposable = parsed.frontmatter.get("tool_exposable")
+            if isinstance(tool_exposable, str):
+                tool_exposable = tool_exposable.strip().lower() in {"true", "1", "yes", "on"}
+            if not tool_exposable:
+                continue
+            names.update(extract_action_tool_names(record["name"], parsed.body))
+
+        self._skill_tool_name_cache = {cache_key: set(names)}
         return names
 
     @staticmethod
     def _strip_frontmatter(content: str) -> str:
-        if content.startswith("---"):
-            match = re.match(r"^---\n.*?\n---\n", content, re.DOTALL)
-            if match:
-                return content[match.end():].strip()
-        return content
+        return strip_frontmatter(content)
 
     def build_summary(self, *, mcp_servers: dict[str, Any] | None = None) -> str:
         skills = self.list_skills(include_unavailable=True)

@@ -39,6 +39,7 @@ from xbot.agent.runtime import AgentRuntime
 from xbot.agent.interaction.progress_coalescer import ProgressCoalescer
 from xbot.config.paths import get_workspace_path
 from xbot.config.schema import Config
+from xbot.logging import configure_logging, get_logger, set_package_logging_enabled
 from xbot.utils.helpers import (
     sync_workspace_command_pack,
     sync_workspace_skill_pack,
@@ -54,6 +55,7 @@ app = typer.Typer(
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # File reference parsing for @path syntax
@@ -299,7 +301,7 @@ def main(
     ),
 ):
     """xbot - Personal AI Assistant."""
-    pass
+    configure_logging()
 
 
 # ============================================================================
@@ -320,8 +322,10 @@ def _run_init(
     from xbot.config.loader import get_config_path, load_config, save_config, set_config_path
     from xbot.config.schema import Config
 
-    if config:
-        config_path = Path(config).expanduser().resolve()
+    config_arg = config
+
+    if config_arg:
+        config_path = Path(config_arg).expanduser().resolve()
         set_config_path(config_path)
         console.print(f"[dim]Using config: {config_path}[/dim]")
     else:
@@ -338,23 +342,23 @@ def _run_init(
         console.print("  [bold]y[/bold] = overwrite with defaults (existing values will be lost)")
         console.print("  [bold]N[/bold] = refresh config, keeping existing values and adding new fields")
         if typer.confirm("Overwrite?"):
-            config = _apply_workspace_override(Config())
-            save_config(config, config_path)
+            loaded_config = _apply_workspace_override(Config())
+            save_config(loaded_config, config_path)
             console.print(f"[green]✓[/green] Config reset to defaults at {config_path}")
         else:
-            config = _apply_workspace_override(load_config(config_path))
-            save_config(config, config_path)
+            loaded_config = _apply_workspace_override(load_config(config_path))
+            save_config(loaded_config, config_path)
             console.print(f"[green]✓[/green] Config refreshed at {config_path} (existing values preserved)")
     else:
-        config = _apply_workspace_override(Config())
-        save_config(config, config_path)
+        loaded_config = _apply_workspace_override(Config())
+        save_config(loaded_config, config_path)
         console.print(f"[green]✓[/green] Created config at {config_path}")
     console.print("[dim]Config template now uses `maxTokens` + `contextWindowTokens`; `memoryWindow` is no longer a runtime setting.[/dim]")
 
     _onboard_plugins(config_path)
 
     # Create workspace, preferring the configured workspace path.
-    workspace_path = get_workspace_path(config.workspace_path)
+    workspace_path = get_workspace_path(loaded_config.workspace_path)
     if not workspace_path.exists():
         workspace_path.mkdir(parents=True, exist_ok=True)
         console.print(f"[green]✓[/green] Created workspace at {workspace_path}")
@@ -386,7 +390,7 @@ def _run_init(
             )
 
     agent_cmd = 'xbot agent -m "Hello!"'
-    if config:
+    if config_arg:
         agent_cmd += f" --config {config_path}"
 
     console.print(f"\n{__logo__} xbot is ready!")
@@ -554,9 +558,7 @@ def gateway(
     from xbot.heartbeat.service import HeartbeatService
     from xbot.session.manager import SessionManager
 
-    if verbose:
-        import logging
-        logging.basicConfig(level=logging.DEBUG)
+    configure_logging(level="DEBUG" if verbose else "INFO")
 
     config = _load_runtime_config(config, workspace)
     _print_deprecated_memory_window_notice(config)
@@ -613,7 +615,7 @@ def gateway(
         if isinstance(cron_tool, CronTool):
             cron_token = cron_tool.set_cron_context(True)
         try:
-            response = await agent.process_direct(
+            response = await agent.process_managed_direct(
                 reminder_note,
                 session_key=f"cron:{job.id}",
                 channel=job.payload.channel or "cli",
@@ -669,7 +671,7 @@ def gateway(
         async def _silent(*_args, **_kwargs):
             pass
 
-        return await agent.process_direct(
+        return await agent.process_managed_direct(
             tasks,
             session_key="heartbeat",
             channel=channel,
@@ -777,8 +779,6 @@ def agent(
     logs: bool = typer.Option(False, "--logs/--no-logs", help="Show xbot runtime logs during chat"),
 ):
     """Interact with the agent directly."""
-    from loguru import logger
-
     from xbot.bus.queue import MessageBus
     from xbot.config.paths import get_cron_dir
     from xbot.cron.service import CronService
@@ -793,10 +793,8 @@ def agent(
     cron_store_path = get_cron_dir() / "jobs.json"
     cron = CronService(cron_store_path)
 
-    if logs:
-        logger.enable("xbot")
-    else:
-        logger.disable("xbot")
+    configure_logging(level="DEBUG" if logs else "INFO")
+    set_package_logging_enabled(logs, enabled_level="DEBUG")
 
     # Shared reference for progress callbacks and permission handler
     _thinking: _ThinkingSpinner | None = None

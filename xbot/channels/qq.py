@@ -4,7 +4,9 @@ import asyncio
 from collections import deque
 from typing import TYPE_CHECKING, Any, Literal
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
@@ -33,11 +35,12 @@ def _make_bot_class(channel: "QQChannel") -> "type[botpy.Client]":
 
     class _Bot(botpy.Client):
         def __init__(self):
-            # Disable botpy's file log — xbot uses loguru; default "botpy.log" fails on read-only fs
+            # Disable botpy's file log — xbot uses centralized stdlib logging;
+            # default "botpy.log" fails on read-only fs.
             super().__init__(intents=intents, ext_handlers=False)
 
         async def on_ready(self):
-            logger.info("QQ bot ready: {}", self.robot.name)
+            logger.info("QQ bot ready: %s", self.robot.name)
 
         async def on_c2c_message_create(self, message: "C2CMessage"):
             await channel._on_message(message, is_group=False)
@@ -103,7 +106,7 @@ class QQChannel(BaseChannel):
             try:
                 await self._client.start(appid=self.config.app_id, secret=self.config.secret)
             except Exception as e:
-                logger.warning("QQ bot error: {}", e)
+                logger.warning("QQ bot error: %s", e)
             if self._running:
                 logger.info("Reconnecting QQ bot in 5 seconds...")
                 await asyncio.sleep(5)
@@ -150,7 +153,7 @@ class QQChannel(BaseChannel):
                     **payload,
                 )
         except Exception as e:
-            logger.error("Error sending QQ message: {}", e)
+            logger.error("Error sending QQ message: %s", e)
 
     async def _on_message(self, data: "C2CMessage | GroupMessage", is_group: bool = False) -> None:
         """Handle incoming message from QQ."""

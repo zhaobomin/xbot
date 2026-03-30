@@ -6,14 +6,14 @@ Compatible with existing MEMORY.md format.
 
 from __future__ import annotations
 
-import logging
 import re
 from pathlib import Path
 from typing import Any
 
 from xbot.agent.tools.base import Tool
+from xbot.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class MemoryTool(Tool):
@@ -162,7 +162,10 @@ class MemoryTool(Tool):
                     lines.append(f"### Result {i}")
                     lines.append(f"Source: {r.get('source', 'unknown')}")
                     lines.append(f"Score: {r.get('score', 0):.2f}")
-                    lines.append(f"Content:\n{r.get('memory', '')[:500]}...")
+                    memory_text = r.get("memory", "")
+                    preview = memory_text[:500]
+                    suffix = "..." if len(memory_text) > 500 else ""
+                    lines.append(f"Content:\n{preview}{suffix}")
                     lines.append("")
                 return "\n".join(lines)
         except Exception as e:

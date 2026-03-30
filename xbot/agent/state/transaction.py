@@ -24,7 +24,9 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Callable
 
-from loguru import logger
+from xbot.logging import TRACE_LEVEL, get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from xbot.agent.state.coordinator import SessionStateCoordinator
@@ -156,7 +158,7 @@ class StateTransaction:
         # 保存快照用于回滚
         self._snapshot = self._capture_snapshot()
 
-        logger.trace(f"Transaction started: {self._session_key}")
+        logger.log(TRACE_LEVEL, "Transaction started: %s", self._session_key)
         return self
 
     async def __aexit__(
@@ -209,8 +211,13 @@ class StateTransaction:
         self._pending_phase_reason = reason
         self._pending_phase_force = force
 
-        logger.trace(
-            f"Transaction[{self._session_key}]: set_phase({phase.value}, reason={reason}, force={force})"
+        logger.log(
+            TRACE_LEVEL,
+            "Transaction[%s]: set_phase(%s, reason=%s, force=%s)",
+            self._session_key,
+            phase.value,
+            reason,
+            force,
         )
 
     def register_task(self, task: asyncio.Task) -> None:
@@ -231,9 +238,7 @@ class StateTransaction:
 
         self._pending_tasks.append(task)
 
-        logger.trace(
-            f"Transaction[{self._session_key}]: register_task({task.get_name()})"
-        )
+        logger.log(TRACE_LEVEL, "Transaction[%s]: register_task(%s)", self._session_key, task.get_name())
 
     def unregister_task(self, task: asyncio.Task) -> None:
         """注销任务。
@@ -258,9 +263,7 @@ class StateTransaction:
         # 添加到待注销列表
         self._pending_unregister_tasks.append(task)
 
-        logger.trace(
-            f"Transaction[{self._session_key}]: unregister_task({task.get_name()})"
-        )
+        logger.log(TRACE_LEVEL, "Transaction[%s]: unregister_task(%s)", self._session_key, task.get_name())
 
     def acquire_lock(self) -> None:
         """获取会话锁。"""
@@ -278,7 +281,7 @@ class StateTransaction:
 
         self._pending_lock_acquire = True
 
-        logger.trace(f"Transaction[{self._session_key}]: acquire_lock()")
+        logger.log(TRACE_LEVEL, "Transaction[%s]: acquire_lock()", self._session_key)
 
     def release_lock(self) -> None:
         """释放会话锁。"""
@@ -297,7 +300,7 @@ class StateTransaction:
         self._pending_lock_acquire = False
         self._pending_lock_release = True
 
-        logger.trace(f"Transaction[{self._session_key}]: release_lock()")
+        logger.log(TRACE_LEVEL, "Transaction[%s]: release_lock()", self._session_key)
 
     # === 提交与回滚 ===
 
@@ -382,9 +385,11 @@ class StateTransaction:
                 except Exception as e:
                     logger.debug(f"Transaction on_commit callback error: {e}")
 
-            logger.trace(
-                f"Transaction committed: {self._session_key} "
-                f"({len(self._operations)} operations)"
+            logger.log(
+                TRACE_LEVEL,
+                "Transaction committed: %s (%s operations)",
+                self._session_key,
+                len(self._operations),
             )
 
             return TransactionResult(
@@ -412,9 +417,11 @@ class StateTransaction:
         """执行回滚。"""
         duration_ms = (time.time() - (self._start_time or time.time())) * 1000
 
-        logger.trace(
-            f"Transaction rolling back: {self._session_key} "
-            f"({len(self._operations)} operations)"
+        logger.log(
+            TRACE_LEVEL,
+            "Transaction rolling back: %s (%s operations)",
+            self._session_key,
+            len(self._operations),
         )
 
         # 逆序执行回滚操作

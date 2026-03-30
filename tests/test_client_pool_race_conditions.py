@@ -138,36 +138,45 @@ class TestClientPoolRaceConditions:
 
         mock_sdk_config = MagicMock()
         mock_sdk_config.max_clients = 10
-        mock_sdk_config.client_ttl_seconds = 3600
+        mock_sdk_config.client_idle_ttl_seconds = 3600
         mock_sdk_config.client_disconnect_retries = 2
+        mock_sdk_config.client_disconnect_timeout_seconds = 1
         backend.sdk_config = mock_sdk_config
 
         def mock_build_options(session_key, **kwargs):
             # Return options with different models
             opts = MagicMock()
-            opts.model = backend._client_models.get(session_key, "model_a")
+            opts.model = backend._options_builder._get_model_name()
             return opts
 
         backend._build_options = mock_build_options
+        backend._options_builder = MagicMock()
+        backend._options_builder._get_model_name.side_effect = [
+            "model_a",
+            "model_a",
+            "model_b",
+            "model_b",
+        ]
 
         async def mock_connect(self):
+            pass
+
+        async def mock_disconnect(self):
             pass
 
         def create_mock_client(*args, **kwargs):
             client = MagicMock()
             client.connect = lambda: mock_connect(client)
+            client.disconnect = lambda: mock_disconnect(client)
             return client
 
         with patch(
             "xbot.agent.backends.claude_sdk_backend._ClaudeSDKClient",
             side_effect=create_mock_client,
         ):
-            # First client with model_a
-            backend._client_models["session_1"] = "model_a"
             await backend._get_or_create_client("session_1")
 
             # Same session, different model - should create new client
-            backend._client_models["session_1"] = "model_b"
             await backend._get_or_create_client("session_1")
 
         # Two clients should have been created (model change)
@@ -263,8 +272,8 @@ class TestClientPoolConfiguration:
             # Create mock config with override values
             mock_sdk_config = MagicMock()
             mock_sdk_config.max_clients = 50
-            mock_sdk_config.client_ttl_seconds = 1800
-            mock_sdk_config.client_disconnect_retries = 5
+            mock_sdk_config.client_idle_ttl_seconds = 1800
+            mock_sdk_config.client_disconnect_max_retries = 5
             backend.sdk_config = mock_sdk_config
 
             assert backend.max_clients == 50

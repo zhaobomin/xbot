@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import asyncio
 import json
-import weakref
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain
 
@@ -155,7 +156,7 @@ class MemoryStore:
             if not response.has_tool_calls:
                 logger.warning(
                     "Memory consolidation: LLM did not call save_memory "
-                    "(finish_reason={}, content_len={}, content_preview={})",
+                    "(finish_reason=%s, content_len=%s, content_preview=%s)",
                     response.finish_reason,
                     len(response.content or ""),
                     (response.content or "")[:200],
@@ -189,7 +190,7 @@ class MemoryStore:
                 self.write_long_term(update)
 
             self._consecutive_failures = 0
-            logger.info("Memory consolidation done for {} messages", len(messages))
+            logger.info("Memory consolidation done for %s messages", len(messages))
             return True
         except Exception:
             logger.exception("Memory consolidation failed")
@@ -212,7 +213,7 @@ class MemoryStore:
             f"{self._format_messages(messages)}"
         )
         logger.warning(
-            "Memory consolidation degraded: raw-archived {} messages", len(messages)
+            "Memory consolidation degraded: raw-archived %s messages", len(messages)
         )
 
 
@@ -260,7 +261,7 @@ class MemoryConsolidator:
         self.context_window_tokens = context_window_tokens
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
-        self._locks: weakref.WeakValueDictionary[str, asyncio.Lock] = weakref.WeakValueDictionary()
+        self._locks: dict[str, asyncio.Lock] = {}
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""
@@ -332,7 +333,7 @@ class MemoryConsolidator:
                 return
             if estimated < trigger_threshold:
                 logger.debug(
-                    "Token consolidation idle {}: {}/{} (trigger at {}) via {}",
+                    "Token consolidation idle %s: %s/%s (trigger at %s) via %s",
                     session.key,
                     estimated,
                     self.context_window_tokens,
@@ -348,7 +349,7 @@ class MemoryConsolidator:
                 boundary = self.pick_consolidation_boundary(session, max(1, estimated - target))
                 if boundary is None:
                     logger.debug(
-                        "Token consolidation: no safe boundary for {} (round {})",
+                        "Token consolidation: no safe boundary for %s (round %s)",
                         session.key,
                         round_num,
                     )
@@ -360,7 +361,7 @@ class MemoryConsolidator:
                     return
 
                 logger.info(
-                    "Token consolidation round {} for {}: {}/{} via {}, chunk={} msgs",
+                    "Token consolidation round %s for %s: %s/%s via %s, chunk=%s msgs",
                     round_num,
                     session.key,
                     estimated,
@@ -418,7 +419,7 @@ class MemoryConsolidator:
 
             messages_count = len(unconsolidated)
             logger.info(
-                "Force consolidation for {}: {} messages, {} tokens",
+                "Force consolidation for %s: %s messages, %s tokens",
                 session.key,
                 messages_count,
                 tokens_before,

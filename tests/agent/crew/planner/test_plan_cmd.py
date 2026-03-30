@@ -177,10 +177,10 @@ class TestPrintCrewResult:
 
         # Create mock result
         result = MagicMock()
-        result.success = True
-        result.execution_time = 10.5
+        result.status = "completed"
+        result.total_time = 10.5
         result.task_results = []
-        result.error = None
+        result.summary = "All good"
 
         # Capture output
         old_stdout = sys.stdout
@@ -202,10 +202,10 @@ class TestPrintCrewResult:
 
         # Create mock result
         result = MagicMock()
-        result.success = False
-        result.execution_time = 5.0
+        result.status = "failed"
+        result.total_time = 5.0
         result.task_results = []
-        result.error = "Test error"
+        result.summary = "Test error"
 
         # Capture output
         old_stdout = sys.stdout

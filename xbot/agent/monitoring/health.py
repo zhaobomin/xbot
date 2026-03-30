@@ -12,7 +12,9 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from aiohttp import web
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -176,7 +178,7 @@ class HealthCheckService:
         """Detailed status endpoint."""
         return web.json_response({
             "uptime_seconds": round(time.time() - self._start_time, 2),
-            "start_time": datetime.fromtimestamp(self._start_time).isoformat(),
+            "start_time": datetime.fromtimestamp(self._start_time, timezone.utc).isoformat().replace("+00:00", "Z"),
             **self._status,
         })
 

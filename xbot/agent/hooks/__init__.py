@@ -8,9 +8,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
+import inspect
 from typing import TYPE_CHECKING, Any, Callable
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from claude_agent_sdk import PreCompactHookInput, HookContext
@@ -86,7 +89,7 @@ class CompactHookHandler:
 
         # DEBUG: Log raw input and context for troubleshooting
         logger.info(
-            "[PreCompact Hook] Triggered! Raw input type={}, input keys={}, context type={}, context keys={}",
+            "[PreCompact Hook] Triggered! Raw input type=%s, input keys=%s, context type=%s, context keys=%s",
             type(input).__name__,
             list(input.keys()) if isinstance(input, dict) else "N/A",
             type(context).__name__,
@@ -108,7 +111,7 @@ class CompactHookHandler:
         trigger = str(trigger) if trigger is not None else "auto"
 
         logger.info(
-            "[PreCompact Hook] Extracted session_id='{}', trigger='{}'",
+            "[PreCompact Hook] Extracted session_id='%s', trigger='%s'",
             session_key,
             trigger,
         )
@@ -128,7 +131,7 @@ class CompactHookHandler:
 
         # Log the event
         logger.info(
-            "Context compaction triggered: session={}, trigger={}",
+            "Context compaction triggered: session=%s, trigger=%s",
             event.session_key,
             event.trigger,
         )
@@ -140,7 +143,9 @@ class CompactHookHandler:
         # Send notification to user's channel via callback
         if self.message_callback:
             try:
-                self.message_callback(str(session_key), notification_msg)
+                callback_result = self.message_callback(str(session_key), notification_msg)
+                if inspect.isawaitable(callback_result):
+                    await callback_result
                 logger.debug(f"Sent compact notification for session {session_key}")
             except Exception as e:
                 logger.warning(f"Failed to send compact notification: {e}")

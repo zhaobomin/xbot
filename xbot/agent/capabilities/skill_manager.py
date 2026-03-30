@@ -11,7 +11,6 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import inspect
-import logging
 import os
 import sys
 from pathlib import Path
@@ -19,11 +18,12 @@ from typing import TYPE_CHECKING, Any
 
 from xbot.agent.capabilities.skills_loader import BUILTIN_SKILLS_DIR, SkillsLoader
 from xbot.agent.tools.base import Tool
+from xbot.logging import get_logger
 
 if TYPE_CHECKING:
     from xbot.agent.capabilities.tool_adapter import ToolAdapter
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class SkillManager:

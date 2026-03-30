@@ -1,6 +1,7 @@
 """Email channel implementation using IMAP polling + SMTP replies."""
 
 import asyncio
+from collections import OrderedDict
 import html
 import imaplib
 import re
@@ -14,7 +15,9 @@ from email.parser import BytesParser
 from email.utils import parseaddr
 from typing import Any
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 from pydantic import Field
 
 from xbot.bus.events import OutboundMessage
@@ -92,7 +95,7 @@ class EmailChannel(BaseChannel):
         self.config: EmailConfig = config
         self._last_subject_by_chat: dict[str, str] = {}
         self._last_message_id_by_chat: dict[str, str] = {}
-        self._processed_uids: set[str] = set()  # Capped to prevent unbounded growth
+        self._processed_uids: OrderedDict[str, None] = OrderedDict()
         self._MAX_PROCESSED_UIDS = 100000
 
     async def start(self) -> None:
@@ -160,7 +163,7 @@ class EmailChannel(BaseChannel):
 
         # autoReplyEnabled only controls automatic replies, not proactive sends
         if is_reply and not self.config.auto_reply_enabled and not force_send:
-            logger.info("Skip automatic email reply to {}: auto_reply_enabled is false", to_addr)
+            logger.info("Skip automatic email reply to %s: auto_reply_enabled is false", to_addr)
             return
 
         base_subject = self._last_subject_by_chat.get(to_addr, "xbot reply")
@@ -184,7 +187,7 @@ class EmailChannel(BaseChannel):
         try:
             await asyncio.to_thread(self._smtp_send, email_msg)
         except Exception as e:
-            logger.error("Error sending email to {}: {}", to_addr, e)
+            logger.error("Error sending email to %s: %s", to_addr, e)
             raise
 
     def _validate_config(self) -> bool:
@@ -203,7 +206,7 @@ class EmailChannel(BaseChannel):
             missing.append("smtp_password")
 
         if missing:
-            logger.error("Email channel not configured, missing: {}", ', '.join(missing))
+            logger.error("Email channel not configured, missing: %s", ', '.join(missing))
             return False
         return True
 
@@ -342,11 +345,13 @@ class EmailChannel(BaseChannel):
                 )
 
                 if dedupe and uid:
-                    self._processed_uids.add(uid)
+                    self._processed_uids[uid] = None
+                    self._processed_uids.move_to_end(uid)
                     # mark_seen is the primary dedup; this set is a safety net
                     if len(self._processed_uids) > self._MAX_PROCESSED_UIDS:
-                        # Evict a random half to cap memory; mark_seen is the primary dedup
-                        self._processed_uids = set(list(self._processed_uids)[len(self._processed_uids) // 2:])
+                        trim_count = len(self._processed_uids) // 2
+                        for _ in range(trim_count):
+                            self._processed_uids.popitem(last=False)
 
                 if mark_seen:
                     client.store(imap_id, "+FLAGS", "\\Seen")

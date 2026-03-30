@@ -8,7 +8,7 @@ Merge rules:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable
 
 
 class MergeError(Exception):
@@ -142,7 +142,7 @@ def merge_tasks(
 
 def check_inheritance_cycle(
     config_path: str,
-    resolve_extends: callable,
+    resolve_extends: Callable[[str], str | None],
     visited: set[str] | None = None,
     path: list[str] | None = None,
 ) -> list[str]:
@@ -188,7 +188,7 @@ def check_inheritance_cycle(
 
 def get_inheritance_chain(
     config_path: str,
-    load_config: callable,
+    load_config: Callable[[str], dict[str, Any]],
 ) -> list[tuple[str, dict]]:
     """Get the full inheritance chain from root to leaf.
 
@@ -236,7 +236,7 @@ def get_inheritance_chain(
 
 def flatten_inheritance(
     config_path: str,
-    load_config: callable,
+    load_config: Callable[[str], dict[str, Any]],
 ) -> dict[str, Any]:
     """Flatten an inheritance chain into a single merged config.
 

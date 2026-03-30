@@ -6,10 +6,13 @@ import asyncio
 import inspect
 import os
 import sys
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, TypeAlias
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
@@ -106,7 +109,12 @@ class AgentRuntime:
         self.shared_resources["on_backend_client_cleanup"] = self._on_backend_client_cleanup
 
     @property
-    def backend(self) -> "ClaudeSDKBackend | None":
+    def backend(self) -> "ClaudeSDKBackend":
+        """Return the initialized backend.
+
+        Raises:
+            RuntimeError: If the router/backend has not been initialized yet.
+        """
         return self.router.backend
 
     @property
@@ -125,8 +133,8 @@ class AgentRuntime:
 
         self._running = True
         await self.initialize()
-        logger.info("Agent runtime started with backend {}", self.router.backend_type)
-        logger.info("Agent runtime summary: {}", self.describe_runtime())
+        logger.info("Agent runtime started with backend %s", self.router.backend_type)
+        logger.info("Agent runtime summary: %s", self.describe_runtime())
 
         while self._running:
             try:
@@ -134,7 +142,7 @@ class AgentRuntime:
             except asyncio.TimeoutError:
                 continue
             except Exception as e:
-                logger.warning("Error consuming inbound message: {}", e)
+                logger.warning("Error consuming inbound message: %s", e)
                 continue
 
             # Check if this is a permission response
@@ -162,11 +170,7 @@ class AgentRuntime:
 
     async def _handle_permission_response(self, msg: InboundMessage) -> bool:
         """Delegate permission-response handling."""
-        handler = None
-        try:
-            handler = self._response_handlers
-        except AttributeError:
-            handler = None
+        handler = self._response_handlers
         if handler is None:
             handler = RuntimeResponseHandlers(self)
         return await handler.handle_permission_response(msg)
@@ -229,7 +233,7 @@ class AgentRuntime:
             ) as tx:
                 tx.set_phase(SessionPhase.ERROR, reason="dispatch_error")
 
-            logger.exception("Error processing message for session {}", msg.session_key)
+            logger.exception("Error processing message for session %s", msg.session_key)
             append_session_trace(
                 self.sessions,
                 msg.session_key,
@@ -245,71 +249,11 @@ class AgentRuntime:
                     )
                 )
         finally:
-            # Check current state - don't override protected states
-            # ERROR: should be explicitly cleared
-            # STOPPING/RESETTING: in progress by _terminate_session
-            current_phase = self._state_coordinator.get_phase(msg.session_key)
-            protected_phases = {
-                SessionPhase.ERROR,
-                SessionPhase.STOPPING,
-                SessionPhase.RESETTING,
-            }
-            if current_phase in protected_phases:
-                # Just log state snapshot and return
-                self._log_state_snapshot(msg.session_key, "dispatch_end")
-                return
-
-            # Sync phase based on pending requests
-            has_pending_permission = False
-            has_pending_interaction = False
-            if self.bus is not None:
-                has_pending_permission = bool(
-                    self.bus.get_pending_request_for_session(msg.session_key)
-                )
-                has_pending_interaction = bool(
-                    self.bus.get_pending_interaction_for_session(msg.session_key)
-                )
-
-            if has_pending_permission:
-                async with self._state_coordinator.transaction(
-                    msg.session_key, validate_on_commit=False
-                ) as tx:
-                    tx.set_phase(SessionPhase.WAITING_PERMISSION, reason="pending_permission")
-            elif has_pending_interaction:
-                async with self._state_coordinator.transaction(
-                    msg.session_key, validate_on_commit=False
-                ) as tx:
-                    tx.set_phase(SessionPhase.WAITING_INTERACTION, reason="pending_interaction")
-            else:
-                # Check if this _dispatch was called from run() (task registered)
-                # or directly (no task registered)
-                current_task = asyncio.current_task()
-                registered_tasks = self._state_coordinator.get_active_tasks(msg.session_key)
-
-                # If current task is registered, callback will handle cleanup
-                # If not registered (or no current task), this is a direct call
-                is_registered_task = (
-                    current_task is not None and current_task in registered_tasks
-                )
-
-                if not is_registered_task:
-                    # Direct call - set IDLE now (no callback will run)
-                    async with self._state_coordinator.transaction(
-                        msg.session_key, validate_on_commit=False
-                    ) as tx:
-                        tx.set_phase(SessionPhase.IDLE, reason="dispatch_end")
-                # else: callback will set IDLE after task completes
-
-            # Log state snapshot at dispatch end
-            self._log_state_snapshot(msg.session_key, "dispatch_end")
+            await self._settle_session_after_turn(msg.session_key)
 
     async def _handle_interaction_response(self, msg: InboundMessage) -> bool:
         """Delegate interaction-response handling."""
-        handler = None
-        try:
-            handler = self._response_handlers
-        except AttributeError:
-            handler = None
+        handler = self._response_handlers
         if handler is None:
             handler = RuntimeResponseHandlers(self)
 
@@ -724,18 +668,17 @@ class AgentRuntime:
         Also syncs the session phase after task removal to ensure correct state.
         """
         def _on_task_done(task: asyncio.Task) -> None:
-            # Unregister via coordinator for accurate stats
-            self._state_coordinator.unregister_task(session_key, task)
-
-            # Clean up empty task lists via coordinator
-            self._state_coordinator.cleanup_empty_task_list(session_key)
-
-            # Sync phase after task is done to ensure correct state
-            # This is critical: _sync_session_phase in _dispatch's finally runs
-            # before this task is marked done, so we need to sync again here
-            self._sync_session_phase(session_key)
+            self._finalize_task_completion(session_key, task)
 
         return _on_task_done
+
+    def _finalize_task_completion(self, session_key: str, task: asyncio.Task) -> None:
+        """Unregister a finished task and resync phase."""
+        self._state_coordinator.unregister_task(session_key, task)
+        self._state_coordinator.cleanup_empty_task_list(session_key)
+        # This is critical: _sync_session_phase in the task's finally runs
+        # before the task is marked done, so we need to sync again here.
+        self._sync_session_phase(session_key)
 
     @staticmethod
     def _tag_task_for_session(task: asyncio.Task, session_key: str) -> None:
@@ -781,6 +724,83 @@ class AgentRuntime:
             self._state_coordinator.force_transition(session_key, SessionPhase.RUNNING, reason="sync_active_tasks")
         else:
             self._state_coordinator.force_transition(session_key, SessionPhase.IDLE, reason="sync_idle")
+
+    async def _settle_session_after_turn(self, session_key: str) -> None:
+        """Reconcile session phase after a turn finishes."""
+        current_phase = self._state_coordinator.get_phase(session_key)
+        protected_phases = {
+            SessionPhase.ERROR,
+            SessionPhase.STOPPING,
+            SessionPhase.RESETTING,
+        }
+        if current_phase in protected_phases:
+            self._log_state_snapshot(session_key, "dispatch_end")
+            return
+
+        has_pending_permission = False
+        has_pending_interaction = False
+        if self.bus is not None:
+            has_pending_permission = bool(
+                self.bus.get_pending_request_for_session(session_key)
+            )
+            has_pending_interaction = bool(
+                self.bus.get_pending_interaction_for_session(session_key)
+            )
+
+        if has_pending_permission:
+            async with self._state_coordinator.transaction(
+                session_key, validate_on_commit=False
+            ) as tx:
+                tx.set_phase(SessionPhase.WAITING_PERMISSION, reason="pending_permission")
+        elif has_pending_interaction:
+            async with self._state_coordinator.transaction(
+                session_key, validate_on_commit=False
+            ) as tx:
+                tx.set_phase(SessionPhase.WAITING_INTERACTION, reason="pending_interaction")
+        else:
+            current_task = asyncio.current_task()
+            registered_tasks = self._state_coordinator.get_active_tasks(session_key)
+            is_registered_task = (
+                current_task is not None and current_task in registered_tasks
+            )
+
+            if not is_registered_task:
+                async with self._state_coordinator.transaction(
+                    session_key, validate_on_commit=False
+                ) as tx:
+                    tx.set_phase(SessionPhase.IDLE, reason="dispatch_end")
+
+        self._log_state_snapshot(session_key, "dispatch_end")
+
+    def _is_ephemeral_direct_session(self, session_key: str) -> bool:
+        """Whether a direct-execution session should be cleaned after completion."""
+        return session_key.startswith("cron:") or session_key == "heartbeat"
+
+    async def _cleanup_ephemeral_direct_session(self, session_key: str) -> None:
+        """Delete ephemeral cron session state after a managed direct run."""
+        if not self._is_ephemeral_direct_session(session_key):
+            return
+        if self._state_coordinator.get_active_tasks(session_key):
+            return
+        if self.bus is not None:
+            if self.bus.get_pending_request_for_session(session_key):
+                return
+            if self.bus.get_pending_interaction_for_session(session_key):
+                return
+
+        if self._session_store.get(session_key) is not None:
+            await self._session_store.delete(session_key)
+        if self._state_coordinator.has_session(session_key):
+            self._state_machine.clear(session_key)
+        if self.sessions is not None:
+            with suppress(Exception):
+                self.sessions.delete(session_key)
+        backend = getattr(self.router, "_backend", None)
+        if backend is not None and hasattr(backend, "forget_client_lifecycle"):
+            with suppress(Exception):
+                result = backend.forget_client_lifecycle(session_key)
+                if inspect.isawaitable(result):
+                    await result
 
     def _log_state_snapshot(self, session_key: str, event: str) -> None:
         """Log state snapshot to session trace for debugging.
@@ -905,6 +925,15 @@ class AgentRuntime:
             f"SDK session id: {sdk_session_id or 'none'}",
             f"Backend: {self.router.backend_type}",
         ]
+        backend = getattr(self.router, "_backend", None)
+        if backend is not None and hasattr(backend, "get_client_lifecycle_snapshot"):
+            lifecycle = backend.get_client_lifecycle_snapshot(session_key)
+            if lifecycle:
+                lines.append(f"Client state: {lifecycle.get('disconnect_state', 'unknown')}")
+                lines.append(
+                    "Process tracking: "
+                    + ("available" if lifecycle.get("process_tracking_available") else "unavailable")
+                )
         return "\n".join(lines)
 
     def _coord_status_text(self) -> str:
@@ -951,6 +980,83 @@ class AgentRuntime:
             await self.initialize()
         response = await self._handle_message(msg, on_progress=on_progress)
         return response.content if response else ""
+
+    async def _run_managed_direct_turn(
+        self,
+        msg: InboundMessage,
+        on_progress=None,
+    ) -> str:
+        """Execute one direct turn with the same state/lock lifecycle as dispatch."""
+        try:
+            async with self._state_coordinator.transaction(
+                msg.session_key, validate_on_commit=False
+            ) as tx:
+                tx.set_phase(SessionPhase.RUNNING, reason="managed_direct_start")
+                tx.acquire_lock()
+
+            self._log_state_snapshot(msg.session_key, "dispatch_start")
+            lock = self._state_coordinator.get_lock_object(msg.session_key)
+
+            async with lock:
+                response = await self._handle_message(msg, on_progress=on_progress)
+
+            return response.content if response else ""
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            async with self._state_coordinator.transaction(
+                msg.session_key, validate_on_commit=False
+            ) as tx:
+                tx.set_phase(SessionPhase.ERROR, reason="managed_direct_error")
+
+            logger.exception("Error processing direct message for session %s", msg.session_key)
+            append_session_trace(
+                self.sessions,
+                msg.session_key,
+                "error",
+                {"backend": self.router.backend_type, "message": "managed_direct_error"},
+            )
+            return "Sorry, I encountered an error."
+        finally:
+            await self._settle_session_after_turn(msg.session_key)
+
+    async def process_managed_direct(
+        self,
+        content: str,
+        session_key: str = "cli:direct",
+        channel: str = "cli",
+        chat_id: str = "direct",
+        on_progress=None,
+        media: list[str] | None = None,
+    ) -> str:
+        """Run a direct turn with full state/task/lock management."""
+        msg = InboundMessage(
+            channel=channel,
+            sender_id="user",
+            chat_id=chat_id,
+            content=content,
+            session_key_override=session_key,
+            media=media or [],
+        )
+        if not self._is_local_runtime_command(content):
+            await self.initialize()
+
+        self._state_coordinator.force_transition(
+            msg.session_key, SessionPhase.RUNNING, reason="managed_direct_start"
+        )
+        task = asyncio.create_task(self._run_managed_direct_turn(msg, on_progress=on_progress))
+        AgentRuntime._tag_task_for_session(task, msg.session_key)
+        self._state_coordinator.register_task(msg.session_key, task)
+
+        try:
+            return await task
+        finally:
+            if not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+            self._finalize_task_completion(msg.session_key, task)
+            await self._cleanup_ephemeral_direct_session(msg.session_key)
 
     @classmethod
     def _is_local_runtime_command(cls, content: str) -> bool:
@@ -1461,13 +1567,13 @@ class AgentRuntime:
             self.stop()
             await self.close_mcp()
         except Exception as e:
-            logger.warning("Restart cleanup error (continuing): {}", e)
+            logger.warning("Restart cleanup error (continuing): %s", e)
 
         os.execv(sys.executable, [sys.executable, "-m", "xbot"] + sys.argv[1:])
 
     def _record_background_task_error(self, task_name: str, exc: BaseException) -> None:
         """Record background task failure without leaking unhandled-task warnings."""
-        logger.warning("Background task '{}' failed: {}", task_name, exc)
+        logger.warning("Background task '%s' failed: %s", task_name, exc)
 
     def _spawn_background_task(self, coro: Coroutine[Any, Any, Any], task_name: str) -> asyncio.Task:
         """Create a background task and always retrieve exceptions."""

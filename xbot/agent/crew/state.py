@@ -10,7 +10,9 @@ from __future__ import annotations
 from enum import Enum
 from typing import Callable
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.agent.crew.models import TaskDefinition
 

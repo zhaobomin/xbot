@@ -36,6 +36,7 @@ class CodexRuntime:
         session = self.session_store.get_or_create(msg.channel, msg.chat_id)
         self.session_store.touch(session.session_key)
         session.process_state = "running"
+        session.current_phase = "thinking"
         delta_parts: list[str] = []
         emitted_final = False
         async for event in self.transport.run_prompt(
@@ -51,12 +52,35 @@ class CodexRuntime:
                 self.session_store.mark_error(session.session_key, event.content or "Codex failed")
                 yield self._map_event(msg, event)
                 continue
+            if event.type == "warning":
+                self.session_store.mark_warning(session.session_key, event.content or "")
+                yield self._map_event(msg, event)
+                continue
+            if event.type in {"phase.started", "phase.updated"}:
+                self.session_store.update_phase(session.session_key, event.phase or None)
+                if event.content:
+                    yield self._map_event(msg, event)
+                continue
+            if event.type == "thought":
+                self.session_store.update_phase(session.session_key, event.phase or "thinking")
+                yield self._map_event(msg, event)
+                continue
+            if event.type in {"tool.started", "tool.finished"}:
+                self.session_store.update_phase(session.session_key, event.phase or "executing")
+                self.session_store.add_tool(session.session_key, event.tool_summary or event.content)
+                yield self._map_event(msg, event)
+                continue
+            if event.type == "status":
+                if event.content:
+                    yield self._map_event(msg, event)
+                continue
             if event.type == "message.delta":
                 if event.delta:
                     delta_parts.append(event.delta)
                 continue
             if event.type == "message.final":
                 session.process_state = "idle"
+                session.current_phase = "completed"
                 session.last_error = None
                 emitted_final = True
                 final_content = event.content or "".join(delta_parts)
@@ -72,8 +96,11 @@ class CodexRuntime:
                 )
         if session.process_state == "running":
             session.process_state = "idle"
+        if emitted_final:
+            session.current_phase = "completed"
         if not emitted_final and delta_parts:
             session.last_error = None
+            session.current_phase = "completed"
             yield OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
@@ -113,7 +140,10 @@ class CodexRuntime:
                 msg,
                 f"Status: {session.process_state}; model={session.codex_model or self.config.codex.default_model or 'default'}; "
                 f"mode={session.codex_mode or self.config.codex.default_mode or 'default'}; "
+                f"phase={session.current_phase or 'none'}; "
                 f"workdir={session.codex_workdir}; "
+                f"recent_tools={', '.join(session.recent_tools) or 'none'}; "
+                f"last_warning={session.last_warning or 'none'}; "
                 f"last_error={session.last_error or 'none'}",
             )
             return
@@ -143,18 +173,27 @@ class CodexRuntime:
             return
 
     def _map_event(self, msg: InboundMessage, event: CodexEvent) -> OutboundMessage:
+        metadata = {
+            "event_type": event.type,
+            "message_id": msg.metadata.get("message_id") if event.type == "message.final" else None,
+            "chat_type": msg.metadata.get("chat_type"),
+            "phase": event.phase,
+            "tool_name": event.tool_name,
+            "tool_summary": event.tool_summary,
+            "raw_event_type": event.raw_event_type,
+        }
         if event.type == "message.final":
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
                 content=event.content,
-                metadata={"event_type": event.type},
+                metadata=metadata,
             )
         return OutboundMessage(
             channel=msg.channel,
             chat_id=msg.chat_id,
             content=event.delta or event.content,
-            metadata={"event_type": event.type},
+            metadata=metadata,
         )
 
     def _reply(self, msg: InboundMessage, content: str) -> OutboundMessage:

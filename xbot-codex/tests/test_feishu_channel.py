@@ -116,6 +116,59 @@ async def test_feishu_channel_send_selects_text_post_and_interactive_formats(mon
 
 
 @pytest.mark.asyncio
+async def test_feishu_channel_process_events_do_not_reply_to_original_message(monkeypatch) -> None:
+    channel = FeishuChannel(
+        FeishuConfig(enabled=True, app_id="id", app_secret="secret", allow_from=["*"], reply_to_message=True)
+    )
+    channel._client = object()
+    replies: list[tuple[str, str]] = []
+    sends: list[tuple[str, str, str, str]] = []
+
+    def fake_reply(parent_message_id: str, msg_type: str, content: str) -> bool:
+        replies.append((parent_message_id, msg_type))
+        return True
+
+    def fake_send(receive_id_type: str, receive_id: str, msg_type: str, content: str) -> bool:
+        sends.append((receive_id_type, receive_id, msg_type, content))
+        return True
+
+    monkeypatch.setattr(channel, "_reply_message_sync", fake_reply)
+    monkeypatch.setattr(channel, "_send_message_sync", fake_send)
+
+    await channel.send(
+        OutboundMessage(
+            channel="feishu",
+            chat_id="ou_1",
+            content="Running command: pwd",
+            metadata={"event_type": "tool.started", "message_id": "mid-1", "tool_summary": "pwd"},
+        )
+    )
+
+    assert replies == []
+    assert sends == [("open_id", "ou_1", "text", '{"text": "[Tool started] pwd"}')]
+
+
+def test_feishu_channel_renders_process_event_prefixes() -> None:
+    assert (
+        FeishuChannel._render_event_content(
+            OutboundMessage(channel="feishu", chat_id="ou_1", content="Inspecting files", metadata={"event_type": "thought"})
+        )
+        == "[Thinking] Inspecting files"
+    )
+    assert (
+        FeishuChannel._render_event_content(
+            OutboundMessage(
+                channel="feishu",
+                chat_id="ou_1",
+                content="Finished command: ls",
+                metadata={"event_type": "tool.finished"},
+            )
+        )
+        == "[Tool finished] Finished command: ls"
+    )
+
+
+@pytest.mark.asyncio
 async def test_feishu_channel_prefers_reply_api_for_first_send(monkeypatch) -> None:
     channel = FeishuChannel(
         FeishuConfig(enabled=True, app_id="id", app_secret="secret", allow_from=["*"], reply_to_message=True)
@@ -140,10 +193,42 @@ async def test_feishu_channel_prefers_reply_api_for_first_send(monkeypatch) -> N
             channel="feishu",
             chat_id="ou_1",
             content="hi",
-            metadata={"message_id": "mid-1"},
+            metadata={"message_id": "mid-1", "event_type": "message.final"},
         )
     )
 
     assert replies == [("mid-1", "text")]
     assert sends == []
 
+
+@pytest.mark.asyncio
+async def test_feishu_channel_falls_back_to_create_when_reply_fails(monkeypatch) -> None:
+    channel = FeishuChannel(
+        FeishuConfig(enabled=True, app_id="id", app_secret="secret", allow_from=["*"], reply_to_message=True)
+    )
+    channel._client = object()
+    replies: list[tuple[str, str]] = []
+    sends: list[tuple[str, str, str]] = []
+
+    def fake_reply(parent_message_id: str, msg_type: str, content: str) -> bool:
+        replies.append((parent_message_id, msg_type))
+        return False
+
+    def fake_send(receive_id_type: str, receive_id: str, msg_type: str, content: str) -> bool:
+        sends.append((receive_id_type, receive_id, msg_type))
+        return True
+
+    monkeypatch.setattr(channel, "_reply_message_sync", fake_reply)
+    monkeypatch.setattr(channel, "_send_message_sync", fake_send)
+
+    await channel.send(
+        OutboundMessage(
+            channel="feishu",
+            chat_id="ou_1",
+            content="hi",
+            metadata={"message_id": "mid-1", "event_type": "message.final"},
+        )
+    )
+
+    assert replies == [("mid-1", "text")]
+    assert sends == [("open_id", "ou_1", "text")]

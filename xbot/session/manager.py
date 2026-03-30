@@ -1,6 +1,5 @@
 """Session management for conversation history."""
 
-import fcntl
 import json
 import os
 import shutil
@@ -10,10 +9,17 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Generator
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.config.paths import get_legacy_sessions_dir
 from xbot.utils.helpers import ensure_dir, safe_filename
+
+try:
+    import fcntl  # type: ignore
+except ImportError:  # pragma: no cover
+    fcntl = None
 
 
 @dataclass
@@ -163,15 +169,16 @@ class SessionManager:
             # Open/create lock file
             lock_fd = open(lock_path, "w")
 
-            # Acquire lock (LOCK_EX for exclusive, LOCK_SH for shared)
-            lock_type = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
-            fcntl.flock(lock_fd.fileno(), lock_type)
+            if fcntl is not None:
+                lock_type = fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH
+                fcntl.flock(lock_fd.fileno(), lock_type)
 
             yield
         finally:
             if lock_fd is not None:
                 try:
-                    fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
+                    if fcntl is not None:
+                        fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
                     lock_fd.close()
                 except Exception:
                     pass
@@ -222,9 +229,9 @@ class SessionManager:
             if legacy_path.exists():
                 try:
                     shutil.move(str(legacy_path), str(path))
-                    logger.info("Migrated session {} from legacy path", key)
+                    logger.info("Migrated session %s from legacy path", key)
                 except Exception:
-                    logger.exception("Failed to migrate session {}", key)
+                    logger.exception("Failed to migrate session %s", key)
 
         if not path.exists():
             return None
@@ -260,7 +267,7 @@ class SessionManager:
                 last_consolidated=last_consolidated
             )
         except Exception as e:
-            logger.warning("Failed to load session {}: {}", key, e)
+            logger.warning("Failed to load session %s: %s", key, e)
             return None
 
     def save(self, session: Session) -> None:
@@ -301,6 +308,20 @@ class SessionManager:
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
+
+    def delete(self, key: str) -> bool:
+        """Delete a session file and remove it from in-memory cache."""
+        self.invalidate(key)
+        path = self._get_session_path(key)
+        lock_path = path.with_suffix(path.suffix + ".lock")
+
+        if not path.exists() and not lock_path.exists():
+            return False
+
+        with self._file_lock(path, exclusive=True):
+            path.unlink(missing_ok=True)
+        lock_path.unlink(missing_ok=True)
+        return True
 
     def list_sessions(self) -> list[dict[str, Any]]:
         """

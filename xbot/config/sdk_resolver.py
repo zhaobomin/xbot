@@ -99,4 +99,11 @@ def resolve_sdk_provider_and_model(
 def _has_api_key(config: "Config", provider_name: str) -> bool:
     provider_attr = provider_name.replace("-", "_")
     provider_config = getattr(config.providers, provider_attr, None)
-    return bool(provider_config and provider_config.api_key)
+    if not provider_config:
+        return False
+    api_key = getattr(provider_config, "api_key", None)
+    if api_key is None:
+        return False
+    if hasattr(api_key, "get_secret_value"):
+        api_key = api_key.get_secret_value()
+    return bool(str(api_key).strip())

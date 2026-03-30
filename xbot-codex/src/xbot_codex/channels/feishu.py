@@ -46,10 +46,17 @@ class FeishuChannel(BaseChannel):
         self._ws_thread: threading.Thread | None = None
         self._stop_flag = threading.Event()
         self._processed_message_ids: OrderedDict[str, float] = OrderedDict()
+        self._message_dedup_ttl = 300
+        self._dedup_lock = threading.Lock()
         self._main_loop: asyncio.AbstractEventLoop | None = None
         self._ws_loop: asyncio.AbstractEventLoop | None = None
         self._ws_reconnect_delay = 5
         self._ws_max_reconnect_delay = 60
+
+    @staticmethod
+    def _register_optional_event(builder: Any, method_name: str, handler: Any) -> Any:
+        method = getattr(builder, method_name, None)
+        return method(handler) if callable(method) else builder
 
     async def start(self) -> None:
         if self._running:
@@ -65,7 +72,13 @@ class FeishuChannel(BaseChannel):
         if not self.config.app_id or not self.config.app_secret:
             logger.warning("Feishu credentials not configured")
             return
-        self._client = lark.Client.builder().app_id(self.config.app_id).app_secret(self.config.app_secret).build()
+        self._client = (
+            lark.Client.builder()
+            .app_id(self.config.app_id)
+            .app_secret(self.config.app_secret)
+            .log_level(lark.LogLevel.INFO)
+            .build()
+        )
 
         def _run_ws() -> None:
             try:
@@ -74,13 +87,26 @@ class FeishuChannel(BaseChannel):
                 self._ws_loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(self._ws_loop)
                 lark_ws_client.loop = self._ws_loop
-                dispatcher = lark.EventDispatcherHandler.builder("", "").register_p2_im_message_receive_v1(
+                builder = lark.EventDispatcherHandler.builder("", "").register_p2_im_message_receive_v1(
                     self._on_message_sync
-                ).build()
+                )
+                builder = self._register_optional_event(
+                    builder, "register_p2_im_message_reaction_created_v1", self._on_reaction_created
+                )
+                builder = self._register_optional_event(
+                    builder, "register_p2_im_message_message_read_v1", self._on_message_read
+                )
+                builder = self._register_optional_event(
+                    builder,
+                    "register_p2_im_chat_access_event_bot_p2p_chat_entered_v1",
+                    self._on_bot_p2p_chat_entered,
+                )
+                dispatcher = builder.build()
                 self._ws_client = lark.ws.Client(
                     self.config.app_id,
                     self.config.app_secret,
                     event_handler=dispatcher,
+                    log_level=lark.LogLevel.INFO,
                 )
                 reconnect_delay = self._ws_reconnect_delay
                 while not self._stop_flag.is_set():
@@ -120,11 +146,12 @@ class FeishuChannel(BaseChannel):
             return
 
         receive_id_type = "chat_id" if msg.chat_id.startswith("oc_") else "open_id"
-        content = (msg.content or "").strip()
+        event_type = str(msg.metadata.get("event_type", "") or "")
+        content = self._render_event_content(msg)
         if not content:
             return
         reply_message_id = None
-        if self.config.reply_to_message and not msg.metadata.get("_progress", False):
+        if event_type == "message.final" and self.config.reply_to_message and not msg.metadata.get("_progress", False):
             reply_message_id = msg.metadata.get("message_id") or None
 
         fmt = self._detect_msg_format(content)
@@ -221,6 +248,34 @@ class FeishuChannel(BaseChannel):
             logger.warning("Feishu send failed: {}", exc)
             return False
 
+    @staticmethod
+    def _render_event_content(msg: OutboundMessage) -> str:
+        content = (msg.content or "").strip()
+        if not content:
+            return ""
+        event_type = str(msg.metadata.get("event_type", "") or "")
+        phase = str(msg.metadata.get("phase", "") or "")
+        tool_summary = str(msg.metadata.get("tool_summary", "") or "")
+        if event_type == "thought":
+            return f"[Thinking] {content}"
+        if event_type == "tool.started":
+            return f"[Tool started] {tool_summary or content}"
+        if event_type == "tool.finished":
+            return f"[Tool finished] {content}"
+        if event_type == "phase.started":
+            return f"[Phase] {content}"
+        if event_type == "phase.updated":
+            return f"[Phase:{phase or 'updated'}] {content}"
+        if event_type == "warning":
+            return f"[Warning] {content}"
+        if event_type == "error":
+            return f"[Error] {content}"
+        if event_type == "status":
+            return f"[Status] {content}"
+        if event_type == "busy":
+            return f"[Busy] {content}"
+        return content
+
     def should_accept_text(self, *, is_group: bool, mentioned: bool) -> bool:
         if not is_group:
             return True
@@ -243,12 +298,19 @@ class FeishuChannel(BaseChannel):
         return MSG_TYPE_MAP.get(msg_type, f"[{msg_type}]")
 
     def seen_message(self, message_id: str) -> bool:
-        if message_id in self._processed_message_ids:
-            return True
-        self._processed_message_ids[message_id] = time.monotonic()
-        while len(self._processed_message_ids) > 2048:
-            self._processed_message_ids.popitem(last=False)
-        return False
+        now = time.monotonic()
+        with self._dedup_lock:
+            expired = [
+                key for key, ts in list(self._processed_message_ids.items()) if now - ts > self._message_dedup_ttl
+            ]
+            for key in expired:
+                del self._processed_message_ids[key]
+            if message_id in self._processed_message_ids:
+                return True
+            self._processed_message_ids[message_id] = now
+            while len(self._processed_message_ids) > 2048:
+                self._processed_message_ids.popitem(last=False)
+            return False
 
     async def _add_reaction(self, message_id: str, emoji_type: str = "THUMBSUP") -> None:
         if not self._client or not message_id:
@@ -273,6 +335,24 @@ class FeishuChannel(BaseChannel):
                 logger.debug("Feishu add reaction failed: {}", exc)
 
         await asyncio.get_running_loop().run_in_executor(None, _sync)
+
+    def _is_bot_mentioned(self, message: Any) -> bool:
+        raw_content = getattr(message, "content", "") or ""
+        if "@_all" in raw_content:
+            return True
+
+        for mention in getattr(message, "mentions", None) or []:
+            mid = getattr(mention, "id", None)
+            if not mid:
+                continue
+            if not getattr(mid, "user_id", None) and (getattr(mid, "open_id", None) or "").startswith("ou_"):
+                return True
+        return False
+
+    def _is_group_message_for_bot(self, message: Any) -> bool:
+        if self.config.group_policy == "open":
+            return True
+        return self._is_bot_mentioned(message)
 
     async def handle_text_message(
         self,
@@ -326,9 +406,8 @@ class FeishuChannel(BaseChannel):
             msg_type = getattr(message, "message_type", "text") or "text"
             raw_content = getattr(message, "content", "") or ""
             content = self.extract_text(raw_content, msg_type)
-            is_group = getattr(message, "chat_type", "") != "p2p"
-            mentioned = "@_all" in raw_content or "@" in content
-            if not self.should_accept_text(is_group=is_group, mentioned=mentioned):
+            chat_type = getattr(message, "chat_type", "") or ""
+            if chat_type == "group" and not self._is_group_message_for_bot(message):
                 return
             if self._on_message is not None and self._main_loop is not None:
                 future = asyncio.run_coroutine_threadsafe(
@@ -340,7 +419,7 @@ class FeishuChannel(BaseChannel):
                         metadata={
                             "message_id": message_id,
                             "msg_type": msg_type,
-                            "chat_type": getattr(message, "chat_type", ""),
+                            "chat_type": chat_type,
                         },
                     ),
                     self._main_loop,
@@ -355,6 +434,16 @@ class FeishuChannel(BaseChannel):
             future.result()
         except Exception as exc:
             logger.warning("Feishu scheduled message handler failed: {}", exc)
+
+    def _on_reaction_created(self, data: Any) -> None:
+        return None
+
+    def _on_message_read(self, data: Any) -> None:
+        return None
+
+    def _on_bot_p2p_chat_entered(self, data: Any) -> None:
+        logger.debug("Bot entered p2p chat")
+        return None
 
     @classmethod
     def _detect_msg_format(cls, content: str) -> str:

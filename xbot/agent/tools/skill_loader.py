@@ -1,11 +1,11 @@
 """Skill loading tool for on-demand skill content retrieval."""
 
-import logging
 from typing import Any
 
 from xbot.agent.tools.base import Tool
+from xbot.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class LoadSkillContentTool(Tool):
@@ -54,7 +54,7 @@ class LoadSkillContentTool(Tool):
             "required": ["skill_name"],
         }
 
-    async def execute(self, skill_name: str) -> str:
+    async def execute(self, skill_name: str, **kwargs: Any) -> str:
         """Load and return the full skill content.
 
         Args:

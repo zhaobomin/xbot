@@ -18,6 +18,9 @@ from __future__ import annotations
 from typing import Any
 
 from xbot.agent.crew.planner.models import Capability
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class LLMValidator:
@@ -204,9 +207,6 @@ class LLMValidator:
             return []
         if not isinstance(value, list):
             return []
-
-        import logging
-        logger = logging.getLogger(__name__)
 
         capabilities = []
         for item in value:

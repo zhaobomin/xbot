@@ -128,7 +128,7 @@ class OutputParser:
                 pass
 
         # Try to find JSON object/array anywhere in content
-        for pattern in [r'\{.*\}', r'\[.*\]']:
+        for pattern in [r'\{.*?\}', r'\[.*?\]']:
             match = re.search(pattern, content, re.DOTALL)
             if match:
                 try:
@@ -181,7 +181,7 @@ class OutputParser:
                     errors.append(f"{path}: expected string, got {type(obj).__name__}")
 
             elif obj_type == "integer":
-                if not isinstance(obj, int):
+                if isinstance(obj, bool) or not isinstance(obj, int):
                     errors.append(f"{path}: expected integer, got {type(obj).__name__}")
 
             elif obj_type == "number":

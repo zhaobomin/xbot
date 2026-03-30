@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
 from typing import TYPE_CHECKING, Any
 
@@ -17,11 +16,12 @@ from xbot.agent.crew.planner.models import (
 )
 from xbot.agent.crew.planner.prompts import ROLE_SELECTION_PROMPT
 from xbot.agent.crew.planner.utils import LLMResponseParser
+from xbot.logging import get_logger
 
 if TYPE_CHECKING:
     from xbot.agent.crew.planner.role_creator import RoleCreator
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class RoleSelector:

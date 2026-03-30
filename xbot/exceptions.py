@@ -202,5 +202,5 @@ class MemoryStoreError(XbotMemoryError):
     pass
 
 
-# Backward compatibility alias
-MemoryError = XbotMemoryError
+# Backward compatibility alias without shadowing the Python builtin
+LegacyXbotMemoryError = XbotMemoryError

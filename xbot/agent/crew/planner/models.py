@@ -307,6 +307,7 @@ class CrewPlan:
         """Validate the plan and return any errors."""
         errors = []
         role_names = {r.name for r in self.roles}
+        task_names = {t.name for t in self.tasks}
 
         for task in self.tasks:
             # Check agent exists
@@ -316,7 +317,6 @@ class CrewPlan:
                 )
 
             # Check dependencies exist
-            task_names = {t.name for t in self.tasks}
             for dep in task.dependencies:
                 if dep not in task_names:
                     errors.append(

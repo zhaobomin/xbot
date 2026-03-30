@@ -4,7 +4,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.agent.interaction.response_parser import (
     derive_interaction_action,
@@ -195,6 +197,7 @@ class RuntimeResponseHandlers:
         original_input = content
         if req.kind == "question" and req.metadata:
             valid_options = req.metadata.get("valid_options", [])
+            validation_mode = req.metadata.get("validation_mode", "strict")
             if valid_options:
                 # 精确匹配或模糊匹配（忽略大小写、前后空格）
                 normalized_content = content.lower().strip()
@@ -207,7 +210,7 @@ class RuntimeResponseHandlers:
                         matched_option = valid_options[i]
                         break
 
-                if matched_option is None:
+                if matched_option is None and validation_mode == "strict":
                     retry_count += 1
                     # Update retry count in runtime
                     if hasattr(self._runtime, '_interaction_retry_counts'):
@@ -242,10 +245,15 @@ class RuntimeResponseHandlers:
                     )
                     return True
 
-                # 匹配成功，使用标准化后的选项值，清理重试计数
-                content = matched_option
-                if hasattr(self._runtime, '_interaction_retry_counts'):
-                    self._runtime._interaction_retry_counts.pop(msg.session_key, None)
+                if matched_option is not None:
+                    # 匹配成功，使用标准化后的选项值，清理重试计数
+                    content = matched_option
+                    if hasattr(self._runtime, '_interaction_retry_counts'):
+                        self._runtime._interaction_retry_counts.pop(msg.session_key, None)
+                elif validation_mode == "suggested":
+                    # 建议模式允许用户输入自定义值，直接透传原始内容
+                    if hasattr(self._runtime, '_interaction_retry_counts'):
+                        self._runtime._interaction_retry_counts.pop(msg.session_key, None)
 
         action = derive_interaction_action(kind=req.kind, content=content)
         # 构建响应 metadata，包含原始输入用于日志记录

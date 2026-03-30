@@ -260,7 +260,7 @@ async def test_connect_mcp_servers_enabled_tools_warns_on_unknown_entries(
     warnings: list[str] = []
 
     def _warning(message: str, *args: object) -> None:
-        warnings.append(message.format(*args))
+        warnings.append(message % args if args else message)
 
     monkeypatch.setattr("xbot.agent.tools.mcp.logger.warning", _warning)
 

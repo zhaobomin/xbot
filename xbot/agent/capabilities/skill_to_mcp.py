@@ -4,14 +4,14 @@ This module converts xbot SKILL.md files to MCP tools,
 enabling Claude SDK to use skills as structured tools.
 """
 
-import logging
-import re
 from pathlib import Path
 from typing import Any
 
 from xbot.agent.capabilities.catalog import CapabilityCatalog
+from xbot.agent.capabilities.skill_parsing import iter_actions, parse_skill_document
+from xbot.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Try to import SDK components
 try:
@@ -20,7 +20,7 @@ try:
     SDK_AVAILABLE = True
 except ImportError:
     SDK_AVAILABLE = False
-    logger.warning("claude-agent-sdk not installed. Skill conversion will be limited.")
+    logger.debug("claude-agent-sdk not installed. Skill conversion will be limited.")
 
 
 class SkillToMCPConverter:
@@ -84,7 +84,9 @@ class SkillToMCPConverter:
             List of MCP tools
         """
         content = skill_path.read_text(encoding="utf-8")
-        frontmatter, body = self._parse_frontmatter(content)
+        parsed = parse_skill_document(content)
+        frontmatter = parsed.frontmatter
+        body = parsed.body
 
         skill_name = skill_path.parent.name
         description = frontmatter.get("description", skill_name)
@@ -114,16 +116,8 @@ class SkillToMCPConverter:
         Returns:
             List of action dicts
         """
-        # Pattern: ### action_name followed by content until next ### or end
-        pattern = r"###\s+(\w+)\s*\n([^#]+)"
-        matches = re.findall(pattern, body)
-
         actions = []
-        for name, content in matches:
-            # Skip if name looks like a regular heading (not an action)
-            if name.lower() in ["overview", "description", "usage", "example", "note", "notes"]:
-                continue
-
+        for name, content in iter_actions(body):
             actions.append({
                 "name": f"{skill_name}_{name.lower()}",
                 "description": self._extract_description(content),
@@ -217,31 +211,3 @@ class SkillToMCPConverter:
             }
 
         return consultation_tool
-
-    def _parse_frontmatter(self, content: str) -> tuple[dict, str]:
-        """Parse YAML frontmatter from markdown content.
-
-        Args:
-            content: Raw content
-
-        Returns:
-            Tuple of (frontmatter dict, body string)
-        """
-        if not content.startswith("---"):
-            return {}, content
-
-        match = re.match(r"^---\n(.*?)\n---\n(.*)$", content, re.DOTALL)
-        if not match:
-            return {}, content
-
-        frontmatter_raw = match.group(1)
-        body = match.group(2)
-
-        # Simple YAML parsing
-        frontmatter = {}
-        for line in frontmatter_raw.split("\n"):
-            if ":" in line:
-                key, value = line.split(":", 1)
-                frontmatter[key.strip()] = value.strip().strip('"\'')
-
-        return frontmatter, body

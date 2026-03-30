@@ -26,7 +26,9 @@ import uuid
 from contextlib import nullcontext
 from typing import Any, Literal
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.bus.queue import (
     InteractionRequest,
@@ -160,8 +162,8 @@ class BasePermissionHandler:
                 # 精确匹配（忽略大小写）
                 if candidate_lower == opt_lower:
                     return opt
-                # 包含匹配（候选包含在选项中，或选项包含候选）
-                if candidate_lower and (candidate_lower in opt_lower or opt_lower in candidate_lower):
+                # 前缀匹配：允许用户输入简写，但避免把自定义值错误归一化到短选项
+                if candidate_lower and opt_lower.startswith(candidate_lower):
                     return opt
             return None
 
@@ -472,6 +474,9 @@ class PermissionRequestHandler(BasePermissionHandler):
         if not questions:
             return "deny", "No questions provided"
 
+        validation_mode = str(tool_input.get("validation_mode") or "suggested").lower()
+        allow_free_text = bool(tool_input.get("allow_free_text", validation_mode != "strict"))
+
         # 构建合并的提示消息和所有有效选项
         prompt_parts = []
         all_valid_options: list[str] = []
@@ -500,11 +505,19 @@ class PermissionRequestHandler(BasePermissionHandler):
         # 合并所有问题
         if len(questions) == 1:
             prompt = prompt_parts[0]
+            if all_valid_options and allow_free_text:
+                prompt += "\n\n可直接回复上面的建议项，也可输入你自己的内容"
+            elif all_valid_options:
+                prompt += "\n\n请回复上面的选项之一"
         else:
-            # 多问题：提示用户用分隔符回复
-            prompt = "请依次回答以下问题，答案之间用空格或逗号分隔：\n\n"
+            # 多问题：提示用户用逗号类分隔符回复
+            prompt = "请依次回答以下问题，答案之间用逗号分隔：\n\n"
             prompt += "\n\n".join(prompt_parts)
-            prompt += "\n\n示例回复：答案1, 答案2, 答案3"
+            if all_valid_options and allow_free_text:
+                prompt += "\n\n可直接回复建议项，也可输入你自己的内容。"
+            elif all_valid_options:
+                prompt += "\n\n请按顺序回复各题对应选项。"
+            prompt += "\n示例回复：答案1, 答案2, 答案3"
 
         # 发起交互请求
         response = await self.request_interaction(
@@ -517,6 +530,8 @@ class PermissionRequestHandler(BasePermissionHandler):
                 "question_count": len(questions),
                 "multi_select": any(q.get("multiSelect", False) for q in questions),
                 "original_questions": questions,
+                "validation_mode": validation_mode,
+                "allow_free_text": allow_free_text,
             },
         )
 

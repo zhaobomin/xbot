@@ -10,7 +10,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class SessionPhase(str, Enum):
@@ -158,14 +160,22 @@ class SessionStateMachine:
         self._on_transition = on_transition
 
     def get_state(self, session_key: str) -> SessionState:
-        """Get or create state for a session.
+        """Get current state for a session without creating a tracked entry.
 
         Args:
             session_key: Session identifier
 
         Returns:
-            SessionState for this session (creates new if not exists)
+            SessionState for this session. Missing sessions are treated as IDLE
+            but are not added to the state table.
         """
+        state = self._states.get(session_key)
+        if state is None:
+            return SessionState()
+        return state
+
+    def get_or_create_state(self, session_key: str) -> SessionState:
+        """Get or create state for a session."""
         if session_key not in self._states:
             logger.debug(f"Creating new session state: {session_key}")
             self._states[session_key] = SessionState()
@@ -180,7 +190,10 @@ class SessionStateMachine:
         Returns:
             Current SessionPhase
         """
-        return self.get_state(session_key).phase
+        state = self._states.get(session_key)
+        if state is None:
+            return SessionPhase.IDLE
+        return state.phase
 
     def transition(
         self,
@@ -201,7 +214,7 @@ class SessionStateMachine:
         Returns:
             True if transition succeeded, False otherwise
         """
-        state = self.get_state(session_key)
+        state = self.get_or_create_state(session_key)
         from_phase = state.phase
 
         # Skip if already in target phase with same reason
@@ -264,39 +277,7 @@ class SessionStateMachine:
         Returns:
             Always True (for consistency with transition())
         """
-        state = self.get_state(session_key)
-        from_phase = state.phase
-
-        # Handle same phase case (same as transition method)
-        if from_phase == to_phase and state.reason == reason:
-            return True
-
-        if from_phase == to_phase:
-            state.reason = reason
-            state.transition_count += 1
-            logger.debug(
-                f"Session state reason update (forced): {session_key} "
-                f"{from_phase.value} (reason={reason}, count={state.transition_count})"
-            )
-            if self._on_transition:
-                self._on_transition(session_key, from_phase, to_phase, reason)
-            return True
-
-        state.previous_phase = from_phase
-        state.phase = to_phase
-        state.reason = reason
-        state.transition_count += 1
-
-        logger.debug(
-            f"Session state transition (forced): {session_key} "
-            f"{from_phase.value} -> {to_phase.value} "
-            f"(reason={reason}, count={state.transition_count})"
-        )
-
-        if self._on_transition:
-            self._on_transition(session_key, from_phase, to_phase, reason)
-
-        return True
+        return self.transition(session_key, to_phase, reason=reason, force=True)
 
     def reset(self, session_key: str) -> None:
         """Reset a session to IDLE state.
@@ -333,7 +314,7 @@ class SessionStateMachine:
     def has_session(self, session_key: str) -> bool:
         """Check whether a session state already exists.
 
-        Unlike get_state(), this method does not create a new state entry.
+        Unlike get_state() / get_or_create_state(), this method does not create a new state entry.
         """
         return session_key in self._states
 

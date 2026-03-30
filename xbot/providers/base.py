@@ -6,7 +6,9 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 @dataclass
@@ -266,7 +268,7 @@ class LLMProvider(ABC):
                 return response
 
             logger.warning(
-                "LLM transient error (attempt {}/{}), retrying in {}s: {}",
+                "LLM transient error (attempt %s/%s), retrying in %ss: %s",
                 attempt, len(self._CHAT_RETRY_DELAYS), delay,
                 (response.content or "")[:120].lower(),
             )

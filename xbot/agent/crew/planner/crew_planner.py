@@ -6,7 +6,6 @@ planning process: goal analysis -> role selection -> task planning -> config gen
 
 from __future__ import annotations
 
-import logging
 import time
 from typing import Any, Callable
 
@@ -21,8 +20,9 @@ from xbot.agent.crew.planner.models import (
 from xbot.agent.crew.planner.role_pool import RolePoolManager
 from xbot.agent.crew.planner.role_selector import RoleSelector
 from xbot.agent.crew.planner.task_planner import TaskPlanner
+from xbot.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 # Type alias for LLM callable

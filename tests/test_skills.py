@@ -168,7 +168,7 @@ class TestSkillsLoader:
 
         assert meta is not None
         assert meta.get("description") == "Test"
-        assert meta.get("tool_exposable") == "true"
+        assert meta.get("tool_exposable") is True
 
     def test_get_skill_metadata_not_found(self, loader: SkillsLoader) -> None:
         """Test getting metadata for non-existent skill."""

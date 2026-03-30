@@ -22,7 +22,7 @@ from xbot.exceptions import (
     ToolNotFoundError,
     ToolExecutionError,
     PermissionRequestError,
-    MemoryError,
+    LegacyXbotMemoryError,
     MemoryConsolidationError,
     MemoryStoreError,
     XbotMemoryError,
@@ -115,7 +115,7 @@ class TestExceptionHierarchy:
         assert issubclass(MemoryStoreError, XbotMemoryError)
         assert issubclass(XbotMemoryError, XbotError)
         # Backward compatibility alias
-        assert MemoryError is XbotMemoryError
+        assert LegacyXbotMemoryError is XbotMemoryError
 
 
 class TestSpecificExceptions:

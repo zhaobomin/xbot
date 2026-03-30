@@ -11,7 +11,9 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import httpx
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.agent.tools.base import Tool
 
@@ -106,7 +108,7 @@ class WebSearchTool(Tool):
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
         provider = self.config.provider.strip().lower() or "brave"
         n = min(max(count or self.config.max_results, 1), 10)
-        logger.debug("WebSearch: query='{}', provider={}, count={}", query, provider, n)
+        logger.debug("WebSearch: query='%s', provider=%s, count=%s", query, provider, n)
 
         if provider == "duckduckgo":
             result = await self._search_duckduckgo(query, n)
@@ -119,10 +121,10 @@ class WebSearchTool(Tool):
         elif provider == "brave":
             result = await self._search_brave(query, n)
         else:
-            logger.warning("WebSearch: unknown provider '{}'", provider)
+            logger.warning("WebSearch: unknown provider '%s'", provider)
             return f"Error: unknown search provider '{provider}'"
 
-        logger.debug("WebSearch: completed for '{}', result_len={}", query, len(result))
+        logger.debug("WebSearch: completed for '%s', result_len=%s", query, len(result))
         return result
 
     async def _search_brave(self, query: str, n: int) -> str:
@@ -226,7 +228,7 @@ class WebSearchTool(Tool):
             ]
             return _format_results(query, items, n)
         except Exception as e:
-            logger.warning("DuckDuckGo search failed: {}", e)
+            logger.warning("DuckDuckGo search failed: %s", e)
             return f"Error: DuckDuckGo search failed ({e})"
 
 
@@ -255,20 +257,20 @@ class WebFetchTool(Tool):
 
     async def execute(self, url: str, extractMode: str = "markdown", maxChars: int | None = None, **kwargs: Any) -> str:
         max_chars = maxChars or self.max_chars
-        logger.debug("WebFetch: url='{}', extractMode={}, maxChars={}", url, extractMode, max_chars)
+        logger.debug("WebFetch: url='%s', extractMode=%s, maxChars=%s", url, extractMode, max_chars)
 
         if not self.disable_security_checks:
             is_valid, error_msg = _validate_url_safe(url)
             if not is_valid:
-                logger.warning("WebFetch: URL validation failed for '{}': {}", url, error_msg)
+                logger.warning("WebFetch: URL validation failed for '%s': %s", url, error_msg)
                 return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
 
         result = await self._fetch_jina(url, max_chars)
         if result is None:
-            logger.debug("WebFetch: Jina failed, falling back to readability for '{}'", url)
+            logger.debug("WebFetch: Jina failed, falling back to readability for '%s'", url)
             result = await self._fetch_readability(url, extractMode, max_chars)
 
-        logger.debug("WebFetch: completed for '{}', result_len={}", url, len(result))
+        logger.debug("WebFetch: completed for '%s', result_len=%s", url, len(result))
         return result
 
     async def _fetch_jina(self, url: str, max_chars: int) -> str | None:
@@ -304,7 +306,7 @@ class WebFetchTool(Tool):
                 "untrusted": True, "text": text,
             }, ensure_ascii=False)
         except Exception as e:
-            logger.debug("Jina Reader failed for {}, falling back to readability: {}", url, e)
+            logger.debug("Jina Reader failed for %s, falling back to readability: %s", url, e)
             return None
 
     async def _fetch_readability(self, url: str, extract_mode: str, max_chars: int) -> str:
@@ -350,10 +352,10 @@ class WebFetchTool(Tool):
                 "untrusted": True, "text": text,
             }, ensure_ascii=False)
         except httpx.ProxyError as e:
-            logger.error("WebFetch proxy error for {}: {}", url, e)
+            logger.error("WebFetch proxy error for %s: %s", url, e)
             return json.dumps({"error": f"Proxy error: {e}", "url": url}, ensure_ascii=False)
         except Exception as e:
-            logger.error("WebFetch error for {}: {}", url, e)
+            logger.error("WebFetch error for %s: %s", url, e)
             return json.dumps({"error": str(e), "url": url}, ensure_ascii=False)
 
     def _to_markdown(self, html_content: str) -> str:

@@ -676,6 +676,164 @@ async def test_router_runtime_process_direct_sets_session_state_back_to_idle(tmp
 
 
 @pytest.mark.asyncio
+async def test_router_runtime_process_managed_direct_tracks_running_state_and_tasks(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    AgentRouter._backends = {"claude_sdk": _FakeBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    observed: dict[str, int | str] = {}
+
+    async def _fake_handle(msg: InboundMessage, on_progress=None) -> OutboundMessage:
+        observed["phase"] = runtime.get_session_state(msg.session_key)
+        observed["active_tasks"] = len(runtime._state_coordinator.get_active_tasks(msg.session_key))
+        return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=f"ok:{msg.content}")
+
+    runtime._handle_message = _fake_handle  # type: ignore[method-assign]
+
+    response = await runtime.process_managed_direct(
+        "hello",
+        session_key="cron:job-1",
+        channel="cli",
+        chat_id="direct",
+    )
+
+    assert response == "ok:hello"
+    assert observed == {"phase": "running", "active_tasks": 1}
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_process_managed_direct_cleans_up_cron_session(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+    from xbot.session.manager import SessionManager
+
+    AgentRouter._backends = {"claude_sdk": _FakeBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    sessions = SessionManager(tmp_path)
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+            "session_manager": sessions,
+        },
+    )
+
+    response = await runtime.process_managed_direct(
+        "hello",
+        session_key="cron:job-2",
+        channel="cli",
+        chat_id="direct",
+    )
+
+    assert response == "echo:hello"
+    assert runtime._session_store.get("cron:job-2") is None
+    assert runtime._state_coordinator.has_session("cron:job-2") is False
+    assert sessions.get("cron:job-2") is None
+    assert sessions._get_session_path("cron:job-2").exists() is False
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_process_managed_direct_forgets_ephemeral_client_lifecycle(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+    from xbot.session.manager import SessionManager
+
+    class _LifecycleBackend(_FakeBackend):
+        def __init__(self) -> None:
+            super().__init__()
+            self.forgotten: list[str] = []
+
+        async def forget_client_lifecycle(self, session_key: str) -> None:
+            self.forgotten.append(session_key)
+
+    AgentRouter._backends = {"claude_sdk": _LifecycleBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    sessions = SessionManager(tmp_path)
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+            "session_manager": sessions,
+        },
+    )
+
+    response = await runtime.process_managed_direct(
+        "hello",
+        session_key="cron:job-lifecycle",
+        channel="cli",
+        chat_id="direct",
+    )
+
+    assert response == "echo:hello"
+    backend = runtime.router.backend
+    assert backend.forgotten == ["cron:job-lifecycle"]
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_process_managed_direct_serializes_same_session(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    AgentRouter._backends = {"claude_sdk": _FakeBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    active = 0
+    max_active = 0
+    events: list[tuple[str, str]] = []
+
+    async def _fake_handle(msg: InboundMessage, on_progress=None) -> OutboundMessage:
+        nonlocal active, max_active
+        active += 1
+        max_active = max(max_active, active)
+        events.append(("start", msg.content))
+        await asyncio.sleep(0.05)
+        events.append(("end", msg.content))
+        active -= 1
+        return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=f"ok:{msg.content}")
+
+    runtime._handle_message = _fake_handle  # type: ignore[method-assign]
+
+    first, second = await asyncio.gather(
+        runtime.process_managed_direct("first", session_key="cron:job-3"),
+        runtime.process_managed_direct("second", session_key="cron:job-3"),
+    )
+
+    assert (first, second) == ("ok:first", "ok:second")
+    assert max_active == 1
+    assert events == [("start", "first"), ("end", "first"), ("start", "second"), ("end", "second")]
+
+
+@pytest.mark.asyncio
 async def test_router_runtime_state_command_reports_session_diagnostics(tmp_path) -> None:
     from xbot.agent.runtime import AgentRuntime
     from xbot.bus.queue import InteractionRequest, MessageBus, PermissionRequest

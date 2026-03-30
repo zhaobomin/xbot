@@ -6,11 +6,14 @@ This module provides utilities for building ClaudeAgentOptions from configuratio
 from __future__ import annotations
 
 import asyncio
+import copy
 import json
 from dataclasses import asdict
 from typing import TYPE_CHECKING, Any
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.agent.capabilities.catalog import CapabilityCatalog
 from xbot.config.provider_registry import get_provider_spec
@@ -136,11 +139,11 @@ class OptionsBuilder:
     def _build_hooks(self) -> dict[str, list] | None:
         """Build hooks configuration including compact notification."""
         # Start with user-configured hooks
-        hooks: dict[str, list] = dict(self._sdk_config.hooks or {})
+        hooks: dict[str, list] = copy.deepcopy(self._sdk_config.hooks or {})
 
         # Add PreCompact hook if compact_notify is enabled
         compact_notify = getattr(self._sdk_config, "compact_notify", True)
-        logger.info("[Hooks] Building hooks, compact_notify={}", compact_notify)
+        logger.info("[Hooks] Building hooks, compact_notify=%s", compact_notify)
         if compact_notify:
             from xbot.agent.hooks import CompactHookHandler
             from xbot.bus.events import OutboundMessage
@@ -148,14 +151,14 @@ class OptionsBuilder:
             def send_compact_notification(session_key: str, message: str) -> None:
                 """Send compact notification to the user's channel."""
                 logger.info(
-                    "[Compact Notification] Called with session_key='{}', message='{}'",
+                    "[Compact Notification] Called with session_key='%s', message='%s'",
                     session_key,
                     message[:50] if message else "",
                 )
 
                 bus = self._shared_resources.get("bus")
                 if bus is None:
-                    logger.warning("[Compact Notification] No bus available for session: {}", session_key)
+                    logger.warning("[Compact Notification] No bus available for session: %s", session_key)
                     return
 
                 # Look up channel and chat_id for this session via backend helper first.
@@ -168,7 +171,7 @@ class OptionsBuilder:
                         context_info = resolver(session_key)
                     except Exception as e:
                         logger.debug(
-                            "[Compact Notification] Backend context resolver failed for '{}': {}",
+                            "[Compact Notification] Backend context resolver failed for '%s': %s",
                             session_key,
                             e,
                         )
@@ -180,8 +183,8 @@ class OptionsBuilder:
 
                 # DEBUG: Log all available session keys for troubleshooting
                 logger.info(
-                    "[Compact Notification] Looking up session_key='{}'. "
-                    "Resolved context={} available legacy keys={}",
+                    "[Compact Notification] Looking up session_key='%s'. "
+                    "Resolved context=%s available legacy keys=%s",
                     session_key,
                     context_info,
                     list(session_contexts.keys()),
@@ -189,8 +192,8 @@ class OptionsBuilder:
 
                 if context_info is None:
                     logger.warning(
-                        "[Compact Notification] No context info for session_key='{}'. "
-                        "Available keys: {}. The notification will NOT be delivered.",
+                        "[Compact Notification] No context info for session_key='%s'. "
+                        "Available keys: %s. The notification will NOT be delivered.",
                         session_key,
                         list(session_contexts.keys()),
                     )
@@ -198,7 +201,7 @@ class OptionsBuilder:
 
                 channel, chat_id = context_info
                 logger.info(
-                    "[Compact Notification] Found context: channel='{}', chat_id='{}'",
+                    "[Compact Notification] Found context: channel='%s', chat_id='%s'",
                     channel,
                     chat_id,
                 )
@@ -223,27 +226,20 @@ class OptionsBuilder:
                 try:
                     loop = asyncio.get_running_loop()
                     asyncio.ensure_future(_send(), loop=loop)
-                except RuntimeError:
-                    # No running event loop - create a new one for this context
-                    try:
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        loop.run_until_complete(_send())
-                        loop.close()
-                    except Exception as e:
-                        logger.warning(
-                            f"Cannot send compact notification for session {session_key}: "
-                            f"no event loop available. Error: {e}"
-                        )
+                except RuntimeError as e:
+                    logger.warning(
+                        f"Cannot send compact notification for session {session_key}: "
+                        f"no running event loop available. Error: {e}"
+                    )
 
             compact_handler = CompactHookHandler(
                 enabled=True,
                 message_callback=send_compact_notification,
             )
             hooks.setdefault("PreCompact", []).append({"hooks": [compact_handler]})
-            logger.info("[Hooks] Added PreCompact hook with CompactHookHandler, hooks keys={}", list(hooks.keys()))
+            logger.info("[Hooks] Added PreCompact hook with CompactHookHandler, hooks keys=%s", list(hooks.keys()))
 
-        logger.info("[Hooks] Final hooks configuration: {}", hooks if hooks else "None")
+        logger.info("[Hooks] Final hooks configuration: %s", hooks if hooks else "None")
         return hooks if hooks else None
 
     def _build_env_config(self) -> dict[str, str]:

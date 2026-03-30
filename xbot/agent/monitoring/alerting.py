@@ -11,7 +11,9 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from xbot.bus.queue import MessageBus
@@ -62,8 +64,8 @@ class AlertService:
         self._last_alert_time: dict[str, float] = {}
         self._rate_lock = asyncio.Lock()
 
-    async def _should_alert(self, rule_name: str) -> bool:
-        """Check if an alert should be sent based on rate limits."""
+    async def _reserve_alert_slot(self, rule_name: str) -> bool:
+        """Reserve an alert slot atomically to enforce rate limits."""
         if not self.config.enabled:
             return False
 
@@ -84,6 +86,8 @@ class AlertService:
             if now - last_time < self.config.cooldown_seconds:
                 return False
 
+            self._alert_count += 1
+            self._last_alert_time[rule_name] = now
             return True
 
     async def send_alert(
@@ -104,7 +108,7 @@ class AlertService:
         Returns:
             True if alert was sent
         """
-        if not await self._should_alert(title):
+        if not await self._reserve_alert_slot(title):
             return False
 
         from xbot.bus.events import OutboundMessage
@@ -137,13 +141,13 @@ class AlertService:
                 content=alert_text,
             ))
 
-            async with self._rate_lock:
-                self._alert_count += 1
-                self._last_alert_time[title] = time.time()
             logger.info(f"Alert sent: {title}")
             return True
 
         except Exception as e:
+            async with self._rate_lock:
+                self._alert_count = max(0, self._alert_count - 1)
+                self._last_alert_time.pop(title, None)
             logger.error(f"Failed to send alert: {e}")
             return False
 

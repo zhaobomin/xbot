@@ -14,7 +14,9 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class VariableError(Exception):

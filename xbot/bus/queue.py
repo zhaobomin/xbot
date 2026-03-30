@@ -7,7 +7,9 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.bus.events import InboundMessage, OutboundMessage
 

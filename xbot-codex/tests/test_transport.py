@@ -54,7 +54,7 @@ async def test_stream_events_parses_json_delta_and_final() -> None:
     assert events == [
         CodexEvent(type="message.delta", content="", delta="hel"),
         CodexEvent(type="message.delta", content="", delta="lo"),
-        CodexEvent(type="message.final", content="hello", delta=""),
+        CodexEvent(type="message.final", content="hello", delta="", phase="completed", raw_event_type="message.final"),
     ]
 
 
@@ -72,7 +72,72 @@ async def test_stream_events_maps_item_completed_agent_message_to_final() -> Non
 
     events = [event async for event in transport.read_events(process)]
 
-    assert events == [CodexEvent(type="message.final", content="Hi.", delta="")]
+    assert events == [
+        CodexEvent(type="phase.started", content="Codex session started.", phase="session", raw_event_type="thread.started"),
+        CodexEvent(type="phase.updated", content="Codex is thinking.", phase="thinking", raw_event_type="turn.started"),
+        CodexEvent(type="message.final", content="Hi.", delta="", phase="completed", raw_event_type="item.completed"),
+        CodexEvent(type="phase.updated", content="Codex finished this turn.", phase="completed", raw_event_type="turn.completed"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_events_maps_json_error_and_warning_messages() -> None:
+    process = FakeProcess(
+        [
+            b'{"type":"warning","message":"slow network"}\n',
+            b'{"type":"error","message":"bad auth"}\n',
+        ]
+    )
+    transport = CodexTransport(binary_path="codex")
+
+    events = [event async for event in transport.read_events(process)]
+
+    assert events == [
+        CodexEvent(type="warning", content="slow network", delta="", raw_event_type="warning"),
+        CodexEvent(type="error", content="bad auth", delta="", raw_event_type="error"),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_stream_events_maps_command_execution_and_intermediate_thoughts() -> None:
+    process = FakeProcess(
+        [
+            b'{"type":"thread.started","thread_id":"t1"}\n',
+            b'{"type":"turn.started"}\n',
+            b'{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"Running pwd and ls first."}}\n',
+            b'{"type":"item.started","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc pwd","aggregated_output":"","exit_code":null,"status":"in_progress"}}\n',
+            b'{"type":"item.completed","item":{"id":"item_1","type":"command_execution","command":"/bin/bash -lc pwd","aggregated_output":"/tmp/demo\\n","exit_code":0,"status":"completed"}}\n',
+            b'{"type":"item.completed","item":{"id":"item_2","type":"agent_message","text":"The current directory is /tmp/demo."}}\n',
+            b'{"type":"turn.completed"}\n',
+        ]
+    )
+    transport = CodexTransport(binary_path="codex")
+
+    events = [event async for event in transport.read_events(process)]
+
+    assert events == [
+        CodexEvent(type="phase.started", content="Codex session started.", phase="session", raw_event_type="thread.started"),
+        CodexEvent(type="phase.updated", content="Codex is thinking.", phase="thinking", raw_event_type="turn.started"),
+        CodexEvent(type="thought", content="Running pwd and ls first.", phase="thinking", raw_event_type="item.completed"),
+        CodexEvent(
+            type="tool.started",
+            content="Running command: /bin/bash -lc pwd",
+            phase="executing",
+            tool_name="command_execution",
+            tool_summary="/bin/bash -lc pwd",
+            raw_event_type="item.started",
+        ),
+        CodexEvent(
+            type="tool.finished",
+            content="Finished command: /bin/bash -lc pwd (completed, exit=0)\n/tmp/demo",
+            phase="executing",
+            tool_name="command_execution",
+            tool_summary="/bin/bash -lc pwd",
+            raw_event_type="item.completed",
+        ),
+        CodexEvent(type="message.final", content="The current directory is /tmp/demo.", phase="completed", raw_event_type="item.completed"),
+        CodexEvent(type="phase.updated", content="Codex finished this turn.", phase="completed", raw_event_type="turn.completed"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -185,7 +250,11 @@ async def test_stream_events_ignores_internal_json_state_events() -> None:
 
     events = [event async for event in transport.read_events(process)]
 
-    assert events == [CodexEvent(type="message.delta", content="", delta="ok")]
+    assert events == [
+        CodexEvent(type="phase.started", content="Codex session started.", phase="session", raw_event_type="thread.started"),
+        CodexEvent(type="phase.updated", content="Codex is thinking.", phase="thinking", raw_event_type="turn.started"),
+        CodexEvent(type="message.delta", content="", delta="ok"),
+    ]
 
 
 @pytest.mark.asyncio
@@ -243,7 +312,7 @@ async def test_stream_events_ignores_internal_log_followups() -> None:
 
     events = [event async for event in transport.read_events(process)]
 
-    assert events == [CodexEvent(type="message.final", content="hello", delta="")]
+    assert events == [CodexEvent(type="message.final", content="hello", delta="", phase="completed", raw_event_type="message.final")]
 
 
 @pytest.mark.asyncio

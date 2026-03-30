@@ -1,7 +1,6 @@
 """Skills loader for agent capabilities."""
 
 import json
-import logging
 import os
 import re
 import shutil
@@ -9,7 +8,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-logger = logging.getLogger(__name__)
+from xbot.agent.capabilities.skill_parsing import parse_skill_document, strip_frontmatter
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent.parent / "skills"
@@ -220,14 +222,12 @@ class SkillsLoader:
 
     def _strip_frontmatter(self, content: str) -> str:
         """Remove YAML frontmatter from markdown content."""
-        if content.startswith("---"):
-            match = re.match(r"^---\n.*?\n---\n", content, re.DOTALL)
-            if match:
-                return content[match.end():].strip()
-        return content
+        return strip_frontmatter(content)
 
-    def _parse_xbot_metadata(self, raw: str) -> dict:
+    def _parse_xbot_metadata(self, raw: Any) -> dict:
         """Parse skill metadata JSON from frontmatter (supports xbot and openclaw keys)."""
+        if isinstance(raw, dict):
+            return raw.get("xbot", raw.get("openclaw", raw))
         try:
             data = json.loads(raw)
             return data.get("xbot", data.get("openclaw", {})) if isinstance(data, dict) else {}
@@ -273,19 +273,8 @@ class SkillsLoader:
         content = self.load_skill(name)
         if not content:
             return None
-
-        if content.startswith("---"):
-            match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
-            if match:
-                # Simple YAML parsing
-                metadata = {}
-                for line in match.group(1).split("\n"):
-                    if ":" in line:
-                        key, value = line.split(":", 1)
-                        metadata[key.strip()] = value.strip().strip('"\'')
-                return metadata
-
-        return None
+        parsed = parse_skill_document(content)
+        return parsed.frontmatter or None
 
     def is_tool_exposable(self, name: str) -> bool:
         """Return True when a skill may be exposed as a tool/MCP capability."""
@@ -429,26 +418,10 @@ class SkillsLoader:
 
         if not content.startswith("---"):
             return {}
-
-        match = re.match(r"^---\n(.*?)\n---", content, re.DOTALL)
-        if not match:
-            return {}
-
-        yaml_content = match.group(1)
-
-        # Try to use PyYAML if available
-        try:
-            import yaml
-            return yaml.safe_load(yaml_content) or {}
-        except ImportError:
-            pass
-
-        # Fallback: simple nested parsing for triggers/excludes
-        try:
-            return self._parse_yaml_simple(yaml_content)
-        except Exception:
-            logger.warning("Failed to parse YAML with fallback parser, returning empty dict")
-            return {}
+        parsed = parse_skill_document(content)
+        if parsed.frontmatter:
+            return parsed.frontmatter
+        return {}
 
     def _parse_yaml_simple(self, yaml_content: str) -> dict[str, Any]:
         """Simple YAML parser for basic nested structures.

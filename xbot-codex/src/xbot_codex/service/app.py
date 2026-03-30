@@ -25,9 +25,9 @@ class CodexService:
         self.bus = bus or MessageBus()
         self.channel_manager = channel_manager
         self._tasks: list[asyncio.Task] = []
+        self._session_tasks: dict[str, asyncio.Task] = {}
 
-    async def process_next_message(self) -> None:
-        inbound = await self.bus.consume_inbound()
+    async def _process_inbound_message(self, inbound) -> None:
         logger.info(
             "Service inbound: channel={} chat_id={} sender_id={} content={!r}",
             inbound.channel,
@@ -44,6 +44,43 @@ class CodexService:
                 len(outbound.content or ""),
             )
             await self.bus.publish_outbound(outbound)
+
+    async def _publish_busy(self, inbound) -> None:
+        await self.bus.publish_outbound(
+            OutboundMessage(
+                channel=inbound.channel,
+                chat_id=inbound.chat_id,
+                content="Codex is still working on your previous message. Please wait or send !stop.",
+                metadata={
+                    "event_type": "busy",
+                    "message_id": inbound.metadata.get("message_id"),
+                    "chat_type": inbound.metadata.get("chat_type"),
+                },
+            )
+        )
+
+    async def process_next_message(self) -> None:
+        inbound = await self.bus.consume_inbound()
+        existing = self._session_tasks.get(inbound.session_key)
+        if existing is not None and not existing.done():
+            await self._publish_busy(inbound)
+            return
+
+        task = asyncio.create_task(self._process_inbound_message(inbound))
+        self._session_tasks[inbound.session_key] = task
+
+        def _cleanup(done_task: asyncio.Task, session_key: str = inbound.session_key) -> None:
+            current = self._session_tasks.get(session_key)
+            if current is done_task:
+                self._session_tasks.pop(session_key, None)
+            try:
+                done_task.result()
+            except asyncio.CancelledError:
+                return
+            except Exception:
+                logger.exception("xbot-codex session task failed: session_key={}", session_key)
+
+        task.add_done_callback(_cleanup)
 
     async def _inbound_loop(self) -> None:
         while True:
@@ -71,9 +108,14 @@ class CodexService:
         if session_store is not None and transport is not None:
             for session_key in session_store.active_session_keys():
                 await transport.interrupt(session_key)
+        for task in list(self._session_tasks.values()):
+            if not task.done():
+                task.cancel()
         for task in list(self._tasks):
             if not task.done():
                 task.cancel()
+        await asyncio.gather(*self._session_tasks.values(), return_exceptions=True)
+        self._session_tasks.clear()
         if self._tasks:
             await asyncio.gather(*self._tasks, return_exceptions=True)
         if self.channel_manager is not None:

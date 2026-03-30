@@ -18,7 +18,10 @@ class Session:
     codex_session_id: str | None = None
     runtime_session_id: str = field(default_factory=lambda: uuid4().hex)
     process_state: str = "idle"
+    current_phase: str | None = None
     last_error: str | None = None
+    last_warning: str | None = None
+    recent_tools: list[str] = field(default_factory=list)
     last_activity_at: datetime = field(default_factory=lambda: datetime.now(UTC))
 
 
@@ -49,7 +52,10 @@ class SessionStore:
         session.runtime_session_id = uuid4().hex
         session.codex_session_id = None
         session.process_state = "idle"
+        session.current_phase = None
         session.last_error = None
+        session.last_warning = None
+        session.recent_tools.clear()
         session.last_activity_at = datetime.now(UTC)
         return session
 
@@ -64,6 +70,25 @@ class SessionStore:
         session = self._sessions[session_key]
         session.process_state = "error"
         session.last_error = error
+        session.last_activity_at = datetime.now(UTC)
+
+    def mark_warning(self, session_key: str, warning: str) -> None:
+        session = self._sessions[session_key]
+        session.last_warning = warning
+        session.last_activity_at = datetime.now(UTC)
+
+    def update_phase(self, session_key: str, phase: str | None) -> None:
+        session = self._sessions[session_key]
+        session.current_phase = phase
+        session.last_activity_at = datetime.now(UTC)
+
+    def add_tool(self, session_key: str, tool_summary: str) -> None:
+        if not tool_summary:
+            return
+        session = self._sessions[session_key]
+        session.recent_tools.append(tool_summary)
+        if len(session.recent_tools) > 5:
+            session.recent_tools = session.recent_tools[-5:]
         session.last_activity_at = datetime.now(UTC)
 
     def active_session_keys(self) -> list[str]:

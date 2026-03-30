@@ -15,11 +15,8 @@ IGNORED_FOLLOWUP_PREFIXES = (
     "Operation not permitted (os error 1)",
 )
 IGNORED_EVENT_TYPES = {
-    "thread.started",
-    "turn.started",
     "thread.updated",
     "turn.updated",
-    "turn.completed",
 }
 IGNORED_LOG_MARKERS = (
     "codex_core::models_manager::cache:",
@@ -36,6 +33,10 @@ class CodexEvent:
     type: str
     content: str = ""
     delta: str = ""
+    phase: str = ""
+    tool_name: str = ""
+    tool_summary: str = ""
+    raw_event_type: str = ""
 
 
 class CodexTransport:
@@ -97,6 +98,36 @@ class CodexTransport:
         auth_failure = False
         mcp_auth_failure = False
         suppress_followups = False
+        pending_agent_message: str | None = None
+
+        def tool_output_summary(text: str, limit: int = 800) -> str:
+            normalized = text.strip()
+            if not normalized:
+                return ""
+            if len(normalized) <= limit:
+                return normalized
+            return normalized[:limit].rstrip() + "\n...[truncated]"
+
+        async def flush_pending(as_final: bool) -> AsyncIterator[CodexEvent]:
+            nonlocal pending_agent_message
+            if pending_agent_message and pending_agent_message.strip():
+                text = pending_agent_message.strip()
+                pending_agent_message = None
+                if as_final:
+                    yield CodexEvent(
+                        type="message.final",
+                        content=text,
+                        phase="completed",
+                        raw_event_type="item.completed",
+                    )
+                else:
+                    yield CodexEvent(
+                        type="thought",
+                        content=text,
+                        phase="thinking",
+                        raw_event_type="item.completed",
+                    )
+
         while True:
             line = await process.stdout.readline()
             if not line:
@@ -133,21 +164,106 @@ class CodexTransport:
             suppress_followups = False
             if event_type in IGNORED_EVENT_TYPES:
                 continue
-            if event_type == "message.final":
-                yield CodexEvent(type=event_type, content=str(payload.get("content", "")))
+            if event_type == "thread.started":
+                async for event in flush_pending(as_final=False):
+                    yield event
+                yield CodexEvent(
+                    type="phase.started",
+                    content="Codex session started.",
+                    phase="session",
+                    raw_event_type=event_type,
+                )
+            elif event_type == "turn.started":
+                async for event in flush_pending(as_final=False):
+                    yield event
+                yield CodexEvent(
+                    type="phase.updated",
+                    content="Codex is thinking.",
+                    phase="thinking",
+                    raw_event_type=event_type,
+                )
+            elif event_type == "turn.completed":
+                async for event in flush_pending(as_final=True):
+                    yield event
+                yield CodexEvent(
+                    type="phase.updated",
+                    content="Codex finished this turn.",
+                    phase="completed",
+                    raw_event_type=event_type,
+                )
+            elif event_type == "message.final":
+                async for event in flush_pending(as_final=False):
+                    yield event
+                yield CodexEvent(
+                    type=event_type,
+                    content=str(payload.get("content", "")),
+                    phase="completed",
+                    raw_event_type=event_type,
+                )
             elif event_type == "message.delta":
                 yield CodexEvent(type=event_type, delta=str(payload.get("delta", "")))
+            elif event_type in {"error", "warning", "status"}:
+                async for event in flush_pending(as_final=False):
+                    yield event
+                content = payload.get("message", payload.get("content", ""))
+                yield CodexEvent(type=event_type, content=str(content), raw_event_type=event_type)
+            elif event_type == "item.started":
+                item = payload.get("item")
+                if isinstance(item, dict) and item.get("type") == "command_execution":
+                    async for event in flush_pending(as_final=False):
+                        yield event
+                    command = str(item.get("command", "")).strip()
+                    yield CodexEvent(
+                        type="tool.started",
+                        content=f"Running command: {command}" if command else "Running command.",
+                        phase="executing",
+                        tool_name="command_execution",
+                        tool_summary=command,
+                        raw_event_type=event_type,
+                    )
             elif event_type == "item.completed":
                 item = payload.get("item")
-                if isinstance(item, dict) and item.get("type") == "agent_message":
-                    text_content = item.get("text")
-                    if isinstance(text_content, str) and text_content.strip():
-                        yield CodexEvent(type="message.final", content=text_content)
+                if isinstance(item, dict):
+                    item_type = str(item.get("type", ""))
+                    if item_type == "agent_message":
+                        text_content = item.get("text")
+                        if isinstance(text_content, str) and text_content.strip():
+                            async for event in flush_pending(as_final=False):
+                                yield event
+                            pending_agent_message = text_content
+                    elif item_type == "command_execution":
+                        async for event in flush_pending(as_final=False):
+                            yield event
+                        command = str(item.get("command", "")).strip()
+                        exit_code = item.get("exit_code")
+                        status = str(item.get("status", "")).strip()
+                        output = tool_output_summary(str(item.get("aggregated_output", "")))
+                        suffix: list[str] = []
+                        if status:
+                            suffix.append(status)
+                        if exit_code is not None:
+                            suffix.append(f"exit={exit_code}")
+                        suffix_text = f" ({', '.join(suffix)})" if suffix else ""
+                        content = f"Finished command: {command}{suffix_text}" if command else f"Finished command{suffix_text}"
+                        if output:
+                            content = f"{content}\n{output}"
+                        yield CodexEvent(
+                            type="tool.finished",
+                            content=content,
+                            phase="executing",
+                            tool_name="command_execution",
+                            tool_summary=command,
+                            raw_event_type=event_type,
+                        )
             else:
+                async for event in flush_pending(as_final=False):
+                    yield event
                 if "delta" in payload:
-                    yield CodexEvent(type=event_type, delta=str(payload.get("delta", "")))
+                    yield CodexEvent(type=event_type, delta=str(payload.get("delta", "")), raw_event_type=event_type)
                 else:
-                    yield CodexEvent(type=event_type, content=str(payload.get("content", text)))
+                    yield CodexEvent(type=event_type, content=str(payload.get("content", text)), raw_event_type=event_type)
+        async for event in flush_pending(as_final=True):
+            yield event
         returncode = await process.wait()
         if mcp_auth_failure:
             yield CodexEvent(

@@ -1,7 +1,6 @@
 """Utility functions for xbot."""
 
 import json
-import logging
 import re
 import time
 from datetime import datetime
@@ -11,7 +10,9 @@ from typing import Any
 
 import tiktoken
 
-logger = logging.getLogger(__name__)
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 def detect_image_mime(data: bytes) -> str | None:

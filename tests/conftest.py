@@ -5,6 +5,8 @@ from __future__ import annotations
 import importlib
 import sys
 
+import pytest
+
 
 def _remove_beartype_path_hook() -> None:
     """Remove beartype claw path hook when preloaded by host shell/profile.
@@ -24,3 +26,16 @@ def _remove_beartype_path_hook() -> None:
 
 _remove_beartype_path_hook()
 
+
+@pytest.fixture(autouse=True)
+def _reset_agent_router_backend_registry() -> None:
+    """Keep AgentRouter backend registry isolated between tests."""
+    from xbot.agent.router import AgentRouter, register_default_backends
+
+    AgentRouter._backends = {}
+    register_default_backends()
+    try:
+        yield
+    finally:
+        AgentRouter._backends = {}
+        register_default_backends()

@@ -22,7 +22,9 @@
 from __future__ import annotations
 
 from typing import TYPE_CHECKING
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.agent.state.snapshot import StateSnapshot
 

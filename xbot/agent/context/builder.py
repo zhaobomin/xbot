@@ -6,7 +6,9 @@ import platform
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.utils.helpers import current_time_str
 
@@ -129,15 +131,15 @@ class ContextBuilder:
             "",
             "<skills>",
         ]
+        all_skill_locations = self.skills.list_skills(filter_unavailable=False)
 
         for skill in skills:
             available = skill.get("available", True)
             status = "true" if available else "false"
             name = skill["name"]
             desc = skill.get("description", name)
-            location = self.skills.list_skills(filter_unavailable=False)
             # Find location for this skill
-            loc = next((s["path"] for s in location if s["name"] == name), "")
+            loc = next((s["path"] for s in all_skill_locations if s["name"] == name), "")
 
             lines.append(f'  <skill available="{status}">')
             lines.append(f"    <name>{name}</name>")

@@ -198,12 +198,12 @@ class TestSessionStateMachine:
         machine = SessionStateMachine()
         assert len(machine.list_session_keys()) == 0
 
-    def test_get_state_creates_new(self):
-        """Test that get_state creates new state for unknown sessions."""
+    def test_get_state_returns_untracked_default_for_missing_session(self):
+        """Test that get_state returns a default state without tracking it."""
         machine = SessionStateMachine()
         state = machine.get_state("session:1")
         assert state.phase == SessionPhase.IDLE
-        assert "session:1" in machine.list_session_keys()
+        assert "session:1" not in machine.list_session_keys()
 
     def test_get_phase(self):
         """Test getting phase for a session."""
@@ -299,15 +299,15 @@ class TestSessionStateMachine:
         machine = SessionStateMachine()
         assert machine.has_session("session:1") is False
 
-        machine.get_state("session:1")
+        machine.get_or_create_state("session:1")
         assert machine.has_session("session:1") is True
 
     def test_list_session_keys(self):
         """Test listing all session keys."""
         machine = SessionStateMachine()
-        machine.get_state("session:1")
-        machine.get_state("session:2")
-        machine.get_state("session:3")
+        machine.get_or_create_state("session:1")
+        machine.get_or_create_state("session:2")
+        machine.get_or_create_state("session:3")
 
         keys = machine.list_session_keys()
         assert keys == {"session:1", "session:2", "session:3"}
@@ -1182,7 +1182,7 @@ class TestStateMachineIsolation:
     def test_list_session_keys_returns_copy(self):
         """Test that list_session_keys returns a copy, not internal state."""
         machine = SessionStateMachine()
-        machine.get_state("session:1")
+        machine.get_or_create_state("session:1")
 
         keys = machine.list_session_keys()
         keys.add("session:fake")
@@ -1190,12 +1190,12 @@ class TestStateMachineIsolation:
         assert "session:fake" not in machine.list_session_keys()
         assert len(machine.list_session_keys()) == 1
 
-    def test_get_state_returns_same_object(self):
-        """Test that get_state returns the same object for same session."""
+    def test_get_or_create_state_returns_same_object(self):
+        """Test that get_or_create_state returns the same object for same session."""
         machine = SessionStateMachine()
 
-        state1 = machine.get_state("session:1")
-        state2 = machine.get_state("session:1")
+        state1 = machine.get_or_create_state("session:1")
+        state2 = machine.get_or_create_state("session:1")
 
         assert state1 is state2  # Same object reference
 
@@ -1203,7 +1203,7 @@ class TestStateMachineIsolation:
         """Test that state object can be mutated (for transition updates)."""
         machine = SessionStateMachine()
 
-        state = machine.get_state("session:1")
+        state = machine.get_or_create_state("session:1")
         machine.transition("session:1", SessionPhase.RUNNING, reason="start")
 
         # The same state object should now have updated values
@@ -1373,7 +1373,7 @@ class TestLogging:
 
         with patch("xbot.agent.state.machine.logger") as mock_logger:
             machine = SessionStateMachine()
-            machine.get_state("session:new")
+            machine.get_or_create_state("session:new")
 
             mock_logger.debug.assert_called()
             call_args = str(mock_logger.debug.call_args)
@@ -1660,7 +1660,7 @@ class TestEdgeCases:
         machine = SessionStateMachine()
 
         # Set a high transition count
-        state = machine.get_state("session:1")
+        state = machine.get_or_create_state("session:1")
         state.transition_count = 1000000
 
         # Should still work

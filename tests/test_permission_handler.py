@@ -238,18 +238,153 @@ class TestPermissionRequestHandler:
         # Check that a permission request was published
         assert bus.get_pending_request_for_session("test:123") is not None
 
-        # Submit response
-        request_id = bus.get_pending_request_for_session("test:123")
-        response = PermissionResponse(
-            request_id=request_id,
-            session_key="test:123",
-            decision="allow",
-        )
-        await bus.submit_permission_response(response)
+    @pytest.mark.asyncio
+    async def test_ask_user_question_defaults_to_suggested_validation(self, handler):
+        handler.set_session_context("test:123", "telegram", "456")
 
-        # Get result
-        decision, result = await task
+        captured = {}
+
+        async def fake_request_interaction(**kwargs):
+            captured.update(kwargs)
+            return InteractionResponse(
+                request_id="req-1",
+                session_key="test:123",
+                action="answer",
+                content="xbot-ubuntu",
+            )
+
+        handler.request_interaction = fake_request_interaction
+
+        decision, updated = await handler.can_use_tool(
+            "AskUserQuestion",
+            {
+                "questions": [
+                    {
+                        "header": "名称",
+                        "question": "请告诉我飞书应用的具体名称是什么？",
+                        "options": [
+                            {"label": "xbot"},
+                            {"label": "xbot-prod"},
+                            {"label": "Other"},
+                        ],
+                    }
+                ]
+            },
+            None,
+        )
+
         assert decision == "allow"
+        assert captured["metadata"]["validation_mode"] == "suggested"
+        assert captured["metadata"]["allow_free_text"] is True
+        assert "也可输入你自己的内容" in captured["prompt"]
+        assert updated["answers"][0]["answer"] == "xbot-ubuntu"
+
+    @pytest.mark.asyncio
+    async def test_ask_user_question_multi_prompt_only_mentions_commas(self, handler):
+        handler.set_session_context("test:123", "telegram", "456")
+
+        captured = {}
+
+        async def fake_request_interaction(**kwargs):
+            captured.update(kwargs)
+            return InteractionResponse(
+                request_id="req-1",
+                session_key="test:123",
+                action="answer",
+                content="A, 高",
+            )
+
+        handler.request_interaction = fake_request_interaction
+
+        await handler.can_use_tool(
+            "AskUserQuestion",
+            {
+                "questions": [
+                    {"header": "方案", "question": "选哪个？", "options": [{"label": "A"}, {"label": "B"}]},
+                    {"header": "优先级", "question": "多高？", "options": [{"label": "高"}, {"label": "低"}]},
+                ]
+            },
+            None,
+        )
+
+        assert "逗号" in captured["prompt"]
+        assert "空格" not in captured["prompt"]
+        assert "也可输入你自己的内容" in captured["prompt"]
+
+    @pytest.mark.asyncio
+    async def test_ask_user_question_can_opt_into_strict_validation(self, handler):
+        handler.set_session_context("test:123", "telegram", "456")
+
+        captured = {}
+
+        async def fake_request_interaction(**kwargs):
+            captured.update(kwargs)
+            return InteractionResponse(
+                request_id="req-1",
+                session_key="test:123",
+                action="answer",
+                content="xbot",
+            )
+
+        handler.request_interaction = fake_request_interaction
+
+        decision, updated = await handler.can_use_tool(
+            "AskUserQuestion",
+            {
+                "validation_mode": "strict",
+                "allow_free_text": False,
+                "questions": [
+                    {
+                        "header": "环境",
+                        "question": "请选择环境",
+                        "options": [
+                            {"label": "xbot"},
+                            {"label": "xbot-prod"},
+                        ],
+                    }
+                ]
+            },
+            None,
+        )
+
+        assert decision == "allow"
+        assert captured["metadata"]["validation_mode"] == "strict"
+        assert captured["metadata"]["allow_free_text"] is False
+        assert "也可输入你自己的内容" not in captured["prompt"]
+        assert updated["answers"][0]["answer"] == "xbot"
+
+    @pytest.mark.asyncio
+    async def test_ask_user_question_without_options_does_not_reference_suggestions(self, handler):
+        handler.set_session_context("test:123", "telegram", "456")
+
+        captured = {}
+
+        async def fake_request_interaction(**kwargs):
+            captured.update(kwargs)
+            return InteractionResponse(
+                request_id="req-1",
+                session_key="test:123",
+                action="answer",
+                content="自由文本",
+            )
+
+        handler.request_interaction = fake_request_interaction
+
+        await handler.can_use_tool(
+            "AskUserQuestion",
+            {
+                "questions": [
+                    {
+                        "header": "备注",
+                        "question": "请补充备注",
+                        "options": [],
+                    }
+                ]
+            },
+            None,
+        )
+
+        assert "上面的建议项" not in captured["prompt"]
 
     @pytest.mark.asyncio
     async def test_permission_request_timeout(self, bus):

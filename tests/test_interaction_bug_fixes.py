@@ -692,3 +692,67 @@ class TestFeishuInteractionFormatting:
         with patch.object(channel, '_send_message_sync'):
             with patch.object(channel, '_markdown_to_post', side_effect=capture_post):
                 await channel.send(msg)
+
+    @pytest.mark.asyncio
+    async def test_suggested_question_mentions_free_text(self):
+        """Suggested questions should tell users they can type custom content."""
+        from unittest.mock import patch, MagicMock
+        from xbot.bus.events import OutboundMessage
+        from xbot.channels.feishu import FeishuChannel, FeishuConfig
+
+        config = FeishuConfig(app_id="test", app_secret="test")
+        bus = MagicMock()
+        channel = FeishuChannel(config, bus)
+        channel._client = MagicMock()
+
+        msg = OutboundMessage(
+            channel="feishu",
+            chat_id="oc_test123",
+            content="请输入应用名",
+            metadata={
+                "interaction_request": True,
+                "interaction_kind": "question",
+                "suggestions": ["xbot", "xbot-prod", "Other"],
+                "validation_mode": "suggested",
+            },
+        )
+
+        def capture_post(content):
+            assert "也可输入你自己的内容" in content
+            return "mock_post"
+
+        with patch.object(channel, '_send_message_sync'):
+            with patch.object(channel, '_markdown_to_post', side_effect=capture_post):
+                await channel.send(msg)
+
+    @pytest.mark.asyncio
+    async def test_strict_question_mentions_reply_with_options(self):
+        """Strict questions should still require option-only replies."""
+        from unittest.mock import patch, MagicMock
+        from xbot.bus.events import OutboundMessage
+        from xbot.channels.feishu import FeishuChannel, FeishuConfig
+
+        config = FeishuConfig(app_id="test", app_secret="test")
+        bus = MagicMock()
+        channel = FeishuChannel(config, bus)
+        channel._client = MagicMock()
+
+        msg = OutboundMessage(
+            channel="feishu",
+            chat_id="oc_test123",
+            content="请选择方案",
+            metadata={
+                "interaction_request": True,
+                "interaction_kind": "question",
+                "suggestions": ["A", "B"],
+                "validation_mode": "strict",
+            },
+        )
+
+        def capture_post(content):
+            assert "请回复以下选项之一" in content
+            return "mock_post"
+
+        with patch.object(channel, '_send_message_sync'):
+            with patch.object(channel, '_markdown_to_post', side_effect=capture_post):
+                await channel.send(msg)

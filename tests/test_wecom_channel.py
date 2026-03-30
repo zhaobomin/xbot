@@ -115,6 +115,39 @@ class TestWecomChannelMessageHandling:
         assert MSG_TYPE_MAP["file"] == "[file]"
         assert MSG_TYPE_MAP["mixed"] == "[mixed content]"
 
+    @pytest.mark.asyncio
+    async def test_send_uses_chat_id_frame_mapping_even_when_message_has_msg_id(self):
+        """Replies should resolve frames by chat id, not only by message id."""
+        channel = WecomChannel(
+            WecomConfig(bot_id="test", secret="pass"),
+            MessageBus(),
+        )
+        frame = {"frame": "value"}
+        channel._handle_message = AsyncMock()
+        channel._client = MagicMock()
+        channel._client.reply_stream = AsyncMock()
+        channel._generate_req_id = MagicMock(return_value="stream-1")
+
+        inbound_frame = {
+            "body": {
+                "msgid": "msg-1",
+                "chatid": "chat-123",
+                "from": {"userid": "user-1"},
+                "text": {"content": "hello"},
+            }
+        }
+
+        await channel._process_message(inbound_frame, "text")
+
+        await channel.send(OutboundMessage(channel="wecom", chat_id="chat-123", content="hello"))
+
+        channel._client.reply_stream.assert_awaited_once_with(
+            inbound_frame,
+            "stream-1",
+            "hello",
+            finish=True,
+        )
+
 
 class TestWecomChannelProcessedMessages:
     """Tests for processed message tracking."""

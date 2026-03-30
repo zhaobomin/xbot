@@ -12,13 +12,14 @@ from xbot.agent.runtime import (
 class TestSessionStateMachine:
     """Tests for SessionStateMachine."""
 
-    def test_get_state_creates_default(self):
-        """Test that get_state creates a default state for new sessions."""
+    def test_get_state_returns_default_without_tracking(self):
+        """Test that get_state returns a default state for new sessions."""
         sm = SessionStateMachine()
         state = sm.get_state("test:123")
         assert state.phase == SessionPhase.IDLE
         assert state.reason == ""
         assert state.transition_count == 0
+        assert sm.has_session("test:123") is False
 
     def test_get_phase(self):
         """Test get_phase returns current phase."""
@@ -117,14 +118,14 @@ class TestSessionStateMachine:
         """Test has_session checks existence without creating state."""
         sm = SessionStateMachine()
         assert sm.has_session("test:123") is False
-        sm.get_state("test:123")
+        sm.get_or_create_state("test:123")
         assert sm.has_session("test:123") is True
 
     def test_list_session_keys(self):
         """Test listing all tracked session keys."""
         sm = SessionStateMachine()
-        sm.get_state("test:1")
-        sm.get_state("test:2")
+        sm.get_or_create_state("test:1")
+        sm.get_or_create_state("test:2")
         assert sm.list_session_keys() == {"test:1", "test:2"}
 
     def test_is_idle(self):

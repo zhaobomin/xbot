@@ -55,7 +55,10 @@ class CommandsLoader:
         if name.startswith("/"):
             name = name[1:]
 
-        cmd_file = self.commands_dir / f"{name}.md"
+        cmd_file = (self.commands_dir / f"{name}.md").resolve()
+        commands_dir = self.commands_dir.resolve()
+        if commands_dir not in cmd_file.parents:
+            return None
         if not cmd_file.exists():
             return None
 

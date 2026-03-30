@@ -10,15 +10,15 @@ information from user goals, including:
 
 from __future__ import annotations
 
-import logging
 from typing import Any, Callable
 
 from xbot.agent.crew.planner.models import Capability, GoalAnalysis
 from xbot.agent.crew.planner.prompts import GOAL_ANALYSIS_PROMPT
 from xbot.agent.crew.planner.utils import LLMResponseParser
 from xbot.agent.crew.planner.validators import LLMValidator
+from xbot.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 # Type alias for LLM callable
 LLMCallable = Callable[[str], str]

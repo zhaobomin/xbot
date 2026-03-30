@@ -1,12 +1,13 @@
 """Matrix (Element) channel — inbound sync + outbound message/media delivery."""
 
 import asyncio
-import logging
 import mimetypes
 from pathlib import Path
 from typing import Any, Literal, TypeAlias
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 from pydantic import Field
 
 try:
@@ -123,26 +124,11 @@ def _build_matrix_text_content(text: str) -> dict[str, object]:
     return content
 
 
-class _NioLoguruHandler(logging.Handler):
-    """Route matrix-nio stdlib logs into Loguru."""
-
-    def emit(self, record: logging.LogRecord) -> None:
-        try:
-            level = logger.level(record.levelname).name
-        except ValueError:
-            level = record.levelno
-        frame, depth = logging.currentframe(), 2
-        while frame and frame.f_code.co_filename == logging.__file__:
-            frame, depth = frame.f_back, depth + 1
-        logger.opt(depth=depth, exception=record.exc_info).log(level, record.getMessage())
-
-
 def _configure_nio_logging_bridge() -> None:
-    """Bridge matrix-nio logs to Loguru (idempotent)."""
+    """Route matrix-nio logs through the stdlib logging pipeline."""
     nio_logger = logging.getLogger("nio")
-    if not any(isinstance(h, _NioLoguruHandler) for h in nio_logger.handlers):
-        nio_logger.handlers = [_NioLoguruHandler()]
-        nio_logger.propagate = False
+    nio_logger.handlers = []
+    nio_logger.propagate = True
 
 
 class MatrixConfig(Base):
@@ -448,7 +434,7 @@ class MatrixChannel(BaseChannel):
             response = await self.client.room_typing(room_id=room_id, typing_state=typing,
                                                      timeout=TYPING_NOTICE_TIMEOUT_MS)
             if isinstance(response, RoomTypingError):
-                logger.debug("Matrix typing failed for {}: {}", room_id, response)
+                logger.debug("Matrix typing failed for %s: %s", room_id, response)
         except Exception:
             pass
 
@@ -610,7 +596,7 @@ class MatrixChannel(BaseChannel):
             return None
         response = await self.client.download(mxc=mxc_url)
         if isinstance(response, DownloadError):
-            logger.warning("Matrix download failed for {}: {}", mxc_url, response)
+            logger.warning("Matrix download failed for %s: %s", mxc_url, response)
             return None
         body = getattr(response, "body", None)
         if isinstance(body, (bytes, bytearray)):
@@ -635,7 +621,7 @@ class MatrixChannel(BaseChannel):
         try:
             return decrypt_attachment(ciphertext, key, sha256, iv)
         except (EncryptionError, ValueError, TypeError):
-            logger.warning("Matrix decrypt failed for event {}", getattr(event, "event_id", ""))
+            logger.warning("Matrix decrypt failed for event %s", getattr(event, "event_id", ""))
             return None
 
     async def _fetch_media_attachment(

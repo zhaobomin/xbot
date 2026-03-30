@@ -290,6 +290,8 @@ def crew_run_dynamic(
         prefix=f"{plan.name}_",
     ) as temp_file:
         temp_file.write(yaml_content)
+        temp_file.flush()
+        temp_file.seek(0)
         config_path = Path(temp_file.name)
 
         if save_config:
@@ -369,29 +371,42 @@ def _print_crew_result(result) -> None:
     """Print crew execution result."""
     from rich.panel import Panel
 
-    if result.success:
+    success = getattr(result, "status", "") == "completed"
+    total_time = float(getattr(result, "total_time", 0.0) or 0.0)
+    summary = getattr(result, "summary", "") or ""
+    task_results = list(getattr(result, "task_results", []) or [])
+
+    if success:
         console.print(Panel(
             f"[green]✓ Crew execution completed successfully[/green]\n\n"
-            f"Tasks completed: {len(result.task_results)}\n"
-            f"Total time: {result.execution_time:.1f}s",
+            f"Tasks completed: {len(task_results)}\n"
+            f"Total time: {total_time:.1f}s"
+            + (f"\nSummary: {summary}" if summary else ""),
             title="Result",
             border_style="green",
         ))
 
         # Show task results
-        if result.task_results:
+        if task_results:
             table = Table(title="Task Results")
             table.add_column("Task", style="cyan")
             table.add_column("Status", style="green")
             table.add_column("Time")
 
-            for task_result in result.task_results:
-                status = "✓" if task_result.success else "✗"
-                status_style = "green" if task_result.success else "red"
+            for task_result in task_results:
+                task_status = getattr(task_result, "status", "unknown")
+                ok_statuses = {"success", "completed", "partial", "skipped"}
+                status = "✓" if task_status in ok_statuses else "✗"
+                status_style = "green" if task_status in ok_statuses else "red"
+                started_at = getattr(task_result, "started_at", None)
+                finished_at = getattr(task_result, "finished_at", None)
+                elapsed = 0.0
+                if started_at is not None and finished_at is not None:
+                    elapsed = max(0.0, (finished_at - started_at).total_seconds())
                 table.add_row(
                     task_result.task_name[:40],
-                    f"[{status_style}]{status}[/{status_style}]",
-                    f"{task_result.execution_time:.1f}s",
+                    f"[{status_style}]{status}[/{status_style}] {task_status}",
+                    f"{elapsed:.1f}s",
                 )
 
             console.print(table)
@@ -399,8 +414,8 @@ def _print_crew_result(result) -> None:
     else:
         console.print(Panel(
             f"[red]✗ Crew execution failed[/red]\n\n"
-            f"Error: {result.error or 'Unknown error'}\n"
-            f"Tasks completed: {len(result.task_results)}/{len(result.task_results) + 1}",
+            f"Summary: {summary or 'Unknown error'}\n"
+            f"Tasks completed: {len(task_results)}",
             title="Result",
             border_style="red",
         ))

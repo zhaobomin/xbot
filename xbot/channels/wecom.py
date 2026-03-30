@@ -6,7 +6,9 @@ import os
 from collections import OrderedDict
 from typing import Any
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
@@ -130,11 +132,11 @@ class WecomChannel(BaseChannel):
     async def _on_disconnected(self, frame: Any) -> None:
         """Handle WebSocket disconnected event."""
         reason = frame.body if hasattr(frame, 'body') else str(frame)
-        logger.warning("WeCom WebSocket disconnected: {}", reason)
+        logger.warning("WeCom WebSocket disconnected: %s", reason)
 
     async def _on_error(self, frame: Any) -> None:
         """Handle error event."""
-        logger.error("WeCom error: {}", frame)
+        logger.error("WeCom error: %s", frame)
 
     async def _on_text_message(self, frame: Any) -> None:
         """Handle text message."""
@@ -175,7 +177,7 @@ class WecomChannel(BaseChannel):
                     "text": {"content": self.config.welcome_message},
                 })
         except Exception as e:
-            logger.error("Error handling enter_chat: {}", e)
+            logger.error("Error handling enter_chat: %s", e)
 
     async def _process_message(self, frame: Any, msg_type: str) -> None:
         """Process incoming message and forward to bus."""
@@ -190,7 +192,7 @@ class WecomChannel(BaseChannel):
 
             # Ensure body is a dict
             if not isinstance(body, dict):
-                logger.warning("Invalid body type: {}", type(body))
+                logger.warning("Invalid body type: %s", type(body))
                 return
 
             # Extract message info
@@ -285,8 +287,11 @@ class WecomChannel(BaseChannel):
             if not content:
                 return
 
-            # Store frame for this chat to enable replies
+            # Primary reply lookup is chat_id. Keep msg_id as a secondary alias
+            # when present, but never make it the only key.
             self._chat_frames[chat_id] = frame
+            if msg_id:
+                self._chat_frames[msg_id] = frame
 
             # Forward to message bus
             await self._handle_message(
@@ -302,7 +307,7 @@ class WecomChannel(BaseChannel):
             )
 
         except Exception as e:
-            logger.error("Error processing WeCom message: {}", e)
+            logger.error("Error processing WeCom message: %s", e)
 
     async def _download_and_save_media(
         self,
@@ -331,11 +336,11 @@ class WecomChannel(BaseChannel):
 
             file_path = media_dir / filename
             file_path.write_bytes(data)
-            logger.debug("Downloaded {} to {}", media_type, file_path)
+            logger.debug("Downloaded %s to %s", media_type, file_path)
             return str(file_path)
 
         except Exception as e:
-            logger.error("Error downloading media: {}", e)
+            logger.error("Error downloading media: %s", e)
             return None
 
     async def send(self, msg: OutboundMessage) -> None:
@@ -352,7 +357,7 @@ class WecomChannel(BaseChannel):
             # Get the stored frame for this chat
             frame = self._chat_frames.get(msg.chat_id)
             if not frame:
-                logger.warning("No frame found for chat {}, cannot reply", msg.chat_id)
+                logger.warning("No frame found for chat %s, cannot reply", msg.chat_id)
                 return
 
             # Use streaming reply for better UX
@@ -366,7 +371,7 @@ class WecomChannel(BaseChannel):
                 finish=True,
             )
 
-            logger.debug("WeCom message sent to {}", msg.chat_id)
+            logger.debug("WeCom message sent to %s", msg.chat_id)
 
         except Exception as e:
-            logger.error("Error sending WeCom message: {}", e)
+            logger.error("Error sending WeCom message: %s", e)

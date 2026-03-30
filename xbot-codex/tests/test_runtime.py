@@ -140,6 +140,54 @@ async def test_runtime_maps_codex_stream_to_outbound_messages() -> None:
 
 
 @pytest.mark.asyncio
+async def test_runtime_emits_process_events_before_final() -> None:
+    transport = StubTransport(
+        [
+            CodexEvent(type="phase.started", content="Codex session started.", phase="session", raw_event_type="thread.started"),
+            CodexEvent(type="phase.updated", content="Codex is thinking.", phase="thinking", raw_event_type="turn.started"),
+            CodexEvent(type="thought", content="I will inspect the repo first.", phase="thinking", raw_event_type="item.completed"),
+            CodexEvent(
+                type="tool.started",
+                content="Running command: /bin/bash -lc pwd",
+                phase="executing",
+                tool_name="command_execution",
+                tool_summary="/bin/bash -lc pwd",
+                raw_event_type="item.started",
+            ),
+            CodexEvent(
+                type="tool.finished",
+                content="Finished command: /bin/bash -lc pwd (completed, exit=0)\n/tmp/demo",
+                phase="executing",
+                tool_name="command_execution",
+                tool_summary="/bin/bash -lc pwd",
+                raw_event_type="item.completed",
+            ),
+            CodexEvent(type="message.final", content="Done.", phase="completed", raw_event_type="item.completed"),
+        ]
+    )
+    runtime = make_runtime(transport)
+
+    outbound = [
+        m
+        async for m in runtime.handle_message(
+            InboundMessage(channel="feishu", sender_id="u1", chat_id="chat-1", content="hello")
+        )
+    ]
+
+    assert [m.metadata.get("event_type") for m in outbound] == [
+        "phase.started",
+        "phase.updated",
+        "thought",
+        "tool.started",
+        "tool.finished",
+        "message.final",
+    ]
+    assert outbound[2].content == "I will inspect the repo first."
+    assert outbound[3].metadata["tool_summary"] == "/bin/bash -lc pwd"
+    assert outbound[-1].content == "Done."
+
+
+@pytest.mark.asyncio
 async def test_runtime_flushes_aggregated_delta_when_no_final_event() -> None:
     transport = StubTransport(
         [
@@ -176,3 +224,24 @@ async def test_runtime_model_command_updates_session_model() -> None:
     assert session is not None
     assert session.codex_model == "gpt-5-codex"
     assert "gpt-5-codex" in outbound[0].content
+
+
+@pytest.mark.asyncio
+async def test_runtime_status_reports_phase_tools_and_warning() -> None:
+    runtime = make_runtime()
+    session = runtime.session_store.get_or_create("telegram", "1")
+    session.process_state = "running"
+    session.current_phase = "executing"
+    session.recent_tools = ["pwd", "ls"]
+    session.last_warning = "slow network"
+
+    outbound = [
+        m
+        async for m in runtime.handle_message(
+            InboundMessage(channel="telegram", sender_id="u1", chat_id="1", content="!status")
+        )
+    ]
+
+    assert "phase=executing" in outbound[0].content
+    assert "recent_tools=pwd, ls" in outbound[0].content
+    assert "last_warning=slow network" in outbound[0].content

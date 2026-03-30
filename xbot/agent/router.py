@@ -5,7 +5,9 @@ Provides a unified interface for message processing through the Claude SDK.
 
 from typing import Any, AsyncIterator, Type
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.agent.protocol import AgentBackend, AgentContext, AgentResponse
 from xbot.config.schema import AgentsConfig
@@ -32,6 +34,7 @@ class AgentRouter:
         """
         self.config = config
         self.shared_resources = shared_resources
+        self._backends = dict(type(self)._backends)
         self._backend: AgentBackend | None = None
         self._initialized = False
 

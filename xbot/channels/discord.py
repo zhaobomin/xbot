@@ -8,7 +8,9 @@ from typing import Any, Literal
 import httpx
 from pydantic import Field
 import websockets
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
@@ -73,7 +75,7 @@ class DiscordChannel(BaseChannel):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.warning("Discord gateway error: {}", e)
+                logger.warning("Discord gateway error: %s", e)
                 if self._running:
                     logger.info("Reconnecting to Discord gateway in 5 seconds...")
                     await asyncio.sleep(5)
@@ -147,7 +149,7 @@ class DiscordChannel(BaseChannel):
                 if response.status_code == 429:
                     data = response.json()
                     retry_after = float(data.get("retry_after", 1.0))
-                    logger.warning("Discord rate limited, retrying in {}s", retry_after)
+                    logger.warning("Discord rate limited, retrying in %ss", retry_after)
                     await asyncio.sleep(retry_after)
                     continue
                 response.raise_for_status()
@@ -169,11 +171,11 @@ class DiscordChannel(BaseChannel):
         """Send a file attachment via Discord REST API using multipart/form-data."""
         path = Path(file_path)
         if not path.is_file():
-            logger.warning("Discord file not found, skipping: {}", file_path)
+            logger.warning("Discord file not found, skipping: %s", file_path)
             return False
 
         if path.stat().st_size > MAX_ATTACHMENT_BYTES:
-            logger.warning("Discord file too large (>20MB), skipping: {}", path.name)
+            logger.warning("Discord file too large (>20MB), skipping: %s", path.name)
             return False
 
         payload_json: dict[str, Any] = {}
@@ -194,15 +196,15 @@ class DiscordChannel(BaseChannel):
                 if response.status_code == 429:
                     resp_data = response.json()
                     retry_after = float(resp_data.get("retry_after", 1.0))
-                    logger.warning("Discord rate limited, retrying in {}s", retry_after)
+                    logger.warning("Discord rate limited, retrying in %ss", retry_after)
                     await asyncio.sleep(retry_after)
                     continue
                 response.raise_for_status()
-                logger.info("Discord file sent: {}", path.name)
+                logger.info("Discord file sent: %s", path.name)
                 return True
             except Exception as e:
                 if attempt == 2:
-                    logger.error("Error sending Discord file {}: {}", path.name, e)
+                    logger.error("Error sending Discord file %s: %s", path.name, e)
                 else:
                     await asyncio.sleep(1)
         return False
@@ -216,7 +218,7 @@ class DiscordChannel(BaseChannel):
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError:
-                logger.warning("Invalid JSON from Discord gateway: {}", raw[:100])
+                logger.warning("Invalid JSON from Discord gateway: %s", raw[:100])
                 continue
 
             op = data.get("op")
@@ -237,7 +239,7 @@ class DiscordChannel(BaseChannel):
                 # Capture bot user ID for mention detection
                 user_data = payload.get("user") or {}
                 self._bot_user_id = user_data.get("id")
-                logger.info("Discord bot connected as user {}", self._bot_user_id)
+                logger.info("Discord bot connected as user %s", self._bot_user_id)
             elif op == 0 and event_type == "MESSAGE_CREATE":
                 await self._handle_message_create(payload)
             elif op == 7:
@@ -279,7 +281,7 @@ class DiscordChannel(BaseChannel):
                 try:
                     await self._ws.send(json.dumps(payload))
                 except Exception as e:
-                    logger.warning("Discord heartbeat failed: {}", e)
+                    logger.warning("Discord heartbeat failed: %s", e)
                     break
                 await asyncio.sleep(interval_s)
 
@@ -329,7 +331,7 @@ class DiscordChannel(BaseChannel):
                 media_paths.append(str(file_path))
                 content_parts.append(f"[attachment: {file_path}]")
             except Exception as e:
-                logger.warning("Failed to download Discord attachment: {}", e)
+                logger.warning("Failed to download Discord attachment: %s", e)
                 content_parts.append(f"[attachment: {filename} - download failed]")
 
         reply_to = (payload.get("referenced_message") or {}).get("id")
@@ -364,7 +366,7 @@ class DiscordChannel(BaseChannel):
                 # Also check content for mention format <@USER_ID>
                 if f"<@{self._bot_user_id}>" in content or f"<@!{self._bot_user_id}>" in content:
                     return True
-            logger.debug("Discord message in {} ignored (bot not mentioned)", payload.get("channel_id"))
+            logger.debug("Discord message in %s ignored (bot not mentioned)", payload.get("channel_id"))
             return False
 
         return True
@@ -382,7 +384,7 @@ class DiscordChannel(BaseChannel):
                 except asyncio.CancelledError:
                     return
                 except Exception as e:
-                    logger.debug("Discord typing indicator failed for {}: {}", channel_id, e)
+                    logger.debug("Discord typing indicator failed for %s: %s", channel_id, e)
                     return
                 await asyncio.sleep(8)
 

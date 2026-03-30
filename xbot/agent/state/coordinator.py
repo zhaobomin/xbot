@@ -25,7 +25,9 @@ import asyncio
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Callable
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.agent.state.machine import SessionPhase
 

@@ -6,7 +6,9 @@ import asyncio
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Coroutine
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 _HEARTBEAT_TOOL = [
     {
@@ -139,7 +141,7 @@ class HeartbeatService:
 
         self._running = True
         self._task = asyncio.create_task(self._run_loop())
-        logger.info("Heartbeat started (every {}s)", self.interval_s)
+        logger.info("Heartbeat started (every %ss)", self.interval_s)
 
     def stop(self) -> None:
         """Stop the heartbeat service."""
@@ -166,7 +168,7 @@ class HeartbeatService:
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error("Heartbeat error: {}", e)
+                logger.error("Heartbeat error: %s", e)
 
     async def _tick(self) -> None:
         """Execute a single heartbeat tick."""

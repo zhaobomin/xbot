@@ -287,8 +287,7 @@ class PlannerValidator:
         path = Path(path)
 
         # Check for path traversal
-        path_str = str(path)
-        if '..' in path_str:
+        if ".." in path.parts:
             errors.append("Path cannot contain '..'")
 
         # Check existence

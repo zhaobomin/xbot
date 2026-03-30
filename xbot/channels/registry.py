@@ -6,12 +6,14 @@ import importlib
 import pkgutil
 from typing import TYPE_CHECKING
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from xbot.channels.base import BaseChannel
 
-_INTERNAL = frozenset({"base", "manager", "registry"})
+_INTERNAL = frozenset({"base", "manager", "registry", "feishu_content"})
 
 
 def discover_channel_names() -> list[str]:
@@ -47,7 +49,7 @@ def discover_plugins() -> dict[str, type[BaseChannel]]:
             cls = ep.load()
             plugins[ep.name] = cls
         except Exception as e:
-            logger.warning("Failed to load channel plugin '{}': {}", ep.name, e)
+            logger.warning("Failed to load channel plugin '%s': %s", ep.name, e)
     return plugins
 
 
@@ -61,11 +63,11 @@ def discover_all() -> dict[str, type[BaseChannel]]:
         try:
             builtin[modname] = load_channel_class(modname)
         except ImportError as e:
-            logger.debug("Skipping built-in channel '{}': {}", modname, e)
+            logger.debug("Skipping built-in channel '%s': %s", modname, e)
 
     external = discover_plugins()
     shadowed = set(external) & set(builtin)
     if shadowed:
-        logger.warning("Plugin(s) shadowed by built-in channels (ignored): {}", shadowed)
+        logger.warning("Plugin(s) shadowed by built-in channels (ignored): %s", shadowed)
 
     return {**external, **builtin}

@@ -8,15 +8,20 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextlib
+import inspect
 import uuid
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
-from loguru import logger
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 from xbot.agent.backends.delegation import DelegationTrace
+from xbot.agent.backends.client_lifecycle import ClientLifecycleManager
 from xbot.agent.backends.message_converter import MessageConverter
 from xbot.agent.backends.options_builder import OptionsBuilder
 from xbot.agent.capabilities.catalog import CapabilityCatalog, canonical_tool_name
@@ -99,6 +104,8 @@ class ClaudeSDKBackend(AgentBackend):
     DEFAULT_MAX_CLIENTS = 100
     DEFAULT_CLIENT_TTL_SECONDS = 3600  # 1 hour TTL for idle clients
     DEFAULT_DISCONNECT_RETRIES = 2
+    DEFAULT_CLIENT_CLEANUP_INTERVAL_SECONDS = 60
+    DEFAULT_CLIENT_DISCONNECT_TIMEOUT_SECONDS = 10.0
 
     def __init__(self):
         """Initialize the backend."""
@@ -137,6 +144,8 @@ class ClaudeSDKBackend(AgentBackend):
         # SessionStore reference for unified state management
         self._session_store: "SessionStore | None" = None
         self._use_session_store: bool = False  # Feature flag for gradual migration
+        self._client_lifecycle = ClientLifecycleManager()
+        self._client_scavenger_task: asyncio.Task | None = None
 
     @property
     def max_clients(self) -> int:
@@ -148,6 +157,8 @@ class ClaudeSDKBackend(AgentBackend):
     @property
     def client_ttl_seconds(self) -> int:
         """Get client TTL from config or use default."""
+        if self.sdk_config and hasattr(self.sdk_config, "client_idle_ttl_seconds"):
+            return self.sdk_config.client_idle_ttl_seconds
         if self.sdk_config and hasattr(self.sdk_config, "client_ttl_seconds"):
             return self.sdk_config.client_ttl_seconds
         return self.DEFAULT_CLIENT_TTL_SECONDS
@@ -155,9 +166,53 @@ class ClaudeSDKBackend(AgentBackend):
     @property
     def disconnect_retries(self) -> int:
         """Get disconnect retries from config or use default."""
+        if self.sdk_config and hasattr(self.sdk_config, "client_disconnect_max_retries"):
+            return self.sdk_config.client_disconnect_max_retries
         if self.sdk_config and hasattr(self.sdk_config, "client_disconnect_retries"):
             return self.sdk_config.client_disconnect_retries
         return self.DEFAULT_DISCONNECT_RETRIES
+
+    @property
+    def client_lifecycle_enabled(self) -> bool:
+        if self.sdk_config and hasattr(self.sdk_config, "client_lifecycle_enabled"):
+            return bool(self.sdk_config.client_lifecycle_enabled)
+        return True
+
+    @property
+    def client_scavenger_enabled(self) -> bool:
+        if self.sdk_config and hasattr(self.sdk_config, "client_scavenger_enabled"):
+            return bool(self.sdk_config.client_scavenger_enabled)
+        return True
+
+    @property
+    def client_cleanup_interval_seconds(self) -> int:
+        if self.sdk_config and hasattr(self.sdk_config, "client_cleanup_interval_seconds"):
+            return int(self.sdk_config.client_cleanup_interval_seconds)
+        return self.DEFAULT_CLIENT_CLEANUP_INTERVAL_SECONDS
+
+    @property
+    def client_disconnect_timeout_seconds(self) -> float:
+        if self.sdk_config and hasattr(self.sdk_config, "client_disconnect_timeout_seconds"):
+            return float(self.sdk_config.client_disconnect_timeout_seconds)
+        return self.DEFAULT_CLIENT_DISCONNECT_TIMEOUT_SECONDS
+
+    @property
+    def client_force_kill_enabled(self) -> bool:
+        if self.sdk_config and hasattr(self.sdk_config, "client_force_kill_enabled"):
+            return bool(self.sdk_config.client_force_kill_enabled)
+        return False
+
+    @property
+    def ephemeral_immediate_release_enabled(self) -> bool:
+        if self.sdk_config and hasattr(self.sdk_config, "ephemeral_immediate_release_enabled"):
+            return bool(self.sdk_config.ephemeral_immediate_release_enabled)
+        return True
+
+    @property
+    def strict_process_tracking_required(self) -> bool:
+        if self.sdk_config and hasattr(self.sdk_config, "strict_process_tracking_required"):
+            return bool(self.sdk_config.strict_process_tracking_required)
+        return False
 
     # === SessionStore helper methods ===
 
@@ -346,6 +401,7 @@ class ClaudeSDKBackend(AgentBackend):
                     else:
                         session.metadata.pop("sdk_session_id", None)
                     self.sessions.save(session)
+            await self._client_lifecycle.update_sdk_session_id(session_key, sdk_session_id)
             return
 
         session_contexts = self._get_session_contexts()
@@ -374,6 +430,7 @@ class ClaudeSDKBackend(AgentBackend):
                 else:
                     session.metadata.pop("sdk_session_id", None)
                 self.sessions.save(session)
+        await self._client_lifecycle.update_sdk_session_id(session_key, sdk_session_id)
 
     def _get_context_by_session_key(self, session_key: str) -> tuple[str, str] | None:
         """Get (channel, chat_id) context by session_key.
@@ -465,6 +522,251 @@ class ClaudeSDKBackend(AgentBackend):
                     return sdk_session_id
 
         return None
+
+    def _is_ephemeral_session(self, session_key: str) -> bool:
+        return session_key.startswith("cron:") or session_key == "heartbeat"
+
+    def _can_cleanup_session(self, session_key: str) -> bool:
+        if self._get_task_id_from_entry(session_key):
+            return False
+        if self._get_request_id_from_entry(session_key):
+            return False
+        bus = self._shared_resources.get("bus")
+        if bus is not None:
+            with contextlib.suppress(Exception):
+                if bus.get_pending_request_for_session(session_key):
+                    return False
+            with contextlib.suppress(Exception):
+                if bus.get_pending_interaction_for_session(session_key):
+                    return False
+        return True
+
+    def _extract_process_tracking(self, client: Any) -> tuple[int | None, Any | None, bool]:
+        candidates = [
+            getattr(client, "process", None),
+            getattr(client, "_process", None),
+            getattr(client, "proc", None),
+            getattr(client, "_proc", None),
+        ]
+        transport = getattr(client, "_transport", None)
+        if transport is not None:
+            candidates.extend([
+                getattr(transport, "process", None),
+                getattr(transport, "_process", None),
+            ])
+
+        for process in candidates:
+            if process is None:
+                continue
+            pid = getattr(process, "pid", None)
+            if isinstance(pid, int):
+                return pid, process, True
+        return None, None, False
+
+    async def _register_managed_client(self, session_key: str, client: Any) -> None:
+        pid, process_handle, tracked = self._extract_process_tracking(client)
+        if self.strict_process_tracking_required and not tracked:
+            logger.warning("Process tracking unavailable for managed Claude client %s", session_key)
+        await self._client_lifecycle.register(
+            session_key,
+            client,
+            sdk_session_id=self._get_sdk_session_id_from_entry(session_key),
+            pid=pid,
+            process_handle=process_handle,
+            process_tracking_available=tracked,
+            is_ephemeral=self._is_ephemeral_session(session_key),
+        )
+
+    async def _run_client_scavenger_loop(self) -> None:
+        try:
+            while True:
+                await asyncio.sleep(self.client_cleanup_interval_seconds)
+                await self._run_client_scavenger_iteration()
+        except asyncio.CancelledError:
+            raise
+
+    async def _run_client_scavenger_iteration(self) -> None:
+        if not self.client_lifecycle_enabled or not self.client_scavenger_enabled:
+            return
+        idle_candidates = set(
+            await self._client_lifecycle.list_idle_candidates(
+                idle_ttl_seconds=self.client_ttl_seconds,
+                can_cleanup=self._can_cleanup_session,
+            )
+        )
+        now = time.time()
+        if self._uses_session_store():
+            for session_key in self._session_store.list_keys():
+                entry = self._session_store.get(session_key)
+                if (
+                    entry is not None
+                    and entry.client is not None
+                    and now - entry.last_used > self.client_ttl_seconds
+                    and self._can_cleanup_session(session_key)
+                ):
+                    idle_candidates.add(session_key)
+        else:
+            for session_key, last_used in self._client_last_used.items():
+                if (
+                    session_key in self._clients
+                    and now - last_used > self.client_ttl_seconds
+                    and self._can_cleanup_session(session_key)
+                ):
+                    idle_candidates.add(session_key)
+
+        for session_key in idle_candidates:
+            await self.release_client(session_key, reason="idle_ttl")
+
+    def _ensure_client_scavenger_started(self) -> None:
+        if not self.client_lifecycle_enabled or not self.client_scavenger_enabled:
+            return
+        if self._client_scavenger_task is not None and not self._client_scavenger_task.done():
+            return
+        self._client_scavenger_task = asyncio.create_task(self._run_client_scavenger_loop())
+
+    async def _stop_client_scavenger(self) -> None:
+        if self._client_scavenger_task is None:
+            return
+        task = self._client_scavenger_task
+        self._client_scavenger_task = None
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    async def _disconnect_client_with_timeout(
+        self,
+        client: Any,
+        session_key: str,
+        *,
+        context: str,
+        retries: int | None = None,
+    ) -> bool:
+        if client is None:
+            return True
+        attempts = self.disconnect_retries if retries is None else retries
+        for attempt in range(attempts + 1):
+            try:
+                await asyncio.wait_for(client.disconnect(), timeout=self.client_disconnect_timeout_seconds)
+                return True
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                if attempt >= attempts:
+                    logger.warning(
+                        "Managed disconnect failed for session %s (%s): %s",
+                        session_key,
+                        context,
+                        e,
+                    )
+                    return False
+                await asyncio.sleep(0.1)
+        return False
+
+    async def _force_kill_process(self, session_key: str) -> bool:
+        record = await self._client_lifecycle.get(session_key)
+        if record is None or record.process_handle is None:
+            return False
+        process = record.process_handle
+        try:
+            terminate = getattr(process, "terminate", None)
+            if callable(terminate):
+                terminate()
+            wait = getattr(process, "wait", None)
+            if callable(wait):
+                result = wait()
+                if inspect.isawaitable(result):
+                    await asyncio.wait_for(result, timeout=1.0)
+            await self._client_lifecycle.mark_killed(session_key)
+            return True
+        except Exception:
+            kill = getattr(process, "kill", None)
+            if callable(kill):
+                with contextlib.suppress(Exception):
+                    kill()
+                    await self._client_lifecycle.mark_killed(session_key)
+                    return True
+        return False
+
+    async def release_client(self, session_key: str, *, reason: str) -> bool:
+        if not self.client_lifecycle_enabled:
+            client = self._remove_client_state(session_key)
+            return await self._safe_disconnect_client(client, session_key, context=reason)
+
+        record = await self._client_lifecycle.get(session_key)
+        if record is None:
+            client = self._get_client_from_entry(session_key)
+            if client is not None:
+                await self._register_managed_client(session_key, client)
+                record = await self._client_lifecycle.get(session_key)
+        if record is None:
+            return True
+
+        record = await self._client_lifecycle.begin_disconnect(session_key)
+        if record is None:
+            latest = await self._client_lifecycle.get(session_key)
+            if latest is None:
+                return True
+            return latest.disconnect_state in {"disconnected", "killed"}
+
+        async with self._clients_lock:
+            client = self._remove_client_state(session_key)
+        if client is None:
+            client = record.client
+
+        if client is None:
+            await self._client_lifecycle.mark_disconnected(session_key)
+            return True
+
+        disconnected = await self._disconnect_client_with_timeout(
+            client,
+            session_key,
+            context=reason,
+            retries=self.disconnect_retries,
+        )
+        if disconnected:
+            await self._client_lifecycle.mark_disconnected(session_key)
+            on_cleanup = self._shared_resources.get("on_backend_client_cleanup")
+            if on_cleanup:
+                with contextlib.suppress(Exception):
+                    await on_cleanup(session_key)
+            return True
+
+        await self._client_lifecycle.mark_leaked(session_key)
+        if self.client_force_kill_enabled and await self._force_kill_process(session_key):
+            return True
+        return False
+
+    async def _finalize_detached_client_cleanup(
+        self,
+        session_key: str,
+        client: Any,
+        *,
+        reason: str,
+    ) -> None:
+        disconnected = await self._disconnect_client_with_timeout(
+            client,
+            session_key,
+            context=reason,
+            retries=self.disconnect_retries,
+        )
+        if disconnected:
+            await self._client_lifecycle.mark_disconnected_if_current(session_key, client)
+        else:
+            leaked = await self._client_lifecycle.mark_leaked_if_current(session_key, client)
+            if leaked is not None and self.client_force_kill_enabled:
+                await self._force_kill_process(session_key)
+
+    def get_client_lifecycle_diagnostics(self) -> dict[str, Any]:
+        return self._client_lifecycle.snapshot_sync()
+
+    def get_client_lifecycle_snapshot(self, session_key: str | None = None) -> dict[str, Any]:
+        snapshot = self._client_lifecycle.snapshot_sync()
+        if session_key is None:
+            return snapshot
+        return snapshot["clients"].get(session_key, {})
+
+    async def forget_client_lifecycle(self, session_key: str) -> None:
+        await self._client_lifecycle.remove(session_key)
 
     def _clear_legacy_tracking_state(self, session_key: str, sdk_session_id: str | None) -> None:
         """Clear legacy tracking dictionaries for a session."""
@@ -589,9 +891,9 @@ class ClaudeSDKBackend(AgentBackend):
             # Replace the ContextBuilder's skills_loader with the one managed by SkillManager
             if self._context_builder:
                 self._context_builder.skills = self._skill_manager.skills_loader
-            logger.info("[Backend] SkillManager initialized, version={}", self._skill_manager.version)
+            logger.info("[Backend] SkillManager initialized, version=%s", self._skill_manager.version)
         except Exception as e:
-            logger.warning("SkillManager not available: {}", e)
+            logger.warning("SkillManager not available: %s", e)
 
         # Initialize tool adapter
         try:
@@ -683,6 +985,8 @@ class ClaudeSDKBackend(AgentBackend):
             self._use_session_store = True
             logger.info("Backend using SessionStore for session state management")
 
+        self._ensure_client_scavenger_started()
+
         logger.info(f"Claude SDK backend initialized with provider: {provider_name}")
         logger.info(f"Claude SDK capabilities: {self.get_tools_summary()}")
 
@@ -699,7 +1003,6 @@ class ClaudeSDKBackend(AgentBackend):
             Async callback function(skill_name: str, status: str)
         """
         bus = shared_resources.get("bus")
-        session_contexts = shared_resources.get("_session_contexts", {})
 
         async def skill_progress_callback(skill_name: str, status: str) -> None:
             """Send skill loading progress notification.
@@ -717,6 +1020,7 @@ class ClaudeSDKBackend(AgentBackend):
 
             # Get current session context (channel, chat_id)
             # Use the last session context or return if not available
+            session_contexts = shared_resources.get("_session_contexts", {})
             if not session_contexts:
                 return
 
@@ -807,6 +1111,7 @@ class ClaudeSDKBackend(AgentBackend):
         """
         # Collect clients that need to be disconnected (outside lock)
         clients_to_disconnect: list[tuple["ClaudeSDKClient", str, str]] = []
+        resolved_client: ClaudeSDKClient | None = None
 
         async with self._clients_lock:
             # Get current model for model change detection
@@ -823,8 +1128,11 @@ class ClaudeSDKBackend(AgentBackend):
 
                 if model_ok and skills_ok:
                     self._touch_entry(session_key)
+                    await self._client_lifecycle.touch(session_key)
                     logger.debug(f"[Client] Reusing existing client for session={session_key}, model={current_model}")
-                    return self._get_client_from_entry(session_key)
+                    resolved_client = self._get_client_from_entry(session_key)
+                    if resolved_client is not None:
+                        return resolved_client
                 else:
                     # Model or skills changed, need to recreate client
                     reasons = []
@@ -838,17 +1146,14 @@ class ClaudeSDKBackend(AgentBackend):
                         # Defer disconnect to outside the lock
                         clients_to_disconnect.append((old_client, session_key, "model/skills change"))
 
-            # Cleanup expired clients before creating new one
-            stale_clients = await self._cleanup_stale_clients_unlocked()
-            clients_to_disconnect.extend((c, k, "TTL expiry") for c, k in stale_clients)
-
             # Evict LRU client if at capacity
             if self._uses_session_store():
                 # Count sessions with clients
-                client_count = sum(
-                    1 for k in self._session_store.list_keys()
-                    if self._session_store.get(k) and self._session_store.get(k).client
-                )
+                client_count = 0
+                for k in self._session_store.list_keys():
+                    session_entry = self._session_store.get(k)
+                    if session_entry and session_entry.client:
+                        client_count += 1
             else:
                 client_count = len(self._clients)
             if client_count >= self.max_clients:
@@ -881,10 +1186,16 @@ class ClaudeSDKBackend(AgentBackend):
             self._set_model_in_entry(session_key, current_model)
             self._set_skills_version_in_entry(session_key, current_skills_version)
             logger.info(f"[Client] Client created for session={session_key}, model={current_model}")
+            await self._register_managed_client(session_key, client)
+            resolved_client = client
 
         # Disconnect old clients outside the lock
         for old_client, client_key, reason in clients_to_disconnect:
-            await self._safe_disconnect_client(old_client, client_key, context=f"client recreation ({reason})")
+            await self._finalize_detached_client_cleanup(
+                client_key,
+                old_client,
+                reason=f"client recreation ({reason})",
+            )
             # Notify runtime to sync state
             on_cleanup = self._shared_resources.get("on_backend_client_cleanup")
             if on_cleanup:
@@ -893,7 +1204,9 @@ class ClaudeSDKBackend(AgentBackend):
                 except Exception as e:
                     logger.debug(f"Error in backend client cleanup callback: {e}")
 
-        return self._get_client_from_entry(session_key)
+        if resolved_client is None:
+            raise RuntimeError(f"Client resolution failed for session {session_key}")
+        return resolved_client
 
     def _remove_client_state(self, session_key: str) -> "ClaudeSDKClient | None":
         """Remove all tracked state for a session and return the client (if any).
@@ -981,66 +1294,12 @@ class ClaudeSDKBackend(AgentBackend):
         """
         if client is None:
             return True
-
-        context_msg = f" ({context})" if context else ""
-        last_error = None
-
-        for attempt in range(retries + 1):
-            try:
-                await client.disconnect()
-                if attempt > 0:
-                    logger.info(f"Client disconnect succeeded on attempt {attempt + 1} for session {session_key}{context_msg}")
-                return True
-            except asyncio.CancelledError:
-                raise  # Don't retry on cancellation
-            except AttributeError as e:
-                # SDK TaskGroup compatibility issue (Python 3.11+ asyncio.TaskGroup vs anyio.TaskGroup)
-                # This can happen when:
-                # 1. SDK version is incompatible with Python version
-                # 2. anyio version mismatch
-                # 3. Client is already partially destroyed
-                logger.warning(
-                    f"SDK TaskGroup compatibility error during disconnect for session {session_key}{context_msg}: {e}. "
-                    f"This is a known SDK internal issue, client will be garbage collected."
-                )
-                return False  # State already removed by caller, safe to ignore
-            except RuntimeError as e:
-                # anyio cancel scope issue: "Attempted to exit cancel scope in a different task"
-                # This happens when disconnect is called from a different task than the one that created the client
-                if "cancel scope" in str(e).lower():
-                    logger.warning(
-                        f"SDK cancel scope error during disconnect for session {session_key}{context_msg}: {e}. "
-                        f"This is a known anyio issue, client will be garbage collected."
-                    )
-                    return False  # State already removed by caller, safe to ignore
-                # Other RuntimeErrors should be retried
-                last_error = e
-                if attempt < retries:
-                    logger.warning(
-                        f"Client disconnect failed (attempt {attempt + 1}/{retries + 1}) "
-                        f"for session {session_key}{context_msg}: {e}. Retrying..."
-                    )
-                    await asyncio.sleep(0.5)
-                else:
-                    logger.error(
-                        f"Client disconnect failed after {retries + 1} attempts "
-                        f"for session {session_key}{context_msg}: {e}"
-                    )
-            except Exception as e:
-                last_error = e
-                if attempt < retries:
-                    logger.warning(
-                        f"Client disconnect failed (attempt {attempt + 1}/{retries + 1}) "
-                        f"for session {session_key}{context_msg}: {e}. Retrying..."
-                    )
-                    await asyncio.sleep(0.5)  # Brief delay before retry
-                else:
-                    logger.error(
-                        f"Client disconnect failed after {retries + 1} attempts "
-                        f"for session {session_key}{context_msg}: {e}"
-                    )
-
-        return False
+        return await self._disconnect_client_with_timeout(
+            client,
+            session_key,
+            context=context,
+            retries=retries,
+        )
 
     # -- Multimodal (image) helpers ----------------------------------------
 
@@ -1055,15 +1314,15 @@ class ClaudeSDKBackend(AgentBackend):
         for path in media:
             p = Path(path)
             if not p.is_file():
-                logger.warning("Image file not found, skipping: {}", path)
+                logger.warning("Image file not found, skipping: %s", path)
                 continue
             if p.stat().st_size > self._MAX_IMAGE_BYTES:
-                logger.warning("Image too large (>20 MB), skipping: {}", path)
+                logger.warning("Image too large (>20 MB), skipping: %s", path)
                 continue
             raw = p.read_bytes()
             mime = detect_image_mime(raw)
             if not mime or mime not in self._SUPPORTED_IMAGE_MIMES:
-                logger.warning("Unsupported image format ({}), skipping: {}", mime, path)
+                logger.warning("Unsupported image format (%s), skipping: %s", mime, path)
                 continue
             blocks.append({
                 "type": "image",
@@ -1081,15 +1340,15 @@ class ClaudeSDKBackend(AgentBackend):
         for path in media:
             p = Path(path)
             if not p.is_file():
-                logger.warning("Audio file not found, skipping: {}", path)
+                logger.warning("Audio file not found, skipping: %s", path)
                 continue
             if p.stat().st_size > self._MAX_AUDIO_BYTES:
-                logger.warning("Audio too large (>25 MB), skipping: {}", path)
+                logger.warning("Audio too large (>25 MB), skipping: %s", path)
                 continue
             raw = p.read_bytes()
             mime = detect_audio_mime(raw[:12])
             if not mime or mime not in self._SUPPORTED_AUDIO_MIMES:
-                logger.warning("Unsupported audio format ({}), skipping: {}", mime, path)
+                logger.warning("Unsupported audio format (%s), skipping: %s", mime, path)
                 continue
             blocks.append({
                 "type": "audio",
@@ -1123,7 +1382,7 @@ class ClaudeSDKBackend(AgentBackend):
             else:
                 ref = format_file_reference(path)
                 file_refs.append(ref)
-                logger.info("[Backend] File reference: {}", ref)
+                logger.info("[Backend] File reference: %s", ref)
         if not file_refs:
             return [], image_paths, audio_paths
         header = "用户附加了以下文件，你可以通过工具读取或修改这些文件:"
@@ -1374,8 +1633,8 @@ class ClaudeSDKBackend(AgentBackend):
             for _ in range(excess):
                 session_contexts.pop(next(iter(session_contexts)))
         logger.info(
-            "[Session Context] Set mapping: session_key='{}' -> (channel='{}', chat_id='{}'). "
-            "Current keys in session_contexts: {}",
+            "[Session Context] Set mapping: session_key='%s' -> (channel='%s', chat_id='%s'). "
+            "Current keys in session_contexts: %s",
             context.session_key,
             context.channel,
             context.chat_id,
@@ -1539,6 +1798,8 @@ class ClaudeSDKBackend(AgentBackend):
             received_result = False
             while query_retry < self._MAX_QUERY_RETRIES:
                 client = await self._get_or_create_client(context.session_key)
+                if self.client_lifecycle_enabled:
+                    await self._register_managed_client(context.session_key, client)
                 query_sent_at = time.perf_counter()
                 logger.info(f"[Backend Process] Client obtained for session={context.session_key}")
 
@@ -1595,7 +1856,7 @@ class ClaudeSDKBackend(AgentBackend):
                         commands = self._extract_slash_commands(message.data)
                         # DEBUG: Log full init message data to check for session_id
                         logger.info(
-                            "[SDK Init] session={}, commands={}, data_keys={}, data={}",
+                            "[SDK Init] session=%s, commands=%s, data_keys=%s, data=%s",
                             context.session_key,
                             commands,
                             list(message.data.keys()) if isinstance(message.data, dict) else "N/A",
@@ -1608,7 +1869,7 @@ class ClaudeSDKBackend(AgentBackend):
                         sdk_session_id = message.data.get("session_id") if isinstance(message.data, dict) else None
                         if sdk_session_id:
                             logger.info(
-                                "[SDK Init] Found session_id in init message: sdk_session_id='{}', mapping to context",
+                                "[SDK Init] Found session_id in init message: sdk_session_id='%s', mapping to context",
                                 sdk_session_id,
                             )
                             session_contexts[sdk_session_id] = (context.channel, context.chat_id)
@@ -1713,8 +1974,7 @@ class ClaudeSDKBackend(AgentBackend):
         except Exception as e:
             # === 诊断日志: 错误恢复 ===
             error_type = type(e).__name__
-            client = self._remove_client_state(context.session_key)
-            await self._safe_disconnect_client(client, context.session_key, context="error recovery")
+            await self.release_client(context.session_key, reason="error recovery")
 
             # Determine if this is a recoverable error
             # Recoverable: network/timeout issues - preserve sdk_session_id for reconnection
@@ -1776,7 +2036,7 @@ class ClaudeSDKBackend(AgentBackend):
                             if isinstance(message, SystemMessage) and message.subtype == "init":
                                 commands = self._extract_slash_commands(message.data)
                                 logger.info(
-                                    "[SDK Init Fallback] session={}, commands={}, data={}",
+                                    "[SDK Init Fallback] session=%s, commands=%s, data=%s",
                                     context.session_key,
                                     commands,
                                     message.data,
@@ -1786,7 +2046,7 @@ class ClaudeSDKBackend(AgentBackend):
                                 sdk_session_id = message.data.get("session_id") if isinstance(message.data, dict) else None
                                 if sdk_session_id:
                                     logger.info(
-                                        "[SDK Init Fallback] Found session_id='{}', mapping to context",
+                                        "[SDK Init Fallback] Found session_id='%s', mapping to context",
                                         sdk_session_id,
                                     )
                                     # Use helper method for SDK session ID mapping
@@ -1876,6 +2136,8 @@ class ClaudeSDKBackend(AgentBackend):
             # Clear permission handler session context
             if self._permission_handler and hasattr(self._permission_handler, "clear_session_context"):
                 self._permission_handler.clear_session_context(context.session_key)
+            if self.ephemeral_immediate_release_enabled and self._is_ephemeral_session(context.session_key):
+                await self.release_client(context.session_key, reason="ephemeral_turn_end")
 
     async def _wait_for_user_input(
         self,
@@ -1890,6 +2152,7 @@ class ClaudeSDKBackend(AgentBackend):
 
     async def shutdown(self) -> None:
         """Shutdown the backend."""
+        await self._stop_client_scavenger()
         session_keys = set(self._clients)
         if self._uses_session_store():
             session_keys.update(
@@ -1898,16 +2161,14 @@ class ClaudeSDKBackend(AgentBackend):
                 if (entry := self._session_store.get(key)) is not None and entry.client is not None
             )
         for session_key in session_keys:
-            client = self._remove_client_state(session_key)
-            await self._safe_disconnect_client(client, session_key, context="shutdown")
+            await self.release_client(session_key, reason="shutdown")
         # Clear session contexts for compact notifications
         self._shared_resources.pop("_session_contexts", None)
         logger.info("Claude SDK backend shutdown complete")
 
     async def reset_session(self, session_key: str) -> None:
         """Reset a session, disconnecting client and clearing state."""
-        client = self._remove_client_state(session_key)
-        await self._safe_disconnect_client(client, session_key, context="session reset")
+        await self.release_client(session_key, reason="session reset")
 
         if self.sessions:
             session = self.sessions.get_or_create(session_key)
@@ -2008,10 +2269,7 @@ class ClaudeSDKBackend(AgentBackend):
         finally:
             # Always remove client to force fresh connection on next request
             # This prevents state inconsistency after interrupt
-            # Use _remove_client_state for unified cleanup
-            client_to_disconnect = self._remove_client_state(session_key)
-            if client_to_disconnect:
-                await self._safe_disconnect_client(client_to_disconnect, session_key, context="interrupt")
+            await self.release_client(session_key, reason="interrupt")
             logger.info(f"[State Cleanup] session={session_key} cleaned up after interrupt")
 
         return {"interrupted": True, "usage": usage_info}
@@ -2089,7 +2347,7 @@ class ClaudeSDKBackend(AgentBackend):
     async def _reset_session_client_state(self, session_key: str) -> None:
         """Reset SDK client/task state for a session after incomplete interaction."""
         task_id = self._get_task_id_from_entry(session_key)
-        client = self._remove_client_state(session_key)
+        client = self._get_client_from_entry(session_key)
         if client is not None and task_id:
             try:
                 await client.stop_task(task_id)
@@ -2097,7 +2355,7 @@ class ClaudeSDKBackend(AgentBackend):
             except Exception:
                 logger.debug("Failed to stop active task while resetting session state")
         if client is not None:
-            await self._safe_disconnect_client(client, session_key, context="force reset session state")
+            await self.release_client(session_key, reason="force reset session state")
         logger.info(f"[Reset Session] session={session_key} client state reset complete")
 
     def get_tools_summary(self) -> str:
@@ -2120,11 +2378,19 @@ class ClaudeSDKBackend(AgentBackend):
         handoff = f"handoff_agents={','.join(agent_names)}" if agent_names else "handoff_agents=0"
         # Count sessions with clients
         if self._uses_session_store():
-            client_count = sum(1 for k in self._session_store.list_keys() if self._session_store.get(k) and self._session_store.get(k).client)
+            client_count = 0
+            for k in self._session_store.list_keys():
+                session_entry = self._session_store.get(k)
+                if session_entry and session_entry.client:
+                    client_count += 1
         else:
             client_count = len(self._clients)
+        lifecycle = self._client_lifecycle.snapshot_sync()
         runtime = (
             f"connected_sessions={client_count} | "
+            f"managed_clients={lifecycle['counts']['connected']} | "
+            f"leaked_clients={lifecycle['counts']['leaked']} | "
+            f"force_kill_total={lifecycle['force_kill_total']} | "
             f"local_tools={len(self._tool_adapter._tools) if self._tool_adapter else 0}"
         )
         return f"{capability_summary} | {policy_summary} | {handoff} | {runtime}"
