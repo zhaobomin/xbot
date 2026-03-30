@@ -5,9 +5,9 @@ import asyncio
 from unittest.mock import MagicMock, AsyncMock
 
 from xbot.agent.runtime import AgentRuntime, SessionPhase, SessionStateMachine
-from xbot.agent.state_coordinator import SessionStateCoordinator
-from xbot.agent.state_checker import StateConsistencyChecker
-from xbot.agent.session_store import SessionStore
+from xbot.agent.state.coordinator import SessionStateCoordinator
+from xbot.agent.state.checker import StateConsistencyChecker
+from xbot.agent.state.store import SessionStore
 from xbot.bus.events import InboundMessage, OutboundMessage
 
 

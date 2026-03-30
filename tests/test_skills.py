@@ -5,7 +5,7 @@ from unittest.mock import patch
 
 import pytest
 
-from xbot.agent.skills import SkillsLoader
+from xbot.agent.capabilities.skills_loader import SkillsLoader
 
 
 class TestSkillsLoader:
@@ -487,7 +487,7 @@ Multi-trigger skill.
 
     def test_check_trigger_user_requests(self, loader: SkillsLoader) -> None:
         """Test _check_trigger for user_requests kind."""
-        from xbot.agent.skills import TriggerCondition
+        from xbot.agent.capabilities.skills_loader import TriggerCondition
 
         condition = TriggerCondition(kind="user_requests", patterns=["test", "example"])
         assert loader._check_trigger(condition, "This is a test", "", None) is True
@@ -496,7 +496,7 @@ Multi-trigger skill.
 
     def test_check_trigger_code_contains(self, loader: SkillsLoader) -> None:
         """Test _check_trigger for code_contains kind."""
-        from xbot.agent.skills import TriggerCondition
+        from xbot.agent.capabilities.skills_loader import TriggerCondition
 
         condition = TriggerCondition(kind="code_contains", patterns=["import os", "from sys"])
         assert loader._check_trigger(condition, "", "import os", None) is True
@@ -505,7 +505,7 @@ Multi-trigger skill.
 
     def test_check_trigger_file_pattern(self, loader: SkillsLoader) -> None:
         """Test _check_trigger for file_pattern kind."""
-        from xbot.agent.skills import TriggerCondition
+        from xbot.agent.capabilities.skills_loader import TriggerCondition
 
         condition = TriggerCondition(kind="file_pattern", patterns=[".py", ".ts"])
         assert loader._check_trigger(condition, "", "", ["main.py"]) is True

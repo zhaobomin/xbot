@@ -5,7 +5,7 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from xbot.bus.queue import InteractionResponse, MessageBus, PermissionRequest, PermissionResponse
-from xbot.agent.permission_handler import (
+from xbot.agent.interaction.permission import (
     BasePermissionHandler,
     CLIPermissionHandler,
     InteractivePermissionHandler,

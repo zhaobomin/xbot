@@ -9,9 +9,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from xbot.agent.state_coordinator import SessionStateCoordinator
-from xbot.agent.session_store import SessionStore
-from xbot.agent.state_machine import SessionPhase
+from xbot.agent.state.coordinator import SessionStateCoordinator
+from xbot.agent.state.store import SessionStore
+from xbot.agent.state.machine import SessionPhase
 from xbot.bus.events import InboundMessage
 from xbot.bus.queue import MessageBus
 

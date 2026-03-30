@@ -308,7 +308,7 @@ class TestContextBuilderFileSupport:
     @staticmethod
     def _get_builder():
         from unittest.mock import MagicMock
-        from xbot.agent.context import ContextBuilder
+        from xbot.agent.context.builder import ContextBuilder
         builder = ContextBuilder.__new__(ContextBuilder)
         builder._config = MagicMock()
         return builder
@@ -596,7 +596,7 @@ class TestContextBuilderEdgeCases:
     @staticmethod
     def _get_builder():
         from unittest.mock import MagicMock
-        from xbot.agent.context import ContextBuilder
+        from xbot.agent.context.builder import ContextBuilder
         builder = ContextBuilder.__new__(ContextBuilder)
         builder._config = MagicMock()
         return builder

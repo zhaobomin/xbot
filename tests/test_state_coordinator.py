@@ -4,8 +4,8 @@ import pytest
 import asyncio
 from unittest.mock import MagicMock
 
-from xbot.agent.session_store import SessionStore
-from xbot.agent.state_coordinator import SessionStateCoordinator, CoordinatorStats
+from xbot.agent.state.store import SessionStore
+from xbot.agent.state.coordinator import SessionStateCoordinator, CoordinatorStats
 from xbot.agent.runtime import SessionPhase, SessionStateMachine
 
 

@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "crew_config_path": "",
+  "crew_name": "test_crew",
+  "crew_phase": "completing",
+  "started_at": "2026-03-30T02:06:58.389329",
+  "checkpoint_at": "2026-03-30T02:06:58.398055",
+  "completed_tasks": [
+    {
+      "name": "find_bugs",
+      "agent": "scout",
+      "status": "success",
+      "output": "Found bugs",
+      "human_edited_output": null,
+      "human_annotations": [],
+      "human_briefing_input": null,
+      "started_at": "2026-03-30T02:06:58.393280",
+      "finished_at": "2026-03-30T02:06:58.393375"
+    },
+    {
+      "name": "fix_bugs",
+      "agent": "fixer",
+      "status": "success",
+      "output": "Fixed bugs",
+      "human_edited_output": null,
+      "human_annotations": [],
+      "human_briefing_input": null,
+      "started_at": "2026-03-30T02:06:58.396551",
+      "finished_at": "2026-03-30T02:06:58.396634"
+    }
+  ],
+  "next_task": null
+}

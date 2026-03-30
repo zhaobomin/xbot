@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from xbot.agent.commands import CommandsLoader
+from xbot.agent.context.commands import CommandsLoader
 
 
 class TestCommandsLoader:

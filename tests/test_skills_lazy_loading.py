@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from xbot.agent.skills import SkillsLoader
+from xbot.agent.capabilities.skills_loader import SkillsLoader
 from xbot.agent.tools.skill_loader import LoadSkillContentTool
 
 

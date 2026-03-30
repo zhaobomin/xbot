@@ -3,13 +3,13 @@
 import pytest
 import asyncio
 
-from xbot.agent.session_store import SessionStore
-from xbot.agent.state_checker import (
+from xbot.agent.state.store import SessionStore
+from xbot.agent.state.checker import (
     StateConsistencyChecker,
     CONSISTENCY_RULES,
 )
 from xbot.agent.runtime import SessionPhase, AgentRuntime
-from xbot.agent.state_snapshot import StateSnapshot
+from xbot.agent.state.snapshot import StateSnapshot
 
 
 class TestConsistencyRules:
@@ -302,7 +302,7 @@ def mock_runtime():
     runtime.bus = bus
 
     # 状态协调器（供 checker 通过公开接口访问状态）
-    from xbot.agent.state_coordinator import SessionStateCoordinator
+    from xbot.agent.state.coordinator import SessionStateCoordinator
     runtime._state_coordinator = SessionStateCoordinator(runtime, runtime._session_store)
 
     return runtime

@@ -19,17 +19,17 @@ from loguru import logger
 from xbot.agent.backends.delegation import DelegationTrace
 from xbot.agent.backends.message_converter import MessageConverter
 from xbot.agent.backends.options_builder import OptionsBuilder
-from xbot.agent.capabilities import CapabilityCatalog, canonical_tool_name
-from xbot.agent.capability_policy import CapabilityPolicy
-from xbot.agent.context import ContextBuilder
-from xbot.agent.handoff_policy import HandoffDecision, HandoffPolicy
-from xbot.agent.memory import MemoryConsolidator
-from xbot.agent.event_formatter import (
+from xbot.agent.capabilities.catalog import CapabilityCatalog, canonical_tool_name
+from xbot.agent.capabilities.policy import CapabilityPolicy
+from xbot.agent.context.builder import ContextBuilder
+from xbot.agent.capabilities.handoff import HandoffDecision, HandoffPolicy
+from xbot.agent.memory.store import MemoryConsolidator
+from xbot.agent.interaction.event_formatter import (
     format_compact_event,
     format_task_notification,
 )
 from xbot.agent.protocol import AgentBackend, AgentContext, AgentResponse
-from xbot.agent.trace import append_session_trace
+from xbot.agent.monitoring.trace import append_session_trace
 from xbot.agent.tools.base import Tool
 from xbot.config.provider_registry import get_provider_spec
 from xbot.config.sdk_resolver import detect_provider_from_model, resolve_sdk_provider_and_model
@@ -50,7 +50,7 @@ if TYPE_CHECKING:
         TaskProgressMessage,
         TaskStartedMessage,
     )
-    from xbot.agent.session_store import SessionEntry, SessionStore
+    from xbot.agent.state.store import SessionEntry, SessionStore
 
 # Try to import Claude SDK
 try:
@@ -576,7 +576,7 @@ class ClaudeSDKBackend(AgentBackend):
 
         # Initialize skill converter
         try:
-            from xbot.agent.skill_to_mcp import SkillToMCPConverter
+            from xbot.agent.capabilities.skill_to_mcp import SkillToMCPConverter
             workspace = shared_resources.get("workspace", config.defaults.workspace)
             self._skill_converter = SkillToMCPConverter(workspace)
         except ImportError:
@@ -584,7 +584,7 @@ class ClaudeSDKBackend(AgentBackend):
 
         # Initialize SkillManager for hot-reload and Python skill support
         try:
-            from xbot.agent.skill_manager import SkillManager
+            from xbot.agent.capabilities.skill_manager import SkillManager
             self._skill_manager = SkillManager(workspace_path)
             # Replace the ContextBuilder's skills_loader with the one managed by SkillManager
             if self._context_builder:
@@ -595,7 +595,7 @@ class ClaudeSDKBackend(AgentBackend):
 
         # Initialize tool adapter
         try:
-            from xbot.agent.tool_adapter import ToolAdapter
+            from xbot.agent.capabilities.tool_adapter import ToolAdapter
             tools_config = shared_resources.get("tools_config")
             # Pass memory_store from ContextBuilder to ToolAdapter
             memory_store = self._context_builder.memory if self._context_builder else None
@@ -639,7 +639,7 @@ class ClaudeSDKBackend(AgentBackend):
             enabled = getattr(permission_config, "enabled", True)
 
             if enabled:
-                from xbot.agent.permission_handler import create_permission_handler
+                from xbot.agent.interaction.permission import create_permission_handler
 
                 if bus is not None:
                     # Channel mode (gateway)

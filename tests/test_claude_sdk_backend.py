@@ -151,7 +151,7 @@ class TestClaudeSDKBackendShutdown:
     @pytest.mark.asyncio
     async def test_shutdown_clears_session_store_clients(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.session_store import SessionStore
+        from xbot.agent.state.store import SessionStore
 
         backend = ClaudeSDKBackend()
         backend._session_store = SessionStore()
@@ -749,7 +749,7 @@ class TestDelegationTrace:
             },
         ):
             from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-            from xbot.agent.handoff_policy import HandoffDecision
+            from xbot.agent.capabilities.handoff import HandoffDecision
 
             backend = ClaudeSDKBackend()
             backend._delegation_traces = []
@@ -805,7 +805,7 @@ class TestDelegationTrace:
             },
         ):
             from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-            from xbot.agent.handoff_policy import HandoffDecision
+            from xbot.agent.capabilities.handoff import HandoffDecision
 
             backend = ClaudeSDKBackend()
             backend._delegation_traces = []
@@ -900,7 +900,7 @@ class TestInterruptSession:
     @pytest.mark.asyncio
     async def test_interrupt_session_clears_session_store_state(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.session_store import SessionStore
+        from xbot.agent.state.store import SessionStore
 
         backend = ClaudeSDKBackend()
         backend._session_store = SessionStore()

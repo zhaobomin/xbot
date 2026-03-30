@@ -25,11 +25,11 @@ __all__ = [
 
 def __getattr__(name: str) -> Any:
     lazy_exports: dict[str, tuple[str, str]] = {
-        "ContextBuilder": ("xbot.agent.context", "ContextBuilder"),
-        "CapabilityCatalog": ("xbot.agent.capabilities", "CapabilityCatalog"),
-        "CapabilityPolicy": ("xbot.agent.capability_policy", "CapabilityPolicy"),
-        "MemoryStore": ("xbot.agent.memory", "MemoryStore"),
-        "SkillsLoader": ("xbot.agent.skills", "SkillsLoader"),
+        "ContextBuilder": ("xbot.agent.context.builder", "ContextBuilder"),
+        "CapabilityCatalog": ("xbot.agent.capabilities.catalog", "CapabilityCatalog"),
+        "CapabilityPolicy": ("xbot.agent.capabilities.policy", "CapabilityPolicy"),
+        "MemoryStore": ("xbot.agent.memory.store", "MemoryStore"),
+        "SkillsLoader": ("xbot.agent.capabilities.skills_loader", "SkillsLoader"),
         "AgentBackend": ("xbot.agent.protocol", "AgentBackend"),
         "AgentResponse": ("xbot.agent.protocol", "AgentResponse"),
         "AgentContext": ("xbot.agent.protocol", "AgentContext"),

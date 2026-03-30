@@ -10,8 +10,8 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from xbot.agent.capabilities import canonical_tool_name
-from xbot.agent.event_formatter import (
+from xbot.agent.capabilities.catalog import canonical_tool_name
+from xbot.agent.interaction.event_formatter import (
     format_compact_event,
     format_rate_limit_event,
     format_task_notification,
@@ -19,8 +19,8 @@ from xbot.agent.event_formatter import (
 from xbot.agent.protocol import AgentResponse
 
 if TYPE_CHECKING:
-    from xbot.agent.capabilities import CapabilityCatalog
-    from xbot.agent.handoff_policy import HandoffPolicy
+    from xbot.agent.capabilities.catalog import CapabilityCatalog
+    from xbot.agent.capabilities.handoff import HandoffPolicy
 
 # Try to import Claude SDK types
 try:

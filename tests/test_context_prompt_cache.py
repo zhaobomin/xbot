@@ -7,7 +7,7 @@ from importlib.resources import files as pkg_files
 from pathlib import Path
 import datetime as datetime_module
 
-from xbot.agent.context import ContextBuilder
+from xbot.agent.context.builder import ContextBuilder
 
 
 class _FakeDatetime(real_datetime):

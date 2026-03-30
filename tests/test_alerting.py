@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from xbot.agent.alerting import (
+from xbot.agent.monitoring.alerting import (
     AlertConfig,
     AlertService,
 )

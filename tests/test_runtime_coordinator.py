@@ -54,8 +54,8 @@ class TestRuntimeCoordinatorIntegration:
 def mock_runtime_with_coordinator():
     """创建带有 coordinator 的 mock runtime"""
     from xbot.agent.runtime import SessionStateMachine
-    from xbot.agent.state_checker import StateConsistencyChecker
-    from xbot.agent.state_coordinator import SessionStateCoordinator
+    from xbot.agent.state.checker import StateConsistencyChecker
+    from xbot.agent.state.coordinator import SessionStateCoordinator
 
     runtime = MagicMock(spec=AgentRuntime)
 
@@ -98,7 +98,7 @@ def mock_runtime_with_coordinator():
     runtime._state_checker = StateConsistencyChecker(runtime)
 
     # Session store
-    from xbot.agent.session_store import SessionStore
+    from xbot.agent.state.store import SessionStore
     session_store = SessionStore()
     runtime._session_store = session_store
 
@@ -166,7 +166,7 @@ class TestStateConsistencyDuringDispatch:
         1. force_transition(RUNNING) → create_task() → register_task()
         2. State checker sees: phase=RUNNING and active_tasks=1 → consistent
         """
-        from xbot.agent.state_checker import StateConsistencyChecker
+        from xbot.agent.state.checker import StateConsistencyChecker
 
         session_key = "test:session"
         checker = StateConsistencyChecker(mock_runtime_with_coordinator)
@@ -199,7 +199,7 @@ class TestStateConsistencyDuringDispatch:
 
     async def test_task_callback_unregisters_and_sets_phase(self, mock_runtime_with_coordinator):
         """Test that task done callback properly cleans up state."""
-        from xbot.agent.state_checker import StateConsistencyChecker
+        from xbot.agent.state.checker import StateConsistencyChecker
 
         session_key = "test:session"
 

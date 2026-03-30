@@ -415,7 +415,7 @@ async def test_exec_timeout_capped_at_max() -> None:
 
 
 def test_tool_adapter_applies_workspace_restriction_to_sdk_tools(tmp_path) -> None:
-    from xbot.agent.tool_adapter import ToolAdapter
+    from xbot.agent.capabilities.tool_adapter import ToolAdapter
 
     tools_config = SimpleNamespace(
         web=SimpleNamespace(proxy=None, search=None),

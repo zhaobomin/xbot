@@ -3,7 +3,7 @@
 import pytest
 import time
 
-from xbot.agent.state_snapshot import StateSnapshot
+from xbot.agent.state.snapshot import StateSnapshot
 
 
 class TestStateSnapshotCreation:

@@ -15,23 +15,23 @@ if TYPE_CHECKING:
     from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
     from xbot.agent.tools.base import ToolRegistry
 
-from xbot.agent.capabilities import CapabilityCatalog, canonical_tool_name
-from xbot.agent.commands import CommandsLoader
-from xbot.agent.event_formatter import format_usage_summary
-from xbot.agent.model_manager import ModelManager
+from xbot.agent.capabilities.catalog import CapabilityCatalog, canonical_tool_name
+from xbot.agent.context.commands import CommandsLoader
+from xbot.agent.interaction.event_formatter import format_usage_summary
+from xbot.agent.context.model_manager import ModelManager
 from xbot.agent.protocol import AgentContext
-from xbot.agent.response_handlers import RuntimeResponseHandlers
+from xbot.agent.interaction.response_handlers import RuntimeResponseHandlers
 from xbot.agent.router import AgentRouter, register_default_backends
-from xbot.agent.session_store import SessionStore
-from xbot.agent.state_checker import StateConsistencyChecker
-from xbot.agent.state_coordinator import SessionStateCoordinator
-from xbot.agent.state_machine import (
+from xbot.agent.state.store import SessionStore
+from xbot.agent.state.checker import StateConsistencyChecker
+from xbot.agent.state.coordinator import SessionStateCoordinator
+from xbot.agent.state.machine import (
     SessionPhase,
     SessionState,
     SessionStateMachine,
     VALID_TRANSITIONS,
 )
-from xbot.agent.trace import append_session_trace
+from xbot.agent.monitoring.trace import append_session_trace
 from xbot.bus.events import InboundMessage, OutboundMessage
 
 

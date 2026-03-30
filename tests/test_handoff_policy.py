@@ -2,7 +2,7 @@
 
 import pytest
 
-from xbot.agent.handoff_policy import HandoffAgentPolicy, HandoffDecision, HandoffPolicy
+from xbot.agent.capabilities.handoff import HandoffAgentPolicy, HandoffDecision, HandoffPolicy
 
 
 class TestHandoffAgentPolicy:

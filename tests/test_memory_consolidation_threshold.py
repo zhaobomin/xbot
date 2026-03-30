@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from xbot.agent.memory import MemoryConsolidator, MemoryStore
+from xbot.agent.memory.store import MemoryConsolidator, MemoryStore
 from xbot.session.manager import Session, SessionManager
 from xbot.providers.base import LLMResponse, ToolCallRequest
 

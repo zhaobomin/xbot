@@ -10,8 +10,8 @@ This test suite prevents regression of bugs fixed in 2026-03-25:
 import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from xbot.agent.response_handlers import RuntimeResponseHandlers
-from xbot.agent.state_machine import SessionPhase
+from xbot.agent.interaction.response_handlers import RuntimeResponseHandlers
+from xbot.agent.state.machine import SessionPhase
 from xbot.bus.events import InboundMessage
 from xbot.bus.queue import InteractionRequest, MessageBus, InteractionResponse
 

@@ -4,9 +4,9 @@ import asyncio
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from xbot.agent.response_handlers import RuntimeResponseHandlers
+from xbot.agent.interaction.response_handlers import RuntimeResponseHandlers
 from xbot.agent.runtime import AgentRuntime
-from xbot.agent.state_machine import SessionPhase
+from xbot.agent.state.machine import SessionPhase
 from xbot.bus.events import InboundMessage
 from xbot.bus.queue import InteractionRequest, MessageBus
 

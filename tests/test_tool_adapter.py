@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from xbot.agent.tool_adapter import ToolAdapter
+from xbot.agent.capabilities.tool_adapter import ToolAdapter
 
 
 class TestToolAdapter:
@@ -69,7 +69,7 @@ class TestToolAdapter:
 
     def test_create_mcp_server_no_sdk(self, workspace: Path) -> None:
         """Test MCP server creation when SDK not available."""
-        with patch("xbot.agent.tool_adapter.SDK_AVAILABLE", False):
+        with patch("xbot.agent.capabilities.tool_adapter.SDK_AVAILABLE", False):
             adapter = ToolAdapter(str(workspace))
             result = adapter.create_mcp_server()
             assert result == {}

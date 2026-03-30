@@ -2,7 +2,7 @@
 
 import pytest
 
-from xbot.agent.state_machine import (
+from xbot.agent.state.machine import (
     BUSY_STATES,
     FINAL_STATES,
     SessionPhase,
@@ -1371,7 +1371,7 @@ class TestLogging:
         """Test that a log is written when a new session is created."""
         from unittest.mock import patch
 
-        with patch("xbot.agent.state_machine.logger") as mock_logger:
+        with patch("xbot.agent.state.machine.logger") as mock_logger:
             machine = SessionStateMachine()
             machine.get_state("session:new")
 
@@ -1383,7 +1383,7 @@ class TestLogging:
         """Test that a log is written when a session is reset."""
         from unittest.mock import patch
 
-        with patch("xbot.agent.state_machine.logger") as mock_logger:
+        with patch("xbot.agent.state.machine.logger") as mock_logger:
             machine = SessionStateMachine()
             machine.transition("session:1", SessionPhase.RUNNING, reason="test", force=True)
             mock_logger.reset_mock()
@@ -1398,7 +1398,7 @@ class TestLogging:
         """Test that a log is written when trying to reset a non-existent session."""
         from unittest.mock import patch
 
-        with patch("xbot.agent.state_machine.logger") as mock_logger:
+        with patch("xbot.agent.state.machine.logger") as mock_logger:
             machine = SessionStateMachine()
             machine.reset("session:nonexistent")
 
@@ -1410,7 +1410,7 @@ class TestLogging:
         """Test that a log is written when a session is cleared."""
         from unittest.mock import patch
 
-        with patch("xbot.agent.state_machine.logger") as mock_logger:
+        with patch("xbot.agent.state.machine.logger") as mock_logger:
             machine = SessionStateMachine()
             machine.transition("session:1", SessionPhase.RUNNING, reason="test", force=True)
             mock_logger.reset_mock()
@@ -1424,7 +1424,7 @@ class TestLogging:
         """Test that a log is written when trying to clear a non-existent session."""
         from unittest.mock import patch
 
-        with patch("xbot.agent.state_machine.logger") as mock_logger:
+        with patch("xbot.agent.state.machine.logger") as mock_logger:
             machine = SessionStateMachine()
             machine.clear("session:nonexistent")
 
@@ -1436,7 +1436,7 @@ class TestLogging:
         """Test that a log is written on valid transition."""
         from unittest.mock import patch
 
-        with patch("xbot.agent.state_machine.logger") as mock_logger:
+        with patch("xbot.agent.state.machine.logger") as mock_logger:
             machine = SessionStateMachine()
             machine.transition("session:1", SessionPhase.RUNNING, reason="dispatch")
 
@@ -1448,7 +1448,7 @@ class TestLogging:
         """Test that a warning log is written on invalid transition."""
         from unittest.mock import patch
 
-        with patch("xbot.agent.state_machine.logger") as mock_logger:
+        with patch("xbot.agent.state.machine.logger") as mock_logger:
             machine = SessionStateMachine()
             machine.transition("session:1", SessionPhase.STOPPING, reason="stop", force=True)
             mock_logger.reset_mock()
@@ -1462,7 +1462,7 @@ class TestLogging:
         """Test that a log is written on reason update."""
         from unittest.mock import patch
 
-        with patch("xbot.agent.state_machine.logger") as mock_logger:
+        with patch("xbot.agent.state.machine.logger") as mock_logger:
             machine = SessionStateMachine()
             machine.transition("session:1", SessionPhase.RUNNING, reason="start", force=True)
             mock_logger.reset_mock()
@@ -1476,7 +1476,7 @@ class TestLogging:
         """Test that a log is written on forced transition."""
         from unittest.mock import patch
 
-        with patch("xbot.agent.state_machine.logger") as mock_logger:
+        with patch("xbot.agent.state.machine.logger") as mock_logger:
             machine = SessionStateMachine()
             machine.transition("session:1", SessionPhase.STOPPING, reason="stop", force=True)
             mock_logger.reset_mock()
@@ -1490,7 +1490,7 @@ class TestLogging:
         """Test that transition logs include the transition count."""
         from unittest.mock import patch
 
-        with patch("xbot.agent.state_machine.logger") as mock_logger:
+        with patch("xbot.agent.state.machine.logger") as mock_logger:
             machine = SessionStateMachine()
             machine.transition("session:1", SessionPhase.RUNNING, reason="dispatch")
 
@@ -1501,7 +1501,7 @@ class TestLogging:
         """Test that reset log includes previous state info."""
         from unittest.mock import patch
 
-        with patch("xbot.agent.state_machine.logger") as mock_logger:
+        with patch("xbot.agent.state.machine.logger") as mock_logger:
             machine = SessionStateMachine()
             machine.transition("session:1", SessionPhase.RUNNING, reason="test", force=True)
             machine.transition("session:1", SessionPhase.WAITING_PERMISSION, reason="waiting", force=True)

@@ -11,7 +11,7 @@ import uuid
 
 import pytest
 
-from xbot.agent.session_context_manager import SessionContext, SessionContextManager
+from xbot.agent.state.context_mapping import SessionContext, SessionContextManager
 
 
 class TestRequestIDTracking:

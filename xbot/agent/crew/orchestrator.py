@@ -17,7 +17,7 @@ from xbot.agent.crew.process import HierarchicalProcess, SequentialProcess
 from xbot.agent.crew.resource_manager import CrewResourceManager
 from xbot.agent.crew.state import CrewPhase, CrewStateManager, TaskPhase
 from xbot.agent.crew.validation import CrewValidator
-from xbot.agent.permission_handler import BasePermissionHandler
+from xbot.agent.interaction.permission import BasePermissionHandler
 from xbot.config.schema import Config
 
 

@@ -80,7 +80,7 @@ class TestDeleteSdkSessionLockProtection:
     @pytest.mark.asyncio
     async def test_delete_clears_session_store_tasks_and_index(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.session_store import SessionStore
+        from xbot.agent.state.store import SessionStore
 
         backend = ClaudeSDKBackend()
         backend._clients_lock = asyncio.Lock()
@@ -270,7 +270,7 @@ class TestBidirectionalMappingConsistency:
 
 class TestSessionStoreSdkIndexHelpers:
     def test_set_sdk_session_id_updates_reverse_index(self):
-        from xbot.agent.session_store import SessionStore
+        from xbot.agent.state.store import SessionStore
 
         store = SessionStore()
         store.get_or_create("session_a")
@@ -281,7 +281,7 @@ class TestSessionStoreSdkIndexHelpers:
         assert store.get_by_sdk_id("sdk_1") is store.get("session_a")
 
     def test_clear_sdk_session_id_removes_reverse_index(self):
-        from xbot.agent.session_store import SessionStore
+        from xbot.agent.state.store import SessionStore
 
         store = SessionStore()
         store.get_or_create("session_a")

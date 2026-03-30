@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from xbot.agent.progress_coalescer import ProgressCoalescer
+from xbot.agent.interaction.progress_coalescer import ProgressCoalescer
 
 
 def test_coalescer_merges_thinking_chunks_without_repeating_prefix() -> None:

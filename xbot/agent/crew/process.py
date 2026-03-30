@@ -31,7 +31,7 @@ from xbot.agent.crew.output import (
 )
 from xbot.agent.crew.state import CrewStateManager, TaskPhase
 from xbot.agent.crew.validation import CrewValidator, ExecutionPreconditions
-from xbot.agent.permission_handler import BasePermissionHandler
+from xbot.agent.interaction.permission import BasePermissionHandler
 
 
 class BaseProcess(ABC):

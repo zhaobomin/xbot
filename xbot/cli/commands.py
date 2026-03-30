@@ -36,7 +36,7 @@ from rich.text import Text
 
 from xbot import __logo__, __version__
 from xbot.agent.runtime import AgentRuntime
-from xbot.agent.progress_coalescer import ProgressCoalescer
+from xbot.agent.interaction.progress_coalescer import ProgressCoalescer
 from xbot.config.paths import get_workspace_path
 from xbot.config.schema import Config
 from xbot.utils.helpers import (
@@ -44,7 +44,7 @@ from xbot.utils.helpers import (
     sync_workspace_skill_pack,
     sync_workspace_templates,
 )
-from xbot.agent.permission_handler import CLIPermissionHandler, InteractivePermissionHandler
+from xbot.agent.interaction.permission import CLIPermissionHandler, InteractivePermissionHandler
 
 app = typer.Typer(
     name="xbot",
@@ -544,8 +544,8 @@ def gateway(
     health_port: int | None = typer.Option(None, "--health-port", help="Health check HTTP port (default: gateway_port - 710)"),
 ):
     """Start the xbot gateway."""
-    from xbot.agent.health import HealthCheckService
-    from xbot.agent.permission_handler import PermissionRequestHandler
+    from xbot.agent.monitoring.health import HealthCheckService
+    from xbot.agent.interaction.permission import PermissionRequestHandler
     from xbot.bus.queue import MessageBus
     from xbot.channels.manager import ChannelManager
     from xbot.config.paths import get_cron_dir
@@ -712,7 +712,7 @@ def gateway(
     console.print(f"[green]✓[/green] Health check: http://{config.gateway.host}:{health_port}/health")
 
     async def run():
-        from xbot.agent.alerting import AlertConfig, init_alert_service
+        from xbot.agent.monitoring.alerting import AlertConfig, init_alert_service
 
         # Initialize alert service
         alert_config = AlertConfig(

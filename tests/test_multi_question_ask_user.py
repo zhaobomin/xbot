@@ -1,7 +1,7 @@
 """Tests for multi-question AskUserQuestion handling."""
 
 import pytest
-from xbot.agent.permission_handler import BasePermissionHandler
+from xbot.agent.interaction.permission import BasePermissionHandler
 
 
 class TestParseAnswers:

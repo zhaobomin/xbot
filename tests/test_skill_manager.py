@@ -16,8 +16,8 @@ from typing import Any
 
 import pytest
 
-from xbot.agent.skills import SkillsLoader
-from xbot.agent.skill_manager import SkillManager
+from xbot.agent.capabilities.skills_loader import SkillsLoader
+from xbot.agent.capabilities.skill_manager import SkillManager
 from xbot.agent.tools.base import Tool
 
 
@@ -635,7 +635,7 @@ class TestToolAdapterPythonSkills:
         return _MockTool()
 
     def test_register_adds_tools(self, tmp_path: Path) -> None:
-        from xbot.agent.tool_adapter import ToolAdapter
+        from xbot.agent.capabilities.tool_adapter import ToolAdapter
         adapter = ToolAdapter(workspace=str(tmp_path))
         t1 = self._make_mock_tool("tool_a")
         t2 = self._make_mock_tool("tool_b")
@@ -646,7 +646,7 @@ class TestToolAdapterPythonSkills:
         assert adapter._python_skill_tool_names == {"tool_a", "tool_b"}
 
     def test_register_replaces_old_tools(self, tmp_path: Path) -> None:
-        from xbot.agent.tool_adapter import ToolAdapter
+        from xbot.agent.capabilities.tool_adapter import ToolAdapter
         adapter = ToolAdapter(workspace=str(tmp_path))
 
         old = self._make_mock_tool("old_tool")
@@ -659,7 +659,7 @@ class TestToolAdapterPythonSkills:
         assert "new_tool" in adapter._tools
 
     def test_register_empty_clears_all(self, tmp_path: Path) -> None:
-        from xbot.agent.tool_adapter import ToolAdapter
+        from xbot.agent.capabilities.tool_adapter import ToolAdapter
         adapter = ToolAdapter(workspace=str(tmp_path))
 
         t = self._make_mock_tool("to_remove")
@@ -671,7 +671,7 @@ class TestToolAdapterPythonSkills:
         assert len(adapter._python_skill_tool_names) == 0
 
     def test_register_does_not_affect_builtin_tools(self, tmp_path: Path) -> None:
-        from xbot.agent.tool_adapter import ToolAdapter
+        from xbot.agent.capabilities.tool_adapter import ToolAdapter
         adapter = ToolAdapter(workspace=str(tmp_path))
 
         # Simulate a builtin tool
@@ -699,7 +699,7 @@ class TestSkillManagerToolAdapterIntegration:
     """Integration test: SkillManager syncs Python tools to ToolAdapter."""
 
     def test_sync_tools_to_adapter(self, tmp_path: Path) -> None:
-        from xbot.agent.tool_adapter import ToolAdapter
+        from xbot.agent.capabilities.tool_adapter import ToolAdapter
 
         ws = tmp_path / "skills"
         _write_python_skill(ws, "sync-test", """\

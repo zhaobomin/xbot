@@ -4,7 +4,7 @@ import pytest
 import asyncio
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from xbot.agent.state_transaction import (
+from xbot.agent.state.transaction import (
     StateTransaction,
     TransactionState,
     TransactionOperation,

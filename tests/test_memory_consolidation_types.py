@@ -11,7 +11,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from xbot.agent.memory import MemoryStore
+from xbot.agent.memory.store import MemoryStore
 from xbot.providers.base import LLMResponse, ToolCallRequest
 
 

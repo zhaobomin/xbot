@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 from loguru import logger
 
-from xbot.agent.capabilities import CapabilityCatalog
+from xbot.agent.capabilities.catalog import CapabilityCatalog
 from xbot.config.provider_registry import get_provider_spec
 from xbot.config.sdk_resolver import detect_provider_from_model, resolve_sdk_provider_and_model
 from xbot.config.schema import ProviderConfig
@@ -21,9 +21,9 @@ if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeAgentOptions
     from claude_agent_sdk.types import AgentDefinition as SDKAgentDefinition
 
-    from xbot.agent.capability_policy import CapabilityPolicy
-    from xbot.agent.context import ContextBuilder
-    from xbot.agent.handoff_policy import HandoffPolicy
+    from xbot.agent.capabilities.policy import CapabilityPolicy
+    from xbot.agent.context.builder import ContextBuilder
+    from xbot.agent.capabilities.handoff import HandoffPolicy
     from xbot.session.manager import SessionManager
 
 

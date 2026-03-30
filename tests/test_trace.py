@@ -4,7 +4,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from xbot.agent.trace import append_session_trace
+from xbot.agent.monitoring.trace import append_session_trace
 from xbot.session.manager import Session
 
 

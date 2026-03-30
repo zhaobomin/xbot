@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from xbot.agent.health import (
+from xbot.agent.monitoring.health import (
     HealthCheckService,
     HealthCheckResult,
     HealthStatus,

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from xbot.agent.context import ContextBuilder
+from xbot.agent.context.builder import ContextBuilder
 
 
 class TestContextBuilder:
@@ -168,7 +168,7 @@ class TestContextBuilderWithReMe:
 
     def test_reme_not_available_fallback(self, tmp_path: Path) -> None:
         """Test fallback when ReMe is not available."""
-        with patch("xbot.agent.memory_reme._REME_AVAILABLE", False):
+        with patch("xbot.agent.memory.reme._REME_AVAILABLE", False):
             builder = ContextBuilder(tmp_path, use_reme=True)
             assert builder.using_reme is False
 

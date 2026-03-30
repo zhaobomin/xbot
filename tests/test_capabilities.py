@@ -3,10 +3,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from xbot.config.schema import MCPServerConfig
-from xbot.agent.capabilities import CapabilityCatalog, canonical_tool_name
-from xbot.agent.capability_policy import CapabilityPolicy
-from xbot.agent.skills import SkillsLoader
-from xbot.agent.skill_to_mcp import SkillToMCPConverter
+from xbot.agent.capabilities.catalog import CapabilityCatalog, canonical_tool_name
+from xbot.agent.capabilities.policy import CapabilityPolicy
+from xbot.agent.capabilities.skills_loader import SkillsLoader
+from xbot.agent.capabilities.skill_to_mcp import SkillToMCPConverter
 
 
 def _write_skill(root: Path, name: str, body: str) -> None:
@@ -144,9 +144,9 @@ def test_skill_to_mcp_converter_only_converts_tool_exposable_skills(tmp_path, mo
         "---\ndescription: writing\n---\nwriting body",
     )
 
-    monkeypatch.setattr("xbot.agent.skill_to_mcp.SDK_AVAILABLE", True)
+    monkeypatch.setattr("xbot.agent.capabilities.skill_to_mcp.SDK_AVAILABLE", True)
     monkeypatch.setattr(
-        "xbot.agent.skill_to_mcp.create_sdk_mcp_server",
+        "xbot.agent.capabilities.skill_to_mcp.create_sdk_mcp_server",
         lambda **kwargs: kwargs,
     )
 

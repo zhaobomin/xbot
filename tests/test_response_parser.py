@@ -1,6 +1,6 @@
 import pytest
 
-from xbot.agent.response_parser import (
+from xbot.agent.interaction.response_parser import (
     ALLOW_RESPONSE_KEYWORDS,
     DENY_RESPONSE_KEYWORDS,
     derive_interaction_action,
