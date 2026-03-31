@@ -1667,6 +1667,7 @@ class TestCompactSession:
         mock_client.query = AsyncMock()
 
         async def _receive():
+            yield SystemMessage(subtype="init", data={})
             yield SystemMessage(
                 subtype="compact_boundary",
                 data={"compact_metadata": {"pre_tokens": 1200, "post_tokens": 450, "trigger": "manual"}},
@@ -1695,7 +1696,7 @@ class TestCompactSession:
     @pytest.mark.asyncio
     async def test_compact_session_without_boundary_keeps_default_stats(self):
         """compact_session should still succeed when SDK returns no compact boundary event."""
-        from claude_agent_sdk.types import ResultMessage
+        from claude_agent_sdk.types import ResultMessage, SystemMessage
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 
         backend = ClaudeSDKBackend()
@@ -1705,6 +1706,7 @@ class TestCompactSession:
         mock_client.query = AsyncMock()
 
         async def _receive():
+            yield SystemMessage(subtype="init", data={})
             yield ResultMessage(
                 subtype="success",
                 duration_ms=1,
@@ -1727,7 +1729,7 @@ class TestCompactSession:
     @pytest.mark.asyncio
     async def test_compact_session_result_error_marks_failure(self):
         """compact_session should return failed status when SDK ResultMessage is_error is true."""
-        from claude_agent_sdk.types import ResultMessage
+        from claude_agent_sdk.types import ResultMessage, SystemMessage
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 
         backend = ClaudeSDKBackend()
@@ -1737,6 +1739,7 @@ class TestCompactSession:
         mock_client.query = AsyncMock()
 
         async def _receive():
+            yield SystemMessage(subtype="init", data={})
             yield ResultMessage(
                 subtype="error",
                 duration_ms=1,
@@ -1767,6 +1770,7 @@ class TestCompactSession:
         mock_client.query = AsyncMock()
 
         async def _receive():
+            yield SystemMessage(subtype="init", data={})
             yield ResultMessage(
                 subtype="success",
                 duration_ms=1,

@@ -2370,6 +2370,7 @@ class ClaudeSDKBackend(AgentBackend):
         )
 
         saw_boundary = False
+        saw_init = False
         stream = client.receive_response().__aiter__()
         while True:
             timeout_s = 0.35 if saw_result else 10.0
@@ -2384,6 +2385,23 @@ class ClaudeSDKBackend(AgentBackend):
                     break
                 # No result in a long window: stop waiting and mark failure below.
                 break
+
+            # --- protocol filter: UserMessage is never yielded upstream ---
+            if isinstance(message, UserMessage):
+                continue
+
+            # --- boundary detection: discard residual pre-init messages ---
+            if not saw_init:
+                if isinstance(message, SystemMessage) and message.subtype == "init":
+                    saw_init = True
+                    continue  # init itself is not needed for compact
+                logger.warning(
+                    "[Compact] Discarding stale pre-boundary message: "
+                    "type=%s, session=%s",
+                    type(message).__name__,
+                    session_key,
+                )
+                continue
 
             if isinstance(message, ResultMessage):
                 saw_result = True
