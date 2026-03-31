@@ -3,7 +3,7 @@ import asyncio
 import json
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -57,6 +57,37 @@ def _make_feishu_event(
         sender_id=SimpleNamespace(open_id=sender_open_id),
     )
     return SimpleNamespace(event=SimpleNamespace(message=message, sender=sender))
+
+
+def _make_feishu_worker_payload(
+    *,
+    message_id: str = "om_001",
+    chat_id: str = "oc_abc",
+    chat_type: str = "p2p",
+    msg_type: str = "text",
+    content: str = '{"text": "hello"}',
+    sender_open_id: str = "ou_alice",
+    parent_id: str | None = None,
+    root_id: str | None = None,
+):
+    return {
+        "event": {
+            "message": {
+                "message_id": message_id,
+                "chat_id": chat_id,
+                "chat_type": chat_type,
+                "message_type": msg_type,
+                "content": content,
+                "parent_id": parent_id,
+                "root_id": root_id,
+                "mentions": [],
+            },
+            "sender": {
+                "sender_type": "user",
+                "sender_id": {"open_id": sender_open_id},
+            },
+        }
+    }
 
 
 def _make_get_message_response(text: str, msg_type: str = "text", success: bool = True):
@@ -433,3 +464,30 @@ async def test_on_message_no_extra_api_call_when_no_parent_id() -> None:
 
     channel._client.im.v1.message.get.assert_not_called()
     assert len(captured) == 1
+
+
+@pytest.mark.asyncio
+async def test_dispatch_worker_event_forwards_message_payload() -> None:
+    channel = _make_feishu_channel()
+    channel._processed_message_ids.clear()
+    channel._on_message = AsyncMock()
+
+    await channel._dispatch_worker_event(
+        {"type": "message", "payload": _make_feishu_worker_payload()}
+    )
+
+    channel._on_message.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_dispatch_worker_event_deduplicates_by_message_id() -> None:
+    channel = _make_feishu_channel()
+    channel._processed_message_ids.clear()
+    channel._on_message = AsyncMock()
+
+    event = {"type": "message", "payload": _make_feishu_worker_payload(message_id="om_dup")}
+
+    await channel._dispatch_worker_event(event)
+    await channel._dispatch_worker_event(event)
+
+    channel._on_message.assert_awaited_once()

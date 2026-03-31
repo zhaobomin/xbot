@@ -3,6 +3,7 @@
 import asyncio
 import os
 import re
+import shlex
 from pathlib import Path
 from typing import Any
 
@@ -174,6 +175,21 @@ class ExecTool(Tool):
                 if p.is_absolute() and cwd_path not in p.parents and p != cwd_path:
                     return "Error: Command blocked by safety guard (path outside working dir)"
 
+            for raw in self._extract_relative_paths(cmd):
+                try:
+                    expanded = os.path.expandvars(raw.strip())
+                    candidate = Path(expanded).expanduser()
+                    if candidate.is_absolute():
+                        continue
+                    candidate_in_cwd = cwd_path / candidate
+                    if not candidate_in_cwd.exists() and "/" not in expanded and "\\" not in expanded:
+                        continue
+                    resolved = candidate_in_cwd.resolve()
+                except Exception:
+                    continue
+                if cwd_path not in resolved.parents and resolved != cwd_path:
+                    return "Error: Command blocked by safety guard (path outside working dir)"
+
         return None
 
     @staticmethod
@@ -182,3 +198,28 @@ class ExecTool(Tool):
         posix_paths = re.findall(r"(?:^|[\s|>'\"])(/[^\s\"'>;|<]+)", command) # POSIX: /absolute only
         home_paths = re.findall(r"(?:^|[\s|>'\"])(~[^\s\"'>;|<]*)", command) # POSIX/Windows home shortcut: ~
         return win_paths + posix_paths + home_paths
+
+    @staticmethod
+    def _extract_relative_paths(command: str) -> list[str]:
+        try:
+            tokens = shlex.split(command, posix=os.name != "nt")
+        except ValueError:
+            tokens = command.split()
+
+        candidates: list[str] = []
+        for token in tokens[1:]:
+            stripped = token.strip("\"'")
+            if not stripped:
+                continue
+            if stripped in {"|", "||", "&&", ";", ">", ">>", "<", "2>", "2>>"}:
+                continue
+            if stripped.startswith("-"):
+                continue
+            if re.match(r"^[A-Za-z_][A-Za-z0-9_]*=.*", stripped):
+                continue
+            if stripped.startswith("$(") or stripped.startswith("`"):
+                continue
+            if stripped.startswith("~"):
+                continue
+            candidates.append(stripped)
+        return candidates

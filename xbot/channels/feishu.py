@@ -1,13 +1,17 @@
 """Feishu/Lark channel implementation using lark-oapi SDK with WebSocket long connection."""
 
 import asyncio
+import contextlib
 import json
+import multiprocessing as mp
 import os
+import queue
 import re
 import threading
 import time
 from collections import OrderedDict
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Literal
 
 from xbot.logging import get_logger
@@ -74,8 +78,10 @@ class FeishuChannel(BaseChannel):
         self.config: FeishuConfig = config
         self._client: Any = None
         self._ws_client: Any = None
-        self._ws_thread: threading.Thread | None = None
-        self._ws_loop: asyncio.AbstractEventLoop | None = None  # WebSocket thread's loop
+        self._ws_process: mp.Process | None = None
+        self._ws_reader_task: asyncio.Task | None = None
+        self._ws_event_queue: Any = None
+        self._ws_stop_event: Any = None
         self._main_loop: asyncio.AbstractEventLoop | None = None  # Main async loop
         self._stop_event = threading.Event()  # Thread-safe stop signal
         self._processed_message_ids: OrderedDict[str, float] = OrderedDict()  # message_id -> timestamp
@@ -133,57 +139,8 @@ class FeishuChannel(BaseChannel):
         )
         event_handler = builder.build()
 
-        # Create WebSocket client for long connection
-        self._ws_client = lark.ws.Client(
-            self.config.app_id,
-            self.config.app_secret,
-            event_handler=event_handler,
-            log_level=lark.LogLevel.INFO
-        )
-
-        # Start WebSocket client in a separate thread with reconnect loop.
-        # A dedicated event loop is created for this thread so that lark_oapi's
-        # module-level `loop = asyncio.get_event_loop()` picks up an idle loop
-        # instead of the already-running main asyncio loop, which would cause
-        # "This event loop is already running" errors.
-        def run_ws():
-            import lark_oapi.ws.client as _lark_ws_client
-            self._ws_loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(self._ws_loop)
-            # Patch the module-level loop used by lark's ws Client.start()
-            _lark_ws_client.loop = self._ws_loop
-
-            reconnect_delay = self._ws_reconnect_delay
-
-            try:
-                while not self._stop_event.is_set():
-                    try:
-                        logger.info("Feishu WebSocket connecting...")
-                        self._ws_client.start()
-                        # Reset delay on successful connection
-                        reconnect_delay = self._ws_reconnect_delay
-                    except Exception as e:
-                        logger.warning("Feishu WebSocket error: %s", e)
-
-                    if not self._stop_event.is_set():
-                        logger.info(
-                            f"Feishu WebSocket disconnected, reconnecting in {reconnect_delay}s..."
-                        )
-                        # Use wait with timeout for responsive stop
-                        if self._stop_event.wait(timeout=reconnect_delay):
-                            # Stop event was set during wait, exit loop
-                            break
-                        # Exponential backoff with max
-                        reconnect_delay = min(
-                            reconnect_delay * 2,
-                            self._ws_max_reconnect_delay
-                        )
-            finally:
-                self._ws_loop.close()
-                self._ws_loop = None
-
-        self._ws_thread = threading.Thread(target=run_ws, daemon=True, name="feishu-ws")
-        self._ws_thread.start()
+        self._start_ws_worker()
+        self._ws_reader_task = asyncio.create_task(self._run_ws_event_reader())
 
         logger.info("Feishu bot started with WebSocket long connection")
         logger.info("No public IP required - using WebSocket to receive events")
@@ -204,18 +161,106 @@ class FeishuChannel(BaseChannel):
         self._running = False
         self._stop_event.set()  # Signal WebSocket thread to stop
 
-        # Wait for WebSocket thread to finish (with timeout)
-        if self._ws_thread and self._ws_thread.is_alive():
-            self._ws_thread.join(timeout=5)
-            if self._ws_thread.is_alive():
-                logger.warning("Feishu WebSocket thread did not stop gracefully")
+        if self._ws_stop_event is not None:
+            self._ws_stop_event.set()
+
+        if self._ws_reader_task is not None:
+            self._ws_reader_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._ws_reader_task
+
+        if self._ws_process is not None:
+            process = self._ws_process
+            await asyncio.to_thread(process.join, 5)
+            if process.is_alive():
+                logger.warning("Feishu WebSocket worker did not stop gracefully; terminating")
+                process.terminate()
+                await asyncio.to_thread(process.join, 2)
+            if process.is_alive():
+                logger.warning("Feishu WebSocket worker still alive after terminate; killing")
+                process.kill()
+                await asyncio.to_thread(process.join, 2)
 
         # Clean up references
         self._main_loop = None
-        self._ws_loop = None
+        self._ws_process = None
+        self._ws_reader_task = None
+        self._ws_event_queue = None
+        self._ws_stop_event = None
         self._pending_messages = None
 
         logger.info("Feishu bot stopped")
+
+    def _start_ws_worker(self) -> None:
+        from xbot.channels.feishu_ws_worker import run_feishu_ws_worker
+
+        ctx = mp.get_context("spawn")
+        self._ws_event_queue = ctx.Queue()
+        self._ws_stop_event = ctx.Event()
+        self._ws_process = ctx.Process(
+            target=run_feishu_ws_worker,
+            args=(
+                self.config.model_dump(by_alias=True),
+                self._ws_event_queue,
+                self._ws_stop_event,
+                self._ws_reconnect_delay,
+                self._ws_max_reconnect_delay,
+            ),
+            daemon=True,
+            name="feishu-ws-worker",
+        )
+        self._ws_process.start()
+
+    @staticmethod
+    def _namespace_from_dict(value: Any) -> Any:
+        if isinstance(value, dict):
+            return SimpleNamespace(**{k: FeishuChannel._namespace_from_dict(v) for k, v in value.items()})
+        if isinstance(value, list):
+            return [FeishuChannel._namespace_from_dict(item) for item in value]
+        return value
+
+    def _extract_message_id_from_event(self, data: Any) -> str | None:
+        try:
+            return data.event.message.message_id
+        except (AttributeError, TypeError):
+            return None
+
+    def _mark_message_seen(self, message_id: str | None) -> bool:
+        if not message_id:
+            return True
+        with self._dedup_lock:
+            now = time.time()
+            if message_id in self._processed_message_ids:
+                return False
+            self._processed_message_ids[message_id] = now
+        return True
+
+    async def _dispatch_worker_event(self, event: dict[str, Any]) -> None:
+        event_type = event.get("type")
+        if event_type != "message":
+            if event_type == "error":
+                logger.warning("Feishu WebSocket worker error: %s", event.get("error", "unknown"))
+            return
+        payload = event.get("payload")
+        if not isinstance(payload, dict):
+            return
+        data = self._namespace_from_dict(payload)
+        if not self._mark_message_seen(self._extract_message_id_from_event(data)):
+            return
+        await self._on_message(data)
+
+    async def _run_ws_event_reader(self) -> None:
+        while self._running:
+            if self._ws_event_queue is None:
+                return
+            try:
+                event = await asyncio.to_thread(self._ws_event_queue.get, True, 0.5)
+            except queue.Empty:
+                if self._ws_process is not None and not self._ws_process.is_alive() and self._running:
+                    logger.error("Feishu WebSocket worker exited unexpectedly")
+                    return
+                continue
+            await self._dispatch_worker_event(event)
 
     def _is_bot_mentioned(self, message: Any) -> bool:
         """Check if the bot is @mentioned in the message."""
@@ -948,17 +993,9 @@ class FeishuChannel(BaseChannel):
             return
 
         # Thread-safe deduplication before scheduling async handler
-        try:
-            message_id = data.event.message.message_id
-        except (AttributeError, TypeError):
-            message_id = None
-
-        if message_id:
-            with self._dedup_lock:
-                now = time.time()
-                if message_id in self._processed_message_ids:
-                    return
-                self._processed_message_ids[message_id] = now
+        message_id = self._extract_message_id_from_event(data)
+        if not self._mark_message_seen(message_id):
+            return
 
         try:
             future = asyncio.run_coroutine_threadsafe(

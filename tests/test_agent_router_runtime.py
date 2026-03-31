@@ -749,6 +749,48 @@ async def test_router_runtime_process_managed_direct_cleans_up_cron_session(tmp_
 
 
 @pytest.mark.asyncio
+async def test_router_runtime_ephemeral_cleanup_uses_state_coordinator_cleanup(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+    from xbot.session.manager import SessionManager
+
+    AgentRouter._backends = {"claude_sdk": _FakeBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    sessions = SessionManager(tmp_path)
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+            "session_manager": sessions,
+        },
+    )
+
+    called: list[str] = []
+    original_cleanup = runtime._state_coordinator.cleanup_session
+
+    async def _cleanup(session_key: str):
+        called.append(session_key)
+        return await original_cleanup(session_key)
+
+    runtime._state_coordinator.cleanup_session = _cleanup  # type: ignore[method-assign]
+
+    response = await runtime.process_managed_direct(
+        "hello",
+        session_key="cron:job-coordinator",
+        channel="cli",
+        chat_id="direct",
+    )
+
+    assert response == "echo:hello"
+    assert called == ["cron:job-coordinator"]
+    assert runtime._state_coordinator.has_session("cron:job-coordinator") is False
+
+
+@pytest.mark.asyncio
 async def test_router_runtime_process_managed_direct_forgets_ephemeral_client_lifecycle(tmp_path) -> None:
     from xbot.agent.runtime import AgentRuntime
     from xbot.bus.queue import MessageBus

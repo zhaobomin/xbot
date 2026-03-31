@@ -73,24 +73,20 @@ class Session:
     @staticmethod
     def _find_legal_start(messages: list[dict[str, Any]]) -> int:
         """Find first index where every tool result has a matching assistant tool_call."""
-        declared: set[str] = set()
+        declared_at: dict[str, int] = {}
         start = 0
+
         for i, msg in enumerate(messages):
             role = msg.get("role")
             if role == "assistant":
                 for tc in msg.get("tool_calls") or []:
                     if isinstance(tc, dict) and tc.get("id"):
-                        declared.add(str(tc["id"]))
+                        declared_at[str(tc["id"])] = i
             elif role == "tool":
                 tid = msg.get("tool_call_id")
-                if tid and str(tid) not in declared:
+                if tid and declared_at.get(str(tid), -1) < start:
                     start = i + 1
-                    declared.clear()
-                    for prev in messages[start:i + 1]:
-                        if prev.get("role") == "assistant":
-                            for tc in prev.get("tool_calls") or []:
-                                if isinstance(tc, dict) and tc.get("id"):
-                                    declared.add(str(tc["id"]))
+
         return start
 
     def get_history(self, max_messages: int = 500) -> list[dict[str, Any]]:

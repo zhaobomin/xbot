@@ -94,7 +94,7 @@ class ClaudeSDKAgentConfig(Base):
     client_idle_ttl_seconds: int = Field(default=3600, description="Idle TTL for managed Claude clients in seconds")
     client_disconnect_timeout_seconds: float = Field(default=10.0, description="Timeout for Claude client disconnect operations")
     client_disconnect_max_retries: int = Field(default=2, description="Max retry attempts for managed disconnect before leak classification")
-    client_force_kill_enabled: bool = Field(default=False, description="Enable force-kill fallback for leaked Claude client processes")
+    client_force_kill_enabled: bool = Field(default=True, description="Enable force-kill fallback for leaked Claude client processes")
     ephemeral_immediate_release_enabled: bool = Field(default=True, description="Release cron/heartbeat clients immediately after turn completion")
     strict_process_tracking_required: bool = Field(default=False, description="Require stable process tracking for managed Claude clients")
 

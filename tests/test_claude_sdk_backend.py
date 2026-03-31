@@ -387,6 +387,125 @@ class TestClaudeSDKBackendLifecycle:
         assert diagnostics["clients"]["cli:leak"]["disconnect_state"] == "leaked"
 
     @pytest.mark.asyncio
+    async def test_release_client_preserves_sdk_session_for_non_ephemeral_session(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.state.store import SessionStore
+
+        backend = ClaudeSDKBackend()
+        backend._session_store = SessionStore()
+        backend._use_session_store = True
+        entry = backend._session_store.get_or_create("cli:keep-context")
+        entry.client = MagicMock(disconnect=AsyncMock())
+        backend._session_store.set_sdk_session_id("cli:keep-context", "sdk-keep")
+
+        backend.sessions = MagicMock()
+        session = MagicMock()
+        session.metadata = {"sdk_session_id": "sdk-keep"}
+        backend.sessions.get = MagicMock(return_value=session)
+
+        released = await backend.release_client("cli:keep-context", reason="test-preserve")
+
+        assert released is True
+        assert backend._session_store.get("cli:keep-context").sdk_session_id == "sdk-keep"
+        diagnostics = backend.get_client_lifecycle_diagnostics()
+        assert diagnostics["clients"]["cli:keep-context"]["sdk_session_id"] == "sdk-keep"
+
+    @pytest.mark.asyncio
+    async def test_release_client_clears_sdk_session_for_ephemeral_session(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.state.store import SessionStore
+
+        backend = ClaudeSDKBackend()
+        backend._session_store = SessionStore()
+        backend._use_session_store = True
+        entry = backend._session_store.get_or_create("cron:job-1")
+        entry.client = MagicMock(disconnect=AsyncMock())
+        backend._session_store.set_sdk_session_id("cron:job-1", "sdk-ephemeral")
+
+        released = await backend.release_client("cron:job-1", reason="ephemeral_turn_end")
+
+        assert released is True
+        assert backend._session_store.get("cron:job-1").sdk_session_id is None
+
+    @pytest.mark.asyncio
+    async def test_release_client_force_kills_and_preserves_sdk_session_on_disconnect_failure(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.state.store import SessionStore
+
+        backend = ClaudeSDKBackend()
+        backend._session_store = SessionStore()
+        backend._use_session_store = True
+        entry = backend._session_store.get_or_create("cli:killed")
+
+        async def _hang_disconnect():
+            await asyncio.sleep(10)
+
+        process = MagicMock()
+        process.pid = 12345
+        process.wait = AsyncMock(return_value=None)
+
+        client = MagicMock()
+        client.disconnect = _hang_disconnect
+        client.process = process
+        entry.client = client
+        backend._session_store.set_sdk_session_id("cli:killed", "sdk-killed")
+        backend.sdk_config = MagicMock(
+            client_lifecycle_enabled=True,
+            client_scavenger_enabled=True,
+            client_idle_ttl_seconds=3600,
+            client_cleanup_interval_seconds=3600,
+            client_disconnect_timeout_seconds=0.01,
+            client_disconnect_max_retries=0,
+            client_force_kill_enabled=True,
+            strict_process_tracking_required=False,
+            ephemeral_immediate_release_enabled=True,
+        )
+
+        released = await backend.release_client("cli:killed", reason="test-timeout")
+
+        assert released is True
+        assert backend._session_store.get("cli:killed").sdk_session_id == "sdk-killed"
+        diagnostics = backend.get_client_lifecycle_diagnostics()
+        assert diagnostics["clients"]["cli:killed"]["disconnect_state"] == "killed"
+
+    @pytest.mark.asyncio
+    async def test_release_client_records_fallback_diagnostics_when_lifecycle_disabled(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.state.store import SessionStore
+
+        backend = ClaudeSDKBackend()
+        backend._session_store = SessionStore()
+        backend._use_session_store = True
+        entry = backend._session_store.get_or_create("cli:fallback-leak")
+
+        async def _hang_disconnect():
+            await asyncio.sleep(10)
+
+        client = MagicMock()
+        client.disconnect = _hang_disconnect
+        entry.client = client
+        backend._session_store.set_sdk_session_id("cli:fallback-leak", "sdk-fallback")
+        backend.sdk_config = MagicMock(
+            client_lifecycle_enabled=False,
+            client_scavenger_enabled=False,
+            client_idle_ttl_seconds=3600,
+            client_cleanup_interval_seconds=3600,
+            client_disconnect_timeout_seconds=0.01,
+            client_disconnect_max_retries=0,
+            client_force_kill_enabled=False,
+            strict_process_tracking_required=False,
+            ephemeral_immediate_release_enabled=True,
+        )
+
+        released = await backend.release_client("cli:fallback-leak", reason="test-timeout")
+
+        assert released is False
+        assert backend._session_store.get("cli:fallback-leak").sdk_session_id == "sdk-fallback"
+        diagnostics = backend.get_client_lifecycle_diagnostics()
+        assert diagnostics["fallback"]["counts"]["leaked"] == 1
+        assert diagnostics["fallback"]["last_failure"]["session_key"] == "cli:fallback-leak"
+
+    @pytest.mark.asyncio
     async def test_release_client_is_idempotent(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
         from xbot.agent.state.store import SessionStore
@@ -629,7 +748,7 @@ class TestClaudeSDKBackendResetSession:
             mock_session = MagicMock()
             mock_session.messages = []
             mock_session.last_consolidated = 0
-            mock_session.metadata = {}
+            mock_session.metadata = {"sdk_session_id": "sdk-reset"}
             backend.sessions.get_or_create = MagicMock(return_value=mock_session)
             backend.sessions.save = MagicMock()
             backend.sessions.invalidate = MagicMock()
@@ -639,6 +758,7 @@ class TestClaudeSDKBackendResetSession:
             mock_client.disconnect.assert_called_once()
             assert "test_session" not in backend._clients
             mock_session.clear.assert_called_once()
+            assert "sdk_session_id" not in mock_session.metadata
 
 
 class TestClaudeSDKBackendToolContext:
@@ -1359,7 +1479,7 @@ class TestInterruptSession:
         assert entry.tasks == []
         assert entry.task_id is None
         assert entry.request_id is None
-        assert backend._session_store.get_by_sdk_id("sdk_1") is None
+        assert backend._session_store.get_by_sdk_id("sdk_1") is entry
 
     @pytest.mark.asyncio
     async def test_interrupt_session_exception(self):

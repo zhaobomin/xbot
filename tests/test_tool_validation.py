@@ -140,6 +140,24 @@ def test_exec_guard_blocks_quoted_home_path_outside_workspace(tmp_path) -> None:
     assert error == "Error: Command blocked by safety guard (path outside working dir)"
 
 
+def test_exec_guard_blocks_relative_symlink_outside_workspace(tmp_path) -> None:
+    tool = ExecTool(restrict_to_workspace=True)
+    outside = tmp_path.parent / "outside.txt"
+    outside.write_text("x", encoding="utf-8")
+    link = tmp_path / "link_outside.txt"
+    link.symlink_to(outside)
+
+    error = tool._guard_command("cat link_outside.txt", str(tmp_path))
+
+    assert error == "Error: Command blocked by safety guard (path outside working dir)"
+
+
+def test_exec_guard_blocks_mixed_separator_relative_traversal(tmp_path) -> None:
+    tool = ExecTool(restrict_to_workspace=True)
+    error = tool._guard_command(r"cat ..\/secret.txt", str(tmp_path))
+    assert error == "Error: Command blocked by safety guard (path traversal detected)"
+
+
 # --- cast_params tests ---
 
 
@@ -435,4 +453,3 @@ def test_tool_adapter_applies_workspace_restriction_to_sdk_tools(tmp_path) -> No
     assert adapter.get_tool("edit_file")._allowed_dir == tmp_path
     assert adapter.get_tool("list_dir")._allowed_dir == tmp_path
     assert adapter.get_tool("shell").restrict_to_workspace is True
-

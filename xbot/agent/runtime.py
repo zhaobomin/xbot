@@ -811,7 +811,7 @@ class AgentRuntime:
         if self._session_store.get(session_key) is not None:
             await self._session_store.delete(session_key)
         if self._state_coordinator.has_session(session_key):
-            self._state_machine.clear(session_key)
+            await self._state_coordinator.cleanup_session(session_key)
         if self.sessions is not None:
             with suppress(Exception):
                 self.sessions.delete(session_key)
