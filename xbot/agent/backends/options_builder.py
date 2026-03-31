@@ -138,6 +138,8 @@ class OptionsBuilder:
 
     def _build_hooks(self) -> dict[str, list] | None:
         """Build hooks configuration including compact notification."""
+        from claude_agent_sdk.types import HookMatcher
+
         # Start with user-configured hooks
         hooks: dict[str, list] = copy.deepcopy(self._sdk_config.hooks or {})
 
@@ -271,7 +273,7 @@ class OptionsBuilder:
                 enabled=True,
                 message_callback=send_compact_notification,
             )
-            hooks.setdefault("PreCompact", []).append({"hooks": [compact_handler]})
+            hooks.setdefault("PreCompact", []).append(HookMatcher(hooks=[compact_handler]))
             logger.info("[Hooks] Added PreCompact hook with CompactHookHandler, hooks keys=%s", list(hooks.keys()))
 
         logger.info("[Hooks] Final hooks configuration: %s", hooks if hooks else "None")

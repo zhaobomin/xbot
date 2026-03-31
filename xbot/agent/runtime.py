@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 from xbot.agent.capabilities.catalog import CapabilityCatalog, canonical_tool_name
 from xbot.agent.context.commands import CommandsLoader
-from xbot.agent.interaction.event_formatter import format_compact_event, format_usage_summary
+from xbot.agent.interaction.event_formatter import format_usage_summary
 from xbot.agent.context.model_manager import ModelManager
 from xbot.agent.protocol import AgentContext
 from xbot.agent.interaction.response_handlers import RuntimeResponseHandlers
@@ -315,49 +315,6 @@ class AgentRuntime:
                 channel=msg.channel,
                 chat_id=msg.chat_id,
                 content="♻️ Session cleared. Starting fresh!\n📌 Use `!stop` to stop tasks without clearing context.",
-                metadata=msg.metadata or {},
-            )
-        if cmd == "/compact":
-            await self.initialize()
-            if on_progress:
-                await self._emit_progress(
-                    on_progress,
-                    "Running: compact",
-                    event_type="task",
-                    event_data={"subtype": "pre_compact", "trigger": "manual"},
-                )
-
-            compact_stats = await self.router.backend.compact_session(msg.session_key)
-
-            compact_text = format_compact_event(
-                pre_tokens=compact_stats.get("tokens_before"),
-                post_tokens=compact_stats.get("tokens_after"),
-                trigger="manual",
-            )
-            if on_progress:
-                await self._emit_progress(
-                    on_progress,
-                    compact_text,
-                    event_type="system",
-                    event_data={"subtype": "compact_boundary", "trigger": "manual"},
-                )
-
-            usage_text = format_usage_summary(compact_stats.get("usage"))
-            if usage_text and on_progress and self._should_send_usage_summary():
-                await self._emit_progress(
-                    on_progress,
-                    usage_text,
-                    event_type="usage",
-                    event_data={"usage": compact_stats.get("usage")},
-                )
-
-            if compact_stats.get("success", True):
-                return None
-
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content=str(compact_stats.get("message") or "Failed to compact context."),
                 metadata=msg.metadata or {},
             )
         if cmd == "/help":

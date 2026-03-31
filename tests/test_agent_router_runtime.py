@@ -386,78 +386,8 @@ async def test_router_runtime_compact_routes_to_backend(tmp_path) -> None:
 
     response = await runtime.process_direct("/compact")
 
-    assert response == ""
+    assert response == "echo:/compact"
     assert backend.initialized is True
-    assert backend.compact_calls == ["cli:direct"]
-
-
-@pytest.mark.asyncio
-async def test_router_runtime_compact_emits_manual_progress_and_usage(tmp_path) -> None:
-    from xbot.agent.runtime import AgentRuntime
-    from xbot.bus.queue import MessageBus
-
-    backend = _FakeBackend()
-
-    class _BackendFactory:
-        def __call__(self):
-            return backend
-
-    async def _compact_session(session_key: str) -> dict[str, Any]:
-        backend.compact_calls.append(session_key)
-        return {
-            "messages_consolidated": 0,
-            "tokens_before": 1200,
-            "tokens_after": 450,
-            "success": True,
-            "usage": {"input_tokens": 12, "output_tokens": 3},
-        }
-
-    backend.compact_session = _compact_session  # type: ignore[method-assign]
-    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
-
-    config = Config()
-    config.agents.defaults.workspace = str(tmp_path)
-    config.channels.send_usage_summary = True
-
-    runtime = AgentRuntime(
-        config=config,
-        shared_resources={
-            "bus": MessageBus(),
-            "workspace": tmp_path,
-            "config": config,
-        },
-    )
-
-    seen: list[tuple[str, bool, str | None, dict[str, Any] | None]] = []
-
-    async def _progress(
-        content: str,
-        *,
-        tool_hint: bool = False,
-        event_type: str | None = None,
-        event_data: dict[str, Any] | None = None,
-    ) -> None:
-        seen.append((content, tool_hint, event_type, event_data))
-
-    response = await runtime.process_direct("/compact", on_progress=_progress)
-
-    assert response == ""
-    assert backend.compact_calls == ["cli:direct"]
-    assert seen == [
-        ("Running: compact", False, "task", {"subtype": "pre_compact", "trigger": "manual"}),
-        (
-            "Context compacted (manual): 1,200 -> 450 tokens (saved ~750).",
-            False,
-            "system",
-            {"subtype": "compact_boundary", "trigger": "manual"},
-        ),
-        (
-            "Usage: input 12 tokens, output 3 tokens",
-            False,
-            "usage",
-            {"usage": {"input_tokens": 12, "output_tokens": 3}},
-        ),
-    ]
 
 
 @pytest.mark.asyncio

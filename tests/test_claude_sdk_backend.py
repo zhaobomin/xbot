@@ -1024,180 +1024,193 @@ class TestOptionsBuilder:
     @pytest.mark.asyncio
     async def test_build_hooks_compact_notification_prefers_backend_context_helper(self):
         """Compact notification should resolve context via backend helper before legacy dict."""
-        with patch.dict(
-            "sys.modules",
-            {
-                "claude_agent_sdk": MagicMock(),
-                "claude_agent_sdk.types": MagicMock(),
+        from claude_agent_sdk.types import HookMatcher
+        from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+
+        outbound_calls = []
+
+        class _Bus:
+            async def publish_outbound(self, message):
+                outbound_calls.append(message)
+
+        class _Backend:
+            def _get_context_by_session_key(self, session_key: str):
+                if session_key == "session:1":
+                    return ("feishu", "chat-1")
+                return None
+
+        class _Runtime:
+            backend = _Backend()
+
+        sdk_config = MagicMock()
+        sdk_config.hooks = {}
+        sdk_config.compact_notify = True
+
+        builder = OptionsBuilder(
+            shared_resources={
+                "bus": _Bus(),
+                "runtime": _Runtime(),
+                "_session_contexts": {},
             },
-        ):
-            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+            sdk_config=sdk_config,
+            skill_converter=None,
+            tool_adapter=None,
+            sessions=None,
+            context_builder=None,
+            handoff_policy=None,
+            capability_policy=None,
+        )
 
-            outbound_calls = []
+        hooks = builder._build_hooks()
+        assert isinstance(hooks["PreCompact"][0], HookMatcher)
+        compact_handler = hooks["PreCompact"][0].hooks[0]
 
-            class _Bus:
-                async def publish_outbound(self, message):
-                    outbound_calls.append(message)
+        compact_handler.message_callback("session:1", "compacted")
+        await asyncio.sleep(0)
 
-            class _Backend:
-                def _get_context_by_session_key(self, session_key: str):
-                    if session_key == "session:1":
-                        return ("feishu", "chat-1")
-                    return None
-
-            class _Runtime:
-                backend = _Backend()
-
-            sdk_config = MagicMock()
-            sdk_config.hooks = {}
-            sdk_config.compact_notify = True
-
-            builder = OptionsBuilder(
-                shared_resources={
-                    "bus": _Bus(),
-                    "runtime": _Runtime(),
-                    "_session_contexts": {},
-                },
-                sdk_config=sdk_config,
-                skill_converter=None,
-                tool_adapter=None,
-                sessions=None,
-                context_builder=None,
-                handoff_policy=None,
-                capability_policy=None,
-            )
-
-            hooks = builder._build_hooks()
-            compact_handler = hooks["PreCompact"][0]["hooks"][0]
-
-            compact_handler.message_callback("session:1", "compacted")
-            await asyncio.sleep(0)
-
-            assert len(outbound_calls) == 1
-            assert outbound_calls[0].channel == "feishu"
-            assert outbound_calls[0].chat_id == "chat-1"
-            assert outbound_calls[0].content == "compacted"
+        assert len(outbound_calls) == 1
+        assert outbound_calls[0].channel == "feishu"
+        assert outbound_calls[0].chat_id == "chat-1"
+        assert outbound_calls[0].content == "compacted"
 
     @pytest.mark.asyncio
     async def test_build_hooks_compact_notification_resolves_sdk_session_id_via_backend_helper(self):
-        with patch.dict(
-            "sys.modules",
-            {
-                "claude_agent_sdk": MagicMock(),
-                "claude_agent_sdk.types": MagicMock(),
+        from claude_agent_sdk.types import HookMatcher
+        from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+
+        outbound_calls = []
+
+        class _Bus:
+            async def publish_outbound(self, message):
+                outbound_calls.append(message)
+
+        class _Backend:
+            def _resolve_compact_notification_target(self, session_ref: str):
+                if session_ref == "sdk-123":
+                    return ("session:1", "feishu", "chat-1")
+                return None
+
+        class _Runtime:
+            backend = _Backend()
+
+        sdk_config = MagicMock()
+        sdk_config.hooks = {}
+        sdk_config.compact_notify = True
+
+        builder = OptionsBuilder(
+            shared_resources={
+                "bus": _Bus(),
+                "runtime": _Runtime(),
+                "_session_contexts": {"session:1": ("feishu", "chat-1")},
             },
-        ):
-            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+            sdk_config=sdk_config,
+            skill_converter=None,
+            tool_adapter=None,
+            sessions=None,
+            context_builder=None,
+            handoff_policy=None,
+            capability_policy=None,
+        )
 
-            outbound_calls = []
+        hooks = builder._build_hooks()
+        assert isinstance(hooks["PreCompact"][0], HookMatcher)
+        compact_handler = hooks["PreCompact"][0].hooks[0]
 
-            class _Bus:
-                async def publish_outbound(self, message):
-                    outbound_calls.append(message)
+        compact_handler.message_callback("sdk-123", "compacted")
+        await asyncio.sleep(0)
 
-            class _Backend:
-                def _resolve_compact_notification_target(self, session_ref: str):
-                    if session_ref == "sdk-123":
-                        return ("session:1", "feishu", "chat-1")
-                    return None
-
-            class _Runtime:
-                backend = _Backend()
-
-            sdk_config = MagicMock()
-            sdk_config.hooks = {}
-            sdk_config.compact_notify = True
-
-            builder = OptionsBuilder(
-                shared_resources={
-                    "bus": _Bus(),
-                    "runtime": _Runtime(),
-                    "_session_contexts": {"session:1": ("feishu", "chat-1")},
-                },
-                sdk_config=sdk_config,
-                skill_converter=None,
-                tool_adapter=None,
-                sessions=None,
-                context_builder=None,
-                handoff_policy=None,
-                capability_policy=None,
-            )
-
-            hooks = builder._build_hooks()
-            compact_handler = hooks["PreCompact"][0]["hooks"][0]
-
-            compact_handler.message_callback("sdk-123", "compacted")
-            await asyncio.sleep(0)
-
-            assert len(outbound_calls) == 1
-            assert outbound_calls[0].channel == "feishu"
-            assert outbound_calls[0].chat_id == "chat-1"
-            assert outbound_calls[0].content == "compacted"
+        assert len(outbound_calls) == 1
+        assert outbound_calls[0].channel == "feishu"
+        assert outbound_calls[0].chat_id == "chat-1"
+        assert outbound_calls[0].content == "compacted"
 
     @pytest.mark.asyncio
     async def test_build_hooks_compact_notification_prefers_direct_progress_callback(self):
-        with patch.dict(
-            "sys.modules",
-            {
-                "claude_agent_sdk": MagicMock(),
-                "claude_agent_sdk.types": MagicMock(),
+        from claude_agent_sdk.types import HookMatcher
+        from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+
+        outbound_calls = []
+        progress_calls = []
+
+        class _Bus:
+            async def publish_outbound(self, message):
+                outbound_calls.append(message)
+
+        class _Runtime:
+            def _resolve_compact_notification_target(self, session_ref: str):
+                if session_ref == "sdk-123":
+                    return ("cli:direct", "cli", "direct")
+                return None
+
+            async def _emit_direct_progress_for_session(
+                self,
+                session_key: str,
+                content: str,
+                *,
+                event_type: str,
+                event_data: dict[str, Any] | None = None,
+            ) -> bool:
+                progress_calls.append((session_key, content, event_type, event_data))
+                return True
+
+        sdk_config = MagicMock()
+        sdk_config.hooks = {}
+        sdk_config.compact_notify = True
+
+        builder = OptionsBuilder(
+            shared_resources={
+                "bus": _Bus(),
+                "runtime": _Runtime(),
+                "_session_contexts": {},
             },
-        ):
-            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+            sdk_config=sdk_config,
+            skill_converter=None,
+            tool_adapter=None,
+            sessions=None,
+            context_builder=None,
+            handoff_policy=None,
+            capability_policy=None,
+        )
 
-            outbound_calls = []
-            progress_calls = []
+        hooks = builder._build_hooks()
+        assert isinstance(hooks["PreCompact"][0], HookMatcher)
+        compact_handler = hooks["PreCompact"][0].hooks[0]
 
-            class _Bus:
-                async def publish_outbound(self, message):
-                    outbound_calls.append(message)
+        compact_handler.message_callback("sdk-123", "compacting")
+        await asyncio.sleep(0)
 
-            class _Runtime:
-                def _resolve_compact_notification_target(self, session_ref: str):
-                    if session_ref == "sdk-123":
-                        return ("cli:direct", "cli", "direct")
-                    return None
+        assert progress_calls == [
+            ("cli:direct", "compacting", "system", {"subtype": "pre_compact"})
+        ]
+        assert outbound_calls == []
 
-                async def _emit_direct_progress_for_session(
-                    self,
-                    session_key: str,
-                    content: str,
-                    *,
-                    event_type: str,
-                    event_data: dict[str, Any] | None = None,
-                ) -> bool:
-                    progress_calls.append((session_key, content, event_type, event_data))
-                    return True
+    def test_build_hooks_precompact_survives_sdk_internal_conversion(self):
+        from claude_agent_sdk.client import ClaudeSDKClient
+        from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
 
-            sdk_config = MagicMock()
-            sdk_config.hooks = {}
-            sdk_config.compact_notify = True
+        sdk_config = MagicMock()
+        sdk_config.hooks = {}
+        sdk_config.compact_notify = True
 
-            builder = OptionsBuilder(
-                shared_resources={
-                    "bus": _Bus(),
-                    "runtime": _Runtime(),
-                    "_session_contexts": {},
-                },
-                sdk_config=sdk_config,
-                skill_converter=None,
-                tool_adapter=None,
-                sessions=None,
-                context_builder=None,
-                handoff_policy=None,
-                capability_policy=None,
-            )
+        builder = OptionsBuilder(
+            shared_resources={
+                "bus": MagicMock(),
+                "runtime": MagicMock(),
+                "_session_contexts": {},
+            },
+            sdk_config=sdk_config,
+            skill_converter=None,
+            tool_adapter=None,
+            sessions=None,
+            context_builder=None,
+            handoff_policy=None,
+            capability_policy=None,
+        )
 
-            hooks = builder._build_hooks()
-            compact_handler = hooks["PreCompact"][0]["hooks"][0]
+        hooks = builder._build_hooks()
+        internal = ClaudeSDKClient(options=MagicMock())._convert_hooks_to_internal_format(hooks)
 
-            compact_handler.message_callback("sdk-123", "compacting")
-            await asyncio.sleep(0)
-
-            assert progress_calls == [
-                ("cli:direct", "compacting", "system", {"subtype": "pre_compact"})
-            ]
-            assert outbound_calls == []
+        assert len(internal["PreCompact"][0]["hooks"]) == 1
 
     def test_get_model_name_normalizes_legacy_prefix(self):
         with patch.dict(
