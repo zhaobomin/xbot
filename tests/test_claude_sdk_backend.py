@@ -2008,6 +2008,7 @@ class TestCompactSession:
                 is_error=False,
                 num_turns=1,
                 session_id="sdk-session-1",
+                usage={"input_tokens": 12, "output_tokens": 3},
             )
 
         mock_client.receive_response = _receive
@@ -2019,6 +2020,7 @@ class TestCompactSession:
         assert result["success"] is True
         assert result["tokens_before"] == 1200
         assert result["tokens_after"] == 450
+        assert result["usage"] == {"input_tokens": 12, "output_tokens": 3}
         assert mock_session.metadata["sdk_session_id"] == "sdk-session-1"
         mock_sessions.save.assert_called()
 

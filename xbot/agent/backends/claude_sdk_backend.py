@@ -2590,6 +2590,7 @@ class ClaudeSDKBackend(AgentBackend):
             "tokens_after": 0,
             "success": True,
             "message": "SDK compaction requested",
+            "usage": None,
         }
         saw_result = False
 
@@ -2634,6 +2635,7 @@ class ClaudeSDKBackend(AgentBackend):
 
             if isinstance(message, ResultMessage):
                 saw_result = True
+                compact_stats["usage"] = getattr(message, "usage", None)
                 if session is not None and message.session_id:
                     session.metadata["sdk_session_id"] = message.session_id
                     self.sessions.save(session)
