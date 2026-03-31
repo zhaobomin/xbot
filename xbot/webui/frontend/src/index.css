@@ -1,0 +1,147 @@
+@import "@fontsource/inter/index.css";
+@import "@fontsource/jetbrains-mono/index.css";
+@import "highlight.js/styles/github.css" screen;
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* iOS keyboard / scroll lock:
+   position:fixed + overflow:hidden on body prevents iOS from scrolling the
+   document when the keyboard opens, which would otherwise displace the
+   position:fixed AppLayout container and produce a blank viewport. */
+html {
+  overflow: hidden;
+  height: 100%;
+}
+body {
+  position: fixed;
+  overflow: hidden;
+  width: 100%;
+  height: 100%;
+}
+#root {
+  height: 100%;
+  width: 100%;
+  overflow: hidden;
+}
+
+@layer base {
+  :root {
+    /* === Light Theme — xbot orange palette === */
+    --background: 36 30% 97%;
+    --foreground: 20 30% 12%;
+    --card: 36 25% 99%;
+    --card-foreground: 20 30% 12%;
+    --popover: 36 25% 99%;
+    --popover-foreground: 20 30% 12%;
+    /* Warm orange — from logo "nano" text */
+    --primary: 24 90% 50%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 34 25% 92%;
+    --secondary-foreground: 20 28% 20%;
+    --muted: 34 25% 92%;
+    --muted-foreground: 20 14% 48%;
+    --accent: 24 90% 94%;
+    --accent-foreground: 24 80% 30%;
+    --destructive: 0 84% 58%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 30 18% 91%;
+    --input: 30 22% 86%;
+    --ring: 24 90% 50%;
+    --radius: 0.5rem;
+    /* Sidebar — warm white, orange-tinted actives */
+    --sidebar-bg: 36 30% 99%;
+    --sidebar-fg: 20 28% 18%;
+    --sidebar-muted: 20 14% 52%;
+    --sidebar-active-bg: 24 90% 93%;
+    --sidebar-active-fg: 24 75% 32%;
+    --sidebar-hover-bg: 34 25% 94%;
+    --sidebar-border: 30 22% 88%;
+    --sidebar-section-label: 20 14% 52%;
+    --sidebar-edge-shadow: 3px 0 20px rgba(120, 60, 0, 0.07);
+    --sidebar-glass-opacity: 0.88;
+    /* Glass shadows — directional soft shadows replace hard borders */
+    --shadow-up:    0 -6px 24px rgba(100,60,10,0.07), 0 -1px 4px rgba(100,60,10,0.04);
+    --shadow-down:  0  6px 24px rgba(100,60,10,0.07), 0  1px 4px rgba(100,60,10,0.04);
+    --shadow-right: 6px 0  24px rgba(100,60,10,0.06), 1px 0  4px rgba(100,60,10,0.03);
+    --shadow-card:  0  2px 12px rgba(100,60,10,0.06), 0  1px  3px rgba(100,60,10,0.04);
+  }
+
+  .dark {
+    /* === Dark Theme — warm charcoal, matches orange brand === */
+    --background: 24 8% 10%;
+    --foreground: 30 15% 88%;
+    --card: 24 8% 14%;
+    --card-foreground: 30 15% 88%;
+    --popover: 24 8% 14%;
+    --popover-foreground: 30 15% 88%;
+    /* Keep the same warm orange as primary */
+    --primary: 24 88% 52%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 24 8% 19%;
+    --secondary-foreground: 30 15% 88%;
+    --muted: 24 8% 19%;
+    --muted-foreground: 28 10% 50%;
+    --accent: 24 60% 18%;
+    --accent-foreground: 24 90% 78%;
+    --destructive: 0 62% 45%;
+    --destructive-foreground: 30 15% 88%;
+    --border: 24 8% 18%;
+    --input: 24 8% 22%;
+    --ring: 24 88% 52%;
+    /* Sidebar — slightly deeper warm charcoal */
+    --sidebar-bg: 24 10% 8%;
+    --sidebar-fg: 30 12% 80%;
+    --sidebar-muted: 28 8% 45%;
+    --sidebar-active-bg: 24 60% 18%;
+    --sidebar-active-fg: 24 88% 76%;
+    --sidebar-hover-bg: 24 8% 15%;
+    --sidebar-border: 24 8% 16%;
+    --sidebar-section-label: 28 8% 38%;
+    --sidebar-edge-shadow: 3px 0 20px rgba(0, 0, 0, 0.4);
+    --sidebar-glass-opacity: 0.88;
+    /* Glass shadows */
+    --shadow-up:    0 -6px 24px rgba(0,0,0,0.30), 0 -1px 4px rgba(0,0,0,0.20);
+    --shadow-down:  0  6px 24px rgba(0,0,0,0.30), 0  1px 4px rgba(0,0,0,0.20);
+    --shadow-right: 6px 0  24px rgba(0,0,0,0.35), 1px 0  4px rgba(0,0,0,0.22);
+    --shadow-card:  0  2px 12px rgba(0,0,0,0.25), 0  1px  3px rgba(0,0,0,0.18);
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground font-sans text-base;
+    font-feature-settings: "rlig" 1, "calt" 1;
+  }
+  code, pre, kbd, samp {
+    @apply font-mono;
+  }
+}
+
+/* Prevent iOS Safari from zooming the page when an input gets focus.
+   iOS zooms when the focused element's font-size is below 16px.
+   This rule ensures every input/textarea/select at least reaches 16px
+   on mobile, overriding any component-level text-sm / text-xs class. */
+@media screen and (max-width: 767px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),
+  textarea,
+  select {
+    font-size: max(16px, 1em) !important;
+  }
+}
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  @apply bg-transparent;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-border rounded-full;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-muted-foreground/30;
+}

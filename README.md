@@ -121,6 +121,7 @@ The router provides:
 - [Agent Social Network](#-agent-social-network)
 - [Configuration](#️-configuration)
 - [Multiple Instances](#-multiple-instances)
+- [WebUI](#-webui)
 - [CLI Reference](#-cli-reference)
 - [Docker](#-docker)
 - [Linux Service](#-linux-service)
@@ -150,6 +151,23 @@ The router provides:
     <td align="center">Learn • Memory • Reasoning</td>
   </tr>
 </table>
+
+## 🖥️ WebUI
+
+xbot ships with a standalone WebUI adapter that reuses the nanobot-style frontend while keeping runtime integration low-intrusion.
+
+Start it with:
+
+```bash
+xbot webui serve
+```
+
+Notes:
+
+- The current WebUI runs in single-admin mode. Default login is `admin` / `nanobot`, and you should change the password immediately after first login.
+- Supported core pages are `Dashboard`, `Chat`, `Channels`, `Tools`, `Settings`, and `System Config`.
+- The WebUI exposes xbot-native capabilities only. Unsupported nanobot-specific features are hidden or downgraded instead of being emulated.
+- Channel and MCP runtime status are shown from the adapter's live integration surface; disconnected items are reported explicitly.
 
 ## 📦 Install
 

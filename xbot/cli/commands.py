@@ -37,6 +37,7 @@ from rich.text import Text
 from xbot import __logo__, __version__
 from xbot.agent.runtime import AgentRuntime
 from xbot.agent.interaction.progress_coalescer import ProgressCoalescer
+from xbot.webui.cli import webui_app
 from xbot.config.paths import get_workspace_path
 from xbot.config.schema import Config
 from xbot.logging import configure_logging, get_logger, set_package_logging_enabled
@@ -2187,6 +2188,8 @@ def _print_crew_result(result: Any) -> None:
 
 provider_app = typer.Typer(help="Manage providers")
 app.add_typer(provider_app, name="provider")
+
+app.add_typer(webui_app, name="webui")
 
 
 _LOGIN_HANDLERS: dict[str, Callable] = {}

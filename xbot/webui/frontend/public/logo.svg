@@ -1,0 +1,33 @@
+<svg width="420" height="128" viewBox="0 0 420 128" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect width="420" height="128" rx="28" fill="transparent"/>
+  <g transform="translate(0 0)">
+    <rect width="128" height="128" rx="28" fill="url(#bg)"/>
+    <path d="M30 34L50 22L54 44L64 32L74 44L78 22L98 34L92 74C90.6 83.2 83 90 73.7 90H54.3C45 90 37.4 83.2 36 74L30 34Z" fill="url(#face)"/>
+    <path d="M45 57C48.3137 57 51 54.3137 51 51C51 47.6863 48.3137 45 45 45C41.6863 45 39 47.6863 39 51C39 54.3137 41.6863 57 45 57Z" fill="#7C2D12"/>
+    <path d="M83 57C86.3137 57 89 54.3137 89 51C89 47.6863 86.3137 45 83 45C79.6863 45 77 47.6863 77 51C77 54.3137 79.6863 57 83 57Z" fill="#7C2D12"/>
+    <path d="M54 72L64 62L74 72" stroke="#7C2D12" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M20 104L43 78" stroke="#FB923C" stroke-width="10" stroke-linecap="round"/>
+    <path d="M108 104L85 78" stroke="#FB923C" stroke-width="10" stroke-linecap="round"/>
+  </g>
+  <g transform="translate(152 24)">
+    <path d="M39.4 0H67.6L38 39.8L69.8 80H41.2L22.6 55.4L4.2 80H0L28 41.6L0 0H28.8L44 22.4L39.4 0Z" fill="url(#word)"/>
+    <path d="M98.8 0C115.5 0 129 13.5 129 30.2V49.8C129 66.5 115.5 80 98.8 80H91.4C74.7 80 61.2 66.5 61.2 49.8V30.2C61.2 13.5 74.7 0 91.4 0H98.8ZM98.2 18.8H92C85 18.8 79.4 24.5 79.4 31.4V48.6C79.4 55.5 85 61.2 92 61.2H98.2C105.2 61.2 110.8 55.5 110.8 48.6V31.4C110.8 24.5 105.2 18.8 98.2 18.8Z" fill="url(#word)"/>
+    <path d="M145.4 0H163.6V26.2C169.1 22.1 175.7 20 183.2 20H187.2C202.5 20 214.8 32.3 214.8 47.6V80H196.6V50.2C196.6 43 190.7 37.2 183.6 37.2H180.4C171.3 37.2 163.6 44.5 163.6 53.6V80H145.4V0Z" fill="url(#word)"/>
+    <path d="M267.6 20C283.7 20 296.8 33 296.8 49.2V80H278.6V72.2C272.9 77.6 265.3 80 255.8 80H252.8C238.8 80 227.4 68.7 227.4 54.8C227.4 40.8 238.8 29.4 252.8 29.4H255.8C264.3 29.4 271.5 31.4 277.2 36.2V49C277.2 40.8 270.6 34.2 262.4 34.2H247.8V20H267.6ZM257.6 45.2H253.8C247.7 45.2 242.8 49.9 242.8 55.8C242.8 61.8 247.7 66.6 253.8 66.6H257.6C268.5 66.6 277.2 58.2 277.2 47.6V46.8C272.8 45.7 267 45.2 257.6 45.2Z" fill="url(#word)"/>
+    <path d="M324.8 20H343V31.6C348.2 23.9 356.6 20 367.6 20H371.8V38.2H364.8C351.3 38.2 343 46.4 343 59.6V80H324.8V20Z" fill="url(#word)"/>
+  </g>
+  <defs>
+    <linearGradient id="bg" x1="18" y1="12" x2="110" y2="118" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#FFF7ED"/>
+      <stop offset="1" stop-color="#FDBA74"/>
+    </linearGradient>
+    <linearGradient id="face" x1="36" y1="24" x2="92" y2="90" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F97316"/>
+      <stop offset="1" stop-color="#C2410C"/>
+    </linearGradient>
+    <linearGradient id="word" x1="152" y1="8" x2="360" y2="88" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F97316"/>
+      <stop offset="1" stop-color="#7C2D12"/>
+    </linearGradient>
+  </defs>
+</svg>

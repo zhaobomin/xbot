@@ -200,7 +200,7 @@ class FeishuChannel(BaseChannel):
         self._ws_process = ctx.Process(
             target=run_feishu_ws_worker,
             args=(
-                self.config.model_dump(by_alias=True),
+                self.config.model_dump(),
                 self._ws_event_queue,
                 self._ws_stop_event,
                 self._ws_reconnect_delay,
