@@ -167,6 +167,8 @@ class HeartbeatConfig(Base):
 
     enabled: bool = True
     interval_s: int = 30 * 60  # 30 minutes
+    channel: str = ""
+    chat_id: str = ""
 
 
 class GatewayConfig(Base):

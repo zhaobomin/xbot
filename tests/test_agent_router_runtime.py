@@ -1269,3 +1269,119 @@ async def test_router_runtime_writes_session_runtime_trace(tmp_path) -> None:
     ]
     assert trace[0]["backend"] == "claude_sdk"
     assert trace[-1]["content_preview"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_process_direct_normalizes_bare_cli_session_key(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    class _CaptureBackend(_FakeBackend):
+        async def process(self, context: AgentContext):
+            yield AgentResponse(
+                content=context.session_key,
+                finish_reason="stop",
+            )
+
+    AgentRouter._backends = {"claude_sdk": _CaptureBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("hello", session_key="direct")
+
+    assert response == "cli:direct"
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_process_direct_preserves_prefixed_cli_session_key(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    class _CaptureBackend(_FakeBackend):
+        async def process(self, context: AgentContext):
+            yield AgentResponse(
+                content=context.session_key,
+                finish_reason="stop",
+            )
+
+    AgentRouter._backends = {"claude_sdk": _CaptureBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("hello", session_key="cli:direct")
+
+    assert response == "cli:direct"
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_process_direct_namespaces_reserved_heartbeat_session_key(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    class _CaptureBackend(_FakeBackend):
+        async def process(self, context: AgentContext):
+            yield AgentResponse(
+                content=context.session_key,
+                finish_reason="stop",
+            )
+
+    AgentRouter._backends = {"claude_sdk": _CaptureBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("hello", session_key="heartbeat")
+
+    assert response == "cli:heartbeat"
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_process_direct_rejects_non_cli_prefixed_session_key(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    AgentRouter._backends = {"claude_sdk": _FakeBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    with pytest.raises(ValueError, match="CLI session key"):
+        await runtime.process_direct("hello", session_key="cron:abc")

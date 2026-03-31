@@ -66,6 +66,23 @@ class AgentRuntime:
     COMMAND_ALIASES: dict[str, str] = {}
     SDK_HELP_FALLBACK_COMMANDS = ["/help", "/clear", "/compact"]
 
+    @staticmethod
+    def _normalize_cli_session_key(session_key: str, *, allow_internal: bool) -> str:
+        """Normalize CLI-originated session keys into a safe namespace."""
+        normalized = (session_key or "").strip()
+        if not normalized:
+            return "cli:direct"
+        if allow_internal and (normalized == "heartbeat" or normalized.startswith("cron:")):
+            return normalized
+        if normalized.startswith("cli:"):
+            return normalized
+        if ":" not in normalized:
+            return f"cli:{normalized}"
+        raise ValueError(
+            "CLI session key must be bare or use the 'cli:' prefix; "
+            f"got {normalized!r}"
+        )
+
     def __init__(self, config: Any, shared_resources: dict[str, Any]):
         register_default_backends()
         self.config = config
@@ -971,12 +988,15 @@ class AgentRuntime:
         on_progress=None,
         media: list[str] | None = None,
     ) -> str:
+        normalized_session_key = self._normalize_cli_session_key(
+            session_key, allow_internal=False
+        )
         msg = InboundMessage(
             channel=channel,
             sender_id="user",
             chat_id=chat_id,
             content=content,
-            session_key_override=session_key,
+            session_key_override=normalized_session_key,
             media=media or [],
         )
         if not self._is_local_runtime_command(content):
@@ -1033,12 +1053,15 @@ class AgentRuntime:
         media: list[str] | None = None,
     ) -> str:
         """Run a direct turn with full state/task/lock management."""
+        normalized_session_key = self._normalize_cli_session_key(
+            session_key, allow_internal=True
+        )
         msg = InboundMessage(
             channel=channel,
             sender_id="user",
             chat_id=chat_id,
             content=content,
-            session_key_override=session_key,
+            session_key_override=normalized_session_key,
             media=media or [],
         )
         if not self._is_local_runtime_command(content):

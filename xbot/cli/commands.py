@@ -57,6 +57,54 @@ console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
 logger = get_logger(__name__)
 
+
+def _resolve_heartbeat_target(
+    *,
+    config: Config,
+    enabled_channels: list[str],
+    session_manager: Any,
+) -> tuple[str, str] | None:
+    """Resolve a stable heartbeat delivery target at gateway startup."""
+    heartbeat_cfg = config.gateway.heartbeat
+    enabled = set(enabled_channels)
+
+    explicit_channel = (heartbeat_cfg.channel or "").strip()
+    explicit_chat_id = (heartbeat_cfg.chat_id or "").strip()
+    if explicit_channel or explicit_chat_id:
+        if not explicit_channel or not explicit_chat_id:
+            logger.warning(
+                "Heartbeat target ignored: both channel and chat_id are required; "
+                "got channel=%r chat_id=%r",
+                explicit_channel,
+                explicit_chat_id,
+            )
+            return None
+        if explicit_channel not in enabled:
+            logger.warning(
+                "Heartbeat target ignored: channel %r is not enabled. Enabled channels: %s",
+                explicit_channel,
+                sorted(enabled),
+            )
+            return None
+        return explicit_channel, explicit_chat_id
+
+    if session_manager is None or not hasattr(session_manager, "list_sessions"):
+        return None
+
+    for item in session_manager.list_sessions():
+        key = item.get("key") or ""
+        if ":" not in key:
+            continue
+        channel, chat_id = key.split(":", 1)
+        if channel in {"cli", "system", "heartbeat"}:
+            continue
+        if channel.startswith("cron"):
+            continue
+        if channel in enabled and chat_id:
+            return channel, chat_id
+
+    return None
+
 # ---------------------------------------------------------------------------
 # File reference parsing for @path syntax
 # ---------------------------------------------------------------------------
@@ -647,26 +695,24 @@ def gateway(
     # Create channel manager
     channels = ChannelManager(config, bus)
 
-    def _pick_heartbeat_target() -> tuple[str, str]:
-        """Pick a routable channel/chat target for heartbeat-triggered messages."""
-        enabled = set(channels.enabled_channels)
-        # Prefer the most recently updated non-internal session on an enabled channel.
-        for item in session_manager.list_sessions():
-            key = item.get("key") or ""
-            if ":" not in key:
-                continue
-            channel, chat_id = key.split(":", 1)
-            if channel in {"cli", "system"}:
-                continue
-            if channel in enabled and chat_id:
-                return channel, chat_id
-        # Fallback keeps prior behavior but remains explicit.
-        return "cli", "direct"
+    heartbeat_target = _resolve_heartbeat_target(
+        config=config,
+        enabled_channels=channels.enabled_channels,
+        session_manager=session_manager,
+    )
+    if heartbeat_target is None:
+        logger.info("Heartbeat target unresolved at startup; execute-only mode enabled")
+    else:
+        logger.info(
+            "Heartbeat target resolved at startup: %s:%s",
+            heartbeat_target[0],
+            heartbeat_target[1],
+        )
 
     # Create heartbeat service
     async def on_heartbeat_execute(tasks: str) -> str:
         """Phase 2: execute heartbeat tasks through the full agent loop."""
-        channel, chat_id = _pick_heartbeat_target()
+        channel, chat_id = heartbeat_target or ("cli", "direct")
 
         async def _silent(*_args, **_kwargs):
             pass
@@ -682,9 +728,9 @@ def gateway(
     async def on_heartbeat_notify(response: str) -> None:
         """Deliver a heartbeat response to the user's channel."""
         from xbot.bus.events import OutboundMessage
-        channel, chat_id = _pick_heartbeat_target()
-        if channel == "cli":
+        if heartbeat_target is None:
             return  # No external channel available to deliver to
+        channel, chat_id = heartbeat_target
         await bus.publish_outbound(OutboundMessage(channel=channel, chat_id=chat_id, content=response))
 
     async def _heartbeat_llm_call(*args, **kwargs):

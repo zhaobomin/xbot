@@ -114,6 +114,144 @@ class TestClaudeSDKBackendLogging:
             assert f"Test log: {test_msg}" in caplog.text
 
 
+class TestClaudeSDKBackendMessageBoundary:
+    """Tests for stale-message boundary detection."""
+
+    @staticmethod
+    def _patch_boundary_types(monkeypatch):
+        from xbot.agent.backends import claude_sdk_backend as backend_module
+
+        class FakeSystemMessage:
+            def __init__(self, subtype: str, data=None):
+                self.subtype = subtype
+                self.data = data or {}
+
+        class FakeAssistantMessage:
+            def __init__(self, label: str):
+                self.label = label
+
+        class FakeUserMessage:
+            def __init__(self, parent_tool_use_id=None):
+                self.parent_tool_use_id = parent_tool_use_id
+
+        class FakeResultMessage:
+            pass
+
+        monkeypatch.setattr(backend_module, "SystemMessage", FakeSystemMessage)
+        monkeypatch.setattr(backend_module, "AssistantMessage", FakeAssistantMessage)
+        monkeypatch.setattr(backend_module, "UserMessage", FakeUserMessage)
+        monkeypatch.setattr(backend_module, "ResultMessage", FakeResultMessage)
+        return (
+            backend_module,
+            FakeSystemMessage,
+            FakeAssistantMessage,
+            FakeUserMessage,
+            FakeResultMessage,
+        )
+
+    @staticmethod
+    async def _collect_boundary_messages(backend, session_key: str, messages: list[object]) -> list[object]:
+        class FakeClient:
+            def __init__(self, queued_messages: list[object]):
+                self._queued_messages = queued_messages
+
+            async def receive_messages(self):
+                for message in self._queued_messages:
+                    yield message
+
+        return [
+            message
+            async for message in backend._receive_with_boundary(FakeClient(messages), session_key)
+        ]
+
+    @pytest.mark.asyncio
+    async def test_receive_with_boundary_discards_stale_before_init_and_yields_rest(
+        self, monkeypatch
+    ):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        (
+            _backend_module,
+            FakeSystemMessage,
+            FakeAssistantMessage,
+            FakeUserMessage,
+            FakeResultMessage,
+        ) = self._patch_boundary_types(monkeypatch)
+        backend = ClaudeSDKBackend()
+
+        stale_assistant = FakeAssistantMessage("stale")
+        init = FakeSystemMessage("init", {"session_id": "sid-1"})
+        fresh_assistant = FakeAssistantMessage("fresh")
+        result = FakeResultMessage()
+
+        seen = await self._collect_boundary_messages(
+            backend,
+            "feishu:test-user",
+            [stale_assistant, init, fresh_assistant, result],
+        )
+
+        assert seen == [init, fresh_assistant, result]
+
+    @pytest.mark.asyncio
+    async def test_receive_with_boundary_init_yields_content_and_filters_user_message(
+        self, monkeypatch
+    ):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        (
+            _backend_module,
+            FakeSystemMessage,
+            FakeAssistantMessage,
+            FakeUserMessage,
+            FakeResultMessage,
+        ) = self._patch_boundary_types(monkeypatch)
+        backend = ClaudeSDKBackend()
+
+        init = FakeSystemMessage("init", {"session_id": "sid-1"})
+        user_msg = FakeUserMessage(parent_tool_use_id=None)
+        fresh_assistant = FakeAssistantMessage("fresh")
+        result = FakeResultMessage()
+
+        seen = await self._collect_boundary_messages(
+            backend,
+            "feishu:test-user",
+            [init, user_msg, fresh_assistant, result],
+        )
+
+        # UserMessage is a protocol echo and must be filtered out
+        assert seen == [init, fresh_assistant, result]
+
+    @pytest.mark.asyncio
+    async def test_receive_with_boundary_discards_all_stale_before_init(
+        self, monkeypatch
+    ):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        (
+            _backend_module,
+            FakeSystemMessage,
+            FakeAssistantMessage,
+            FakeUserMessage,
+            FakeResultMessage,
+        ) = self._patch_boundary_types(monkeypatch)
+        backend = ClaudeSDKBackend()
+
+        stale_one = FakeAssistantMessage("stale-1")
+        stale_two = FakeAssistantMessage("stale-2")
+        stale_user = FakeUserMessage(parent_tool_use_id=None)
+        init = FakeSystemMessage("init", {"session_id": "sid-1"})
+        fresh_assistant = FakeAssistantMessage("fresh")
+        result = FakeResultMessage()
+
+        seen = await self._collect_boundary_messages(
+            backend,
+            "feishu:test-user",
+            [stale_one, stale_two, stale_user, init, fresh_assistant, result],
+        )
+
+        assert seen == [init, fresh_assistant, result]
+
+
 class TestClaudeSDKBackendShutdown:
     """Tests for backend shutdown behavior."""
 
@@ -1402,7 +1540,8 @@ class TestStopActiveTask:
         mock_client.query = AsyncMock()
 
         async def _receive():
-            from claude_agent_sdk.types import UserMessage
+            from claude_agent_sdk.types import SystemMessage, UserMessage
+            yield SystemMessage(subtype="init", data={"session_id": "s1"})
             yield UserMessage(content="hello", parent_tool_use_id=None)
             yield ResultMessage(
                 subtype="success",
@@ -1692,7 +1831,8 @@ class TestInputRequiredRecoveryFlow:
         client1.disconnect = AsyncMock(return_value=None)
 
         async def _receive_1():
-            from claude_agent_sdk.types import UserMessage
+            from claude_agent_sdk.types import SystemMessage, UserMessage
+            yield SystemMessage(subtype="init", data={"session_id": "s1"})
             yield UserMessage(content="first task", parent_tool_use_id=None)
             yield TaskStartedMessage(
                 subtype="task_started",
@@ -1722,7 +1862,8 @@ class TestInputRequiredRecoveryFlow:
         client2.disconnect = AsyncMock(return_value=None)
 
         async def _receive_2():
-            from claude_agent_sdk.types import UserMessage
+            from claude_agent_sdk.types import SystemMessage, UserMessage
+            yield SystemMessage(subtype="init", data={"session_id": "s2"})
             yield UserMessage(content="second task", parent_tool_use_id=None)
             yield ResultMessage(
                 subtype="success",

@@ -732,6 +732,59 @@ def test_gateway_heartbeat_uses_managed_direct(monkeypatch, tmp_path: Path) -> N
     runtime.process_direct.assert_not_awaited()
 
 
+def test_resolve_heartbeat_target_prefers_explicit_configured_target(tmp_path: Path) -> None:
+    from xbot.cli.commands import _resolve_heartbeat_target
+
+    config = Config()
+    config.gateway.heartbeat.channel = "telegram"
+    config.gateway.heartbeat.chat_id = "chat-123"
+
+    session_manager = MagicMock(list_sessions=lambda: [
+        {"key": "slack:older", "updated_at": "2026-01-01T00:00:00"},
+    ])
+
+    assert _resolve_heartbeat_target(
+        config=config,
+        enabled_channels=["telegram", "slack"],
+        session_manager=session_manager,
+    ) == ("telegram", "chat-123")
+
+
+def test_resolve_heartbeat_target_falls_back_to_startup_session_snapshot() -> None:
+    from xbot.cli.commands import _resolve_heartbeat_target
+
+    config = Config()
+    session_manager = MagicMock(list_sessions=lambda: [
+        {"key": "cli:direct", "updated_at": "2026-01-03T00:00:00"},
+        {"key": "telegram:newer", "updated_at": "2026-01-02T00:00:00"},
+        {"key": "slack:older", "updated_at": "2026-01-01T00:00:00"},
+    ])
+
+    assert _resolve_heartbeat_target(
+        config=config,
+        enabled_channels=["telegram", "slack"],
+        session_manager=session_manager,
+    ) == ("telegram", "newer")
+
+
+def test_resolve_heartbeat_target_returns_none_for_invalid_explicit_target() -> None:
+    from xbot.cli.commands import _resolve_heartbeat_target
+
+    config = Config()
+    config.gateway.heartbeat.channel = "telegram"
+    config.gateway.heartbeat.chat_id = "chat-123"
+
+    session_manager = MagicMock(list_sessions=lambda: [
+        {"key": "telegram:newer", "updated_at": "2026-01-02T00:00:00"},
+    ])
+
+    assert _resolve_heartbeat_target(
+        config=config,
+        enabled_channels=["slack"],
+        session_manager=session_manager,
+    ) is None
+
+
 def test_gateway_uses_configured_port_when_cli_flag_is_missing(monkeypatch, tmp_path: Path) -> None:
     config_file = tmp_path / "instance" / "config.json"
     config_file.parent.mkdir(parents=True)

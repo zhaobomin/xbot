@@ -1619,59 +1619,57 @@ class ClaudeSDKBackend(AgentBackend):
     ) -> AsyncIterator["ResultMessage | AssistantMessage | SystemMessage | StreamEvent | TaskStartedMessage | TaskNotificationMessage | TaskProgressMessage"]:
         """Wrap ``client.receive_messages()`` with stale-message boundary detection.
 
-        The SDK CLI echoes a ``UserMessage`` (with ``parent_tool_use_id is None``)
-        when it accepts a new user query.  Any messages arriving *before* that echo
-        are residual output from the previous request still sitting in the
+        Each ``query()`` triggers a ``SystemMessage(subtype='init')`` as the very
+        first message of the new response.  Any messages arriving *before* that
+        ``init`` are residual output from the previous request still sitting in the
         ``MemoryObjectStream`` buffer and must be discarded.
 
-        After the boundary ``UserMessage`` is seen (or the safety-valve fires),
-        all subsequent messages are yielded normally.  ``ResultMessage`` terminates
+        ``UserMessage`` is a protocol-level echo (history replay or tool-result
+        acknowledgement) and is **always** filtered out, regardless of boundary
+        state.
+
+        After the ``init`` message is seen (or the safety-valve fires), all
+        subsequent messages are yielded normally.  ``ResultMessage`` terminates
         the iterator – mirroring the behaviour of ``receive_response()``.
         """
         boundary_crossed = False
         stale_count = 0
 
         async for message in client.receive_messages():
+            # --- protocol filter: UserMessage is never yielded upstream ---
+            if isinstance(message, UserMessage):
+                continue
+
             # --- boundary detection phase ---
             if not boundary_crossed:
-                if isinstance(message, UserMessage) and message.parent_tool_use_id is None:
-                    boundary_crossed = True
-                    logger.debug(
-                        "[SDK Boundary] UserMessage boundary crossed for session=%s "
-                        "(discarded %d stale message(s))",
-                        session_key,
-                        stale_count,
-                    )
-                    continue  # UserMessage itself is not yielded
-
                 if isinstance(message, SystemMessage) and message.subtype == "init":
-                    # init messages are always valid (client initialisation)
                     boundary_crossed = True
                     logger.debug(
-                        "[SDK Boundary] init SystemMessage treated as boundary for session=%s "
+                        "[SDK Boundary] init boundary crossed for session=%s "
                         "(discarded %d stale message(s))",
                         session_key,
                         stale_count,
                     )
-                    # fall through – yield this message
-                else:
-                    stale_count += 1
-                    logger.warning(
-                        "[SDK Boundary] Discarding stale pre-boundary message #%d: "
-                        "type=%s, session=%s",
+                    yield message
+                    continue
+
+                stale_count += 1
+                logger.warning(
+                    "[SDK Boundary] Discarding stale pre-boundary message #%d: "
+                    "type=%s, session=%s",
+                    stale_count,
+                    type(message).__name__,
+                    session_key,
+                )
+                if stale_count >= self._MAX_STALE_DISCARD:
+                    logger.error(
+                        "[SDK Boundary] Safety valve: forcing boundary after %d "
+                        "stale messages for session=%s",
                         stale_count,
-                        type(message).__name__,
                         session_key,
                     )
-                    if stale_count >= self._MAX_STALE_DISCARD:
-                        logger.error(
-                            "[SDK Boundary] Safety valve: forcing boundary after %d "
-                            "stale messages for session=%s",
-                            stale_count,
-                            session_key,
-                        )
-                        boundary_crossed = True
-                    continue
+                    boundary_crossed = True
+                continue
 
             # --- normal phase ---
             yield message
