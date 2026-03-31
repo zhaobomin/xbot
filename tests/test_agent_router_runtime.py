@@ -84,6 +84,72 @@ async def test_router_runtime_process_direct_routes_through_selected_backend(tmp
 
 
 @pytest.mark.asyncio
+async def test_router_runtime_blocks_local_only_noninteractive_slash_command(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("/voice")
+
+    assert "TODO" in response
+    assert "/voice" in response
+    assert backend.initialized is False
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_blocks_local_only_noninteractive_slash_command_with_args(
+    tmp_path,
+) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("/voice summary of latest run")
+
+    assert "TODO" in response
+    assert "/voice" in response
+    assert backend.initialized is False
+
+
+@pytest.mark.asyncio
 async def test_router_runtime_help_includes_dynamic_sdk_commands(tmp_path) -> None:
     from xbot.agent.runtime import AgentRuntime
     from xbot.bus.queue import MessageBus
@@ -119,6 +185,42 @@ async def test_router_runtime_help_includes_dynamic_sdk_commands(tmp_path) -> No
     assert "/compact" in response
     assert "Claude SDK slash commands" in response
     assert backend.initialized is True
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_help_separates_local_only_commands_from_sdk_commands(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    class _BackendWithLocalOnly(_FakeBackend):
+        async def get_session_commands(self, session_key: str) -> list[str]:
+            return ["/compact", "/clear", "/help", "/voice"]
+
+    backend = _BackendWithLocalOnly()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("!help")
+
+    assert "Claude SDK slash commands:" in response
+    assert "Claude local-only commands (TODO in xbot):" in response
+    assert "/voice — local command, not supported in xbot headless mode yet" in response
 
 
 @pytest.mark.asyncio

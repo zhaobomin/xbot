@@ -484,6 +484,38 @@ class ClaudeSDKBackend(AgentBackend):
         result = session_contexts.get(sdk_session_id)
         return result if isinstance(result, tuple) else None
 
+    def _resolve_compact_notification_target(
+        self, session_ref: str
+    ) -> tuple[str, str, str] | None:
+        """Resolve compact-hook target from either session_key or SDK session_id."""
+        context = self._get_context_by_session_key(session_ref)
+        if context is not None:
+            channel, chat_id = context
+            return (session_ref, channel, chat_id)
+
+        sdk_context = self._get_context_by_sdk_id(session_ref)
+        if sdk_context is None:
+            return None
+
+        channel, chat_id = sdk_context
+        if self._uses_session_store():
+            entry = self._session_store.get_by_sdk_id(session_ref)
+            if entry is not None:
+                for session_key in self._session_store.list_keys():
+                    if self._session_store.get(session_key) is entry:
+                        return (session_key, channel, chat_id)
+
+        mapped_session_key = self._get_sdk_session_index().get(session_ref)
+        if isinstance(mapped_session_key, str):
+            return (mapped_session_key, channel, chat_id)
+
+        session_contexts = self._get_session_contexts()
+        for session_key, value in session_contexts.items():
+            if value == session_ref:
+                return (session_key, channel, chat_id)
+
+        return None
+
     def _set_context_in_entry(self, session_key: str, channel: str, chat_id: str) -> None:
         """Set channel and chat_id in SessionEntry.
 

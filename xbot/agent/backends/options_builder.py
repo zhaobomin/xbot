@@ -148,60 +148,76 @@ class OptionsBuilder:
             from xbot.agent.hooks import CompactHookHandler
             from xbot.bus.events import OutboundMessage
 
-            def send_compact_notification(session_key: str, message: str) -> None:
+            def send_compact_notification(session_ref: str, message: str) -> None:
                 """Send compact notification to the user's channel."""
                 logger.info(
-                    "[Compact Notification] Called with session_key='%s', message='%s'",
-                    session_key,
+                    "[Compact Notification] Called with session_ref='%s', message='%s'",
+                    session_ref,
                     message[:50] if message else "",
                 )
 
                 bus = self._shared_resources.get("bus")
                 if bus is None:
-                    logger.warning("[Compact Notification] No bus available for session: %s", session_key)
+                    logger.warning("[Compact Notification] No bus available for session: %s", session_ref)
                     return
 
-                # Look up channel and chat_id for this session via backend helper first.
-                context_info = None
                 runtime = self._shared_resources.get("runtime")
                 backend = getattr(runtime, "backend", None) if runtime is not None else None
-                resolver = getattr(backend, "_get_context_by_session_key", None)
+                resolver = getattr(backend, "_resolve_compact_notification_target", None)
+                if not callable(resolver) and runtime is not None:
+                    resolver = getattr(runtime, "_resolve_compact_notification_target", None)
+                resolved_target = None
                 if callable(resolver):
                     try:
-                        context_info = resolver(session_key)
+                        resolved_target = resolver(session_ref)
                     except Exception as e:
                         logger.debug(
-                            "[Compact Notification] Backend context resolver failed for '%s': %s",
-                            session_key,
+                            "[Compact Notification] Backend target resolver failed for '%s': %s",
+                            session_ref,
                             e,
                         )
+                elif backend is not None:
+                    legacy_resolver = getattr(backend, "_get_context_by_session_key", None)
+                    if callable(legacy_resolver):
+                        try:
+                            context_info = legacy_resolver(session_ref)
+                            if isinstance(context_info, tuple):
+                                resolved_target = (session_ref, context_info[0], context_info[1])
+                        except Exception as e:
+                            logger.debug(
+                                "[Compact Notification] Legacy backend context resolver failed for '%s': %s",
+                                session_ref,
+                                e,
+                            )
 
-                # Fallback to legacy mapping during transition.
                 session_contexts = self._shared_resources.get("_session_contexts", {})
-                if context_info is None:
-                    context_info = session_contexts.get(session_key)
+                if resolved_target is None:
+                    context_info = session_contexts.get(session_ref)
+                    if isinstance(context_info, tuple):
+                        resolved_target = (session_ref, context_info[0], context_info[1])
 
                 # DEBUG: Log all available session keys for troubleshooting
                 logger.info(
-                    "[Compact Notification] Looking up session_key='%s'. "
-                    "Resolved context=%s available legacy keys=%s",
-                    session_key,
-                    context_info,
+                    "[Compact Notification] Looking up session_ref='%s'. "
+                    "Resolved target=%s available legacy keys=%s",
+                    session_ref,
+                    resolved_target,
                     list(session_contexts.keys()),
                 )
 
-                if context_info is None:
+                if resolved_target is None:
                     logger.warning(
-                        "[Compact Notification] No context info for session_key='%s'. "
+                        "[Compact Notification] No context info for session_ref='%s'. "
                         "Available keys: %s. The notification will NOT be delivered.",
-                        session_key,
+                        session_ref,
                         list(session_contexts.keys()),
                     )
                     return
 
-                channel, chat_id = context_info
+                session_key, channel, chat_id = resolved_target
                 logger.info(
-                    "[Compact Notification] Found context: channel='%s', chat_id='%s'",
+                    "[Compact Notification] Found target: session_key='%s', channel='%s', chat_id='%s'",
+                    session_key,
                     channel,
                     chat_id,
                 )
@@ -209,12 +225,31 @@ class OptionsBuilder:
 
                 async def _send():
                     try:
+                        if runtime is not None:
+                            emit_direct = getattr(runtime, "_emit_direct_progress_for_session", None)
+                            if callable(emit_direct):
+                                handled = await emit_direct(
+                                    session_key,
+                                    message,
+                                    event_type="system",
+                                    event_data={"subtype": "pre_compact"},
+                                )
+                                if handled:
+                                    logger.debug(
+                                        "Sent compact notification via direct progress for %s",
+                                        session_key,
+                                    )
+                                    return
                         await bus.publish_outbound(
                             OutboundMessage(
                                 channel=channel,
                                 chat_id=chat_id,
                                 content=message,
-                                metadata={"_progress": True, "_event_type": "system"},
+                                metadata={
+                                    "_progress": True,
+                                    "_event_type": "system",
+                                    "_event_data": {"subtype": "pre_compact"},
+                                },
                             )
                         )
                         logger.debug(f"Sent compact notification to {channel}:{chat_id}")
@@ -228,7 +263,7 @@ class OptionsBuilder:
                     asyncio.ensure_future(_send(), loop=loop)
                 except RuntimeError as e:
                     logger.warning(
-                        f"Cannot send compact notification for session {session_key}: "
+                        f"Cannot send compact notification for session {session_ref}: "
                         f"no running event loop available. Error: {e}"
                     )
 

@@ -1,6 +1,7 @@
 """Tests for Claude SDK Backend."""
 
 import asyncio
+from typing import Any
 import time
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -250,6 +251,93 @@ class TestClaudeSDKBackendMessageBoundary:
         )
 
         assert seen == [init, fresh_assistant, result]
+
+    @pytest.mark.asyncio
+    async def test_receive_with_boundary_filters_replay_user_after_assistant(
+        self, monkeypatch
+    ):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        (
+            _backend_module,
+            FakeSystemMessage,
+            FakeAssistantMessage,
+            FakeUserMessage,
+            FakeResultMessage,
+        ) = self._patch_boundary_types(monkeypatch)
+        backend = ClaudeSDKBackend()
+
+        init = FakeSystemMessage("init", {"session_id": "sid-1"})
+        assistant_one = FakeAssistantMessage("assistant-1")
+        replay_user = FakeUserMessage(parent_tool_use_id=None)
+        assistant_two = FakeAssistantMessage("assistant-2")
+        result = FakeResultMessage()
+
+        seen = await self._collect_boundary_messages(
+            backend,
+            "feishu:test-user",
+            [init, assistant_one, replay_user, assistant_two, result],
+        )
+
+        assert seen == [init, assistant_one, assistant_two, result]
+
+    @pytest.mark.asyncio
+    async def test_receive_with_boundary_discards_result_before_init_as_stale(
+        self, monkeypatch
+    ):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        (
+            _backend_module,
+            FakeSystemMessage,
+            FakeAssistantMessage,
+            FakeUserMessage,
+            FakeResultMessage,
+        ) = self._patch_boundary_types(monkeypatch)
+        backend = ClaudeSDKBackend()
+
+        stale_result = FakeResultMessage()
+        init = FakeSystemMessage("init", {"session_id": "sid-1"})
+        fresh_assistant = FakeAssistantMessage("fresh")
+        fresh_result = FakeResultMessage()
+
+        seen = await self._collect_boundary_messages(
+            backend,
+            "feishu:test-user",
+            [stale_result, init, fresh_assistant, fresh_result],
+        )
+
+        assert seen == [init, fresh_assistant, fresh_result]
+
+    @pytest.mark.asyncio
+    async def test_receive_with_boundary_discards_stale_user_before_init_and_keeps_active_stream(
+        self, monkeypatch
+    ):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        (
+            _backend_module,
+            FakeSystemMessage,
+            FakeAssistantMessage,
+            FakeUserMessage,
+            FakeResultMessage,
+        ) = self._patch_boundary_types(monkeypatch)
+        backend = ClaudeSDKBackend()
+
+        stale_user = FakeUserMessage(parent_tool_use_id=None)
+        stale_result = FakeResultMessage()
+        init = FakeSystemMessage("init", {"session_id": "sid-1"})
+        fresh_assistant = FakeAssistantMessage("fresh")
+        replay_user = FakeUserMessage(parent_tool_use_id=None)
+        fresh_result = FakeResultMessage()
+
+        seen = await self._collect_boundary_messages(
+            backend,
+            "feishu:test-user",
+            [stale_user, stale_result, init, fresh_assistant, replay_user, fresh_result],
+        )
+
+        assert seen == [init, fresh_assistant, fresh_result]
 
 
 class TestClaudeSDKBackendShutdown:
@@ -989,6 +1077,127 @@ class TestOptionsBuilder:
             assert outbound_calls[0].channel == "feishu"
             assert outbound_calls[0].chat_id == "chat-1"
             assert outbound_calls[0].content == "compacted"
+
+    @pytest.mark.asyncio
+    async def test_build_hooks_compact_notification_resolves_sdk_session_id_via_backend_helper(self):
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+
+            outbound_calls = []
+
+            class _Bus:
+                async def publish_outbound(self, message):
+                    outbound_calls.append(message)
+
+            class _Backend:
+                def _resolve_compact_notification_target(self, session_ref: str):
+                    if session_ref == "sdk-123":
+                        return ("session:1", "feishu", "chat-1")
+                    return None
+
+            class _Runtime:
+                backend = _Backend()
+
+            sdk_config = MagicMock()
+            sdk_config.hooks = {}
+            sdk_config.compact_notify = True
+
+            builder = OptionsBuilder(
+                shared_resources={
+                    "bus": _Bus(),
+                    "runtime": _Runtime(),
+                    "_session_contexts": {"session:1": ("feishu", "chat-1")},
+                },
+                sdk_config=sdk_config,
+                skill_converter=None,
+                tool_adapter=None,
+                sessions=None,
+                context_builder=None,
+                handoff_policy=None,
+                capability_policy=None,
+            )
+
+            hooks = builder._build_hooks()
+            compact_handler = hooks["PreCompact"][0]["hooks"][0]
+
+            compact_handler.message_callback("sdk-123", "compacted")
+            await asyncio.sleep(0)
+
+            assert len(outbound_calls) == 1
+            assert outbound_calls[0].channel == "feishu"
+            assert outbound_calls[0].chat_id == "chat-1"
+            assert outbound_calls[0].content == "compacted"
+
+    @pytest.mark.asyncio
+    async def test_build_hooks_compact_notification_prefers_direct_progress_callback(self):
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+
+            outbound_calls = []
+            progress_calls = []
+
+            class _Bus:
+                async def publish_outbound(self, message):
+                    outbound_calls.append(message)
+
+            class _Runtime:
+                def _resolve_compact_notification_target(self, session_ref: str):
+                    if session_ref == "sdk-123":
+                        return ("cli:direct", "cli", "direct")
+                    return None
+
+                async def _emit_direct_progress_for_session(
+                    self,
+                    session_key: str,
+                    content: str,
+                    *,
+                    event_type: str,
+                    event_data: dict[str, Any] | None = None,
+                ) -> bool:
+                    progress_calls.append((session_key, content, event_type, event_data))
+                    return True
+
+            sdk_config = MagicMock()
+            sdk_config.hooks = {}
+            sdk_config.compact_notify = True
+
+            builder = OptionsBuilder(
+                shared_resources={
+                    "bus": _Bus(),
+                    "runtime": _Runtime(),
+                    "_session_contexts": {},
+                },
+                sdk_config=sdk_config,
+                skill_converter=None,
+                tool_adapter=None,
+                sessions=None,
+                context_builder=None,
+                handoff_policy=None,
+                capability_policy=None,
+            )
+
+            hooks = builder._build_hooks()
+            compact_handler = hooks["PreCompact"][0]["hooks"][0]
+
+            compact_handler.message_callback("sdk-123", "compacting")
+            await asyncio.sleep(0)
+
+            assert progress_calls == [
+                ("cli:direct", "compacting", "system", {"subtype": "pre_compact"})
+            ]
+            assert outbound_calls == []
 
     def test_get_model_name_normalizes_legacy_prefix(self):
         with patch.dict(

@@ -65,6 +65,21 @@ class AgentRuntime:
     LOCAL_RUNTIME_COMMAND_PREFIXES = ("!model",)
     COMMAND_ALIASES: dict[str, str] = {}
     SDK_HELP_FALLBACK_COMMANDS = ["/help", "/clear", "/compact"]
+    # Synced from the current Claude Code bundle's local commands that declare
+    # `type: 'local'` and `supportsNonInteractive: false`. These commands
+    # should never be forwarded to SDK/headless execution in xbot.
+    LOCAL_ONLY_NONINTERACTIVE_SLASH_COMMANDS = {
+        "/bridge-kick",
+        "/clear",
+        "/install-slack-app",
+        "/keybindings",
+        "/reload-plugins",
+        "/rewind",
+        "/stickers",
+        "/thinkback-play",
+        "/vim",
+        "/voice",
+    }
 
     @staticmethod
     def _normalize_cli_session_key(session_key: str, *, allow_internal: bool) -> str:
@@ -118,6 +133,9 @@ class AgentRuntime:
         # Session state coordinator (unified state management)
         self._state_coordinator = SessionStateCoordinator(self, self._session_store)
         self._response_handlers = RuntimeResponseHandlers(self)
+        self._direct_progress_callbacks: dict[
+            str, Callable[..., Coroutine[None, None, None]]
+        ] = {}
 
         # Retry count tracking for interaction responses (max 3 retries for invalid answers)
         self._interaction_retry_counts: dict[str, int] = {}
@@ -287,6 +305,7 @@ class AgentRuntime:
         on_progress: Callable[..., Coroutine[None, None, None]] | None = None,
     ) -> OutboundMessage | None:
         cmd = msg.content.strip().lower()
+        slash_cmd = self._extract_slash_command_name(msg.content)
 
         # Handle local slash aliases without forwarding to the SDK.
         if cmd in ("/clear", "/new", "/reset"):
@@ -316,6 +335,16 @@ class AgentRuntime:
         if cmd == "/restart":
             self._spawn_background_task(self._do_restart(), "restart")
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="Restarting...")
+        if slash_cmd in self.LOCAL_ONLY_NONINTERACTIVE_SLASH_COMMANDS:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=(
+                    f"TODO: xbot 暂未支持 Claude 本地命令 {slash_cmd} "
+                    "(local + non-interactive=false)，当前不会转发到 SDK。"
+                ),
+                metadata=msg.metadata or {},
+            )
 
         # Debug: Log slash commands going to SDK
         if cmd.startswith("/"):
@@ -999,10 +1028,20 @@ class AgentRuntime:
             session_key_override=normalized_session_key,
             media=media or [],
         )
-        if not self._is_local_runtime_command(content):
+        slash_cmd = self._extract_slash_command_name(content)
+        is_local_only_noninteractive = (
+            slash_cmd in self.LOCAL_ONLY_NONINTERACTIVE_SLASH_COMMANDS
+            and slash_cmd not in {"/clear"}
+        )
+        if not self._is_local_runtime_command(content) and not is_local_only_noninteractive:
             await self.initialize()
-        response = await self._handle_message(msg, on_progress=on_progress)
-        return response.content if response else ""
+        if on_progress is not None:
+            self._register_direct_progress_callback(normalized_session_key, on_progress)
+        try:
+            response = await self._handle_message(msg, on_progress=on_progress)
+            return response.content if response else ""
+        finally:
+            self._unregister_direct_progress_callback(normalized_session_key, on_progress)
 
     async def _run_managed_direct_turn(
         self,
@@ -1098,6 +1137,51 @@ class AgentRuntime:
         stripped = content.strip()
         alias = cls.COMMAND_ALIASES.get(stripped.lower())
         return alias if alias else content
+
+    @staticmethod
+    def _extract_slash_command_name(content: str) -> str | None:
+        stripped = content.strip()
+        if not stripped.startswith("/"):
+            return None
+        command = stripped.split(maxsplit=1)[0].lower()
+        return command or None
+
+    def _register_direct_progress_callback(
+        self,
+        session_key: str,
+        callback: Callable[..., Coroutine[None, None, None]],
+    ) -> None:
+        self._direct_progress_callbacks[session_key] = callback
+
+    def _unregister_direct_progress_callback(
+        self,
+        session_key: str,
+        callback: Callable[..., Coroutine[None, None, None]] | None,
+    ) -> None:
+        if callback is None:
+            return
+        current = self._direct_progress_callbacks.get(session_key)
+        if current is callback:
+            self._direct_progress_callbacks.pop(session_key, None)
+
+    async def _emit_direct_progress_for_session(
+        self,
+        session_key: str,
+        content: str,
+        *,
+        event_type: str,
+        event_data: dict[str, Any] | None = None,
+    ) -> bool:
+        callback = self._direct_progress_callbacks.get(session_key)
+        if callback is None:
+            return False
+        await self._emit_progress(
+            callback,
+            content,
+            event_type=event_type,
+            event_data=event_data,
+        )
+        return True
 
     def _handle_model_command(self, msg: InboundMessage, content: str) -> OutboundMessage:
         """处理 !model 命令。
@@ -1232,7 +1316,12 @@ class AgentRuntime:
         # returns only a partial command list (regression guard for "/help incomplete").
         discovered = set(await self.router.backend.get_session_commands(session_key))
         baseline = set(self.SDK_HELP_FALLBACK_COMMANDS)
-        sdk_commands = sorted(discovered | baseline)
+        unsupported_local_only = sorted(
+            command
+            for command in discovered
+            if command in self.LOCAL_ONLY_NONINTERACTIVE_SLASH_COMMANDS and command not in {"/clear"}
+        )
+        sdk_commands = sorted((discovered | baseline) - set(unsupported_local_only))
 
         # Get workspace commands
         workspace_commands = self.commands.list_commands()
@@ -1275,6 +1364,11 @@ class AgentRuntime:
         lines.append("")
         lines.append("Claude SDK slash commands:")
         lines.extend(sdk_commands)
+
+        if unsupported_local_only:
+            lines.append("")
+            lines.append("Claude local-only commands (TODO in xbot):")
+            lines.extend(f"{command} — local command, not supported in xbot headless mode yet" for command in unsupported_local_only)
 
         return "\n".join(lines)
 
