@@ -119,6 +119,8 @@ class OptionsBuilder:
 
         # Build hooks including compact notification hook
         hooks = self._build_hooks()
+        extra_args = dict(getattr(self._sdk_config, "extra_args", {}) or {})
+        extra_args.setdefault("replay-user-messages", None)
 
         return ClaudeAgentOptions(
             cwd=self._shared_resources.get("workspace", defaults.workspace),
@@ -132,6 +134,7 @@ class OptionsBuilder:
             hooks=hooks,
             system_prompt=self._build_system_prompt(),
             env=env,
+            extra_args=extra_args,
             can_use_tool=can_use_tool,
             disallowed_tools=disallowed_tools,
         )

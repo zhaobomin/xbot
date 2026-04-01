@@ -1212,6 +1212,39 @@ class TestOptionsBuilder:
 
         assert len(internal["PreCompact"][0]["hooks"]) == 1
 
+    def test_build_enables_replay_user_messages_extra_arg(self):
+        from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+        from xbot.config.schema import Config
+
+        config = Config()
+        config.agents.defaults.provider = "anthropic"
+        config.agents.defaults.model = "claude-sonnet-4-5"
+        config.providers.anthropic.api_key = "test-key"
+
+        sdk_config = MagicMock()
+        sdk_config.hooks = {}
+        sdk_config.compact_notify = False
+        sdk_config.max_turns = 4
+        sdk_config.permission_mode = "acceptEdits"
+        sdk_config.include_partial_messages = False
+        sdk_config.disallowed_tools = ["WebFetch", "WebSearch"]
+        sdk_config.extra_args = {}
+
+        builder = OptionsBuilder(
+            shared_resources={"config": config},
+            sdk_config=sdk_config,
+            skill_converter=None,
+            tool_adapter=None,
+            sessions=None,
+            context_builder=None,
+            handoff_policy=None,
+            capability_policy=None,
+        )
+
+        options = builder.build()
+
+        assert options.extra_args["replay-user-messages"] is None
+
     def test_get_model_name_normalizes_legacy_prefix(self):
         with patch.dict(
             "sys.modules",
@@ -1905,6 +1938,98 @@ class TestStopActiveTask:
 
         # Backend should stop reading stream after ResultMessage and not hit sentinel error.
         assert responses == []
+
+    @pytest.mark.asyncio
+    async def test_process_plain_text_query_uses_streaming_user_message_with_request_uuid(self):
+        from claude_agent_sdk.types import ResultMessage, SystemMessage
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.protocol import AgentContext
+
+        backend = ClaudeSDKBackend()
+        backend.sessions = None
+        backend._message_converter = None
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
+
+        async def _receive():
+            yield SystemMessage(subtype="init", data={"session_id": "s1"})
+            yield ResultMessage(
+                subtype="success",
+                duration_ms=1,
+                duration_api_ms=1,
+                is_error=False,
+                num_turns=1,
+                session_id="s1",
+            )
+
+        mock_client.receive_messages = _receive
+        backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
+
+        context = AgentContext(session_key="test_session", prompt="hello world")
+        _ = [msg async for msg in backend.process(context)]
+
+        mock_client.query.assert_awaited_once()
+        streamed_prompt = mock_client.query.await_args.args[0]
+        session_id = mock_client.query.await_args.kwargs["session_id"]
+        assert not isinstance(streamed_prompt, str)
+
+        streamed_messages = []
+        async for item in streamed_prompt:
+            streamed_messages.append(item)
+
+        assert len(streamed_messages) == 1
+        assert streamed_messages[0]["type"] == "user"
+        assert streamed_messages[0]["message"] == {"role": "user", "content": "hello world"}
+        assert streamed_messages[0]["parent_tool_use_id"] is None
+        assert streamed_messages[0]["session_id"] == session_id
+        assert isinstance(streamed_messages[0]["uuid"], str)
+        assert backend._get_request_id_from_entry("test_session") is None
+
+    @pytest.mark.asyncio
+    async def test_process_releases_client_after_long_running_turn_and_preserves_sdk_context(self):
+        from claude_agent_sdk.types import ResultMessage, SystemMessage, TaskStartedMessage
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.protocol import AgentContext
+
+        backend = ClaudeSDKBackend()
+        backend.sessions = None
+        backend._message_converter = None
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
+
+        async def _receive():
+            yield SystemMessage(subtype="init", data={"session_id": "s1"})
+            yield TaskStartedMessage(
+                subtype="task_started",
+                data={},
+                task_id="task-1",
+                description="long task",
+                uuid="u1",
+                session_id="s1",
+            )
+            yield ResultMessage(
+                subtype="success",
+                duration_ms=1,
+                duration_api_ms=1,
+                is_error=False,
+                num_turns=1,
+                session_id="s1",
+            )
+
+        mock_client.receive_messages = _receive
+        backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
+        backend.release_client = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        context = AgentContext(session_key="cli:direct", prompt="hello")
+        _ = [msg async for msg in backend.process(context)]
+
+        backend.release_client.assert_awaited_once_with(
+            "cli:direct",
+            reason="post_long_task",
+            preserve_sdk_context=True,
+        )
 
 
 class TestSessionCommands:

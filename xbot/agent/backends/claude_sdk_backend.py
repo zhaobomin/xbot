@@ -144,6 +144,7 @@ class ClaudeSDKBackend(AgentBackend):
         self._client_models: dict[str, str] = {}  # Track model used for each client (for model change detection)
         self._active_task_ids: dict[str, str] = {}
         self._active_request_ids: dict[str, str] = {}  # Track request IDs for request-response validation
+        self._long_running_turns: set[str] = set()
         self._session_commands: dict[str, list[str]] = {}
         self._delegation_traces: list[DelegationTrace] = []
         self._delegation_traces_lock = asyncio.Lock()
@@ -1628,6 +1629,7 @@ class ClaudeSDKBackend(AgentBackend):
         prompt: str,
         media: list[str],
         session_id: str,
+        request_uuid: str | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Yield a single user message with image blocks and/or file references.
 
@@ -1653,8 +1655,25 @@ class ClaudeSDKBackend(AgentBackend):
             "parent_tool_use_id": None,
             "session_id": session_id,
         }
+        if request_uuid is not None:
+            message["uuid"] = request_uuid
 
         yield message
+
+    async def _build_text_query(
+        self,
+        prompt: str,
+        session_id: str,
+        request_uuid: str,
+    ) -> AsyncIterator[dict[str, Any]]:
+        """Yield a single text-only user message with a caller-generated UUID."""
+        yield {
+            "type": "user",
+            "message": {"role": "user", "content": prompt},
+            "parent_tool_use_id": None,
+            "session_id": session_id,
+            "uuid": request_uuid,
+        }
 
     async def _cleanup_stale_clients_unlocked(self) -> list[tuple["ClaudeSDKClient", str]]:
         """Remove clients that have been idle longer than TTL.
@@ -1863,6 +1882,22 @@ class ClaudeSDKBackend(AgentBackend):
         async for message in client.receive_messages():
             # --- protocol filter: UserMessage is never yielded upstream ---
             if isinstance(message, UserMessage):
+                active_request_uuid = self._get_request_id_from_entry(session_key)
+                message_uuid = getattr(message, "uuid", None)
+                relation = (
+                    "current_echo"
+                    if active_request_uuid
+                    and message_uuid
+                    and message_uuid == active_request_uuid
+                    else "historical_replay"
+                )
+                logger.debug(
+                    "[SDK Boundary] Filtering user message: session=%s relation=%s uuid=%s active_request_uuid=%s",
+                    session_key,
+                    relation,
+                    message_uuid,
+                    active_request_uuid,
+                )
                 continue
 
             # --- boundary detection phase ---
@@ -2111,20 +2146,29 @@ class ClaudeSDKBackend(AgentBackend):
                 )
                 logger.info(f"[Backend Process] Sending query to SDK for session={context.session_key}")
                 _query_session_id = self._query_session_id(context.session_key, session)
+                request_uuid = str(uuid.uuid4())
 
                 # Clear task_id before new request to detect stale messages
                 self._set_task_id_in_entry(context.session_key, None)
+                self._set_request_id_in_entry(context.session_key, request_uuid)
+                self._long_running_turns.discard(context.session_key)
 
                 if context.media:
                     logger.info(f"[Backend Process] Multimodal query with {len(context.media)} media file(s)")
                     await client.query(
-                        self._build_multimodal_query(prompt, context.media, _query_session_id),
+                        self._build_multimodal_query(
+                            prompt,
+                            context.media,
+                            _query_session_id,
+                            request_uuid,
+                        ),
                         session_id=_query_session_id,
                     )
                 else:
-                    # For non-media queries, we can't set uuid via string prompt
-                    # The SDK will generate its own uuid
-                    await client.query(prompt, session_id=_query_session_id)
+                    await client.query(
+                        self._build_text_query(prompt, _query_session_id, request_uuid),
+                        session_id=_query_session_id,
+                    )
                 logger.info(f"[Backend Process] Query sent, waiting for response for session={context.session_key}")
 
                 first_sdk_message_logged = False
@@ -2179,10 +2223,14 @@ class ClaudeSDKBackend(AgentBackend):
                             f"prev_task_id={prev_task_id or 'none'}"
                         )
                         self._set_task_id_in_entry(context.session_key, message.task_id)
+                        self._long_running_turns.add(context.session_key)
+                    if isinstance(message, TaskProgressMessage):
+                        self._long_running_turns.add(context.session_key)
                     if (
                         isinstance(message, TaskNotificationMessage)
                         and message.status in {"completed", "failed", "stopped"}
                     ):
+                        self._long_running_turns.add(context.session_key)
                         # === 诊断日志 + Task ID验证: TaskNotification 终态 ===
                         current_task_id = self._get_task_id_from_entry(context.session_key)
                         logger.info(
@@ -2231,6 +2279,15 @@ class ClaudeSDKBackend(AgentBackend):
 
                 # After async for loop ends, check if we got a ResultMessage
                 if received_result:
+                    if (
+                        not self._is_ephemeral_session(context.session_key)
+                        and context.session_key in self._long_running_turns
+                    ):
+                        await self.release_client(
+                            context.session_key,
+                            reason="post_long_task",
+                            preserve_sdk_context=True,
+                        )
                     break  # Got valid result, exit retry loop
 
                 # No ResultMessage received - likely stale task notification
@@ -2427,6 +2484,8 @@ class ClaudeSDKBackend(AgentBackend):
                 finish_reason="error",
             )
         finally:
+            self._set_request_id_in_entry(context.session_key, None)
+            self._long_running_turns.discard(context.session_key)
             # Clear permission handler session context
             if self._permission_handler and hasattr(self._permission_handler, "clear_session_context"):
                 self._permission_handler.clear_session_context(context.session_key)
