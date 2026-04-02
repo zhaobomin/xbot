@@ -15,6 +15,7 @@ from xbot.logging import get_logger
 
 logger = get_logger(__name__)
 
+from xbot.agent.mcp_config import resolve_mcp_server_config
 from xbot.agent.capabilities.catalog import CapabilityCatalog
 from xbot.config.provider_registry import get_provider_spec
 from xbot.config.sdk_resolver import detect_provider_from_model, resolve_sdk_provider_and_model
@@ -330,6 +331,18 @@ class OptionsBuilder:
                         )
                         continue
 
+                resolved_config, unresolved = resolve_mcp_server_config(mcp_servers[name])
+                if unresolved:
+                    mcp_servers.pop(name, None)
+                    logger.warning(
+                        "MCP server '%s' has unresolved env vars (%s), skipping for Claude SDK",
+                        name,
+                        ", ".join(unresolved),
+                    )
+                    continue
+
+                mcp_servers[name] = self._sanitize_mcp_server_for_sdk(resolved_config)
+
                 # Validate that the config is JSON serializable
                 try:
                     json.dumps(mcp_servers[name])
@@ -348,6 +361,41 @@ class OptionsBuilder:
             mcp_servers.update(tools_mcp)
 
         return mcp_servers
+
+    @staticmethod
+    def _sanitize_mcp_server_for_sdk(server_config: dict[str, Any]) -> dict[str, Any]:
+        """Translate xbot MCP config to the Claude CLI MCP schema.
+
+        xbot supports a few local-only conveniences that the Claude CLI schema
+        rejects, notably `streamableHttp`, `tool_timeout`, and `enabled_tools`.
+        """
+        cfg = copy.deepcopy(server_config)
+
+        if cfg.get("type") == "streamableHttp":
+            cfg["type"] = "http"
+
+        # These are consumed by xbot's own MCP client layer, not by Claude Code.
+        cfg.pop("tool_timeout", None)
+        cfg.pop("enabled_tools", None)
+
+        transport_type = cfg.get("type")
+        if transport_type is None:
+            if cfg.get("command"):
+                transport_type = "stdio"
+            elif cfg.get("url"):
+                transport_type = "sse" if str(cfg.get("url", "")).rstrip("/").endswith("/sse") else "http"
+
+        if transport_type in {"http", "sse"}:
+            cfg["type"] = transport_type
+            cfg.pop("command", None)
+            cfg.pop("args", None)
+            cfg.pop("env", None)
+        elif transport_type == "stdio":
+            cfg.pop("type", None)
+            cfg.pop("url", None)
+            cfg.pop("headers", None)
+
+        return cfg
 
     def _get_resume_session(self, session_key: str | None) -> str | None:
         """Get resume session ID if available."""

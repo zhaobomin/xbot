@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.memory-ingest</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/zhaobomin/Documents/projects/thirdpart/xbot/.venv/bin/memory-ingest</string>
+    <string>run</string>
+    <string>--config</string>
+    <string>/Users/zhaobomin/Documents/projects/thirdpart/xbot/memory-ingest/memory-ingest.toml.example</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>14400</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>StandardOutPath</key>
+  <string>/Users/zhaobomin/.memory-ingest/launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/zhaobomin/.memory-ingest/launchd-error.log</string>
+</dict>
+</plist>

@@ -965,7 +965,7 @@ class TestOptionsBuilder:
             assert builder._detect_provider_from_model("unknown-model") == "anthropic"
 
     def test_build_mcp_servers_with_pydantic_config(self):
-        """Test that MCPServerConfig Pydantic objects are converted to dicts for JSON serialization."""
+        """Test that MCPServerConfig objects are converted to Claude CLI-safe dicts."""
         import json
 
         with patch.dict(
@@ -1014,12 +1014,107 @@ class TestOptionsBuilder:
             assert mcp_servers["test_server"]["command"] == "npx"
             assert mcp_servers["test_server"]["args"] == ["-y", "@example/mcp-server"]
             assert mcp_servers["test_server"]["env"] == {"API_KEY": "test123"}
-            assert mcp_servers["test_server"]["tool_timeout"] == 60
+            assert "tool_timeout" not in mcp_servers["test_server"]
 
             # Critical: Verify JSON serialization works
             json_str = json.dumps(mcp_servers)
             assert "test_server" in json_str
             assert "npx" in json_str
+
+    def test_build_mcp_servers_maps_streamable_http_to_http_and_strips_xbot_only_fields(self):
+        """HTTP MCP config should be adapted to the Claude CLI schema."""
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+            from xbot.config.schema import MCPServerConfig
+
+            server_config = MCPServerConfig(
+                type="streamableHttp",
+                url="http://127.0.0.1:8766/mcp/xbot/http/aliu",
+                headers={"X-Test": "1"},
+                tool_timeout=45,
+                enabled_tools=["search_memory", "list_memories"],
+            )
+
+            mock_tools = MagicMock()
+            mock_tools.mcp_servers = {"openmemory": server_config}
+
+            mock_config = MagicMock()
+            mock_config.tools = mock_tools
+
+            builder = OptionsBuilder(
+                shared_resources={"config": mock_config},
+                sdk_config=None,
+                skill_converter=None,
+                tool_adapter=None,
+                sessions=None,
+                context_builder=None,
+                handoff_policy=None,
+                capability_policy=None,
+            )
+
+            mcp_servers = builder._build_mcp_servers()
+
+            assert mcp_servers["openmemory"] == {
+                "type": "http",
+                "url": "http://127.0.0.1:8766/mcp/xbot/http/aliu",
+                "headers": {"X-Test": "1"},
+            }
+
+    def test_build_mcp_servers_expands_env_headers_and_skips_unresolved_servers(self, monkeypatch):
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+            from xbot.config.schema import MCPServerConfig
+
+            monkeypatch.setenv("MEM0_API_KEY", "m0-test")
+
+            mock_tools = MagicMock()
+            mock_tools.mcp_servers = {
+                "mem0": MCPServerConfig(
+                    type="streamableHttp",
+                    url="https://mcp.mem0.ai/mcp",
+                    headers={"Authorization": "Token ${MEM0_API_KEY}"},
+                    enabled_tools=["search_memories", "get_memories"],
+                ),
+                "broken": MCPServerConfig(
+                    type="streamableHttp",
+                    url="https://example.com/${MISSING_TOKEN}",
+                ),
+            }
+
+            mock_config = MagicMock()
+            mock_config.tools = mock_tools
+
+            builder = OptionsBuilder(
+                shared_resources={"config": mock_config},
+                sdk_config=None,
+                skill_converter=None,
+                tool_adapter=None,
+                sessions=None,
+                context_builder=None,
+                handoff_policy=None,
+                capability_policy=None,
+            )
+
+            mcp_servers = builder._build_mcp_servers()
+
+            assert mcp_servers["mem0"] == {
+                "type": "http",
+                "url": "https://mcp.mem0.ai/mcp",
+                "headers": {"Authorization": "Token m0-test"},
+            }
+            assert "broken" not in mcp_servers
 
     @pytest.mark.asyncio
     async def test_build_hooks_compact_notification_prefers_backend_context_helper(self):

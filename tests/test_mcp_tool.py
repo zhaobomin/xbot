@@ -280,3 +280,30 @@ async def test_connect_mcp_servers_enabled_tools_warns_on_unknown_entries(
     assert "enabledTools entries not found: unknown" in warnings[-1]
     assert "Available raw names: demo" in warnings[-1]
     assert "Available wrapped names: mcp_test_demo" in warnings[-1]
+
+
+@pytest.mark.asyncio
+async def test_connect_mcp_servers_skips_server_with_unresolved_env_vars(
+    fake_mcp_runtime: dict[str, object | None],
+) -> None:
+    fake_mcp_runtime["session"] = _make_fake_session(["demo"])
+    registry = ToolRegistry()
+
+    stack = AsyncExitStack()
+    await stack.__aenter__()
+    try:
+        await connect_mcp_servers(
+            {
+                "mem0": MCPServerConfig(
+                    type="streamableHttp",
+                    url="https://mcp.mem0.ai/mcp",
+                    headers={"Authorization": "Token ${MEM0_API_KEY}"},
+                )
+            },
+            registry,
+            stack,
+        )
+    finally:
+        await stack.aclose()
+
+    assert registry.tool_names == []

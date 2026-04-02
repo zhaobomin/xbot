@@ -10,6 +10,7 @@ from xbot.logging import get_logger
 
 logger = get_logger(__name__)
 
+from xbot.agent.mcp_config import resolve_mcp_server_config
 from xbot.agent.tools.base import Tool
 from xbot.agent.tools.registry import ToolRegistry
 
@@ -105,12 +106,26 @@ async def _connect_single_mcp_server(
         # Create isolated stack for this server
         conn.stack = AsyncExitStack()
 
-        transport_type = cfg.type
+        raw_cfg = {
+            "type": getattr(cfg, "type", None),
+            "command": getattr(cfg, "command", ""),
+            "args": list(getattr(cfg, "args", []) or []),
+            "env": dict(getattr(cfg, "env", {}) or {}),
+            "url": getattr(cfg, "url", ""),
+            "headers": dict(getattr(cfg, "headers", {}) or {}),
+        }
+        resolved_cfg, unresolved = resolve_mcp_server_config(raw_cfg)
+        if unresolved:
+            conn.error = f"Unresolved env vars: {', '.join(unresolved)}"
+            logger.warning("MCP server '%s': %s", name, conn.error)
+            return conn
+
+        transport_type = resolved_cfg["type"]
         if not transport_type:
-            if cfg.command:
+            if resolved_cfg["command"]:
                 transport_type = "stdio"
-            elif cfg.url:
-                transport_type = "sse" if cfg.url.rstrip("/").endswith("/sse") else "streamableHttp"
+            elif resolved_cfg["url"]:
+                transport_type = "sse" if resolved_cfg["url"].rstrip("/").endswith("/sse") else "streamableHttp"
             else:
                 logger.warning("MCP server '%s': no command or url configured, skipping", name)
                 conn.error = "No command or url configured"
@@ -119,7 +134,9 @@ async def _connect_single_mcp_server(
         # Setup transport based on type
         if transport_type == "stdio":
             params = StdioServerParameters(
-                command=cfg.command, args=cfg.args, env=cfg.env or None
+                command=resolved_cfg["command"],
+                args=resolved_cfg["args"],
+                env=resolved_cfg["env"] or None,
             )
             read, write = await conn.stack.enter_async_context(stdio_client(params))
         elif transport_type == "sse":
@@ -128,7 +145,7 @@ async def _connect_single_mcp_server(
                 timeout: httpx.Timeout | None = None,
                 auth: httpx.Auth | None = None,
             ) -> httpx.AsyncClient:
-                merged_headers = {**(cfg.headers or {}), **(headers or {})}
+                merged_headers = {**(resolved_cfg["headers"] or {}), **(headers or {})}
                 return httpx.AsyncClient(
                     headers=merged_headers or None,
                     follow_redirects=True,
@@ -136,18 +153,18 @@ async def _connect_single_mcp_server(
                     auth=auth,
                 )
             read, write = await conn.stack.enter_async_context(
-                sse_client(cfg.url, httpx_client_factory=httpx_client_factory)
+                sse_client(resolved_cfg["url"], httpx_client_factory=httpx_client_factory)
             )
         elif transport_type == "streamableHttp":
             http_client = await conn.stack.enter_async_context(
                 httpx.AsyncClient(
-                    headers=cfg.headers or None,
+                    headers=resolved_cfg["headers"] or None,
                     follow_redirects=True,
                     timeout=None,
                 )
             )
             read, write, _ = await conn.stack.enter_async_context(
-                streamable_http_client(cfg.url, http_client=http_client)
+                streamable_http_client(resolved_cfg["url"], http_client=http_client)
             )
         else:
             logger.warning("MCP server '%s': unknown transport type '%s'", name, transport_type)
