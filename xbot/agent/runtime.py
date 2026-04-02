@@ -4,8 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import os
+import shlex
+import subprocess
 import sys
+import webbrowser
 from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, TypeAlias
@@ -36,6 +40,7 @@ from xbot.agent.state.machine import (
 )
 from xbot.agent.monitoring.trace import append_session_trace
 from xbot.bus.events import InboundMessage, OutboundMessage
+from xbot.config.paths import get_data_dir
 
 
 # Type alias for progress callback
@@ -66,20 +71,62 @@ class AgentRuntime:
     COMMAND_ALIASES: dict[str, str] = {}
     SDK_HELP_FALLBACK_COMMANDS = ["/help", "/clear", "/compact"]
     # Synced from the current Claude Code bundle's local commands that declare
-    # `type: 'local'` and `supportsNonInteractive: false`. These commands
-    # should never be forwarded to SDK/headless execution in xbot.
-    LOCAL_ONLY_NONINTERACTIVE_SLASH_COMMANDS = {
-        "/bridge-kick",
-        "/clear",
-        "/install-slack-app",
-        "/keybindings",
-        "/reload-plugins",
-        "/rewind",
-        "/stickers",
-        "/thinkback-play",
-        "/vim",
-        "/voice",
+    # `type: 'local'` and `supportsNonInteractive: false`. xbot handles a
+    # compatible subset locally and blocks the rest instead of forwarding them.
+    LOCAL_NONINTERACTIVE_COMMANDS: dict[str, dict[str, Any]] = {
+        "/bridge-kick": {
+            "supported": False,
+            "description": "Bridge debug injection command",
+        },
+        "/clear": {
+            "supported": False,
+            "description": "Clear conversation context",
+        },
+        "/install-slack-app": {
+            "supported": True,
+            "supported_channels": None,
+            "description": "Open Claude Slack app installation page",
+            "fallback": None,
+        },
+        "/keybindings": {
+            "supported": True,
+            "supported_channels": {"cli"},
+            "description": "Create/open xbot keybindings template",
+            "fallback": "/keybindings is only available in CLI sessions.",
+        },
+        "/reload-plugins": {
+            "supported": False,
+            "description": "Activate pending plugin changes in the current session",
+        },
+        "/rewind": {
+            "supported": False,
+            "description": "Restore the code and/or conversation to a previous point",
+        },
+        "/stickers": {
+            "supported": True,
+            "supported_channels": None,
+            "description": "Open Claude Code stickers page",
+            "fallback": None,
+        },
+        "/thinkback-play": {
+            "supported": False,
+            "description": "Play the thinkback animation",
+        },
+        "/vim": {
+            "supported": True,
+            "supported_channels": {"cli"},
+            "description": "Toggle editor mode flag between vim and normal",
+            "fallback": "/vim is only available in CLI sessions.",
+        },
+        "/voice": {
+            "supported": False,
+            "description": "Toggle voice mode",
+        },
     }
+    LOCAL_SETTINGS_FILE = "local_command_settings.json"
+    KEYBINDINGS_FILE = "keybindings.json"
+    STICKERS_URL = "https://www.stickermule.com/claudecode"
+    SLACK_APP_URL = "https://slack.com/marketplace/A08SF47R6P4-claude"
 
     @staticmethod
     def _normalize_cli_session_key(session_key: str, *, allow_internal: bool) -> str:
@@ -208,9 +255,10 @@ class AgentRuntime:
 
     async def _handle_permission_response(self, msg: InboundMessage) -> bool:
         """Delegate permission-response handling."""
-        handler = self._response_handlers
+        handler = getattr(self, "_response_handlers", None)
         if handler is None:
             handler = RuntimeResponseHandlers(self)
+            setattr(self, "_response_handlers", handler)
         return await handler.handle_permission_response(msg)
 
     async def _dispatch(self, msg: InboundMessage) -> None:
@@ -287,13 +335,45 @@ class AgentRuntime:
                     )
                 )
         finally:
-            await self._settle_session_after_turn(msg.session_key)
+            settler = getattr(self, "_settle_session_after_turn", None)
+            if callable(settler):
+                await settler(msg.session_key)
+            else:
+                has_pending_permission = False
+                has_pending_interaction = False
+                if self.bus is not None:
+                    has_pending_permission = bool(
+                        self.bus.get_pending_request_for_session(msg.session_key)
+                    )
+                    has_pending_interaction = bool(
+                        self.bus.get_pending_interaction_for_session(msg.session_key)
+                    )
+                if has_pending_permission:
+                    self._state_coordinator.force_transition(
+                        msg.session_key,
+                        SessionPhase.WAITING_PERMISSION,
+                        reason="pending_permission",
+                    )
+                elif has_pending_interaction:
+                    self._state_coordinator.force_transition(
+                        msg.session_key,
+                        SessionPhase.WAITING_INTERACTION,
+                        reason="pending_interaction",
+                    )
+                elif not self._state_coordinator.get_active_tasks(msg.session_key):
+                    self._state_coordinator.force_transition(
+                        msg.session_key,
+                        SessionPhase.IDLE,
+                        reason="dispatch_end",
+                    )
+                self._log_state_snapshot(msg.session_key, "dispatch_end")
 
     async def _handle_interaction_response(self, msg: InboundMessage) -> bool:
         """Delegate interaction-response handling."""
-        handler = self._response_handlers
+        handler = getattr(self, "_response_handlers", None)
         if handler is None:
             handler = RuntimeResponseHandlers(self)
+            setattr(self, "_response_handlers", handler)
 
         # Get retry count for this session (handler manages the count internally)
         retry_count = getattr(self, '_interaction_retry_counts', {}).get(msg.session_key, 0)
@@ -308,21 +388,14 @@ class AgentRuntime:
         slash_cmd = self._extract_slash_command_name(msg.content)
 
         # Handle local slash aliases without forwarding to the SDK.
-        if cmd in ("/clear", "/new", "/reset"):
-            logger.info(f"[Local Command] Clearing session locally: {cmd!r} (session={msg.session_key})")
-            await self._do_clear_session(msg.session_key)
-            return OutboundMessage(
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                content="♻️ Session cleared. Starting fresh!\n📌 Use `!stop` to stop tasks without clearing context.",
-                metadata=msg.metadata or {},
-            )
+        if cmd in ("/clear", "/new", "/reset") or cmd.startswith("/reset "):
+            return await self._handle_clear_alias(msg)
         if cmd == "/help":
             await self.initialize()
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content=await self._help_text(msg.session_key),
+                content=await self._help_text(msg.session_key, msg.channel),
                 metadata=msg.metadata or {},
             )
         if cmd == "/state":
@@ -335,7 +408,9 @@ class AgentRuntime:
         if cmd == "/restart":
             self._spawn_background_task(self._do_restart(), "restart")
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content="Restarting...")
-        if slash_cmd in self.LOCAL_ONLY_NONINTERACTIVE_SLASH_COMMANDS:
+        if self._is_supported_local_noninteractive_command(slash_cmd):
+            return await self._handle_supported_local_slash_command(msg, slash_cmd)
+        if self._is_known_local_noninteractive_command(slash_cmd):
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
@@ -364,7 +439,7 @@ class AgentRuntime:
             return OutboundMessage(
                 channel=msg.channel,
                 chat_id=msg.chat_id,
-                content=await self._help_text(msg.session_key),
+                content=await self._help_text(msg.session_key, msg.channel),
                 metadata=msg.metadata or {},
             )
         if cmd == "!restart":
@@ -717,7 +792,15 @@ class AgentRuntime:
         Also syncs the session phase after task removal to ensure correct state.
         """
         def _on_task_done(task: asyncio.Task) -> None:
-            self._finalize_task_completion(session_key, task)
+            finalizer = getattr(self, "_finalize_task_completion", None)
+            if callable(finalizer):
+                finalizer(session_key, task)
+                return
+            self._state_coordinator.unregister_task(session_key, task)
+            self._state_coordinator.cleanup_empty_task_list(session_key)
+            sync_phase = getattr(self, "_sync_session_phase", None)
+            if callable(sync_phase):
+                sync_phase(session_key)
 
         return _on_task_done
 
@@ -1030,7 +1113,7 @@ class AgentRuntime:
         )
         slash_cmd = self._extract_slash_command_name(content)
         is_local_only_noninteractive = (
-            slash_cmd in self.LOCAL_ONLY_NONINTERACTIVE_SLASH_COMMANDS
+            self._is_known_local_noninteractive_command(slash_cmd)
             and slash_cmd not in {"/clear"}
         )
         if not self._is_local_runtime_command(content) and not is_local_only_noninteractive:
@@ -1311,7 +1394,7 @@ class AgentRuntime:
             + (f" | {backend_summary}" if backend_summary else "")
         )
 
-    async def _help_text(self, session_key: str) -> str:
+    async def _help_text(self, session_key: str, channel: str = "cli") -> str:
         # Keep baseline runtime-compatible commands visible even when SDK discovery
         # returns only a partial command list (regression guard for "/help incomplete").
         discovered = set(await self.router.backend.get_session_commands(session_key))
@@ -1319,9 +1402,12 @@ class AgentRuntime:
         unsupported_local_only = sorted(
             command
             for command in discovered
-            if command in self.LOCAL_ONLY_NONINTERACTIVE_SLASH_COMMANDS and command not in {"/clear"}
+            if self._is_known_local_noninteractive_command(command)
+            and command not in {"/clear"}
+            and not self._is_supported_local_noninteractive_command(command)
         )
         sdk_commands = sorted((discovered | baseline) - set(unsupported_local_only))
+        visible_local_commands = self._visible_local_slash_commands(msg_channel=channel)
 
         # Get workspace commands
         workspace_commands = self.commands.list_commands()
@@ -1339,7 +1425,6 @@ class AgentRuntime:
             "!stop — Stop current task (preserves context)",
             "!reset — Full reset, delete all context and SDK session",
             "/reset — Local reset alias",
-            "        --soft: Keep SDK context, only clear state",
             "!state — Show runtime session diagnostics",
             "/state — Local diagnostics alias",
             "!restart — Restart the bot process",
@@ -1353,6 +1438,16 @@ class AgentRuntime:
             "",
             "SDK commands (forwarded):",
         ]
+
+        if visible_local_commands:
+            lines[lines.index("SDK commands (forwarded):"):lines.index("SDK commands (forwarded):")] = [
+                "Claude local commands supported in xbot:",
+                *[
+                    f"{command} — {self.LOCAL_NONINTERACTIVE_COMMANDS[command]['description']}"
+                    for command in visible_local_commands
+                ],
+                "",
+            ]
 
         # Add workspace commands if any
         if workspace_commands_lines:
@@ -1676,6 +1771,223 @@ class AgentRuntime:
                 logger.info(f"Session cleared via terminate_session: {session_key}")
         except Exception as e:
             logger.warning(f"Error clearing session {session_key}: {e}")
+
+    async def _handle_clear_alias(self, msg: InboundMessage) -> OutboundMessage:
+        logger.info(
+            "[Local Command] Clear alias locally: %r (session=%s)",
+            msg.content,
+            msg.session_key,
+        )
+
+        await self.initialize()
+        state = await self._terminate_session(
+            msg.session_key,
+            hard_reset=False,
+        )
+        await self._do_clear_session(msg.session_key)
+
+        parts = ["♻️ Session cleared. Starting fresh!"]
+        if state["cleared_requests"].get("permission") or state["cleared_requests"].get("interaction"):
+            cleared = []
+            if state["cleared_requests"].get("permission"):
+                cleared.append("pending permission")
+            if state["cleared_requests"].get("interaction"):
+                cleared.append("pending interaction")
+            parts.append(f"Cleared: {', '.join(cleared)}.")
+        parts.append("📌 Use `!stop` to stop tasks without clearing context.")
+
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content="\n".join(parts),
+            metadata=msg.metadata or {},
+        )
+
+    async def _handle_supported_local_slash_command(
+        self,
+        msg: InboundMessage,
+        slash_cmd: str,
+    ) -> OutboundMessage:
+        blocked_reason = self._unsupported_local_slash_reason(slash_cmd, msg.channel)
+        if blocked_reason:
+            return OutboundMessage(
+                channel=msg.channel,
+                chat_id=msg.chat_id,
+                content=blocked_reason,
+                metadata=msg.metadata or {},
+            )
+
+        if slash_cmd == "/vim":
+            mode = self._toggle_local_editor_mode()
+            self._apply_cli_editor_mode(mode)
+            content = (
+                f"Editor mode set to {mode}. "
+                + (
+                    "Use Escape key to toggle between INSERT and NORMAL modes."
+                    if mode == "vim"
+                    else "Using standard keyboard bindings."
+                )
+            )
+        elif slash_cmd == "/stickers":
+            content = self._browser_command_message(
+                channel=msg.channel,
+                url=self.STICKERS_URL,
+                success_text="Opening sticker page in browser…",
+                fallback_prefix="Visit:",
+            )
+        elif slash_cmd == "/install-slack-app":
+            content = self._browser_command_message(
+                channel=msg.channel,
+                url=self.SLACK_APP_URL,
+                success_text="Opening Slack app installation page in browser…",
+                fallback_prefix="Visit:",
+            )
+        elif slash_cmd == "/keybindings":
+            content = self._handle_keybindings_command()
+        else:
+            content = f"TODO: unsupported local slash command {slash_cmd}"
+
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=content,
+            metadata=msg.metadata or {},
+        )
+
+    def _visible_local_slash_commands(self, *, msg_channel: str) -> list[str]:
+        visible: list[str] = []
+        for command, meta in self.LOCAL_NONINTERACTIVE_COMMANDS.items():
+            if not meta.get("supported", False):
+                continue
+            supported_channels = meta.get("supported_channels")
+            if supported_channels is None or msg_channel in supported_channels:
+                visible.append(command)
+        return sorted(visible)
+
+    def _unsupported_local_slash_reason(self, slash_cmd: str, channel: str) -> str | None:
+        meta = self.LOCAL_NONINTERACTIVE_COMMANDS.get(slash_cmd)
+        if not meta:
+            return None
+        if not meta.get("supported", False):
+            return None
+        supported_channels = meta.get("supported_channels")
+        if supported_channels is None or channel in supported_channels:
+            return None
+        return str(meta.get("fallback") or f"{slash_cmd} is not available on channel {channel}.")
+
+    @classmethod
+    def _is_known_local_noninteractive_command(cls, slash_cmd: str | None) -> bool:
+        return bool(slash_cmd and slash_cmd in cls.LOCAL_NONINTERACTIVE_COMMANDS)
+
+    @classmethod
+    def _is_supported_local_noninteractive_command(cls, slash_cmd: str | None) -> bool:
+        if not slash_cmd:
+            return False
+        meta = cls.LOCAL_NONINTERACTIVE_COMMANDS.get(slash_cmd)
+        return bool(meta and meta.get("supported", False))
+
+    def _local_settings_path(self) -> Path:
+        return get_data_dir() / self.LOCAL_SETTINGS_FILE
+
+    def _load_local_settings(self) -> dict[str, Any]:
+        path = self._local_settings_path()
+        try:
+            if path.exists():
+                return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as e:
+            logger.warning("Failed to load local runtime settings from %s: %s", path, e)
+        return {}
+
+    def _save_local_settings(self, data: dict[str, Any]) -> None:
+        path = self._local_settings_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+
+    def _toggle_local_editor_mode(self) -> str:
+        settings = self._load_local_settings()
+        current_mode = settings.get("editorMode", "normal")
+        if current_mode == "emacs":
+            current_mode = "normal"
+        new_mode = "vim" if current_mode == "normal" else "normal"
+        settings["editorMode"] = new_mode
+        self._save_local_settings(settings)
+        return new_mode
+
+    def _apply_cli_editor_mode(self, mode: str) -> None:
+        try:
+            from xbot.cli.commands import set_cli_editing_mode
+
+            set_cli_editing_mode(mode)
+        except Exception as e:
+            logger.debug("Failed to apply CLI editing mode %s: %s", mode, e)
+
+    def _open_browser(self, url: str) -> bool:
+        try:
+            return bool(webbrowser.open(url))
+        except Exception as e:
+            logger.warning("Failed to open browser for %s: %s", url, e)
+            return False
+
+    def _browser_command_message(
+        self,
+        *,
+        channel: str,
+        url: str,
+        success_text: str,
+        fallback_prefix: str,
+    ) -> str:
+        if channel != "cli":
+            return f"{fallback_prefix} {url}"
+        opened = self._open_browser(url)
+        if opened:
+            return success_text
+        return f"{fallback_prefix} {url}"
+
+    def _open_in_editor(self, path: Path) -> str | None:
+        editor = os.environ.get("EDITOR", "").strip()
+        if not editor:
+            return "EDITOR is not set"
+        try:
+            subprocess.Popen([*shlex.split(editor), str(path)])
+            return None
+        except Exception as e:
+            logger.warning("Failed to open %s in editor %r: %s", path, editor, e)
+            return str(e)
+
+    def _handle_keybindings_command(self) -> str:
+        keybindings_path = get_data_dir() / self.KEYBINDINGS_FILE
+        template = (
+            "{\n"
+            '  "//": "xbot keybindings template",\n'
+            '  "bindings": [\n'
+            '    {\n'
+            '      "key": "ctrl+k",\n'
+            '      "command": "help"\n'
+            "    }\n"
+            "  ]\n"
+            "}\n"
+        )
+
+        created = False
+        if not keybindings_path.exists():
+            keybindings_path.parent.mkdir(parents=True, exist_ok=True)
+            keybindings_path.write_text(template, encoding="utf-8")
+            created = True
+
+        error = self._open_in_editor(keybindings_path)
+        if error:
+            return (
+                f"{'Created' if created else 'Opened'} {keybindings_path}. "
+                f"Could not open in editor: {error}"
+            )
+        return (
+            f"Created {keybindings_path} with template. Opened in your editor."
+            if created
+            else f"Opened {keybindings_path} in your editor."
+        )
 
     async def _do_restart(self) -> None:
         """Gracefully clean up resources before restarting the process."""

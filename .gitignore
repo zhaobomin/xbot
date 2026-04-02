@@ -26,3 +26,5 @@ nano.*.save
 .DS_Store
 uv.lock
 node_modules/
+.xbot/
+.claw/

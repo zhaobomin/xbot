@@ -463,10 +463,7 @@ class OptionsBuilder:
         identity_section = self._build_runtime_identity_section()
         if identity_section:
             base_prompt = f"{base_prompt}\n\n{identity_section}"
-        policy_section = self._handoff_policy.build_system_section() if self._handoff_policy else ""
-        if not policy_section:
-            return base_prompt
-        return f"{base_prompt}\n\n{policy_section}"
+        return base_prompt
 
     def _build_runtime_identity_section(self) -> str:
         """Build runtime identity section for system prompt."""
@@ -508,12 +505,6 @@ class OptionsBuilder:
             normalized_tools = (
                 resolution.allowed if resolution
                 else CapabilityCatalog.normalize_tool_names(tools)
-            )
-
-            # Build agent prompt with handoff policy
-            prompt = (
-                self._handoff_policy.build_agent_prompt(name, prompt)
-                if self._handoff_policy else prompt
             )
 
             # Add when clause to description if present

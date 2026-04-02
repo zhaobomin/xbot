@@ -21,14 +21,13 @@ from xbot.logging import get_logger
 
 logger = get_logger(__name__)
 
-from xbot.agent.backends.delegation import DelegationTrace
 from xbot.agent.backends.client_lifecycle import ClientLifecycleManager
 from xbot.agent.backends.message_converter import MessageConverter
 from xbot.agent.backends.options_builder import OptionsBuilder
 from xbot.agent.capabilities.catalog import CapabilityCatalog, canonical_tool_name
 from xbot.agent.capabilities.policy import CapabilityPolicy
 from xbot.agent.context.builder import ContextBuilder
-from xbot.agent.capabilities.handoff import HandoffDecision, HandoffPolicy
+from xbot.agent.capabilities.handoff import HandoffPolicy
 from xbot.agent.memory.store import MemoryConsolidator
 from xbot.agent.interaction.event_formatter import (
     format_compact_event,
@@ -146,8 +145,6 @@ class ClaudeSDKBackend(AgentBackend):
         self._active_request_ids: dict[str, str] = {}  # Track request IDs for request-response validation
         self._long_running_turns: set[str] = set()
         self._session_commands: dict[str, list[str]] = {}
-        self._delegation_traces: list[DelegationTrace] = []
-        self._delegation_traces_lock = asyncio.Lock()
         self.tools: Any = None
         self.sessions: SessionManager | None = None
         self.memory_consolidator: MemoryConsolidator | None = None
@@ -424,7 +421,7 @@ class ClaudeSDKBackend(AgentBackend):
                     else:
                         session.metadata.pop("sdk_session_id", None)
                     self.sessions.save(session)
-            await self._client_lifecycle.update_sdk_session_id(session_key, sdk_session_id)
+            await self._sync_client_lifecycle_sdk_session_id(session_key, sdk_session_id)
             return
 
         session_contexts = self._get_session_contexts()
@@ -453,7 +450,7 @@ class ClaudeSDKBackend(AgentBackend):
                 else:
                     session.metadata.pop("sdk_session_id", None)
                 self.sessions.save(session)
-        await self._client_lifecycle.update_sdk_session_id(session_key, sdk_session_id)
+        await self._sync_client_lifecycle_sdk_session_id(session_key, sdk_session_id)
 
     def _get_context_by_session_key(self, session_key: str) -> tuple[str, str] | None:
         """Get (channel, chat_id) context by session_key.
@@ -989,7 +986,21 @@ class ClaudeSDKBackend(AgentBackend):
         return snapshot["clients"].get(session_key, {})
 
     async def forget_client_lifecycle(self, session_key: str) -> None:
-        await self._client_lifecycle.remove(session_key)
+        lifecycle = getattr(self, "_client_lifecycle", None)
+        if lifecycle is None:
+            return
+        await lifecycle.remove(session_key)
+
+    async def _sync_client_lifecycle_sdk_session_id(
+        self,
+        session_key: str,
+        sdk_session_id: str | None,
+    ) -> None:
+        """Best-effort lifecycle sync for SDK session IDs."""
+        lifecycle = getattr(self, "_client_lifecycle", None)
+        if lifecycle is None:
+            return
+        await lifecycle.update_sdk_session_id(session_key, sdk_session_id)
 
     def _clear_legacy_tracking_state(self, session_key: str, sdk_session_id: str | None) -> None:
         """Clear legacy tracking dictionaries for a session."""
@@ -1814,45 +1825,6 @@ class ClaudeSDKBackend(AgentBackend):
             return session.metadata["sdk_session_id"]
         return context_session_key
 
-    async def _record_delegation_trace(
-        self,
-        session_key: str,
-        decision: HandoffDecision,
-    ) -> None:
-        """Record a delegation decision trace."""
-        trace = DelegationTrace(
-            timestamp=datetime.now().isoformat(),
-            session_key=session_key,
-            decision_mode=decision.mode,
-            reason=decision.reason,
-            candidates=list(decision.candidate_agents),
-        )
-
-        async with self._delegation_traces_lock:
-            self._delegation_traces.append(trace)
-            if len(self._delegation_traces) > 100:
-                self._delegation_traces = self._delegation_traces[-100:]
-        
-        logger.info(
-            f"Delegation decision: session={session_key}, mode={decision.mode}, "
-            f"reason={decision.reason}, candidates={list(decision.candidate_agents)}"
-        )
-
-    def get_delegation_traces(self, session_key: str | None = None) -> list[dict[str, Any]]:
-        """Get delegation traces, optionally filtered by session.
-        
-        Args:
-            session_key: Optional session key to filter traces
-            
-        Returns:
-            List of delegation trace dictionaries
-        """
-        # Snapshot to avoid race with concurrent _add_trace writes
-        traces = list(self._delegation_traces)
-        if session_key:
-            traces = [t for t in traces if t.session_key == session_key]
-        return [t.to_dict() for t in traces]
-
     # -- Stale message boundary detection ------------------------------------
     _MAX_STALE_DISCARD = 50  # safety valve: force boundary after this many discards
 
@@ -2096,7 +2068,6 @@ class ClaudeSDKBackend(AgentBackend):
 
         try:
             final_content = ""
-            decision = None
             prompt = f"{triggered_skills_prefix}{context.prompt}" if triggered_skills_prefix else context.prompt
 
             # Send reconnect hint if this is a recovery attempt
@@ -2105,21 +2076,6 @@ class ClaudeSDKBackend(AgentBackend):
                     content="",
                     progress_texts=[reconnect_hint],
                 )
-
-            if self._handoff_policy and self._handoff_policy.has_agents():
-                decision = self._handoff_policy.decide(context.prompt)
-                
-                # Record delegation trace
-                await self._record_delegation_trace(context.session_key, decision)
-                
-                yield AgentResponse(
-                    content="",
-                    progress_texts=[
-                        self._handoff_policy.build_activation_trace(),
-                        self._handoff_policy.build_decision_trace(decision),
-                    ],
-                )
-                prompt = f"{self._handoff_policy.build_request_prefix(decision)}\n{context.prompt}"
 
             # Retry loop: SDK may return stale task notifications instead of ResultMessage
             # We need to retry the query in such cases, with a limit to avoid infinite loops
@@ -2353,124 +2309,6 @@ class ClaudeSDKBackend(AgentBackend):
                 self.sessions.save(session)
 
             logger.exception("Error in Claude SDK backend")
-
-            can_fallback = (
-                self._handoff_policy is not None
-                and self._handoff_policy.has_agents()
-            )
-            if can_fallback:
-                yield AgentResponse(
-                    content="",
-                    progress_texts=[self._handoff_policy.build_fallback_trace(str(e))],
-                )
-                try:
-                    final_content = ""
-                    fallback_client = await self._create_temp_client(
-                        context.session_key,
-                        include_agents=False,
-                    )
-                    try:
-                        # Clear task_id before fallback request for consistency
-                        self._set_task_id_in_entry(context.session_key, None)
-
-                        fallback_prompt = (
-                            "[Runtime Policy]\n"
-                            "Continue on the main agent. Do not use specialist handoff for this retry.\n\n"
-                            f"{context.prompt}"
-                        )
-                        await fallback_client.query(
-                            fallback_prompt,
-                            session_id=self._query_session_id(context.session_key, session),
-                        )
-                        async for message in self._receive_with_boundary(fallback_client, context.session_key):
-                            is_terminal_result = isinstance(message, ResultMessage)
-                            if isinstance(message, SystemMessage) and message.subtype == "init":
-                                commands = self._extract_slash_commands(message.data)
-                                logger.info(
-                                    "[SDK Init Fallback] session=%s, commands=%s, data=%s",
-                                    context.session_key,
-                                    commands,
-                                    message.data,
-                                )
-                                self._set_commands_in_entry(context.session_key, commands)
-                                # Early mapping for hooks
-                                sdk_session_id = message.data.get("session_id") if isinstance(message.data, dict) else None
-                                if sdk_session_id:
-                                    logger.info(
-                                        "[SDK Init Fallback] Found session_id='%s', mapping to context",
-                                        sdk_session_id,
-                                    )
-                                    # Use helper method for SDK session ID mapping
-                                    # This also syncs to session.metadata and saves
-                                    await self._set_sdk_session_id_in_entry(context.session_key, sdk_session_id)
-                            if isinstance(message, TaskStartedMessage) and message.task_id:
-                                self._set_task_id_in_entry(context.session_key, message.task_id)
-                            if (
-                                isinstance(message, TaskNotificationMessage)
-                                and message.status in {"completed", "failed", "stopped"}
-                            ):
-                                # === Fallback 路径 Task ID 验证 ===
-                                current_task_id = self._get_task_id_from_entry(context.session_key)
-                                logger.info(
-                                    f"[Fallback Notification] session={context.session_key}, task_id={message.task_id}, "
-                                    f"status={message.status}, current_task_id={current_task_id or 'none'}"
-                                )
-                                # Stale detection: if message.task_id and task_ids don't match
-                                # or current_task_id is None (no TaskStarted received for this request)
-                                if message.task_id and (
-                                    current_task_id is None or message.task_id != current_task_id
-                                ):
-                                    logger.warning(
-                                        f"[Fallback Notification] Stale task notification detected: "
-                                        f"session={context.session_key}, received_task={message.task_id}, "
-                                        f"expected_task={current_task_id or 'none'}. Ignoring."
-                                    )
-                                    continue
-                                self._set_task_id_in_entry(context.session_key, None)
-                            if is_terminal_result:
-                                self._set_task_id_in_entry(context.session_key, None)
-                                if session is not None and message.session_id:
-                                    # Use helper method for SDK session ID mapping
-                                    # This also syncs to session.metadata and saves
-                                    await self._set_sdk_session_id_in_entry(context.session_key, message.session_id)
-                            
-                            response = self._message_converter.convert(message) if self._message_converter else None
-                                
-                            if response:
-                                # Accumulate content: delta content or final content
-                                if response.is_delta and response.delta_content:
-                                    final_content += response.delta_content
-                                elif response.content:
-                                    final_content = response.content
-                                yield response
-                            if is_terminal_result:
-                                break
-                    finally:
-                        await fallback_client.disconnect()
-
-                    if session is not None and final_content:
-                        session.add_message("assistant", final_content)
-                        self.sessions.save(session)
-                        mode = getattr(self.sdk_config, "memory_consolidation_mode", "off")
-                        if self.memory_consolidator and mode == "sync":
-                            await self.memory_consolidator.maybe_consolidate_by_tokens(session)
-                        elif self.memory_consolidator and mode == "async":
-                            async def _safe_consolidate():
-                                try:
-                                    await self.memory_consolidator.maybe_consolidate_by_tokens(session)
-                                except asyncio.CancelledError:
-                                    logger.debug(f"Memory consolidation cancelled for session {context.session_key}")
-                                    raise
-                                except Exception as e:
-                                    logger.warning(f"Async memory consolidation failed for {context.session_key}: {e}")
-                            asyncio.create_task(_safe_consolidate())
-                    return
-                except Exception as fallback_error:
-                    logger.exception("Claude SDK fallback to main agent failed")
-                    # Don't clear sdk_session_id - preserve context for potential recovery
-                    if session is not None:
-                        session.metadata["_fallback_error"] = str(fallback_error)[:500]
-                        self.sessions.save(session)
 
             # Provide a user-friendly error message
             error_hint = "连接遇到问题，会话状态已保存。"

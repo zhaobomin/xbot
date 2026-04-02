@@ -927,6 +927,145 @@ class TestMessageConverter:
 class TestOptionsBuilder:
     """Tests for OptionsBuilder class."""
 
+    def test_build_omits_sdk_agents_when_include_agents_false(self):
+        class _FakeClaudeAgentOptions:
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(ClaudeAgentOptions=_FakeClaudeAgentOptions),
+                "claude_agent_sdk.types": MagicMock(HookMatcher=MagicMock()),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+            from xbot.agent.capabilities.handoff import HandoffPolicy
+            from xbot.config.schema import Config
+
+            sdk_config = MagicMock()
+            sdk_config.agents = {
+                "coder": {
+                    "description": "Coding assistant",
+                    "when": "code-related tasks",
+                    "prompt": "Base prompt",
+                }
+            }
+            sdk_config.max_turns = 3
+            sdk_config.permission_mode = "acceptEdits"
+            sdk_config.hooks = {}
+            sdk_config.compact_notify = False
+            sdk_config.extra_args = {}
+            sdk_config.disallowed_tools = []
+            sdk_config.mcp_servers = {}
+            sdk_config.model = "claude-sonnet-4-5"
+            sdk_config.provider = "anthropic"
+
+            builder = OptionsBuilder(
+                shared_resources={"config": Config()},
+                sdk_config=sdk_config,
+                skill_converter=None,
+                tool_adapter=None,
+                sessions=None,
+                context_builder=None,
+                handoff_policy=HandoffPolicy(sdk_config.agents),
+                capability_policy=None,
+            )
+            builder._build_env_config = MagicMock(return_value={})
+            builder._get_model_name = MagicMock(return_value="claude-sonnet-4-5")
+            builder._build_mcp_servers = MagicMock(return_value={})
+            builder._get_resume_session = MagicMock(return_value=None)
+            builder._build_hooks = MagicMock(return_value=None)
+            builder._build_system_prompt = MagicMock(return_value="base prompt")
+
+            options = builder.build(include_agents=False)
+
+            assert options.agents is None
+
+    def test_build_system_prompt_does_not_include_delegation_policy(self):
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+            from xbot.agent.capabilities.handoff import HandoffPolicy
+            from xbot.config.schema import Config
+
+            config = Config()
+            policy = HandoffPolicy(
+                {
+                    "coder": {
+                        "description": "Coding assistant",
+                        "when": "code-related tasks",
+                        "prompt": "You are a coder.",
+                    }
+                }
+            )
+
+            builder = OptionsBuilder(
+                shared_resources={"config": config},
+                sdk_config=MagicMock(agents={}),
+                skill_converter=None,
+                tool_adapter=None,
+                sessions=None,
+                context_builder=None,
+                handoff_policy=policy,
+                capability_policy=None,
+            )
+
+            prompt = builder._build_system_prompt()
+
+            assert "Delegation Policy" not in prompt
+
+    def test_build_sdk_agents_preserves_raw_agent_prompt(self):
+        class _FakeAgentDefinition:
+            def __init__(self, description, prompt, tools, model):
+                self.description = description
+                self.prompt = prompt
+                self.tools = tools
+                self.model = model
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(AgentDefinition=_FakeAgentDefinition),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+            from xbot.agent.capabilities.handoff import HandoffPolicy
+
+            sdk_config = MagicMock()
+            sdk_config.agents = {
+                "coder": {
+                    "description": "Coding assistant",
+                    "when": "code-related tasks",
+                    "prompt": "Base prompt",
+                    "tools": ["Read"],
+                    "model": "claude-sonnet-4-5",
+                }
+            }
+
+            builder = OptionsBuilder(
+                shared_resources={},
+                sdk_config=sdk_config,
+                skill_converter=None,
+                tool_adapter=None,
+                sessions=None,
+                context_builder=None,
+                handoff_policy=HandoffPolicy(sdk_config.agents),
+                capability_policy=None,
+            )
+
+            agents = builder._build_sdk_agents()
+
+            assert agents is not None
+            assert agents["coder"].prompt == "Base prompt"
+            assert "specialist agent invoked by the main xbot agent" not in agents["coder"].prompt
+
     def test_options_builder_detect_provider_from_model(self):
         """Test provider detection from model name."""
         with patch.dict(
@@ -1609,39 +1748,9 @@ class TestClaudeSDKBackendMemoryConfig:
 
 
 class TestDelegationTrace:
-    """Tests for delegation tracing."""
+    """Legacy delegation tracing tests removed with native handoff behavior."""
 
-    def test_delegation_trace_creation(self):
-        """Test DelegationTrace dataclass."""
-        with patch.dict(
-            "sys.modules",
-            {
-                "claude_agent_sdk": MagicMock(),
-                "claude_agent_sdk.types": MagicMock(),
-            },
-        ):
-            from xbot.agent.backends.claude_sdk_backend import DelegationTrace
-
-            trace = DelegationTrace(
-                timestamp="2026-03-21T01:00:00",
-                session_key="test_session",
-                decision_mode="native_handoff",
-                reason="specialist matched",
-                candidates=["agent1", "agent2"],
-            )
-
-            assert trace.session_key == "test_session"
-            assert trace.decision_mode == "native_handoff"
-            assert trace.candidates == ["agent1", "agent2"]
-
-            # Test to_dict
-            trace_dict = trace.to_dict()
-            assert trace_dict["session_key"] == "test_session"
-            assert trace_dict["mode"] == "native_handoff"
-
-    @pytest.mark.asyncio
-    async def test_backend_records_delegation_trace(self):
-        """Test that backend records delegation traces."""
+    def test_delegation_tracing_is_removed(self):
         with patch.dict(
             "sys.modules",
             {
@@ -1650,78 +1759,10 @@ class TestDelegationTrace:
             },
         ):
             from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-            from xbot.agent.capabilities.handoff import HandoffDecision
 
             backend = ClaudeSDKBackend()
-            backend._delegation_traces = []
-            backend._delegation_traces_lock = asyncio.Lock()
 
-            decision = HandoffDecision(
-                mode="native_handoff",
-                reason="test",
-                candidate_agents=("agent1",),
-            )
-
-            await backend._record_delegation_trace("test_session", decision)
-
-            traces = backend.get_delegation_traces()
-            assert len(traces) == 1
-            assert traces[0]["session_key"] == "test_session"
-            assert traces[0]["mode"] == "native_handoff"
-
-    def test_get_delegation_traces_filtered(self):
-        """Test getting filtered delegation traces."""
-        with patch.dict(
-            "sys.modules",
-            {
-                "claude_agent_sdk": MagicMock(),
-                "claude_agent_sdk.types": MagicMock(),
-            },
-        ):
-            from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend, DelegationTrace
-
-            backend = ClaudeSDKBackend()
-            backend._delegation_traces = [
-                DelegationTrace("2026-03-21T01:00:00", "session1", "main", "reason1", []),
-                DelegationTrace("2026-03-21T01:01:00", "session2", "handoff", "reason2", ["agent1"]),
-                DelegationTrace("2026-03-21T01:02:00", "session1", "background", "reason3", []),
-            ]
-
-            # Get all traces
-            all_traces = backend.get_delegation_traces()
-            assert len(all_traces) == 3
-
-            # Get filtered traces
-            session1_traces = backend.get_delegation_traces("session1")
-            assert len(session1_traces) == 2
-
-    @pytest.mark.asyncio
-    async def test_delegation_traces_limit(self):
-        """Test that delegation traces are limited to 100."""
-        with patch.dict(
-            "sys.modules",
-            {
-                "claude_agent_sdk": MagicMock(),
-                "claude_agent_sdk.types": MagicMock(),
-            },
-        ):
-            from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-            from xbot.agent.capabilities.handoff import HandoffDecision
-
-            backend = ClaudeSDKBackend()
-            backend._delegation_traces = []
-            backend._delegation_traces_lock = asyncio.Lock()
-
-            decision = HandoffDecision(mode="main", reason="test", candidate_agents=())
-
-            # Add 150 traces
-            for i in range(150):
-                await backend._record_delegation_trace(f"session_{i}", decision)
-
-            # Should be limited to 100
-            assert len(backend._delegation_traces) == 100
-            # Should keep the most recent
-            assert backend._delegation_traces[-1].session_key == "session_149"
+            assert not hasattr(backend, "_record_delegation_trace")
 
 
 class TestTypeAnnotations:
@@ -2380,6 +2421,133 @@ class TestSessionStateReset:
         assert "s1" not in backend._active_task_ids
 
 
+class TestClaudeSDKBackendNativeHandoff:
+    @pytest.mark.asyncio
+    async def test_process_does_not_inject_runtime_policy_prefix(self):
+        from claude_agent_sdk.types import ResultMessage, SystemMessage
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.capabilities.handoff import HandoffPolicy
+        from xbot.agent.protocol import AgentContext
+
+        backend = ClaudeSDKBackend()
+        backend.sessions = None
+        backend._message_converter = None
+        backend._handoff_policy = HandoffPolicy(
+            {"coder": {"description": "Coding assistant", "when": "code-related tasks", "prompt": "Be helpful"}}
+        )
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
+
+        async def _receive():
+            yield SystemMessage(subtype="init", data={"session_id": "s1"})
+            yield ResultMessage(
+                subtype="success",
+                duration_ms=1,
+                duration_api_ms=1,
+                is_error=False,
+                num_turns=1,
+                session_id="s1",
+                result="done",
+            )
+
+        mock_client.receive_messages = _receive
+        backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
+
+        context = AgentContext(session_key="test_session", prompt="Help me with coding")
+        responses = [msg async for msg in backend.process(context)]
+
+        assert responses == []
+        mock_client.query.assert_awaited_once()
+        streamed_prompt = mock_client.query.await_args.args[0]
+        streamed_messages = []
+        async for item in streamed_prompt:
+            streamed_messages.append(item)
+
+        assert streamed_messages[0]["message"]["content"] == "Help me with coding"
+        assert "[Runtime Policy]" not in streamed_messages[0]["message"]["content"]
+
+    @pytest.mark.asyncio
+    async def test_process_error_does_not_fallback_to_main_agent(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.capabilities.handoff import HandoffPolicy
+        from xbot.agent.protocol import AgentContext
+
+        backend = ClaudeSDKBackend()
+        backend.sessions = None
+        backend._handoff_policy = HandoffPolicy(
+            {"coder": {"description": "Coding assistant", "when": "code-related tasks", "prompt": "Be helpful"}}
+        )
+        backend.release_client = AsyncMock(return_value=True)  # type: ignore[method-assign]
+        backend._create_temp_client = AsyncMock()  # type: ignore[method-assign]
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock(side_effect=ConnectionError("boom"))
+        backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
+
+        context = AgentContext(session_key="test_session", prompt="Help me with coding")
+        responses = [msg async for msg in backend.process(context)]
+
+        backend._create_temp_client.assert_not_called()
+        backend.release_client.assert_awaited()
+        assert len(responses) == 1
+        assert "fallback to main agent" not in (responses[0].content or "")
+
+    @pytest.mark.asyncio
+    async def test_process_recoverable_error_marks_reconnect_pending_without_fresh_start(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.protocol import AgentContext
+
+        backend = ClaudeSDKBackend()
+        mock_session = MagicMock()
+        mock_session.metadata = {"sdk_session_id": "sdk-1"}
+        mock_session.add_message = MagicMock()
+        backend.sessions = MagicMock()
+        backend.sessions.get_or_create = MagicMock(return_value=mock_session)
+        backend.sessions.save = MagicMock()
+        backend.release_client = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock(side_effect=ConnectionError("boom"))
+        backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
+
+        context = AgentContext(session_key="test_session", prompt="Help me with coding")
+        responses = [msg async for msg in backend.process(context)]
+
+        assert len(responses) == 1
+        assert mock_session.metadata["_reconnect_pending"] is True
+        assert mock_session.metadata["_last_error"] == "boom"
+        assert "_fresh_start_required" not in mock_session.metadata
+        backend.sessions.save.assert_called()
+
+    @pytest.mark.asyncio
+    async def test_process_nonrecoverable_error_marks_fresh_start_required(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.protocol import AgentContext
+
+        backend = ClaudeSDKBackend()
+        mock_session = MagicMock()
+        mock_session.metadata = {"sdk_session_id": "sdk-1"}
+        mock_session.add_message = MagicMock()
+        backend.sessions = MagicMock()
+        backend.sessions.get_or_create = MagicMock(return_value=mock_session)
+        backend.sessions.save = MagicMock()
+        backend.release_client = AsyncMock(return_value=True)  # type: ignore[method-assign]
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock(side_effect=ValueError("bad state"))
+        backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
+
+        context = AgentContext(session_key="test_session", prompt="Help me with coding")
+        responses = [msg async for msg in backend.process(context)]
+
+        assert len(responses) == 1
+        assert mock_session.metadata["_reconnect_pending"] is True
+        assert mock_session.metadata["_fresh_start_required"] is True
+        assert mock_session.metadata["_last_error"] == "bad state"
+        backend.sessions.save.assert_called()
+
+
 class TestInputRequiredRecoveryFlow:
     @pytest.mark.asyncio
     async def test_new_turn_retries_after_non_terminal_notification_without_old_input_flow(self):
@@ -2545,6 +2713,54 @@ class TestMessageConverterEnhancements:
         assert "Task failed" in text
         assert "Tool crashed" in text
         assert "task-1" in text
+
+    def test_convert_task_started_adds_handoff_trace_only_for_factual_sdk_events(self):
+        from claude_agent_sdk.types import TaskStartedMessage
+        from xbot.agent.backends.claude_sdk_backend import MessageConverter
+        from xbot.agent.capabilities.handoff import HandoffPolicy
+
+        converter = MessageConverter(
+            handoff_policy=HandoffPolicy({"coder": {"description": "Coding assistant", "when": "", "prompt": ""}}),
+            capabilities=None,
+            config=None,
+        )
+        msg = TaskStartedMessage(
+            subtype="task_started",
+            data={},
+            task_id="task-2",
+            description="handoff to coder",
+            uuid="u2",
+            session_id="s2",
+        )
+
+        response = converter.convert(msg)
+
+        assert response is not None
+        assert response.progress_texts == ["Running: handoff to coder", "Handoff: handoff to coder"]
+
+    def test_convert_task_started_does_not_add_handoff_trace_for_generic_agent_text(self):
+        from claude_agent_sdk.types import TaskStartedMessage
+        from xbot.agent.backends.claude_sdk_backend import MessageConverter
+        from xbot.agent.capabilities.handoff import HandoffPolicy
+
+        converter = MessageConverter(
+            handoff_policy=HandoffPolicy({"coder": {"description": "Coding assistant", "when": "", "prompt": ""}}),
+            capabilities=None,
+            config=None,
+        )
+        msg = TaskStartedMessage(
+            subtype="task_started",
+            data={},
+            task_id="task-3",
+            description="main agent continuing request",
+            uuid="u3",
+            session_id="s3",
+        )
+
+        response = converter.convert(msg)
+
+        assert response is not None
+        assert response.progress_texts == ["Running: main agent continuing request"]
 
     def test_convert_stream_event_thinking_delta_is_visible(self):
         from claude_agent_sdk.types import StreamEvent

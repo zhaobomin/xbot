@@ -152,6 +152,322 @@ async def test_router_runtime_blocks_local_only_noninteractive_slash_command_wit
 
 
 @pytest.mark.asyncio
+async def test_router_runtime_slash_reset_soft_is_local_alias(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("/reset --soft")
+
+    assert response != "echo:/reset --soft"
+    assert "session cleared" in response.lower()
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_slash_vim_toggles_local_editor_mode(tmp_path, monkeypatch) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("/vim")
+    assert "editor mode set to vim" in response.lower()
+
+    response = await runtime.process_direct("/vim")
+    assert "editor mode set to normal" in response.lower()
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_slash_stickers_opens_browser(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+    runtime._open_browser = lambda url: True  # type: ignore[method-assign]
+
+    response = await runtime.process_direct("/stickers")
+
+    assert "opening sticker page in browser" in response.lower()
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_slash_install_slack_app_opens_browser(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+    runtime._open_browser = lambda url: True  # type: ignore[method-assign]
+
+    response = await runtime.process_direct("/install-slack-app")
+
+    assert "opening slack app installation page in browser" in response.lower()
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_slash_stickers_returns_link_on_non_cli_channel(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+    runtime._open_browser = lambda url: (_ for _ in ()).throw(AssertionError("should not open browser"))  # type: ignore[method-assign]
+
+    response = await runtime.process_direct("/stickers", channel="slack", chat_id="C123")
+
+    assert "visit:" in response.lower()
+    assert "stickermule.com/claudecode" in response.lower()
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_slash_install_slack_app_returns_link_on_non_cli_channel(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+    runtime._open_browser = lambda url: (_ for _ in ()).throw(AssertionError("should not open browser"))  # type: ignore[method-assign]
+
+    response = await runtime.process_direct("/install-slack-app", channel="wecom", chat_id="room-1")
+
+    assert "visit:" in response.lower()
+    assert "slack.com/marketplace" in response.lower()
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_slash_keybindings_creates_template(tmp_path, monkeypatch) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+    runtime._open_in_editor = lambda path: "mock editor unavailable"  # type: ignore[method-assign]
+
+    response = await runtime.process_direct("/keybindings")
+
+    assert "keybindings.json" in response
+    assert "mock editor unavailable" in response
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_slash_vim_is_blocked_on_non_cli_channel(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("/vim", channel="slack", chat_id="C123")
+
+    assert "only available in cli" in response.lower()
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_slash_keybindings_is_blocked_on_non_cli_channel(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("/keybindings", channel="wecom", chat_id="room-1")
+
+    assert "only available in cli" in response.lower()
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_help_hides_cli_only_local_commands_on_non_cli_channel(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("/help", channel="slack", chat_id="C123")
+
+    assert "/stickers" in response
+    assert "/install-slack-app" in response
+    assert "/vim" not in response
+    assert "/keybindings" not in response
+
+
+@pytest.mark.asyncio
 async def test_router_runtime_help_includes_dynamic_sdk_commands(tmp_path) -> None:
     from xbot.agent.runtime import AgentRuntime
     from xbot.bus.queue import MessageBus

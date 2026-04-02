@@ -238,7 +238,7 @@ class TestStateConsistencyCheckerAllSessions:
     def test_get_all_session_keys(self, mock_runtime):
         """测试获取所有 session key"""
         # 添加一些 session
-        mock_runtime._state_machine.get_state("state:1")
+        mock_runtime._state_machine.get_or_create_state("state:1")
         mock_runtime._session_store.get_or_create("task:1").tasks = []
         mock_runtime._session_store.get_or_create("lock:1").lock = asyncio.Lock()
         mock_runtime.router._backend._clients["client:1"] = "mock"

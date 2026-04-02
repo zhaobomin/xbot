@@ -86,6 +86,36 @@ class MCPToolWrapper(Tool):
         return "\n".join(parts) or "(no output)"
 
 
+def _is_ignorable_mcp_close_error(exc: BaseException) -> bool:
+    """Return True for known SSE/anyio shutdown bugs in the MCP Python client."""
+    message = str(exc)
+    if (
+        "Attempted to exit cancel scope in a different task" in message
+        or "generator didn't stop after athrow()" in message
+    ):
+        return True
+
+    if isinstance(exc, BaseExceptionGroup):
+        return all(_is_ignorable_mcp_close_error(sub) for sub in exc.exceptions)
+
+    return False
+
+
+async def _safe_close_stack(stack: AsyncExitStack, server_name: str) -> None:
+    """Close an MCP server stack while suppressing known SSE cleanup bugs."""
+    try:
+        await stack.aclose()
+    except Exception as exc:
+        if _is_ignorable_mcp_close_error(exc):
+            logger.warning(
+                "MCP server '%s': suppressed known SSE cleanup error: %s",
+                server_name,
+                exc,
+            )
+            return
+        raise
+
+
 async def _connect_single_mcp_server(
     name: str,
     cfg: Any,
@@ -228,7 +258,7 @@ async def _connect_single_mcp_server(
         logger.error("MCP server '%s': failed to connect: %s", name, conn.error)
         # Cleanup stack if connection failed
         try:
-            await conn.stack.aclose()
+            await _safe_close_stack(conn.stack, name)
         except Exception:
             pass
 
@@ -255,7 +285,7 @@ async def connect_mcp_servers(
     results = await asyncio.gather(*tasks, return_exceptions=True)
     for result in results:
         if isinstance(result, MCPServerConnection) and result.connected:
-            stack.push_async_callback(result.stack.aclose)
+            stack.push_async_callback(_safe_close_stack, result.stack, result.name)
 
     # Log summary
     connected_count = sum(1 for r in results if isinstance(r, MCPServerConnection) and r.connected)

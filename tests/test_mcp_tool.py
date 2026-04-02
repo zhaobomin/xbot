@@ -307,3 +307,39 @@ async def test_connect_mcp_servers_skips_server_with_unresolved_env_vars(
         await stack.aclose()
 
     assert registry.tool_names == []
+
+
+@pytest.mark.asyncio
+async def test_connect_mcp_servers_suppresses_known_sse_close_bug(
+    fake_mcp_runtime: dict[str, object | None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_mcp_runtime["session"] = _make_fake_session(["demo"])
+
+    from xbot.agent.tools import mcp as mcp_module
+
+    original_connect = mcp_module._connect_single_mcp_server
+
+    async def _wrapped_connect(name: str, cfg: object, registry: ToolRegistry):
+        conn = await original_connect(name, cfg, registry)
+
+        async def _raise_bug() -> None:
+            raise RuntimeError("Attempted to exit cancel scope in a different task than it was entered in")
+
+        conn.stack.aclose = _raise_bug  # type: ignore[method-assign]
+        return conn
+
+    monkeypatch.setattr(mcp_module, "_connect_single_mcp_server", _wrapped_connect)
+
+    registry = ToolRegistry()
+    stack = AsyncExitStack()
+    await stack.__aenter__()
+    try:
+        await connect_mcp_servers(
+            {"test": MCPServerConfig(command="fake", enabled_tools=["demo"])},
+            registry,
+            stack,
+        )
+    finally:
+        await stack.aclose()
+
+    assert registry.tool_names == ["mcp_test_demo"]

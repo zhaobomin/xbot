@@ -2,6 +2,7 @@
 
 import asyncio
 from contextlib import contextmanager, nullcontext
+import json
 import os
 import select
 import signal
@@ -25,6 +26,7 @@ if sys.platform == "win32":
 import typer
 from prompt_toolkit import print_formatted_text
 from prompt_toolkit import PromptSession
+from prompt_toolkit.enums import EditingMode
 from prompt_toolkit.formatted_text import ANSI, HTML
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
@@ -39,6 +41,7 @@ from xbot.agent.runtime import AgentRuntime
 from xbot.agent.interaction.progress_coalescer import ProgressCoalescer
 from xbot.webui.cli import webui_app
 from xbot.config.paths import get_workspace_path
+from xbot.config.paths import get_data_dir
 from xbot.config.schema import Config
 from xbot.logging import configure_logging, get_logger, set_package_logging_enabled
 from xbot.utils.helpers import (
@@ -145,6 +148,7 @@ def _parse_media_from_input(user_input: str) -> tuple[str, list[str]]:
 
 _PROMPT_SESSION: PromptSession | None = None
 _SAVED_TERM_ATTRS = None  # original termios settings, restored on exit
+_LOCAL_COMMAND_SETTINGS = "local_command_settings.json"
 
 
 def _flush_pending_tty_input() -> None:
@@ -209,6 +213,29 @@ def _init_prompt_session() -> None:
         history=FileHistory(str(history_file)),
         enable_open_in_editor=False,
         multiline=False,   # Enter submits (single line mode)
+    )
+    _PROMPT_SESSION.editing_mode = _load_cli_editing_mode()
+
+
+def _load_cli_editing_mode() -> EditingMode:
+    settings_path = get_data_dir() / _LOCAL_COMMAND_SETTINGS
+    try:
+        if settings_path.exists():
+            data = json.loads(settings_path.read_text(encoding="utf-8"))
+            mode = str(data.get("editorMode", "normal")).lower()
+            if mode == "vim":
+                return EditingMode.VI
+    except Exception:
+        pass
+    return EditingMode.EMACS
+
+
+def set_cli_editing_mode(mode: str) -> None:
+    if _PROMPT_SESSION is None:
+        return
+    normalized = mode.lower()
+    _PROMPT_SESSION.editing_mode = (
+        EditingMode.VI if normalized == "vim" else EditingMode.EMACS
     )
 
 
