@@ -120,6 +120,19 @@ def safe_filename(name: str) -> str:
     return _UNSAFE_CHARS.sub("_", name).strip()
 
 
+def sanitize_download_filename(name: str, fallback: str) -> str:
+    """Normalize an untrusted download filename to a single safe basename."""
+    normalized = (name or "").replace("\\", "/").split("/")[-1].strip()
+    if normalized in {"", ".", ".."}:
+        normalized = fallback
+
+    sanitized = safe_filename(normalized)
+    if sanitized in {"", ".", ".."}:
+        raw = safe_filename(fallback).strip()
+        sanitized = "download" if (not raw or raw in {".", ".."}) else raw
+    return sanitized
+
+
 def split_message(content: str, max_len: int = 2000) -> list[str]:
     """
     Split content into chunks within max_len, preferring line breaks.
@@ -133,6 +146,8 @@ def split_message(content: str, max_len: int = 2000) -> list[str]:
     """
     if not content:
         return []
+    if max_len <= 0:
+        raise ValueError(f"max_len must be positive, got {max_len}")
     if len(content) <= max_len:
         return [content]
     chunks: list[str] = []

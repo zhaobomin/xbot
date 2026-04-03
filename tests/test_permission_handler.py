@@ -280,6 +280,37 @@ class TestPermissionRequestHandler:
         assert updated["answers"][0]["answer"] == "xbot-ubuntu"
 
     @pytest.mark.asyncio
+    async def test_ask_user_question_accepts_reply_action(self, handler):
+        handler.set_session_context("test:123", "telegram", "456")
+
+        async def fake_request_interaction(**kwargs):
+            return InteractionResponse(
+                request_id="req-1",
+                session_key="test:123",
+                action="reply",
+                content="xbot-ubuntu",
+            )
+
+        handler.request_interaction = fake_request_interaction
+
+        decision, updated = await handler.can_use_tool(
+            "AskUserQuestion",
+            {
+                "questions": [
+                    {
+                        "header": "名称",
+                        "question": "请告诉我飞书应用的具体名称是什么？",
+                        "options": [{"label": "xbot"}, {"label": "Other"}],
+                    }
+                ]
+            },
+            None,
+        )
+
+        assert decision == "allow"
+        assert updated["answers"][0]["answer"] == "xbot-ubuntu"
+
+    @pytest.mark.asyncio
     async def test_ask_user_question_multi_prompt_only_mentions_commas(self, handler):
         handler.set_session_context("test:123", "telegram", "456")
 

@@ -19,6 +19,7 @@ from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
 from xbot.config.schema import Base
+from xbot.utils.helpers import sanitize_download_filename
 
 try:
     from dingtalk_stream import (
@@ -190,6 +191,7 @@ class DingTalkChannel(BaseChannel):
         # Access Token management for sending messages
         self._access_token: str | None = None
         self._token_expiry: float = 0
+        self._token_lock = asyncio.Lock()
 
         # Hold references to background tasks to prevent GC
         self._background_tasks: set[asyncio.Task] = set()
@@ -253,27 +255,31 @@ class DingTalkChannel(BaseChannel):
         if self._access_token and time.time() < self._token_expiry:
             return self._access_token
 
-        url = "https://api.dingtalk.com/v1.0/oauth2/accessToken"
-        data = {
-            "appKey": self.config.client_id,
-            "appSecret": self.config.client_secret,
-        }
+        async with self._token_lock:
+            if self._access_token and time.time() < self._token_expiry:
+                return self._access_token
 
-        if not self._http:
-            logger.warning("DingTalk HTTP client not initialized, cannot refresh token")
-            return None
+            url = "https://api.dingtalk.com/v1.0/oauth2/accessToken"
+            data = {
+                "appKey": self.config.client_id,
+                "appSecret": self.config.client_secret,
+            }
 
-        try:
-            resp = await self._http.post(url, json=data)
-            resp.raise_for_status()
-            res_data = resp.json()
-            self._access_token = res_data.get("accessToken")
-            # Expire 60s early to be safe
-            self._token_expiry = time.time() + int(res_data.get("expireIn", 7200)) - 60
-            return self._access_token
-        except Exception as e:
-            logger.exception("Failed to get DingTalk access token")
-            return None
+            if not self._http:
+                logger.warning("DingTalk HTTP client not initialized, cannot refresh token")
+                return None
+
+            try:
+                resp = await self._http.post(url, json=data)
+                resp.raise_for_status()
+                res_data = resp.json()
+                self._access_token = res_data.get("accessToken")
+                # Expire 60s early to be safe
+                self._token_expiry = time.time() + int(res_data.get("expireIn", 7200)) - 60
+                return self._access_token
+            except Exception as e:
+                logger.exception("Failed to get DingTalk access token")
+                return None
 
     @staticmethod
     def _is_http_url(value: str) -> bool:
@@ -576,7 +582,8 @@ class DingTalkChannel(BaseChannel):
             # Save to media directory (accessible under workspace)
             download_dir = get_media_dir("dingtalk") / sender_id
             download_dir.mkdir(parents=True, exist_ok=True)
-            file_path = download_dir / filename
+            safe_name = sanitize_download_filename(filename, "download")
+            file_path = download_dir / safe_name
             await asyncio.to_thread(file_path.write_bytes, file_resp.content)
             logger.info("DingTalk file saved: %s", file_path)
             return str(file_path)

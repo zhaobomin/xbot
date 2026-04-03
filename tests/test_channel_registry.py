@@ -26,6 +26,7 @@ class TestDiscoverChannelNames:
         assert "base" not in names
         assert "manager" not in names
         assert "registry" not in names
+        assert "feishu_ws_worker" not in names
 
     def test_includes_known_channels(self):
         """Test that known channels are included."""

@@ -238,7 +238,8 @@ class MemoryTool(Tool):
             # Add new section before the footer
             footer_pattern = r"\n---\n\n\*This file is automatically updated"
             if re.search(footer_pattern, existing):
-                updated = re.sub(footer_pattern, f"\n\n{new_section}---\n\n*This file is automatically updated", existing)
+                replacement = f"\n\n{new_section}---\n\n*This file is automatically updated"
+                updated = re.sub(footer_pattern, lambda _m: replacement, existing)
             else:
                 updated = existing + "\n\n" + new_section
 

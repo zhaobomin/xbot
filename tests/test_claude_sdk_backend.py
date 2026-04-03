@@ -90,6 +90,49 @@ class TestClaudeSDKBackendConcurrency:
                 client_ids = [r.id for r in results]
                 assert len(set(client_ids)) == 5
 
+    @pytest.mark.asyncio
+    async def test_get_or_create_client_different_sessions_do_not_block_on_slow_connect(self):
+        """Slow connect for one session should not serialize other sessions."""
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(),
+                "claude_agent_sdk.types": MagicMock(),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+            backend = ClaudeSDKBackend()
+
+            def build_options(session_key, **kwargs):
+                return MagicMock(session_key=session_key, model="test-model")
+
+            backend._build_options = build_options
+            backend._refresh_session_commands = AsyncMock()
+
+            async def mock_connect(self):
+                if self.session_key == "slow":
+                    await asyncio.sleep(0.1)
+
+            def create_mock_client(*args, **kwargs):
+                options = kwargs["options"]
+                mock = MagicMock()
+                mock.session_key = options.session_key
+                mock.connect = lambda: mock_connect(mock)
+                return mock
+
+            with patch(
+                "xbot.agent.backends.claude_sdk_backend._ClaudeSDKClient",
+                side_effect=create_mock_client,
+            ):
+                slow_task = asyncio.create_task(backend._get_or_create_client("slow"))
+                await asyncio.sleep(0.01)
+                fast_task = asyncio.create_task(backend._get_or_create_client("fast"))
+
+                fast_client = await asyncio.wait_for(fast_task, timeout=0.05)
+                assert fast_client.session_key == "fast"
+                await slow_task
+
 
 class TestClaudeSDKBackendLogging:
     """Tests for logging format."""
@@ -406,6 +449,32 @@ class TestClaudeSDKBackendShutdown:
         await backend.shutdown()
 
         assert backend._client_scavenger_task is None
+
+    @pytest.mark.asyncio
+    async def test_force_kill_process_does_not_block_event_loop_for_sync_wait(self):
+        """Synchronous process.wait should not block unrelated coroutines."""
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        backend = ClaudeSDKBackend()
+        backend._client_lifecycle = MagicMock()
+        backend._client_lifecycle.get = AsyncMock(
+            return_value=MagicMock(
+                process_handle=MagicMock(
+                    terminate=MagicMock(),
+                    wait=MagicMock(side_effect=lambda: time.sleep(0.2)),
+                )
+            )
+        )
+        backend._client_lifecycle.mark_killed = AsyncMock()
+
+        kill_task = asyncio.create_task(backend._force_kill_process("session-1"))
+        start = time.perf_counter()
+        await asyncio.sleep(0.02)
+        elapsed = time.perf_counter() - start
+        result = await kill_task
+
+        assert elapsed < 0.1
+        assert result is True
 
 
 class TestClaudeSDKBackendLifecycle:
@@ -1359,6 +1428,48 @@ class TestOptionsBuilder:
         assert outbound_calls[0].content == "compacted"
 
     @pytest.mark.asyncio
+    async def test_build_hooks_compact_notification_ignores_string_session_context_entries(self):
+        from claude_agent_sdk.types import HookMatcher
+        from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+
+        outbound_calls = []
+
+        class _Bus:
+            async def publish_outbound(self, message):
+                outbound_calls.append(message)
+
+        sdk_config = MagicMock()
+        sdk_config.hooks = {}
+        sdk_config.compact_notify = True
+
+        builder = OptionsBuilder(
+            shared_resources={
+                "bus": _Bus(),
+                "runtime": MagicMock(),
+                "_session_contexts": {
+                    "session:1": ("feishu", "chat-1"),
+                    "session:2": "sdk_123",
+                },
+            },
+            sdk_config=sdk_config,
+            skill_converter=None,
+            tool_adapter=None,
+            sessions=None,
+            context_builder=None,
+            handoff_policy=None,
+            capability_policy=None,
+        )
+
+        hooks = builder._build_hooks()
+        assert isinstance(hooks["PreCompact"][0], HookMatcher)
+        compact_handler = hooks["PreCompact"][0].hooks[0]
+
+        compact_handler.message_callback("session:2", "compacted")
+        await asyncio.sleep(0)
+
+        assert outbound_calls == []
+
+    @pytest.mark.asyncio
     async def test_build_hooks_compact_notification_prefers_direct_progress_callback(self):
         from claude_agent_sdk.types import HookMatcher
         from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
@@ -2161,6 +2272,10 @@ class TestStopActiveTask:
         context = AgentContext(session_key="cli:direct", prompt="hello")
         _ = [msg async for msg in backend.process(context)]
 
+        # release_client is now fire-and-forget via create_task;
+        # yield control so the event loop can execute the background task
+        await asyncio.sleep(0)
+
         backend.release_client.assert_awaited_once_with(
             "cli:direct",
             reason="post_long_task",
@@ -2263,6 +2378,7 @@ class TestCompactSession:
         mock_session = MagicMock()
         mock_session.metadata = {}
         mock_sessions.get_or_create = MagicMock(return_value=mock_session)
+        mock_sessions.get = MagicMock(return_value=mock_session)
         mock_sessions.save = MagicMock()
         backend.sessions = mock_sessions
 
@@ -2958,4 +3074,5 @@ class TestClaudeSDKBackendConsolidationCall:
         assert state["calls"] == 2
         sleep_mock.assert_awaited_once()
         assert response.finish_reason == "stop"
+        assert response.content == "ok"
         assert response.content == "ok"

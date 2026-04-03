@@ -13,7 +13,7 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     from xbot.channels.base import BaseChannel
 
-_INTERNAL = frozenset({"base", "manager", "registry", "feishu_content"})
+_INTERNAL = frozenset({"base", "manager", "registry", "feishu_content", "feishu_ws_worker"})
 
 
 def discover_channel_names() -> list[str]:

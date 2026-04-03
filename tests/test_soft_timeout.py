@@ -152,6 +152,7 @@ class TestSoftTimeoutExecution:
 
         state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
         context = MagicMock()
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
         permission_handler = MagicMock()
 
         process = SequentialProcess(
@@ -203,6 +204,7 @@ class TestSoftTimeoutExecution:
 
         state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
         context = MagicMock()
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
         permission_handler = MagicMock()
 
         process = SequentialProcess(
@@ -241,6 +243,7 @@ class TestSoftTimeoutExecution:
 
         state_manager = CrewStateManager(task_names=[], task_definitions=[])
         context = MagicMock()
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
         permission_handler = MagicMock()
         pool = MagicMock(spec=AgentPool)
 
@@ -312,6 +315,7 @@ class TestSoftTimeoutExecution:
 
         state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
         context = MagicMock()
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
         permission_handler = MagicMock()
 
         process = SequentialProcess(
@@ -376,8 +380,8 @@ class TestTimeoutEdgeCases:
         assert task.timeout == 0
 
     @pytest.mark.asyncio
-    async def test_timeout_zero_uses_zero_not_estimated(self) -> None:
-        """When timeout=0, should use 0 not estimated timeout."""
+    async def test_timeout_zero_fails_validation(self) -> None:
+        """timeout=0 should be rejected before execution starts."""
         crew_config = MagicMock()
         crew_config.agents = {
             "test_agent": AgentRole(
@@ -392,13 +396,7 @@ class TestTimeoutEdgeCases:
 
         pool = MagicMock(spec=AgentPool)
 
-        # Track what timeout was actually used
-        actual_timeout_used = None
-
         async def track_timeout_stream(*args, **kwargs):
-            nonlocal actual_timeout_used
-            # We can't directly check the timeout, but we can verify behavior
-            # With timeout=0, it should timeout immediately
             yield TaskProgress(delta_content="result", total_content="result", is_final=True)
 
         pool.run_task_streaming = track_timeout_stream
@@ -406,6 +404,7 @@ class TestTimeoutEdgeCases:
         state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
         context = MagicMock()
         context.build_task_prompt = MagicMock(return_value="test prompt")
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
         permission_handler = MagicMock()
 
         process = SequentialProcess(
@@ -423,11 +422,10 @@ class TestTimeoutEdgeCases:
             timeout=0,  # Zero timeout
         )
 
-        # With timeout=0, use_soft_timeout should be False
         result = await process._execute_single_task(task)
 
-        # Task should complete successfully (mock returns immediately)
-        assert result.status == "success"
+        assert result.status == "failed"
+        assert "Timeout must be positive" in result.output
 
 
 class TestUnknownAgentHandling:
@@ -451,6 +449,7 @@ class TestUnknownAgentHandling:
         pool = MagicMock(spec=AgentPool)
         state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
         context = MagicMock()
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
         permission_handler = MagicMock()
 
         process = SequentialProcess(
@@ -495,6 +494,7 @@ class TestUnknownAgentHandling:
         state_manager.force_task_phase("test_task", TaskPhase.AWAITING_REVIEW)
 
         context = MagicMock()
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
         permission_handler = MagicMock()
         permission_handler.request_interaction = AsyncMock(return_value=MagicMock(content="feedback"))
 
@@ -569,6 +569,7 @@ class TestSoftTimeoutNoOutputCase:
 
         state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
         context = MagicMock()
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
         permission_handler = MagicMock()
 
         process = SequentialProcess(
@@ -632,6 +633,7 @@ class TestSoftTimeoutNoOutputCase:
 
         state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
         context = MagicMock()
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
         permission_handler = MagicMock()
 
         process = SequentialProcess(

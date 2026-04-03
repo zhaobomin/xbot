@@ -267,6 +267,15 @@ class MemoryConsolidator:
         """Return the shared consolidation lock for one session."""
         return self._locks.setdefault(session_key, asyncio.Lock())
 
+    def _cleanup_lock_if_idle(self, session_key: str, lock: asyncio.Lock) -> None:
+        if lock.locked():
+            return
+        waiters = getattr(lock, "_waiters", None)
+        if waiters:
+            return
+        if self._locks.get(session_key) is lock:
+            self._locks.pop(session_key, None)
+
     async def consolidate_messages(self, messages: list[dict[str, object]]) -> bool:
         """Archive a selected message chunk into persistent memory."""
         return await self.store.consolidate(messages, self.backend)
@@ -325,58 +334,61 @@ class MemoryConsolidator:
             return
 
         lock = self.get_lock(session.key)
-        async with lock:
-            target = self.context_window_tokens // 2
-            trigger_threshold = target  # 触发阈值：context_window 的一半
-            estimated, source = self.estimate_session_prompt_tokens(session)
-            if estimated <= 0:
-                return
-            if estimated < trigger_threshold:
-                logger.debug(
-                    "Token consolidation idle %s: %s/%s (trigger at %s) via %s",
-                    session.key,
-                    estimated,
-                    self.context_window_tokens,
-                    trigger_threshold,
-                    source,
-                )
-                return
-
-            for round_num in range(self._MAX_CONSOLIDATION_ROUNDS):
-                if estimated <= target:
-                    return
-
-                boundary = self.pick_consolidation_boundary(session, max(1, estimated - target))
-                if boundary is None:
-                    logger.debug(
-                        "Token consolidation: no safe boundary for %s (round %s)",
-                        session.key,
-                        round_num,
-                    )
-                    return
-
-                end_idx = boundary[0]
-                chunk = session.messages[session.last_consolidated:end_idx]
-                if not chunk:
-                    return
-
-                logger.info(
-                    "Token consolidation round %s for %s: %s/%s via %s, chunk=%s msgs",
-                    round_num,
-                    session.key,
-                    estimated,
-                    self.context_window_tokens,
-                    source,
-                    len(chunk),
-                )
-                if not await self.consolidate_messages(chunk):
-                    return
-                session.last_consolidated = end_idx
-                self.sessions.save(session)
-
+        try:
+            async with lock:
+                target = self.context_window_tokens // 2
+                trigger_threshold = target  # 触发阈值：context_window 的一半
                 estimated, source = self.estimate_session_prompt_tokens(session)
                 if estimated <= 0:
                     return
+                if estimated < trigger_threshold:
+                    logger.debug(
+                        "Token consolidation idle %s: %s/%s (trigger at %s) via %s",
+                        session.key,
+                        estimated,
+                        self.context_window_tokens,
+                        trigger_threshold,
+                        source,
+                    )
+                    return
+
+                for round_num in range(self._MAX_CONSOLIDATION_ROUNDS):
+                    if estimated <= target:
+                        return
+
+                    boundary = self.pick_consolidation_boundary(session, max(1, estimated - target))
+                    if boundary is None:
+                        logger.debug(
+                            "Token consolidation: no safe boundary for %s (round %s)",
+                            session.key,
+                            round_num,
+                        )
+                        return
+
+                    end_idx = boundary[0]
+                    chunk = session.messages[session.last_consolidated:end_idx]
+                    if not chunk:
+                        return
+
+                    logger.info(
+                        "Token consolidation round %s for %s: %s/%s via %s, chunk=%s msgs",
+                        round_num,
+                        session.key,
+                        estimated,
+                        self.context_window_tokens,
+                        source,
+                        len(chunk),
+                    )
+                    if not await self.consolidate_messages(chunk):
+                        return
+                    session.last_consolidated = end_idx
+                    self.sessions.save(session)
+
+                    estimated, source = self.estimate_session_prompt_tokens(session)
+                    if estimated <= 0:
+                        return
+        finally:
+            self._cleanup_lock_if_idle(session.key, lock)
 
     async def force_consolidate(self, session: Session) -> dict[str, Any]:
         """Force consolidate all unconsolidated messages in a session.
@@ -403,40 +415,43 @@ class MemoryConsolidator:
             }
 
         lock = self.get_lock(session.key)
-        async with lock:
-            # Get tokens before
-            tokens_before, _ = self.estimate_session_prompt_tokens(session)
+        try:
+            async with lock:
+                # Get tokens before
+                tokens_before, _ = self.estimate_session_prompt_tokens(session)
 
-            # Get unconsolidated messages
-            unconsolidated = session.messages[session.last_consolidated:]
-            if not unconsolidated:
+                # Get unconsolidated messages
+                unconsolidated = session.messages[session.last_consolidated:]
+                if not unconsolidated:
+                    return {
+                        "messages_consolidated": 0,
+                        "tokens_before": tokens_before,
+                        "tokens_after": tokens_before,
+                        "success": True,
+                    }
+
+                messages_count = len(unconsolidated)
+                logger.info(
+                    "Force consolidation for %s: %s messages, %s tokens",
+                    session.key,
+                    messages_count,
+                    tokens_before,
+                )
+
+                # Consolidate all unconsolidated messages
+                success = await self.consolidate_messages(unconsolidated)
+                if success:
+                    session.last_consolidated = len(session.messages)
+                    self.sessions.save(session)
+
+                # Get tokens after
+                tokens_after, _ = self.estimate_session_prompt_tokens(session)
+
                 return {
-                    "messages_consolidated": 0,
+                    "messages_consolidated": messages_count,
                     "tokens_before": tokens_before,
-                    "tokens_after": tokens_before,
-                    "success": True,
+                    "tokens_after": tokens_after,
+                    "success": success,
                 }
-
-            messages_count = len(unconsolidated)
-            logger.info(
-                "Force consolidation for %s: %s messages, %s tokens",
-                session.key,
-                messages_count,
-                tokens_before,
-            )
-
-            # Consolidate all unconsolidated messages
-            success = await self.consolidate_messages(unconsolidated)
-            if success:
-                session.last_consolidated = len(session.messages)
-                self.sessions.save(session)
-
-            # Get tokens after
-            tokens_after, _ = self.estimate_session_prompt_tokens(session)
-
-            return {
-                "messages_consolidated": messages_count,
-                "tokens_before": tokens_before,
-                "tokens_after": tokens_after,
-                "success": success,
-            }
+        finally:
+            self._cleanup_lock_if_idle(session.key, lock)

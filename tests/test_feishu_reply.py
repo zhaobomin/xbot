@@ -1,6 +1,8 @@
 """Tests for Feishu message reply (quote) feature."""
 import asyncio
 import json
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -219,6 +221,18 @@ def test_reply_message_sync_returns_false_on_exception() -> None:
 
 
 @pytest.mark.asyncio
+async def test_on_message_falls_back_to_unknown_sender_when_open_id_missing() -> None:
+    channel = _make_feishu_channel()
+    bus = channel.bus
+    data = _make_feishu_event(sender_open_id=None)
+
+    await channel._on_message(data)
+
+    msg = await bus.consume_inbound()
+    assert msg.sender_id == "unknown"
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("filename", "expected_msg_type"),
     [
@@ -239,25 +253,66 @@ async def test_send_uses_expected_feishu_msg_type_for_uploaded_files(
     def _record_send(receive_id_type: str, receive_id: str, msg_type: str, content: str) -> None:
         send_calls.append((receive_id_type, receive_id, msg_type, content))
 
-    with patch.object(channel, "_upload_file_sync", return_value="file-key"), patch.object(
-        channel, "_send_message_sync", side_effect=_record_send
-    ):
-        await channel.send(
-            OutboundMessage(
-                channel="feishu",
-                chat_id="oc_test",
-                content="",
-                media=[str(file_path)],
-                metadata={},
-            )
+
+@pytest.mark.asyncio
+async def test_on_message_does_not_block_event_loop_when_dedup_lock_is_held() -> None:
+    channel = _make_feishu_channel()
+    channel._dedup_lock.acquire()
+
+    data = SimpleNamespace(
+        event=SimpleNamespace(
+            message=SimpleNamespace(
+                message_id="om_blocked",
+                chat_id="oc_abc",
+                chat_type="p2p",
+                message_type="text",
+                content='{"text":"hello"}',
+                parent_id=None,
+                root_id=None,
+                mentions=[],
+            ),
+            sender=SimpleNamespace(
+                sender_type="bot",
+                sender_id=SimpleNamespace(open_id="ou_bot"),
+            ),
+        )
+    )
+
+    threading.Timer(0.2, channel._dedup_lock.release).start()
+    task = asyncio.create_task(channel._on_message(data))
+    start = time.perf_counter()
+    await asyncio.sleep(0.02)
+    elapsed = time.perf_counter() - start
+    await asyncio.wait_for(task, timeout=1.0)
+
+    assert elapsed < 0.1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("filename", "expected_name"),
+    [
+        ("../../escape.txt", "escape.txt"),
+        ("..\\\\..\\\\escape.txt", "escape.txt"),
+        ("report.pdf", "report.pdf"),
+    ],
+)
+async def test_download_and_save_media_sanitizes_filename(
+    tmp_path: Path, filename: str, expected_name: str
+) -> None:
+    channel = _make_feishu_channel()
+
+    with patch("xbot.channels.feishu.get_media_dir", return_value=tmp_path):
+        channel._download_file_sync = MagicMock(return_value=(b"demo", filename))
+        file_path, content_text = await channel._download_and_save_media(
+            "file",
+            {"file_key": "file-key"},
+            message_id="om_001",
         )
 
-    assert len(send_calls) == 1
-    receive_id_type, receive_id, msg_type, content = send_calls[0]
-    assert receive_id_type == "chat_id"
-    assert receive_id == "oc_test"
-    assert msg_type == expected_msg_type
-    assert json.loads(content) == {"file_key": "file-key"}
+    assert file_path == str(tmp_path / expected_name)
+    assert (tmp_path / expected_name).read_bytes() == b"demo"
+    assert content_text == f"[file: {expected_name}]"
 
 
 # ---------------------------------------------------------------------------

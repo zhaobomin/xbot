@@ -156,3 +156,25 @@ def test_skill_to_mcp_converter_only_converts_tool_exposable_skills(tmp_path, mo
 
     assert set(servers) == {"skills"}
     assert len(servers["skills"]["tools"]) == 1
+
+
+def test_capability_catalog_ignores_skill_deleted_between_exists_and_stat(tmp_path, monkeypatch) -> None:
+    workspace_skills = tmp_path / "skills"
+    _write_skill(
+        workspace_skills,
+        "weather",
+        "---\ndescription: weather\ntool_exposable: true\n---\n/weather",
+    )
+    catalog = CapabilityCatalog(tmp_path)
+    skill_path = workspace_skills / "weather" / "SKILL.md"
+
+    original_read_text = Path.read_text
+
+    def _read_text(self, *args, **kwargs):
+        if self == skill_path:
+            raise FileNotFoundError(str(self))
+        return original_read_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", _read_text)
+
+    assert catalog.skill_tool_names(include_unavailable=True) == set()

@@ -9,6 +9,7 @@ import queue
 import re
 import threading
 import time
+import uuid
 from collections import OrderedDict
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +32,7 @@ from xbot.channels.feishu_content import (
 )
 from xbot.config.paths import get_media_dir
 from xbot.config.schema import Base
+from xbot.utils.helpers import sanitize_download_filename
 
 import importlib.util
 
@@ -120,25 +122,6 @@ class FeishuChannel(BaseChannel):
             .app_secret(self.config.app_secret) \
             .log_level(lark.LogLevel.INFO) \
             .build()
-        builder = lark.EventDispatcherHandler.builder(
-            self.config.encrypt_key or "",
-            self.config.verification_token or "",
-        ).register_p2_im_message_receive_v1(
-            self._on_message_sync
-        )
-        builder = self._register_optional_event(
-            builder, "register_p2_im_message_reaction_created_v1", self._on_reaction_created
-        )
-        builder = self._register_optional_event(
-            builder, "register_p2_im_message_message_read_v1", self._on_message_read
-        )
-        builder = self._register_optional_event(
-            builder,
-            "register_p2_im_chat_access_event_bot_p2p_chat_entered_v1",
-            self._on_bot_p2p_chat_entered,
-        )
-        event_handler = builder.build()
-
         self._start_ws_worker()
         self._ws_reader_task = asyncio.create_task(self._run_ws_event_reader())
 
@@ -191,6 +174,16 @@ class FeishuChannel(BaseChannel):
 
         logger.info("Feishu bot stopped")
 
+    def check_health(self) -> tuple[bool, str]:
+        """Check Feishu channel health: WS process alive + client initialized."""
+        if not self._running:
+            return False, "channel stopped"
+        if self._ws_process is None or not self._ws_process.is_alive():
+            return False, "websocket worker process dead"
+        if self._client is None:
+            return False, "lark client not initialized"
+        return True, "ok"
+
     def _start_ws_worker(self) -> None:
         from xbot.channels.feishu_ws_worker import run_feishu_ws_worker
 
@@ -235,6 +228,12 @@ class FeishuChannel(BaseChannel):
             self._processed_message_ids[message_id] = now
         return True
 
+    async def _run_with_dedup_lock(self, fn: "Callable[[], None]") -> None:
+        def _locked() -> None:
+            with self._dedup_lock:
+                fn()
+        await asyncio.to_thread(_locked)
+
     async def _dispatch_worker_event(self, event: dict[str, Any]) -> None:
         event_type = event.get("type")
         if event_type != "message":
@@ -250,6 +249,8 @@ class FeishuChannel(BaseChannel):
         await self._on_message(data)
 
     async def _run_ws_event_reader(self) -> None:
+        ws_restart_count = 0
+        max_ws_restarts = 10
         while self._running:
             if self._ws_event_queue is None:
                 return
@@ -257,9 +258,20 @@ class FeishuChannel(BaseChannel):
                 event = await asyncio.to_thread(self._ws_event_queue.get, True, 0.5)
             except queue.Empty:
                 if self._ws_process is not None and not self._ws_process.is_alive() and self._running:
-                    logger.error("Feishu WebSocket worker exited unexpectedly")
-                    return
+                    ws_restart_count += 1
+                    if ws_restart_count > max_ws_restarts:
+                        logger.error("Feishu WebSocket worker exceeded max restart attempts (%d), giving up", max_ws_restarts)
+                        return
+                    backoff = min(2 ** ws_restart_count, 60)
+                    logger.error(
+                        "Feishu WebSocket worker exited unexpectedly, restarting in %ds (attempt %d/%d)",
+                        backoff, ws_restart_count, max_ws_restarts,
+                    )
+                    await asyncio.sleep(backoff)
+                    if self._running:
+                        self._start_ws_worker()
                 continue
+            ws_restart_count = 0  # Reset on successful event
             await self._dispatch_worker_event(event)
 
     def _is_bot_mentioned(self, message: Any) -> bool:
@@ -751,10 +763,11 @@ class FeishuChannel(BaseChannel):
                     filename = f"{filename}.opus"
 
         if data and filename:
-            file_path = media_dir / filename
-            file_path.write_bytes(data)
+            safe_name = sanitize_download_filename(filename, file_key[:16] if 'file_key' in locals() and file_key else f"{msg_type}_download")
+            file_path = media_dir / safe_name
+            await asyncio.to_thread(file_path.write_bytes, data)
             logger.debug("Downloaded %s to %s", msg_type, file_path)
-            return str(file_path), f"[{msg_type}: {filename}]"
+            return str(file_path), f"[{msg_type}: {safe_name}]"
 
         return None, f"[{msg_type}: download failed]"
 
@@ -805,55 +818,88 @@ class FeishuChannel(BaseChannel):
             return None
 
     def _reply_message_sync(self, parent_message_id: str, msg_type: str, content: str) -> bool:
-        """Reply to an existing Feishu message using the Reply API (synchronous)."""
+        """Reply to an existing Feishu message using the Reply API (synchronous) with retry."""
         from lark_oapi.api.im.v1 import ReplyMessageRequest, ReplyMessageRequestBody
-        try:
-            request = ReplyMessageRequest.builder() \
-                .message_id(parent_message_id) \
-                .request_body(
-                    ReplyMessageRequestBody.builder()
-                    .msg_type(msg_type)
-                    .content(content)
-                    .build()
-                ).build()
-            response = self._client.im.v1.message.reply(request)
-            if not response.success():
-                logger.error(
-                    "Failed to reply to Feishu message %s: code=%s, msg=%s, log_id=%s",
-                    parent_message_id, response.code, response.msg, response.get_log_id()
-                )
+        msg_uuid = uuid.uuid4().hex
+        for attempt in range(self._SEND_MAX_RETRIES):
+            try:
+                request = ReplyMessageRequest.builder() \
+                    .message_id(parent_message_id) \
+                    .request_body(
+                        ReplyMessageRequestBody.builder()
+                        .msg_type(msg_type)
+                        .content(content)
+                        .uuid(msg_uuid)
+                        .build()
+                    ).build()
+                response = self._client.im.v1.message.reply(request)
+                if not response.success():
+                    logger.error(
+                        "Failed to reply to Feishu message %s: code=%s, msg=%s, log_id=%s",
+                        parent_message_id, response.code, response.msg, response.get_log_id()
+                    )
+                    return False
+                logger.debug("Feishu reply sent to message %s", parent_message_id)
+                return True
+            except (ConnectionError, OSError) as e:
+                if attempt < self._SEND_MAX_RETRIES - 1:
+                    delay = self._SEND_RETRY_BACKOFF[attempt]
+                    logger.warning(
+                        "Feishu reply retry %d/%d after network error: %s (backoff %.1fs)",
+                        attempt + 1, self._SEND_MAX_RETRIES, e, delay,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error("Feishu reply failed after %d retries: %s", self._SEND_MAX_RETRIES, e)
+                    return False
+            except Exception as e:
+                logger.error("Error replying to Feishu message %s: %s", parent_message_id, e)
                 return False
-            logger.debug("Feishu reply sent to message %s", parent_message_id)
-            return True
-        except Exception as e:
-            logger.error("Error replying to Feishu message %s: %s", parent_message_id, e)
-            return False
+        return False
+
+    _SEND_MAX_RETRIES = 3
+    _SEND_RETRY_BACKOFF = (1.0, 2.0, 4.0)
 
     def _send_message_sync(self, receive_id_type: str, receive_id: str, msg_type: str, content: str) -> bool:
-        """Send a single message (text/image/file/interactive) synchronously."""
+        """Send a single message (text/image/file/interactive) synchronously with retry."""
         from lark_oapi.api.im.v1 import CreateMessageRequest, CreateMessageRequestBody
-        try:
-            request = CreateMessageRequest.builder() \
-                .receive_id_type(receive_id_type) \
-                .request_body(
-                    CreateMessageRequestBody.builder()
-                    .receive_id(receive_id)
-                    .msg_type(msg_type)
-                    .content(content)
-                    .build()
-                ).build()
-            response = self._client.im.v1.message.create(request)
-            if not response.success():
-                logger.error(
-                    "Failed to send Feishu %s message: code=%s, msg=%s, log_id=%s",
-                    msg_type, response.code, response.msg, response.get_log_id()
-                )
+        msg_uuid = uuid.uuid4().hex
+        for attempt in range(self._SEND_MAX_RETRIES):
+            try:
+                request = CreateMessageRequest.builder() \
+                    .receive_id_type(receive_id_type) \
+                    .request_body(
+                        CreateMessageRequestBody.builder()
+                        .receive_id(receive_id)
+                        .msg_type(msg_type)
+                        .content(content)
+                        .uuid(msg_uuid)
+                        .build()
+                    ).build()
+                response = self._client.im.v1.message.create(request)
+                if not response.success():
+                    logger.error(
+                        "Failed to send Feishu %s message: code=%s, msg=%s, log_id=%s",
+                        msg_type, response.code, response.msg, response.get_log_id()
+                    )
+                    return False
+                logger.debug("Feishu %s message sent to %s", msg_type, receive_id)
+                return True
+            except (ConnectionError, OSError) as e:
+                if attempt < self._SEND_MAX_RETRIES - 1:
+                    delay = self._SEND_RETRY_BACKOFF[attempt]
+                    logger.warning(
+                        "Feishu send %s retry %d/%d after network error: %s (backoff %.1fs)",
+                        msg_type, attempt + 1, self._SEND_MAX_RETRIES, e, delay,
+                    )
+                    time.sleep(delay)
+                else:
+                    logger.error("Feishu send %s failed after %d retries: %s", msg_type, self._SEND_MAX_RETRIES, e)
+                    return False
+            except Exception as e:
+                logger.error("Error sending Feishu %s message: %s", msg_type, e)
                 return False
-            logger.debug("Feishu %s message sent to %s", msg_type, receive_id)
-            return True
-        except Exception as e:
-            logger.error("Error sending Feishu %s message: %s", msg_type, e)
-            return False
+        return False
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Feishu, including media (images/files) if present."""
@@ -1017,7 +1063,7 @@ class FeishuChannel(BaseChannel):
 
             # Dedup check+mark is done in _on_message_sync (thread-safe).
             # Here we only do TTL cleanup and trim under lock.
-            with self._dedup_lock:
+            def _cleanup_dedup_state() -> None:
                 expired_keys = [
                     key for key, ts in list(self._processed_message_ids.items())
                     if now - ts > self._message_dedup_ttl
@@ -1036,12 +1082,14 @@ class FeishuChannel(BaseChannel):
                 max_cache_size = 1000
                 while len(self._processed_message_ids) > max_cache_size:
                     self._processed_message_ids.popitem(last=False)
+            await self._run_with_dedup_lock(_cleanup_dedup_state)
 
             # Skip bot messages
             if sender.sender_type == "bot":
                 return
 
-            sender_id = sender.sender_id.open_id if sender.sender_id else "unknown"
+            sender_id = getattr(sender.sender_id, "open_id", None) if sender.sender_id else None
+            sender_id = sender_id or "unknown"
             chat_id = message.chat_id
             chat_type = message.chat_type
             msg_type = message.message_type

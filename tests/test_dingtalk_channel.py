@@ -1,4 +1,5 @@
 import asyncio
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -19,6 +20,10 @@ class _FakeResponse:
 
     def json(self) -> dict:
         return self._json_body
+
+    def raise_for_status(self) -> None:
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
 
 
 class _FakeHttp:
@@ -211,3 +216,65 @@ async def test_download_dingtalk_file(tmp_path, monkeypatch) -> None:
     assert "messageFiles/download" in channel._http.calls[0]["url"]
     assert channel._http.calls[0]["json"]["downloadCode"] == "code123"
     assert channel._http.calls[1]["method"] == "GET"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("filename", "expected_name"),
+    [
+        ("../../escape.txt", "escape.txt"),
+        ("..\\\\..\\\\escape.txt", "escape.txt"),
+        ("report.xlsx", "report.xlsx"),
+    ],
+)
+async def test_download_dingtalk_file_sanitizes_filename(tmp_path, monkeypatch, filename, expected_name) -> None:
+    channel = DingTalkChannel(
+        DingTalkConfig(client_id="app", client_secret="secret", allow_from=["*"]),
+        MessageBus(),
+    )
+
+    async def fake_get_token():
+        return "test-token"
+
+    monkeypatch.setattr(channel, "_get_access_token", fake_get_token)
+    channel._http = _FakeHttp(responses=[_FakeResponse(200, {"downloadUrl": "https://example.com/tmpfile"}), _FakeResponse(200)])
+    channel._http._responses[1].content = b"safe file"
+    monkeypatch.setattr(
+        "xbot.config.paths.get_media_dir",
+        lambda channel_name=None: tmp_path / channel_name if channel_name else tmp_path,
+    )
+
+    result = await channel._download_dingtalk_file("code123", filename, "user1")
+
+    assert result is not None
+    assert result.endswith(expected_name)
+    assert Path(result).parent == tmp_path / "dingtalk" / "user1"
+    assert Path(result).name == expected_name
+
+
+@pytest.mark.asyncio
+async def test_get_access_token_uses_singleflight_refresh() -> None:
+    channel = DingTalkChannel(
+        DingTalkConfig(client_id="app", client_secret="secret", allow_from=["*"]),
+        MessageBus(),
+    )
+
+    class _TokenHttp:
+        def __init__(self):
+            self.calls = 0
+
+        async def post(self, url: str, json=None, headers=None, **kwargs):
+            self.calls += 1
+            await asyncio.sleep(0.05)
+            return _FakeResponse(200, {"accessToken": "token-1", "expireIn": 7200})
+
+    channel._http = _TokenHttp()
+
+    token1, token2 = await asyncio.gather(
+        channel._get_access_token(),
+        channel._get_access_token(),
+    )
+
+    assert token1 == "token-1"
+    assert token2 == "token-1"
+    assert channel._http.calls == 1

@@ -558,6 +558,7 @@ class TestSequentialProcessExecute:
 
         context = MagicMock()
         context.build_task_prompt = MagicMock(return_value="test prompt")
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
         context.get_upstream_results = MagicMock(return_value={})
 
         permission_handler = MagicMock()
@@ -607,6 +608,7 @@ class TestSequentialProcessExecute:
         pool.run_task_streaming = MagicMock()
 
         context = MagicMock()
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
         existing_result = TaskResult(
             task_name="task1",
             agent_name="agent1",
@@ -690,6 +692,12 @@ class TestHierarchicalProcessPlanParsing:
         result = HierarchicalProcess._parse_plan(output)
         assert result is None
 
+    def test_parse_plan_recovers_after_invalid_array_prefix(self) -> None:
+        """Parser should keep scanning after an invalid candidate array."""
+        output = 'noise [1, 2] trailing ["task1", "task[2]"]'
+        result = HierarchicalProcess._parse_plan(output)
+        assert result == ["task1", "task[2]"]
+
 
 class TestProgressHelper:
     """Test progress callback helper."""
@@ -760,6 +768,7 @@ class TestOutputProcessing:
 
         context = MagicMock()
         context.build_task_prompt = MagicMock(return_value="test prompt")
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
 
         permission_handler = MagicMock()
         permission_handler.request_interaction = AsyncMock(return_value=MagicMock(content=""))

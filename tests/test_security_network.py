@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 import pytest
 
-from xbot.security.network import contains_internal_url, validate_url_target
+from xbot.security.network import contains_internal_url, validate_resolved_url, validate_url_target
 
 
 def _fake_resolve(host: str, results: list[str]):
@@ -76,6 +76,13 @@ def test_allows_normal_https():
     with patch("xbot.security.network.socket.getaddrinfo", _fake_resolve("github.com", ["140.82.121.3"])):
         ok, err = validate_url_target("https://github.com/HKUDS/xbot")
         assert ok
+
+
+def test_validate_resolved_url_blocks_rebound_private_host():
+    with patch("xbot.security.network.socket.getaddrinfo", _fake_resolve("example.com", ["127.0.0.1"])):
+        ok, err = validate_resolved_url("https://example.com/path")
+        assert not ok
+        assert "private" in err.lower() or "blocked" in err.lower()
 
 
 # ---------------------------------------------------------------------------

@@ -773,6 +773,7 @@ def gateway(
         on_notify=on_heartbeat_notify,
         interval_s=hb_cfg.interval_s,
         enabled=hb_cfg.enabled,
+        on_channel_health=channels.check_channels_health,
     )
 
     if channels.enabled_channels:

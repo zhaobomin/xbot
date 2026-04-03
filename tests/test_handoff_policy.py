@@ -64,6 +64,18 @@ class TestHandoffPolicy:
         assert "coder" in names
         assert "researcher" in names
 
+    def test_list_agents_normalizes_none_fields_on_objects(self) -> None:
+        class _Agent:
+            description = None
+            when = None
+            prompt = None
+
+        policy = HandoffPolicy({"coder": _Agent()})
+
+        agents = policy.list_agents()
+
+        assert agents == [HandoffAgentPolicy(name="coder", description="", when="", prompt="")]
+
     def test_classify_task_event(self, policy_with_agents: HandoffPolicy) -> None:
         """Test classify_task_event method."""
         assert policy_with_agents.classify_task_event("handoff to coder") == "handoff"

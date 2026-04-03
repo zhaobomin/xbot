@@ -154,6 +154,7 @@ class CronService:
                         delete_after_run=j.get("deleteAfterRun", False),
                     ))
                 self._store = CronStore(jobs=jobs)
+                self._last_mtime = self.store_path.stat().st_mtime
             except Exception as e:
                 logger.error("Failed to load cron store from %s: %s. "
                              "Keeping existing file intact - will retry on next operation.",
@@ -298,8 +299,10 @@ class CronService:
         for job in due_jobs:
             await self._execute_job(job)
 
-        self._save_store()
-        self._arm_timer()
+        try:
+            self._save_store()
+        finally:
+            self._arm_timer()
 
     async def _execute_job(self, job: CronJob) -> None:
         """Execute a single job."""
@@ -395,6 +398,51 @@ class CronService:
             logger.info("Cron: removed job %s", job_id)
 
         return removed
+
+    def get_job(self, job_id: str) -> CronJob | None:
+        """Return a single job by ID."""
+        store = self._load_store()
+        for job in store.jobs:
+            if job.id == job_id:
+                return job
+        return None
+
+    def update_job(self, job_id: str, **updates: Any) -> CronJob:
+        """Update an existing job in-place."""
+        store = self._load_store()
+        for job in store.jobs:
+            if job.id != job_id:
+                continue
+
+            # Validate first, before mutating anything
+            if "schedule" in updates:
+                _validate_schedule_for_add(updates["schedule"])
+
+            # Apply changes
+            if "name" in updates:
+                job.name = updates["name"]
+            if "schedule" in updates:
+                job.schedule = updates["schedule"]
+            if "payload" in updates:
+                job.payload = updates["payload"]
+            if "enabled" in updates:
+                job.enabled = bool(updates["enabled"])
+
+            now = _now_ms()
+            job.updated_at_ms = now
+            if job.enabled:
+                job.state.next_run_at_ms = _compute_next_run(job.schedule, now)
+            else:
+                job.state.next_run_at_ms = None
+            self._save_store()
+            self._arm_timer()
+            return job
+
+        raise KeyError(job_id)
+
+    def delete_job(self, job_id: str) -> bool:
+        """Backward-compatible alias used by the WebUI."""
+        return self.remove_job(job_id)
 
     def enable_job(self, job_id: str, enabled: bool = True) -> CronJob | None:
         """Enable or disable a job."""

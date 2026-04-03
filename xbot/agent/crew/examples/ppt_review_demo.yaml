@@ -1,0 +1,277 @@
+# PPT Review Crew 配置示例
+# 展示新的 media 字段支持（vision 能力）
+
+name: ppt_review_demo
+description: PPT Review 示例 - 使用 media 字段支持图片分析
+
+process: sequential
+
+workspace: .
+
+global_context: |
+  你正在参与 PPT Review 流程。
+  任务是分析 PPT 幻灯片内容，评估逻辑结构、内容重点和观点表达。
+
+agents:
+  slide_analyzer:
+    name: slide_analyzer
+    description: 幻灯片内容分析师
+    goal: 提取幻灯片中的标题、正文、图表和核心观点
+    backstory: |
+      你是专业的幻灯片内容分析师，擅长从视觉内容中提取结构化信息。
+      你会仔细阅读每一页幻灯片，提取标题、正文要点、图表描述和核心观点。
+    model: kimi-k2.5  # 使用支持 vision 的模型
+    max_iterations: 40
+
+  chapter_organizer:
+    name: chapter_organizer
+    description: 章节组织专家
+    goal: 基于页面内容识别章节边界，输出章节结构
+    backstory: |
+      你擅长内容结构分析，能够识别幻灯片中的章节边界和逻辑分组。
+    max_iterations: 30
+
+  structure_reviewer:
+    name: structure_reviewer
+    description: 逻辑结构评审员
+    goal: 评估整体逻辑结构是否合理
+    backstory: |
+      你专注于评估文档的逻辑结构：章节顺序、过渡衔接、层次清晰度。
+    max_iterations: 30
+
+  content_reviewer:
+    name: content_reviewer
+    description: 内容重点评审员
+    goal: 评估内容重点是否突出
+    backstory: |
+      你专注于评估内容策略：核心主题、重点突出、详略得当。
+    max_iterations: 30
+
+  point_reviewer:
+    name: point_reviewer
+    description: 观点表达评审员
+    goal: 评估每页观点是否明确具体
+    backstory: |
+      你专注于评估观点表达：观点明确性、支撑充分性、避免抽象空话。
+    max_iterations: 30
+
+  report_synthesizer:
+    name: report_synthesizer
+    description: 报告撰写专家
+    goal: 整合所有评审结果，输出结构化报告
+    backstory: |
+      你擅长整合多维度评审意见，输出清晰、有行动指导价值的报告。
+    max_iterations: 40
+
+tasks:
+  # ===== Phase 1: 单页分析（使用 media 字段） =====
+  - name: analyze_slide_01
+    description: |
+      【第 1 页幻灯片分析】
+
+      请分析这张幻灯片图片，提取以下内容：
+      1. 页面标题
+      2. 正文内容（逐条列出）
+      3. 图表/图示描述（如有）
+      4. 核心观点（一句话总结）
+      5. 页面类型（封面/目录/内容/过渡/结尾）
+
+      输出格式：
+      ```yaml
+      page_num: 1
+      title: "..."
+      content:
+        - "..."
+        - "..."
+      charts: "..."  # 或 null
+      key_point: "..."
+      page_type: "..."
+      ```
+    agent: slide_analyzer
+    # ===== 使用新的 media 字段 =====
+    media:
+      - slides/page_01.png
+    media_mode: vision  # 强制使用 vision 模式
+    expected_output: 第 1 页结构化内容（YAML 格式）
+    timeout: 120
+
+  - name: analyze_slide_02
+    description: |
+      【第 2 页幻灯片分析】
+
+      请分析这张幻灯片图片，提取标题、正文、图表和核心观点。
+    agent: slide_analyzer
+    media:
+      - slides/page_02.png
+    media_mode: vision
+    expected_output: 第 2 页结构化内容
+    timeout: 120
+
+  - name: analyze_slide_03
+    description: |
+      【第 3 页幻灯片分析】
+
+      请分析这张幻灯片图片，提取标题、正文、图表和核心观点。
+    agent: slide_analyzer
+    media:
+      - slides/page_03.png
+    media_mode: vision
+    expected_output: 第 3 页结构化内容
+    timeout: 120
+
+  # ===== Phase 2: 章节组织 =====
+  - name: organize_chapters
+    description: |
+      【章节组织结构】
+
+      基于前面所有幻灯片分析结果，进行章节分段：
+
+      ## 任务
+      1. 识别章节边界（封面、目录、过渡页、正文、结尾）
+      2. 输出章节结构：
+         - 章节名称
+         - 包含的页码
+         - 章节主题
+         - 每页在章节中的角色（引入/展开/总结）
+
+      3. 识别整体叙事逻辑
+
+      ## 输出格式
+      ```yaml
+      chapters:
+        - name: "..."
+          pages: [1, 2, 3]
+          theme: "..."
+          page_roles:
+            1: "cover"
+            2: "intro"
+            3: "content"
+      narrative_flow: "..."
+      ```
+    agent: chapter_organizer
+    context_from:
+      - analyze_slide_01
+      - analyze_slide_02
+      - analyze_slide_03
+    expected_output: 章节结构文档（YAML 格式）
+    timeout: 180
+
+  # ===== Phase 3: 多维度 Review =====
+  - name: review_structure
+    description: |
+      【逻辑结构 Review】
+
+      评估 PPT 的整体逻辑结构：
+
+      ## 评估维度
+      1. 整体结构：章节顺序是否符合认知逻辑？（1-5 分）
+      2. 过渡衔接：章节间是否有自然的过渡？（1-5 分）
+      3. 层次清晰：主次是否分明？（1-5 分）
+      4. 节奏把控：是否有张弛有度？（1-5 分）
+
+      ## 输出
+      - 每个维度的评分和说明
+      - 问题清单
+      - 改进建议（具体到章节/页）
+    agent: structure_reviewer
+    context_from:
+      - organize_chapters
+      - analyze_slide_01
+      - analyze_slide_02
+      - analyze_slide_03
+    expected_output: 结构 Review 报告
+    timeout: 180
+
+  - name: review_content_focus
+    description: |
+      【内容重点 Review】
+
+      评估 PPT 的内容重点：
+
+      ## 评估维度
+      1. 核心主题：PPT 是否有明确的中心思想？（1-5 分）
+      2. 重点突出：关键信息是否得到充分展开？（1-5 分）
+      3. 详略得当：次要内容是否过于冗长？（1-5 分）
+      4. 一致性：各页内容是否围绕主题展开？（1-5 分）
+
+      ## 输出
+      - 每个维度的评分和说明
+      - 问题清单
+      - 改进建议
+    agent: content_reviewer
+    context_from:
+      - organize_chapters
+      - analyze_slide_01
+      - analyze_slide_02
+      - analyze_slide_03
+    expected_output: 内容 Review 报告
+    timeout: 180
+
+  - name: review_point_expression
+    description: |
+      【观点表达 Review】
+
+      逐页评估观点表达质量：
+
+      ## 评估维度（按页检查）
+      1. 观点明确：每页是否有清晰的观点句？
+      2. 支撑充分：观点是否有数据/案例/逻辑支撑？
+      3. 避免抽象：观点是否具体可感知？
+         - 警告："提升效率""赋能业务""创造价值"等空话
+      4. 页间关联：前后页观点是否有逻辑递进？
+
+      ## 输出
+      - 逐页评分和问题清单
+      - 观点改进建议（具体到页）
+      - 抽象观点识别和替换建议
+    agent: point_reviewer
+    context_from:
+      - organize_chapters
+      - analyze_slide_01
+      - analyze_slide_02
+      - analyze_slide_03
+    expected_output: 观点 Review 报告（按页详细）
+    timeout: 240
+
+  # ===== Phase 4: 汇总报告 =====
+  - name: synthesize_final_report
+    description: |
+      【最终 Review 报告】
+
+      整合所有评审结果，输出完整的 PPT Review 报告。
+
+      ## 报告结构
+
+      ### 1. 执行摘要
+      - 整体评分（3 个维度加权平均）
+      - 核心问题总结（Top 5）
+      - 优先级改进建议（Top 5）
+
+      ### 2. 详细 Review 结果
+      - 逻辑结构分析
+      - 内容重点分析
+      - 观点表达分析（按章节/页列出具体问题）
+
+      ### 3. 章节级反馈
+      按章节输出：
+      - 章节评分
+      - 具体问题
+      - 改进建议
+
+      ### 4. 行动计划
+      - 高优先级修改（必须做）
+      - 中优先级修改（建议做）
+      - 低优先级修改（可选）
+
+      ## 风格要求
+      - 具体、可操作、避免笼统
+      - 用表格呈现评分和对比
+      - 每个建议都要明确指向具体页面
+    agent: report_synthesizer
+    context_from:
+      - organize_chapters
+      - review_structure
+      - review_content_focus
+      - review_point_expression
+    expected_output: final_review_report.md（完整 Markdown 报告）
+    timeout: 300

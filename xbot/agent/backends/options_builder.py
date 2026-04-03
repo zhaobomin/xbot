@@ -145,7 +145,10 @@ class OptionsBuilder:
         from claude_agent_sdk.types import HookMatcher
 
         # Start with user-configured hooks
-        hooks: dict[str, list] = copy.deepcopy(self._sdk_config.hooks or {})
+        try:
+            hooks: dict[str, list] = copy.deepcopy(self._sdk_config.hooks or {})
+        except Exception:
+            hooks = dict(self._sdk_config.hooks or {})
 
         # Add PreCompact hook if compact_notify is enabled
         compact_notify = getattr(self._sdk_config, "compact_notify", True)
@@ -201,6 +204,13 @@ class OptionsBuilder:
                     context_info = session_contexts.get(session_ref)
                     if isinstance(context_info, tuple):
                         resolved_target = (session_ref, context_info[0], context_info[1])
+
+                if not (
+                    isinstance(resolved_target, tuple)
+                    and len(resolved_target) == 3
+                    and all(isinstance(part, str) and part for part in resolved_target)
+                ):
+                    resolved_target = None
 
                 # DEBUG: Log all available session keys for troubleshooting
                 logger.info(

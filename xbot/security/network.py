@@ -27,6 +27,17 @@ def _is_private(addr: ipaddress.IPv4Address | ipaddress.IPv6Address) -> bool:
     return any(addr in net for net in _BLOCKED_NETWORKS)
 
 
+def _resolve_host_ips(hostname: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+    resolved: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for info in infos:
+        try:
+            resolved.append(ipaddress.ip_address(info[4][0]))
+        except ValueError:
+            continue
+    return resolved
+
+
 def validate_url_target(url: str) -> tuple[bool, str]:
     """Validate a URL is safe to fetch: scheme, hostname, and resolved IPs.
 
@@ -47,15 +58,11 @@ def validate_url_target(url: str) -> tuple[bool, str]:
         return False, "Missing hostname"
 
     try:
-        infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        resolved = _resolve_host_ips(hostname)
     except socket.gaierror:
         return False, f"Cannot resolve hostname: {hostname}"
 
-    for info in infos:
-        try:
-            addr = ipaddress.ip_address(info[4][0])
-        except ValueError:
-            continue
+    for addr in resolved:
         if _is_private(addr):
             return False, f"Blocked: {hostname} resolves to private/internal address {addr}"
 
@@ -80,14 +87,12 @@ def validate_resolved_url(url: str) -> tuple[bool, str]:
     except ValueError:
         # hostname is a domain name, resolve it
         try:
-            infos = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+            resolved = _resolve_host_ips(hostname)
         except socket.gaierror:
             return True, ""
-        for info in infos:
-            try:
-                addr = ipaddress.ip_address(info[4][0])
-            except ValueError:
-                continue
+        if not resolved:
+            return False, f"Redirect target cannot be resolved: {hostname}"
+        for addr in resolved:
             if _is_private(addr):
                 return False, f"Redirect target {hostname} resolves to private address {addr}"
 

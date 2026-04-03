@@ -364,6 +364,84 @@ class TestAnswerValidation:
 
         assert result is True
 
+    @pytest.mark.asyncio
+    async def test_strict_multi_question_answers_are_validated_per_question(
+        self, handler, runtime, mock_transaction
+    ):
+        """Strict multi-question replies should validate each comma-separated answer."""
+        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime._state_coordinator.transaction.return_value = mock_transaction
+
+        request = InteractionRequest(
+            request_id="req-123",
+            session_key="telegram:oc_123",
+            channel="telegram",
+            chat_id="oc_123",
+            kind="question",
+            prompt="请依次回答以下问题，答案之间用逗号分隔",
+            suggestions=["A", "B", "C", "D"],
+            metadata={
+                "valid_options": ["A", "B", "C", "D"],
+                "question_options_map": [["A", "B"], ["C", "D"]],
+                "question_count": 2,
+                "validation_mode": "strict",
+            },
+        )
+        await runtime.bus.publish_interaction_request(request)
+
+        msg = InboundMessage(
+            channel="telegram",
+            sender_id="user123",
+            chat_id="oc_123",
+            content="A, C",
+        )
+
+        result = await handler.handle_interaction_response(msg, retry_count=0)
+
+        assert result is True
+        response = runtime.bus._interaction_results["req-123"]
+        assert response.content == "A, C"
+
+    @pytest.mark.asyncio
+    async def test_strict_multi_question_validation_reports_invalid_answer(
+        self, handler, runtime, mock_transaction
+    ):
+        """Strict multi-question replies should reject answers invalid for that specific question."""
+        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime._state_coordinator.transaction.return_value = mock_transaction
+
+        request = InteractionRequest(
+            request_id="req-123",
+            session_key="telegram:oc_123",
+            channel="telegram",
+            chat_id="oc_123",
+            kind="question",
+            prompt="请依次回答以下问题，答案之间用逗号分隔",
+            suggestions=["A", "B", "C", "D"],
+            metadata={
+                "valid_options": ["A", "B", "C", "D"],
+                "question_options_map": [["A", "B"], ["C", "D"]],
+                "question_count": 2,
+                "validation_mode": "strict",
+            },
+        )
+        await runtime.bus.publish_interaction_request(request)
+        await runtime.bus.consume_outbound()
+
+        msg = InboundMessage(
+            channel="telegram",
+            sender_id="user123",
+            chat_id="oc_123",
+            content="A, B",
+        )
+
+        result = await handler.handle_interaction_response(msg, retry_count=0)
+
+        assert result is True
+        assert runtime._interaction_retry_counts["telegram:oc_123"] == 1
+        outbound = await runtime.bus.consume_outbound()
+        assert "答案无效" in outbound.content
+
 
 class TestRetryCountManagement:
     """Tests for retry count tracking in runtime."""

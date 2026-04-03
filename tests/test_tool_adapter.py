@@ -1,7 +1,9 @@
 """Tests for tool adapter."""
 
+import asyncio
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -136,3 +138,68 @@ class TestToolAdapterRegistration:
 
         # Tools should be created with workspace restriction
         assert adapter._tools["read_file"]._allowed_dir == workspace
+
+    @pytest.mark.asyncio
+    async def test_message_tool_uses_per_session_context(self, workspace: Path) -> None:
+        bus = MagicMock()
+        bus.publish_outbound = AsyncMock()
+        adapter = ToolAdapter(str(workspace), shared_resources={"bus": bus})
+        adapter._register_xbot_tools()
+        tool = adapter.get_tool("message")
+
+        barrier = asyncio.Event()
+
+        async def _send(session_key: str, chat_id: str) -> None:
+            adapter.set_tool_context(
+                channel="telegram",
+                chat_id=chat_id,
+                session_key=session_key,
+            )
+            barrier.set()
+            await barrier.wait()
+            await tool.execute(content=f"hello-{chat_id}")
+
+        await asyncio.gather(
+            _send("telegram:1", "chat-1"),
+            _send("telegram:2", "chat-2"),
+        )
+
+        sent = [call.args[0] for call in bus.publish_outbound.await_args_list]
+        assert {(msg.channel, msg.chat_id, msg.content) for msg in sent} == {
+            ("telegram", "chat-1", "hello-chat-1"),
+            ("telegram", "chat-2", "hello-chat-2"),
+        }
+
+    @pytest.mark.asyncio
+    async def test_cron_tool_uses_per_session_context(self, workspace: Path) -> None:
+        cron_service = MagicMock()
+        cron_service.add_job.side_effect = lambda **kwargs: SimpleNamespace(
+            id=f"job-{kwargs['to']}",
+            name=kwargs["name"],
+        )
+        adapter = ToolAdapter(str(workspace), shared_resources={"cron_service": cron_service})
+        adapter._register_xbot_tools()
+        tool = adapter.get_tool("cron")
+
+        barrier = asyncio.Event()
+
+        async def _schedule(session_key: str, chat_id: str) -> None:
+            adapter.set_tool_context(
+                channel="telegram",
+                chat_id=chat_id,
+                session_key=session_key,
+            )
+            barrier.set()
+            await barrier.wait()
+            await tool.execute(action="add", message=f"ping-{chat_id}", every_seconds=60)
+
+        await asyncio.gather(
+            _schedule("telegram:1", "chat-1"),
+            _schedule("telegram:2", "chat-2"),
+        )
+
+        calls = cron_service.add_job.call_args_list
+        assert {(call.kwargs["channel"], call.kwargs["to"], call.kwargs["message"]) for call in calls} == {
+            ("telegram", "chat-1", "ping-chat-1"),
+            ("telegram", "chat-2", "ping-chat-2"),
+        }

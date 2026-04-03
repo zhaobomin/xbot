@@ -173,6 +173,19 @@ class TestMemoryToolWrite:
         assert "Preferences" in content  # Other section preserved
         assert "Chinese" in content  # Other section content preserved
 
+    def test_write_preserves_backreference_like_content(self, temp_workspace):
+        """Content containing regex backreferences should be written literally."""
+        tool = MemoryTool(workspace=temp_workspace)
+
+        asyncio.run(tool.execute(
+            action="write",
+            section="Escapes",
+            content=r"literal \1 and \g<0> should stay untouched",
+        ))
+
+        content = (temp_workspace / "memory" / "MEMORY.md").read_text(encoding="utf-8")
+        assert r"literal \1 and \g<0> should stay untouched" in content
+
 
 class TestMemoryToolAppend:
     """Tests for memory append action."""

@@ -118,6 +118,16 @@ class ChannelManager:
             except Exception as e:
                 logger.error("Error stopping %s: %s", name, e)
 
+    def check_channels_health(self) -> dict[str, tuple[bool, str]]:
+        """Check health of all enabled channels. Returns {name: (healthy, detail)}."""
+        results = {}
+        for name, channel in self.channels.items():
+            try:
+                results[name] = channel.check_health()
+            except Exception as e:
+                results[name] = (False, str(e))
+        return results
+
     async def _dispatch_outbound(self) -> None:
         """Dispatch outbound messages to the appropriate channel."""
         logger.info("Outbound dispatcher started")

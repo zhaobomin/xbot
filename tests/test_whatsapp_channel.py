@@ -141,6 +141,25 @@ class TestWhatsAppChannelSend:
         assert payload["to"] == "1234567890@s.whatsapp.net"
         assert payload["text"] == "test message"
 
+    @pytest.mark.asyncio
+    async def test_send_includes_media_paths(self):
+        channel = WhatsAppChannel(WhatsAppConfig(), MessageBus())
+        channel._connected = True
+        channel._ws = MagicMock()
+        channel._ws.send = AsyncMock()
+
+        msg = OutboundMessage(
+            channel="whatsapp",
+            chat_id="1234567890@s.whatsapp.net",
+            content="test message",
+            media=["/tmp/a.png", "/tmp/b.pdf"],
+        )
+
+        await channel.send(msg)
+
+        payload = json.loads(channel._ws.send.call_args[0][0])
+        assert payload["media"] == ["/tmp/a.png", "/tmp/b.pdf"]
+
 
 class TestWhatsAppChannelHandleBridgeMessage:
     """Tests for WhatsApp bridge message handling."""

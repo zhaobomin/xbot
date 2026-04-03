@@ -301,14 +301,23 @@ class OutputTruncator:
 
     def _truncate_hard(self, content: str, max_length: int) -> TruncationResult:
         """Simple character-level truncation."""
-        truncated_content = content[:max_length - 20] + '\n\n... (output truncated)'
+        if max_length <= 0:
+            truncated_content = ""
+        elif max_length < 20:
+            marker = "..."
+            if max_length <= len(marker):
+                truncated_content = marker[:max_length]
+            else:
+                truncated_content = content[: max_length - len(marker)] + marker
+        else:
+            truncated_content = content[:max_length - 20] + '\n\n... (output truncated)'
         return TruncationResult(
             content=truncated_content,
             original_length=len(content),
             truncated_length=len(truncated_content),
             truncated=True,
             strategy="hard",
-            message=f"Hard truncation at character {max_length - 20}",
+            message=f"Hard truncation at character {max_length}",
         )
 
     def _find_important_sections(self, content: str, patterns: list[str]) -> list[tuple[int, int]]:
@@ -382,7 +391,7 @@ class OutputTruncator:
 
     def _find_code_block_end(self, lines: list[str], start: int) -> int | None:
         """Find the end of the current code block."""
-        for i in range(start, len(lines)):
+        for i in range(start + 1, len(lines)):
             if lines[i].strip() == '```':
                 return i
         return None

@@ -380,6 +380,8 @@ class DiscordChannel(BaseChannel):
             headers = {"Authorization": f"Bot {self.config.token}"}
             while self._running:
                 try:
+                    if self._http is None:
+                        return
                     await self._http.post(url, headers=headers)
                 except asyncio.CancelledError:
                     return

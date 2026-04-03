@@ -25,7 +25,7 @@ class ExecTool(Tool):
         self.timeout = timeout
         self.working_dir = working_dir
         self.deny_patterns = deny_patterns or [
-            r"\brm\s+-[rf]{1,2}\b",          # rm -r, rm -rf, rm -fr
+            r"\brm\s+-[a-z]*r[a-z]*\b",      # rm -r, rm -rf, rm -rfv, rm -rfi
             r"\brm\b[^\n;&|]*--(?:recursive|force)\b",  # GNU long options
             r"\bdel\s+/[fq]\b",              # del /f, del /q
             r"\brmdir\s+/s\b",               # rmdir /s

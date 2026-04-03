@@ -118,6 +118,14 @@ class TestHardTruncation:
         assert result.truncated is True
         assert len(result.content) < len(content)
 
+    @pytest.mark.parametrize("max_length", [5, 10, 19])
+    def test_hard_truncate_handles_tiny_limits(self, max_length: int) -> None:
+        truncator = OutputTruncator()
+        result = truncator.truncate("Hello World! " * 10, max_length=max_length, strategy=TruncationStrategy.HARD)
+
+        assert result.truncated is True
+        assert len(result.content) <= max_length
+
 
 class TestSmartStrategyDetection:
     """Test smart strategy auto-detection."""
@@ -229,6 +237,12 @@ class TestMarkdownTruncation:
 
         assert result.truncated is True
         assert "truncated" in result.content.lower()
+
+    def test_find_code_block_end_skips_opening_fence(self) -> None:
+        truncator = OutputTruncator()
+        lines = ["```", "print('x')", "```"]
+
+        assert truncator._find_code_block_end(lines, 0) == 2
 
 
 class TestPreservePatterns:

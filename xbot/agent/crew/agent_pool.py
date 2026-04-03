@@ -68,9 +68,15 @@ class AgentPool:
 
                 agents_config = self._build_role_config(role)
 
+                # 更新 shared_resources 中的 config，确保 model 设置生效
+                from copy import deepcopy
+                updated_config = deepcopy(self.xbot_config)
+                if role.model and role.model != "inherit":
+                    updated_config.agents.defaults.model = role.model
+
                 shared_resources: dict[str, Any] = {
                     "workspace": str(workspace),
-                    "config": self.xbot_config,
+                    "config": updated_config,
                     "tools_config": self.xbot_config.tools,
                     "permission_handler": self.permission_handler,
                     "bus": None,
@@ -79,7 +85,7 @@ class AgentPool:
 
                 await backend.initialize(agents_config, shared_resources)
                 self._backends[role_name] = backend
-                logger.info(f"[crew-pool] Initialised backend for role '{role_name}'")
+                logger.info(f"[crew-pool] Initialised backend for role '{role_name}' with model={role.model if role.model != 'inherit' else updated_config.agents.defaults.model}")
             except Exception as e:
                 error_msg = str(e)
                 self._failed_roles[role_name] = error_msg
@@ -100,13 +106,16 @@ class AgentPool:
                 f"Tasks using these roles will fail."
             )
 
-    async def run_task(self, role_name: str, prompt: str, session_key: str) -> str:
+    async def run_task(
+        self, role_name: str, prompt: str, session_key: str, media: list[str] | None = None
+    ) -> str:
         """Execute a prompt with the specified role's backend and collect the full response.
 
         Args:
             role_name: The crew role to use.
             prompt: Full prompt text.
             session_key: Unique session key for this invocation.
+            media: Optional list of media file paths (images, etc.) to include.
 
         Returns:
             The concatenated response text.
@@ -115,12 +124,12 @@ class AgentPool:
             KeyError: If the role was not initialised or initialisation failed.
         """
         content = ""
-        async for progress in self.run_task_streaming(role_name, prompt, session_key):
+        async for progress in self.run_task_streaming(role_name, prompt, session_key, media):
             content = progress.total_content
         return content
 
     async def run_task_streaming(
-        self, role_name: str, prompt: str, session_key: str
+        self, role_name: str, prompt: str, session_key: str, media: list[str] | None = None
     ) -> AsyncIterator[TaskProgress]:
         """Execute a prompt and yield progress events.
 
@@ -131,6 +140,7 @@ class AgentPool:
             role_name: The crew role to use.
             prompt: Full prompt text.
             session_key: Unique session key for this invocation.
+            media: Optional list of media file paths (images, etc.) to include.
 
         Yields:
             TaskProgress events with delta and total content.
@@ -155,6 +165,7 @@ class AgentPool:
             prompt=prompt,
             channel="crew",
             chat_id=role_name,
+            media=media,
         )
 
         total_content = ""

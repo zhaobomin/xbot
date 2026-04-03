@@ -148,6 +148,32 @@ class TestWecomChannelMessageHandling:
             finish=True,
         )
 
+    @pytest.mark.asyncio
+    async def test_chat_frames_cache_is_bounded_and_keeps_latest_entries(self):
+        """Reply frame cache should not grow without bound."""
+        channel = WecomChannel(
+            WecomConfig(bot_id="test", secret="pass"),
+            MessageBus(),
+        )
+        channel._handle_message = AsyncMock()
+
+        for idx in range(600):
+            await channel._process_message(
+                {
+                    "body": {
+                        "msgid": f"msg-{idx}",
+                        "chatid": f"chat-{idx}",
+                        "from": {"userid": f"user-{idx}"},
+                        "text": {"content": f"hello-{idx}"},
+                    }
+                },
+                "text",
+            )
+
+        assert len(channel._chat_frames) <= 1000
+        assert "chat-599" in channel._chat_frames
+        assert "msg-599" in channel._chat_frames
+
 
 class TestWecomChannelProcessedMessages:
     """Tests for processed message tracking."""

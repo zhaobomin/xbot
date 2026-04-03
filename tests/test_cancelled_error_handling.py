@@ -152,6 +152,7 @@ class TestProcessCancelledError:
 
         context = MagicMock()
         context.build_task_prompt = MagicMock(return_value="test prompt")
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
 
         permission_handler = MockPermissionHandler()
         crew_config = MagicMock()
@@ -348,6 +349,7 @@ class TestRedoTaskBugFixes:
 
         context = MagicMock()
         context.build_task_prompt = MagicMock(return_value="test prompt")
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
 
         permission_handler = MagicMock()
         permission_handler.request_interaction = AsyncMock(return_value=MagicMock(content="feedback"))
@@ -413,6 +415,7 @@ class TestRedoTaskBugFixes:
 
         context = MagicMock()
         context.build_task_prompt = MagicMock(return_value="test prompt")
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
 
         permission_handler = MagicMock()
         permission_handler.request_interaction = AsyncMock(return_value=MagicMock(content="feedback"))
@@ -488,6 +491,7 @@ class TestExecuteWithSoftTimeoutEdgeCases:
         state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
         context = MagicMock()
         context.build_task_prompt = MagicMock(return_value="test prompt")
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
 
         permission_handler = MagicMock()
 
@@ -557,6 +561,7 @@ class TestExecuteWithSoftTimeoutEdgeCases:
         state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
         context = MagicMock()
         context.build_task_prompt = MagicMock(return_value="test prompt")
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
 
         permission_handler = MagicMock()
 

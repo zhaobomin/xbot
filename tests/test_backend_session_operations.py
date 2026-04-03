@@ -213,6 +213,23 @@ class TestBidirectionalMappingConsistency:
     """Tests for bidirectional mapping consistency."""
 
     @pytest.mark.asyncio
+    async def test_setting_sdk_session_id_does_not_overwrite_session_context_tuple(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+
+        backend = ClaudeSDKBackend()
+        backend._use_session_store = False
+        backend._shared_resources = {}
+        backend._sdk_session_ids = {}
+        backend.sessions = None
+
+        backend._set_context_in_entry("telegram:1", "telegram", "chat-1")
+        await backend._set_sdk_session_id_in_entry("telegram:1", "sdk-1")
+        backend._set_sdk_context_mapping("sdk-1", "telegram", "chat-1")
+
+        assert backend._get_context_by_session_key("telegram:1") == ("telegram", "chat-1")
+        assert backend._resolve_compact_notification_target("sdk-1") == ("telegram:1", "telegram", "chat-1")
+
+    @pytest.mark.asyncio
     async def test_delete_clears_both_mappings(self):
         """delete_sdk_session should clear both session_key and sdk_session_id mappings."""
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend

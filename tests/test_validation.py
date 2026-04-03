@@ -98,10 +98,10 @@ class TestCrewValidatorValidateTask:
         result = CrewValidator.validate_task(task, available_agents, task_names)
         assert result is not None
         assert result.field == "timeout"
-        assert "non-negative" in result.message
+        assert "positive" in result.message
 
     def test_zero_timeout_is_valid(self):
-        """timeout=0 should be valid (edge case for falsy values)."""
+        """timeout=0 should be rejected to avoid immediate runtime timeout."""
         task = TaskDefinition(
             name="test_task",
             agent="agent_a",
@@ -112,7 +112,9 @@ class TestCrewValidatorValidateTask:
         task_names = {"test_task"}
 
         result = CrewValidator.validate_task(task, available_agents, task_names)
-        assert result is None
+        assert result is not None
+        assert result.field == "timeout"
+        assert "positive" in result.message
 
     def test_none_timeout_is_valid(self):
         """timeout=None should be valid (smart mode)."""

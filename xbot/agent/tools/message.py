@@ -1,5 +1,6 @@
 """Message tool for sending messages to users."""
 
+from contextvars import ContextVar
 from typing import Any, Awaitable, Callable
 
 from xbot.agent.tools.base import Tool
@@ -21,12 +22,46 @@ class MessageTool(Tool):
         self._default_chat_id = default_chat_id
         self._default_message_id = default_message_id
         self._sent_in_turn: bool = False
+        self._contexts: dict[str, tuple[str, str, str | None]] = {
+            "_global": (default_channel, default_chat_id, default_message_id),
+        }
+        self._active_session_key: ContextVar[str] = ContextVar(
+            "message_tool_active_session",
+            default="_global",
+        )
 
-    def set_context(self, channel: str, chat_id: str, message_id: str | None = None) -> None:
+    def set_context(
+        self,
+        channel: str,
+        chat_id: str,
+        message_id: str | None = None,
+        session_key: str | None = None,
+    ) -> None:
         """Set the current message context."""
-        self._default_channel = channel
-        self._default_chat_id = chat_id
-        self._default_message_id = message_id
+        key = session_key or "_global"
+        self._contexts[key] = (channel, chat_id, message_id)
+        if key == "_global":
+            self._default_channel = channel
+            self._default_chat_id = chat_id
+            self._default_message_id = message_id
+
+    def set_active_session(self, session_key: str | None) -> None:
+        """Select the task-local session context for subsequent execute calls."""
+        self._active_session_key.set(session_key or "_global")
+
+    def clear_context(self, session_key: str) -> None:
+        """Remove per-session context to prevent unbounded growth."""
+        self._contexts.pop(session_key, None)
+
+    def _resolve_context(self) -> tuple[str, str, str | None]:
+        key = self._active_session_key.get()
+        return self._contexts.get(
+            key,
+            self._contexts.get(
+                "_global",
+                (self._default_channel, self._default_chat_id, self._default_message_id),
+            ),
+        )
 
     def set_send_callback(self, callback: Callable[[OutboundMessage], Awaitable[None]]) -> None:
         """Set the callback for sending messages."""
@@ -79,9 +114,10 @@ class MessageTool(Tool):
         media: list[str] | None = None,
         **kwargs: Any
     ) -> str:
-        channel = channel or self._default_channel
-        chat_id = chat_id or self._default_chat_id
-        message_id = message_id or self._default_message_id
+        default_channel, default_chat_id, default_message_id = self._resolve_context()
+        channel = channel or default_channel
+        chat_id = chat_id or default_chat_id
+        message_id = message_id or default_message_id
 
         if not channel or not chat_id:
             return "Error: No target channel/chat specified"
@@ -101,7 +137,7 @@ class MessageTool(Tool):
 
         try:
             await self._send_callback(msg)
-            if channel == self._default_channel and chat_id == self._default_chat_id:
+            if channel == default_channel and chat_id == default_chat_id:
                 self._sent_in_turn = True
             media_info = f" with {len(media)} attachments" if media else ""
             return f"Message sent to {channel}:{chat_id}{media_info}"

@@ -3,13 +3,15 @@
 Tests for:
 1. Bug 1: Corrupted jobs.json should not be overwritten with empty store
 2. Bug 4: Invalid schedules should be rejected at add time
+3. Timer should be re-armed even when save fails
 """
 
 import json
+from unittest.mock import MagicMock
 import pytest
 
 from xbot.cron.service import CronService, _validate_schedule_for_add, _now_ms
-from xbot.cron.types import CronSchedule
+from xbot.cron.types import CronSchedule, CronStore
 
 
 class TestCronCorruptedFileProtection:
@@ -224,6 +226,34 @@ class TestCronScheduleValidation:
 
         assert job.id is not None
         assert job.state.next_run_at_ms is not None
+
+
+class TestCronTimerReliability:
+    """Tests for timer re-arming on persistence failures."""
+
+    @pytest.mark.asyncio
+    async def test_on_timer_rearms_even_when_save_store_raises(self, tmp_path) -> None:
+        service = CronService(tmp_path / "cron" / "jobs.json")
+        service._store = CronStore()
+        service._running = True
+        service._load_store = MagicMock(return_value=service._store)
+        service._save_store = MagicMock(side_effect=RuntimeError("disk full"))
+        service._arm_timer = MagicMock()
+
+        with pytest.raises(RuntimeError, match="disk full"):
+            await service._on_timer()
+
+        service._arm_timer.assert_called_once()
+
+    def test_load_store_updates_last_mtime_after_successful_reload(self, tmp_path) -> None:
+        store_path = tmp_path / "cron" / "jobs.json"
+        store_path.parent.mkdir(parents=True)
+        store_path.write_text(json.dumps({"version": 1, "jobs": []}), encoding="utf-8")
+
+        service = CronService(store_path)
+        service._load_store()
+
+        assert service._last_mtime == store_path.stat().st_mtime
 
     def test_valid_future_at_schedule_accepted(self, tmp_path) -> None:
         """Valid future at schedule should be accepted."""

@@ -2,6 +2,7 @@
 
 import asyncio
 import time
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -348,6 +349,16 @@ class TestInteractionFlow:
 
 class TestSessionCleanup:
     """Tests for session cleanup operations."""
+
+    def test_clear_session_requests_delegates_to_async_variant(self, monkeypatch):
+        bus = MessageBus()
+        delegated = AsyncMock(return_value={"permission": True, "interaction": False})
+        monkeypatch.setattr(bus, "aclear_session_requests", delegated)
+
+        result = bus.clear_session_requests("test:clear")
+
+        delegated.assert_awaited_once_with("test:clear")
+        assert result == {"permission": True, "interaction": False}
 
     @pytest.mark.asyncio
     async def test_aclear_session_requests(self):

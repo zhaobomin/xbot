@@ -2,6 +2,7 @@
 
 import asyncio
 from datetime import datetime
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -39,8 +40,8 @@ class MockAgentPool:
         self.outputs = outputs or []
         self.calls = []
 
-    async def run_task(self, role_name, prompt, session_key):
-        self.calls.append({"role": role_name, "prompt": prompt, "session": session_key})
+    async def run_task(self, role_name, prompt, session_key, media=None):
+        self.calls.append({"role": role_name, "prompt": prompt, "session": session_key, "media": media})
         if self.outputs:
             return self.outputs.pop(0)
         return "Default output"
@@ -382,6 +383,36 @@ class TestHierarchicalProcess:
         assert len(results) == 2
 
     @pytest.mark.asyncio
+    async def test_hierarchical_reuses_parent_persister(self, basic_crew_config, tmp_path: Path):
+        pool = MockAgentPool(outputs=["Found bugs", "Fixed bugs"])
+        context = CrewExecutionContext()
+        permission = MockPermissionHandler()
+        state_manager = CrewStateManager(
+            task_names=[t.name for t in basic_crew_config.tasks]
+        )
+        basic_crew_config.process = "hierarchical"
+        basic_crew_config.workspace = str(tmp_path)
+
+        process = HierarchicalProcess(
+            pool=pool,
+            context=context,
+            permission_handler=permission,
+            crew_config=basic_crew_config,
+            state_manager=state_manager,
+            started_at=datetime.now(),
+        )
+
+        state_manager.transition_crew(CrewPhase.INITIALIZING)
+        state_manager.transition_crew(CrewPhase.RUNNING)
+
+        results = await process.execute(basic_crew_config.tasks)
+        process.finalize_output()
+
+        assert len(results) == 2
+        assert process._persister is not None
+        assert len(process._persister.manifest.tasks) == 2
+
+    @pytest.mark.asyncio
     async def test_parse_valid_json_plan(self):
         """Parse valid JSON plan from manager output."""
         output = 'Here is the plan: ["fix_bugs", "find_bugs"]'
@@ -439,6 +470,41 @@ class TestHumanReviewLoop:
         assert result.status == "success"
         # Three interactions: redo selection + feedback + continue
         assert len(permission.interactions) == 3
+        assert state_manager.get_task_phase("find_bugs") == TaskPhase.AWAITING_REVIEW
+
+    @pytest.mark.asyncio
+    async def test_redo_then_skip_does_not_raise_invalid_transition(self, basic_crew_config):
+        pool = MockAgentPool(outputs=["Redone output"])
+        context = CrewExecutionContext()
+        permission = MockPermissionHandler()
+        permission.responses = ["redo", "Needs changes", "skip"]
+        state_manager = CrewStateManager(
+            task_names=[t.name for t in basic_crew_config.tasks]
+        )
+
+        process = SequentialProcess(
+            pool=pool,
+            context=context,
+            permission_handler=permission,
+            crew_config=basic_crew_config,
+            state_manager=state_manager,
+            started_at=datetime.now(),
+        )
+
+        task = basic_crew_config.tasks[0]
+        task.human_review = True
+
+        state_manager.transition_crew(CrewPhase.INITIALIZING)
+        state_manager.transition_crew(CrewPhase.RUNNING)
+        state_manager.transition_task("find_bugs", TaskPhase.QUEUED)
+        state_manager.transition_task("find_bugs", TaskPhase.RUNNING)
+        state_manager.transition_task("find_bugs", TaskPhase.AWAITING_REVIEW)
+
+        result = await process._execute_single_task(task)
+        reviewed = await process._human_review(task, result)
+
+        assert reviewed.status == "skipped"
+        assert state_manager.get_task_phase("find_bugs") == TaskPhase.AWAITING_REVIEW
 
     @pytest.mark.asyncio
     async def test_annotate_continues_review_loop(self, basic_crew_config):

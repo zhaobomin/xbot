@@ -494,25 +494,15 @@ class MessageBus:
         """清理指定会话下挂起的权限与交互请求。
 
         .. deprecated:: 使用 aclear_session_requests 代替。
-           此同步方法不获取锁，在并发场景下不安全。
+           此同步方法委托给异步版本；在事件循环中请直接使用 aclear_session_requests。
         """
-        cleared_permission = False
-        cleared_interaction = False
-
-        request_id = self._session_pending_requests.get(session_key)
-        if request_id:
-            self.clear_permission_request(request_id)
-            cleared_permission = True
-
-        interaction_id = self._session_pending_interactions.get(session_key)
-        if interaction_id:
-            self.clear_interaction_request(interaction_id)
-            cleared_interaction = True
-
-        return {
-            "permission": cleared_permission,
-            "interaction": cleared_interaction,
-        }
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.run(self.aclear_session_requests(session_key))
+        raise RuntimeError(
+            "clear_session_requests() cannot be used inside a running event loop; use aclear_session_requests()"
+        )
 
     async def aclear_session_requests(self, session_key: str) -> dict[str, bool]:
         """异步清理指定会话下挂起的权限与交互请求（带锁保护）。

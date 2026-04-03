@@ -446,11 +446,19 @@ class SessionStore:
         return entry.lock
 
     def release_lock(self, session_key: str) -> bool:
-        """Release lock ownership for a session while keeping the entry."""
+        """Release lock ownership for a session while keeping the entry.
+
+        Does NOT forcibly release a locked lock — that would break mutual
+        exclusion for the current holder.  Instead it only nullifies the
+        lock reference when no one is waiting, allowing GC to reclaim it.
+        """
         entry = self._entries.get(session_key)
         if not entry or entry.lock is None:
             return False
-        entry.lock = None
+        lock = entry.lock
+        had_waiters = bool(getattr(lock, "_waiters", None))
+        if not lock.locked() and not had_waiters:
+            entry.lock = None
         return True
 
     async def cancel_all_tasks(self, session_key: str) -> int:

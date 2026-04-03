@@ -8,7 +8,7 @@ import time
 from contextlib import AsyncExitStack
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from pydantic import SecretStr
@@ -21,6 +21,7 @@ from xbot.agent.crew.planner.models import Capability, RolePoolConfig, RoleTier
 from xbot.agent.crew.planner.role_pool import RolePoolManager
 from xbot.agent.hooks import CompactHookHandler
 from xbot.agent.memory.store import MemoryConsolidator
+from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 from xbot.agent.monitoring.alerting import AlertConfig, AlertService
 from xbot.agent.state.machine import SessionPhase, SessionStateMachine
 from xbot.agent.tools.filesystem import WriteFileTool
@@ -38,7 +39,7 @@ from xbot.channels.slack import SlackChannel, SlackConfig
 from xbot.agent.router import AgentRouter
 from xbot.config.sdk_resolver import _has_api_key
 from xbot.config.schema import Config, MCPServerConfig
-from xbot.session.manager import SessionManager
+from xbot.session.manager import Session, SessionManager
 
 
 def test_runtime_backend_property_raises_until_initialized() -> None:
@@ -173,6 +174,48 @@ def test_memory_consolidator_lock_is_stable(tmp_path: Path) -> None:
         get_tool_definitions=lambda: [],
     )
     assert consolidator.get_lock("session:1") is consolidator.get_lock("session:1")
+
+
+@pytest.mark.asyncio
+async def test_memory_consolidator_cleans_up_idle_lock_after_consolidation(tmp_path: Path) -> None:
+    consolidator = MemoryConsolidator(
+        workspace=tmp_path,
+        backend=_make_mock_backend(),
+        sessions=SessionManager(tmp_path),
+        context_window_tokens=10000,
+        build_messages=lambda **kwargs: [],
+        get_tool_definitions=lambda: [],
+    )
+    session = Session(key="test:cleanup")
+    session.messages = [{"role": "user", "content": "hi", "timestamp": "2024-01-01"}]
+
+    with patch.object(consolidator, "estimate_session_prompt_tokens", return_value=(8000, "mock")), patch.object(
+        consolidator, "pick_consolidation_boundary", return_value=(0, 1)
+    ), patch.object(consolidator, "consolidate_messages", AsyncMock(return_value=True)):
+        await consolidator.maybe_consolidate_by_tokens(session)
+
+    assert "test:cleanup" not in consolidator._locks
+
+
+def test_split_message_rejects_non_positive_limits() -> None:
+    from xbot.utils.helpers import split_message
+
+    with pytest.raises(ValueError):
+        split_message("hello", 0)
+
+    with pytest.raises(ValueError):
+        split_message("hello", -1)
+
+
+def test_set_model_in_entry_accepts_none() -> None:
+    backend = ClaudeSDKBackend()
+    backend._use_session_store = False
+    backend._shared_resources = {}
+    backend._client_models = {}
+
+    backend._set_model_in_entry("session:1", None)
+
+    assert backend._get_model_from_entry("session:1") is None
 
 
 def test_feishu_channel_checks_only_current_bot_mentions() -> None:

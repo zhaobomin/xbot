@@ -121,12 +121,12 @@ class CrewValidator:
                 message=f"Agent '{task.agent}' not found. Available agents: {available}",
             )
 
-        # Validate timeout is non-negative
-        if task.timeout is not None and task.timeout < 0:
+        # Validate timeout is positive if explicitly set
+        if task.timeout is not None and task.timeout <= 0:
             return ValidationError(
                 task_name=task.name,
                 field="timeout",
-                message=f"Timeout must be non-negative, got {task.timeout}",
+                message=f"Timeout must be positive, got {task.timeout}",
             )
 
         # Validate context_from references exist

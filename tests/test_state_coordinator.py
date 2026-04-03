@@ -261,6 +261,33 @@ class TestSessionStateCoordinatorLocks:
         assert lock is existing_lock
         assert coordinator._stats.locks_created == 0
 
+    @pytest.mark.asyncio
+    async def test_release_lock_preserves_waiting_lock_object(self, mock_runtime):
+        """release_lock should NOT forcibly release a held lock (breaks mutual exclusion).
+
+        When a lock is held and has waiters, release_lock preserves the lock
+        reference but does not release it — the holder must release explicitly.
+        """
+        store = mock_runtime._session_store
+        lock = store.get_or_create_lock("test:1")
+        await lock.acquire()
+
+        waiter = asyncio.create_task(lock.acquire())
+        await asyncio.sleep(0)
+
+        released = store.release_lock("test:1")
+
+        assert released is True
+        # Lock object should be preserved (has waiters)
+        assert store.get_lock("test:1") is lock
+        # Lock is still held — waiter cannot acquire yet
+        assert lock.locked()
+        # Holder explicitly releases → waiter acquires
+        lock.release()
+        await asyncio.wait_for(waiter, timeout=0.2)
+        assert lock.locked()  # Now held by waiter
+        lock.release()
+
     def test_release_lock(self, mock_runtime):
         """测试释放锁"""
         mock_runtime._session_store.get_or_create("test:1")

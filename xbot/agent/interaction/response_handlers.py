@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import TYPE_CHECKING
 
 from xbot.logging import get_logger
@@ -199,16 +200,32 @@ class RuntimeResponseHandlers:
             valid_options = req.metadata.get("valid_options", [])
             validation_mode = req.metadata.get("validation_mode", "strict")
             if valid_options:
-                # 精确匹配或模糊匹配（忽略大小写、前后空格）
-                normalized_content = content.lower().strip()
-                normalized_options = [str(opt).lower().strip() for opt in valid_options]
+                def _match_option(candidate: str, options: list[object]) -> str | None:
+                    normalized_candidate = candidate.lower().strip()
+                    for option in options:
+                        if normalized_candidate == str(option).lower().strip():
+                            return str(option)
+                    return None
 
-                # 查找匹配选项的原始值
                 matched_option = None
-                for i, opt in enumerate(normalized_options):
-                    if normalized_content == opt:
-                        matched_option = valid_options[i]
-                        break
+                question_options_map = req.metadata.get("question_options_map") or []
+                question_count = int(req.metadata.get("question_count") or 0)
+                if question_count > 1 and question_options_map:
+                    parts = [p.strip() for p in re.split(r"[，,、]+", content.strip()) if p.strip()]
+                    if len(parts) == question_count:
+                        normalized_parts: list[str] = []
+                        for idx, part in enumerate(parts):
+                            options = list(question_options_map[idx]) if idx < len(question_options_map) else []
+                            part_match = _match_option(part, options)
+                            if part_match is None:
+                                normalized_parts = []
+                                break
+                            normalized_parts.append(part_match)
+                        if normalized_parts:
+                            matched_option = ", ".join(normalized_parts)
+                    # else: parts count doesn't match question_count → matched_option stays None
+                else:
+                    matched_option = _match_option(content, list(valid_options))
 
                 if matched_option is None and validation_mode == "strict":
                     retry_count += 1

@@ -65,6 +65,15 @@ class CommandsLoader:
         content = cmd_file.read_text(encoding="utf-8")
         return self._strip_frontmatter(content)
 
+    @staticmethod
+    def _normalize_command_name(raw_name: str) -> str | None:
+        name = raw_name.strip()
+        if name in {"", ".", ".."}:
+            return None
+        if "/" in name or "\\" in name:
+            return None
+        return name
+
     def get_command_names(self) -> list[str]:
         """Get list of available command names (with / prefix)."""
         return [f"/{cmd['name']}" for cmd in self.list_commands()]
@@ -122,7 +131,9 @@ class CommandsLoader:
         if not text.startswith("/"):
             return False
 
-        cmd_name = text.split()[0][1:]  # Remove / and get command name
+        cmd_name = self._normalize_command_name(text.split()[0][1:])  # Remove / and get command name
+        if cmd_name is None:
+            return False
         cmd_file = self.commands_dir / f"{cmd_name}.md"
         return cmd_file.exists()
 
@@ -135,7 +146,9 @@ class CommandsLoader:
         if not parts:
             return None
 
-        cmd_name = parts[0][1:]  # Remove / prefix
+        cmd_name = self._normalize_command_name(parts[0][1:])  # Remove / prefix
+        if cmd_name is None:
+            return None
         cmd_file = self.commands_dir / f"{cmd_name}.md"
 
         if cmd_file.exists():

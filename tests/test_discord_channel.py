@@ -90,6 +90,19 @@ class TestDiscordChannelStartStop:
         assert channel._heartbeat_task is None
         assert channel._http is None
 
+    @pytest.mark.asyncio
+    async def test_typing_loop_exits_when_http_client_is_cleared(self):
+        """Test that typing loop exits quietly if shutdown clears the HTTP client."""
+        channel = DiscordChannel(DiscordConfig(token="test"), MessageBus())
+        channel._running = True
+        channel._http = None
+
+        await channel._start_typing("123456")
+        await asyncio.sleep(0.05)
+
+        task = channel._typing_tasks["123456"]
+        assert task.done() is True
+
 
 class TestDiscordChannelSend:
     """Tests for Discord channel send."""

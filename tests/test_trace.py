@@ -74,3 +74,12 @@ class TestAppendSessionTrace:
         assert len(session.metadata["runtime_trace"]) == 2
         assert session.metadata["runtime_trace"][0]["event"] == "old"
         assert session.metadata["runtime_trace"][1]["event"] == "new"
+
+    def test_updates_session_without_forcing_immediate_save(self) -> None:
+        session = Session(key="test", metadata={})
+        sessions = MagicMock()
+        sessions.get_or_create.return_value = session
+
+        append_session_trace(sessions, "test", "event", {})
+
+        sessions.save.assert_not_called()

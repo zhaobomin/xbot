@@ -28,6 +28,7 @@ def build_services(config, *, make_runtime) -> ServiceContainer:
         llm_call=_heartbeat_llm_call,
         interval_s=config.gateway.heartbeat.interval_s,
         enabled=config.gateway.heartbeat.enabled,
+        on_channel_health=channel_manager.check_channels_health,
     )
     agent = make_runtime(
         config=config,

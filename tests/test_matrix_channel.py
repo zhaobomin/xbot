@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -181,6 +182,17 @@ def test_configure_nio_logging_bridge_routes_to_unified_logger() -> None:
 
     assert nio_logger.handlers == []
     assert nio_logger.propagate is True
+
+
+def test_log_response_error_formats_standard_logging_message(caplog) -> None:
+    channel = MatrixChannel(_make_config(), MessageBus())
+    response = SimpleNamespace(status_code="M_FORBIDDEN", detail="denied")
+
+    caplog.set_level(logging.ERROR)
+    channel._log_response_error("sync", response)
+
+    assert "Matrix sync failed:" in caplog.text
+    assert "M_FORBIDDEN" in caplog.text
 
 
 @pytest.mark.asyncio

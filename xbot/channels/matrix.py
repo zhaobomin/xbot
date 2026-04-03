@@ -415,7 +415,7 @@ class MatrixChannel(BaseChannel):
         code = getattr(response, "status_code", None)
         is_auth = code in {"M_UNKNOWN_TOKEN", "M_FORBIDDEN", "M_UNAUTHORIZED"}
         is_fatal = is_auth or getattr(response, "soft_logout", False)
-        (logger.error if is_fatal else logger.warning)("Matrix {} failed: {}", label, response)
+        (logger.error if is_fatal else logger.warning)("Matrix %s failed: %s", label, response)
 
     async def _on_sync_error(self, response: SyncError) -> None:
         self._log_response_error("sync", response)

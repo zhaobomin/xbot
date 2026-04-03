@@ -536,12 +536,12 @@ def _mock_pool(outputs: dict[str, str] | None = None):
         total_content: str
         is_final: bool
 
-    async def run_task(role_name: str, prompt: str, session_key: str) -> str:
+    async def run_task(role_name: str, prompt: str, session_key: str, media: list[str] | None = None) -> str:
         if outputs and role_name in outputs:
             return outputs[role_name]
         return default_output
 
-    async def run_task_streaming(role_name: str, prompt: str, session_key: str):
+    async def run_task_streaming(role_name: str, prompt: str, session_key: str, media: list[str] | None = None):
         """Mock streaming that yields progress events."""
         output = default_output
         if outputs and role_name in outputs:

@@ -57,20 +57,30 @@ class _FakeCronService:
 
     def add_job(
         self,
-        *,
         name: str,
         schedule: CronSchedule,
-        payload: CronPayload,
+        payload: CronPayload | None = None,
         enabled: bool = True,
+        message: str = "",
+        deliver: bool = False,
+        channel: str | None = None,
+        to: str | None = None,
         delete_after_run: bool = False,
     ) -> CronJob:
         job_id = f"job-{len(self.jobs) + 1}"
+        resolved_payload = payload or CronPayload(
+            kind="agent_turn",
+            message=message,
+            deliver=deliver,
+            channel=channel,
+            to=to,
+        )
         job = CronJob(
             id=job_id,
             name=name,
             enabled=enabled,
             schedule=schedule,
-            payload=payload,
+            payload=resolved_payload,
             state=CronJobState(next_run_at_ms=schedule.at_ms),
             delete_after_run=delete_after_run,
         )
@@ -88,6 +98,13 @@ class _FakeCronService:
 
     def delete_job(self, job_id: str) -> bool:
         return self.jobs.pop(job_id, None) is not None
+
+    def enable_job(self, job_id: str, enabled: bool = True) -> CronJob | None:
+        job = self.jobs.get(job_id)
+        if job is None:
+            return None
+        job.enabled = enabled
+        return job
 
     def status(self) -> dict[str, int | bool]:
         return {"running": False, "jobs": len(self.jobs)}
@@ -437,6 +454,126 @@ def test_cron_and_skills_management_endpoints(tmp_path: Path) -> None:
     assert any(item["name"] == "demo-skill" for item in skill_list.json())
 
 
+def test_cron_management_crud_endpoints_with_real_service_shape(tmp_path: Path) -> None:
+    from xbot.webui.app import create_app
+    from xbot.webui.services import ServiceContainer
+
+    class _RealShapeCronService:
+        def __init__(self) -> None:
+            self.jobs: dict[str, CronJob] = {}
+
+        def list_jobs(self) -> list[CronJob]:
+            return list(self.jobs.values())
+
+        def add_job(
+            self,
+            name: str,
+            schedule: CronSchedule,
+            message: str,
+            deliver: bool = False,
+            channel: str | None = None,
+            to: str | None = None,
+            delete_after_run: bool = False,
+        ) -> CronJob:
+            job_id = f"job-{len(self.jobs) + 1}"
+            job = CronJob(
+                id=job_id,
+                name=name,
+                enabled=True,
+                schedule=schedule,
+                payload=CronPayload(
+                    kind="agent_turn",
+                    message=message,
+                    deliver=deliver,
+                    channel=channel,
+                    to=to,
+                ),
+                state=CronJobState(next_run_at_ms=schedule.at_ms),
+                delete_after_run=delete_after_run,
+            )
+            self.jobs[job_id] = job
+            return job
+
+        def get_job(self, job_id: str) -> CronJob | None:
+            return self.jobs.get(job_id)
+
+        def update_job(self, job_id: str, **updates) -> CronJob:
+            job = self.jobs[job_id]
+            for key, value in updates.items():
+                setattr(job, key, value)
+            return job
+
+        def delete_job(self, job_id: str) -> bool:
+            return self.jobs.pop(job_id, None) is not None
+
+        def enable_job(self, job_id: str, enabled: bool = True) -> CronJob | None:
+            job = self.jobs.get(job_id)
+            if job is None:
+                return None
+            job.enabled = enabled
+            return job
+
+        def status(self) -> dict[str, int | bool]:
+            return {"running": False, "jobs": len(self.jobs)}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+    session_manager = SessionManager(config.workspace_path)
+    services = ServiceContainer(
+        config=config,
+        bus=MessageBus(),
+        agent=_FakeRuntime(),
+        session_manager=session_manager,
+        cron=_RealShapeCronService(),
+        heartbeat=_FakeHeartbeatService(),
+    )
+    client = TestClient(create_app(services, data_dir=tmp_path / "webui-data"))
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create = client.post(
+        "/api/cron/jobs",
+        headers=headers,
+        json={
+            "name": "compat",
+            "enabled": True,
+            "schedule": {"kind": "at", "at_ms": 4102444800000},
+            "payload": {
+                "kind": "agent_turn",
+                "message": "ping",
+                "deliver": True,
+                "channel": "feishu",
+                "to": "chat-1",
+            },
+            "delete_after_run": True,
+        },
+    )
+    assert create.status_code == 201
+    job_id = create.json()["id"]
+
+    update = client.put(
+        f"/api/cron/jobs/{job_id}",
+        headers=headers,
+        json={
+            "name": "compat-updated",
+            "enabled": False,
+            "schedule": {"kind": "every", "every_ms": 60000},
+            "payload": {"kind": "agent_turn", "message": "pong", "deliver": False},
+        },
+    )
+    assert update.status_code == 200
+    assert update.json()["name"] == "compat-updated"
+    assert update.json()["schedule"]["kind"] == "every"
+
+    toggle = client.patch(f"/api/cron/jobs/{job_id}/enabled", headers=headers, json={"enabled": True})
+    assert toggle.status_code == 200
+    assert toggle.json()["enabled"] is True
+
+    delete = client.delete(f"/api/cron/jobs/{job_id}", headers=headers)
+    assert delete.status_code == 200
+    assert delete.json() == {"ok": True}
+
+
 def test_write_management_endpoints(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
     token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
@@ -650,12 +787,15 @@ def test_frontend_compatibility_mutations(tmp_path: Path) -> None:
     )
     cron_id = cron_create.json()["id"]
     cron_toggle = client.patch(f"/api/cron/jobs/{cron_id}/enabled", headers=headers, json={"enabled": False})
+    providers = client.get("/api/providers", headers=headers)
     users = client.get("/api/users", headers=headers)
 
     assert revoke.status_code == 200
     assert memory.status_code == 200
     assert provider.status_code == 200
     assert services.config.providers.custom.api_base == "https://example.com/v1"
+    custom_provider = next(item for item in providers.json() if item["name"] == "custom")
+    assert custom_provider["has_key"] is True
     assert channel.status_code == 200
     assert services.config.channels.telegram["enabled"] is False
     assert reload_channel.status_code == 200
@@ -746,6 +886,34 @@ def test_channel_reload_returns_structured_error(tmp_path: Path) -> None:
     assert response.status_code == 500
     assert response.json()["detail"]["name"] == "telegram"
     assert response.json()["detail"]["error"] == "reload boom"
+
+
+def test_workspace_import_keeps_existing_files_when_extract_fails(tmp_path: Path, monkeypatch) -> None:
+    import io
+    import zipfile
+
+    client, services = _build_client(tmp_path)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    existing = services.config.workspace_path / "keep.txt"
+    existing.parent.mkdir(parents=True, exist_ok=True)
+    existing.write_text("keep-me", encoding="utf-8")
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("new.txt", "new")
+
+    monkeypatch.setattr(zipfile.ZipFile, "extractall", lambda self, path: (_ for _ in ()).throw(RuntimeError("extract failed")))
+
+    response = client.post(
+        "/api/config/workspace/import",
+        headers=headers,
+        files={"file": ("backup.zip", archive.getvalue(), "application/zip")},
+    )
+
+    assert response.status_code == 500
+    assert existing.read_text(encoding="utf-8") == "keep-me"
 
 
 def test_mcp_runtime_reports_disconnected_server_details(tmp_path: Path) -> None:

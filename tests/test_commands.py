@@ -638,6 +638,9 @@ def test_gateway_cron_callback_uses_managed_direct(monkeypatch, tmp_path: Path) 
         def __init__(self, _config, _bus) -> None:
             self.enabled_channels = []
 
+        def check_channels_health(self):
+            return {}
+
     runtime = MagicMock()
     runtime.tools = {}
     runtime.process_managed_direct = AsyncMock(return_value="managed-response")
@@ -692,6 +695,9 @@ def test_gateway_heartbeat_uses_managed_direct(monkeypatch, tmp_path: Path) -> N
     class _FakeChannelManager:
         def __init__(self, _config, _bus) -> None:
             self.enabled_channels = []
+
+        def check_channels_health(self):
+            return {}
 
     runtime = MagicMock()
     runtime.tools = {}

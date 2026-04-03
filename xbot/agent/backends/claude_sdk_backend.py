@@ -117,6 +117,11 @@ class ClaudeSDKBackend(AgentBackend):
     name = "claude_sdk"
     _MAX_QUERY_RETRIES = 3  # Max retries when SDK returns stale task notifications instead of ResultMessage
 
+    @staticmethod
+    def _is_request_too_large(text: str) -> bool:
+        """Check if error text indicates a payload size limit."""
+        return "request too large" in text.lower()
+
     # Default client pool constants (can be overridden by config)
     DEFAULT_MAX_CLIENTS = 100
     DEFAULT_CLIENT_TTL_SECONDS = 3600  # 1 hour TTL for idle clients
@@ -162,6 +167,8 @@ class ClaudeSDKBackend(AgentBackend):
         self._use_session_store: bool = False  # Feature flag for gradual migration
         self._client_lifecycle = ClientLifecycleManager()
         self._client_scavenger_task: asyncio.Task | None = None
+        self._background_release_tasks: set[asyncio.Task] = set()  # Track fire-and-forget release tasks
+        self._client_creation_futures: dict[str, asyncio.Future] = {}
         self._fallback_release_diagnostics: dict[str, Any] = {
             "counts": {"disconnected": 0, "killed": 0, "leaked": 0},
             "last_failure": None,
@@ -270,7 +277,7 @@ class ClaudeSDKBackend(AgentBackend):
             return entry.model if entry else None
         return self._client_models.get(session_key)
 
-    def _set_model_in_entry(self, session_key: str, model: str) -> None:
+    def _set_model_in_entry(self, session_key: str, model: str | None) -> None:
         """Set model name in SessionEntry or legacy dict."""
         if self._uses_session_store():
             entry = self._get_or_create_entry(session_key)
@@ -430,17 +437,14 @@ class ClaudeSDKBackend(AgentBackend):
         old_sdk_id = self._get_sdk_session_id_from_entry(session_key)
         if old_sdk_id and old_sdk_id != sdk_session_id:
             sdk_session_ids.pop(old_sdk_id, None)
-            if session_contexts.get(session_key) == old_sdk_id:
-                session_contexts.pop(session_key, None)
             if isinstance(session_contexts.get(old_sdk_id), tuple):
                 session_contexts.pop(old_sdk_id, None)
 
         if sdk_session_id:
-            session_contexts[session_key] = sdk_session_id
             sdk_session_ids[sdk_session_id] = session_key
         else:
-            if session_contexts.get(session_key) == old_sdk_id or isinstance(session_contexts.get(session_key), str):
-                session_contexts.pop(session_key, None)
+            if old_sdk_id:
+                sdk_session_ids.pop(old_sdk_id, None)
 
         if self.sessions:
             session = self.sessions.get(session_key)
@@ -486,6 +490,29 @@ class ClaudeSDKBackend(AgentBackend):
         self, session_ref: str
     ) -> tuple[str, str, str] | None:
         """Resolve compact-hook target from either session_key or SDK session_id."""
+        mapped_session_key: str | None = None
+        if self._uses_session_store():
+            entry = self._session_store.get_by_sdk_id(session_ref)
+            if entry is not None:
+                for session_key in self._session_store.list_keys():
+                    if self._session_store.get(session_key) is entry:
+                        mapped_session_key = session_key
+                        break
+
+        if mapped_session_key is None:
+            mapped_session_key = self._get_sdk_session_index().get(session_ref)
+        if isinstance(mapped_session_key, str):
+            sdk_context = self._get_context_by_sdk_id(session_ref)
+            if sdk_context is not None:
+                channel, chat_id = sdk_context
+                return (mapped_session_key, channel, chat_id)
+            # Fallback: context may be stored under session_key, not SDK session ID yet
+            context_by_key = self._get_context_by_session_key(mapped_session_key)
+            if context_by_key is not None:
+                channel, chat_id = context_by_key
+                return (mapped_session_key, channel, chat_id)
+            return None
+
         context = self._get_context_by_session_key(session_ref)
         if context is not None:
             channel, chat_id = context
@@ -496,17 +523,6 @@ class ClaudeSDKBackend(AgentBackend):
             return None
 
         channel, chat_id = sdk_context
-        if self._uses_session_store():
-            entry = self._session_store.get_by_sdk_id(session_ref)
-            if entry is not None:
-                for session_key in self._session_store.list_keys():
-                    if self._session_store.get(session_key) is entry:
-                        return (session_key, channel, chat_id)
-
-        mapped_session_key = self._get_sdk_session_index().get(session_ref)
-        if isinstance(mapped_session_key, str):
-            return (mapped_session_key, channel, chat_id)
-
         session_contexts = self._get_session_contexts()
         for session_key, value in session_contexts.items():
             if value == session_ref:
@@ -743,9 +759,10 @@ class ClaudeSDKBackend(AgentBackend):
                 terminate()
             wait = getattr(process, "wait", None)
             if callable(wait):
-                result = wait()
-                if inspect.isawaitable(result):
-                    await asyncio.wait_for(result, timeout=1.0)
+                if inspect.iscoroutinefunction(wait):
+                    await asyncio.wait_for(wait(), timeout=1.0)
+                else:
+                    await asyncio.wait_for(asyncio.to_thread(wait), timeout=1.0)
             await self._client_lifecycle.mark_killed(session_key)
             return True
         except Exception:
@@ -805,6 +822,15 @@ class ClaudeSDKBackend(AgentBackend):
             result.process_tracking_available,
             result.error_summary or "none",
         )
+
+    def _on_background_release_done(self, task: asyncio.Task) -> None:
+        """Callback for fire-and-forget release_client tasks."""
+        self._background_release_tasks.discard(task)
+        if task.cancelled():
+            return
+        exc = task.exception()
+        if exc:
+            logger.error("Background release_client failed: %s", exc)
 
     async def release_client(
         self,
@@ -1345,13 +1371,12 @@ class ClaudeSDKBackend(AgentBackend):
         """
         # Collect clients that need to be disconnected (outside lock)
         clients_to_disconnect: list[tuple["ClaudeSDKClient", str, str]] = []
-        resolved_client: ClaudeSDKClient | None = None
+        creation_future: asyncio.Future | None = None
+        should_create = False
+        current_model = self._options_builder._get_model_name() if self._options_builder else None
+        current_skills_version = self._skill_manager.version if self._skill_manager else None
 
         async with self._clients_lock:
-            # Get current model for model change detection
-            current_model = self._options_builder._get_model_name() if self._options_builder else None
-            # Get current skills version for hot-reload detection
-            current_skills_version = self._skill_manager.version if self._skill_manager else None
 
             # Check if client exists and model/skills haven't changed
             if self._has_client_in_entry(session_key):
@@ -1364,9 +1389,9 @@ class ClaudeSDKBackend(AgentBackend):
                     self._touch_entry(session_key)
                     await self._client_lifecycle.touch(session_key)
                     logger.debug(f"[Client] Reusing existing client for session={session_key}, model={current_model}")
-                    resolved_client = self._get_client_from_entry(session_key)
-                    if resolved_client is not None:
-                        return resolved_client
+                    existing_client = self._get_client_from_entry(session_key)
+                    if existing_client is not None:
+                        return existing_client
                 else:
                     # Model or skills changed, need to recreate client
                     reasons = []
@@ -1380,22 +1405,47 @@ class ClaudeSDKBackend(AgentBackend):
                         # Defer disconnect to outside the lock
                         clients_to_disconnect.append((old_client, session_key, "model/skills change"))
 
-            # Evict LRU client if at capacity
-            if self._uses_session_store():
-                # Count sessions with clients
-                client_count = 0
-                for k in self._session_store.list_keys():
-                    session_entry = self._session_store.get(k)
-                    if session_entry and session_entry.client:
-                        client_count += 1
-            else:
-                client_count = len(self._clients)
-            if client_count >= self.max_clients:
-                evicted_client, evicted_key = await self._evict_lru_client_unlocked()
-                if evicted_client is not None:
-                    clients_to_disconnect.append((evicted_client, evicted_key, "LRU eviction"))
+            creation_future = self._client_creation_futures.get(session_key)
+            if creation_future is None:
+                creation_future = asyncio.get_running_loop().create_future()
+                self._client_creation_futures[session_key] = creation_future
+                should_create = True
 
-            # Create new client with timing
+            if should_create:
+                if self._uses_session_store():
+                    client_count = 0
+                    for k in self._session_store.list_keys():
+                        session_entry = self._session_store.get(k)
+                        if session_entry and session_entry.client:
+                            client_count += 1
+                else:
+                    client_count = len(self._clients)
+                if client_count >= self.max_clients:
+                    evicted_client, evicted_key = await self._evict_lru_client_unlocked()
+                    if evicted_client is not None:
+                        clients_to_disconnect.append((evicted_client, evicted_key, "LRU eviction"))
+
+        # Disconnect old clients outside the lock
+        for old_client, client_key, reason in clients_to_disconnect:
+            await self._finalize_detached_client_cleanup(
+                client_key,
+                old_client,
+                reason=f"client recreation ({reason})",
+            )
+            # Notify runtime to sync state
+            on_cleanup = self._shared_resources.get("on_backend_client_cleanup")
+            if on_cleanup:
+                try:
+                    await on_cleanup(client_key)
+                except Exception as e:
+                    logger.debug(f"Error in backend client cleanup callback: {e}")
+
+        if not should_create:
+            assert creation_future is not None
+            return await asyncio.shield(creation_future)
+
+        assert creation_future is not None
+        try:
             client_start = time.perf_counter()
             logger.info(f"[Client] Creating new client for session={session_key}")
 
@@ -1414,33 +1464,23 @@ class ClaudeSDKBackend(AgentBackend):
             total_time = time.perf_counter() - client_start
             logger.info(f"[Client] Total client creation took {total_time:.2f}s for session={session_key}")
 
-            # Store client and metadata using helper methods
-            self._set_client_in_entry(session_key, client)
-            self._touch_entry(session_key)
-            self._set_model_in_entry(session_key, current_model)
-            self._set_skills_version_in_entry(session_key, current_skills_version)
-            logger.info(f"[Client] Client created for session={session_key}, model={current_model}")
-            await self._register_managed_client(session_key, client)
-            resolved_client = client
-
-        # Disconnect old clients outside the lock
-        for old_client, client_key, reason in clients_to_disconnect:
-            await self._finalize_detached_client_cleanup(
-                client_key,
-                old_client,
-                reason=f"client recreation ({reason})",
-            )
-            # Notify runtime to sync state
-            on_cleanup = self._shared_resources.get("on_backend_client_cleanup")
-            if on_cleanup:
-                try:
-                    await on_cleanup(client_key)
-                except Exception as e:
-                    logger.debug(f"Error in backend client cleanup callback: {e}")
-
-        if resolved_client is None:
-            raise RuntimeError(f"Client resolution failed for session {session_key}")
-        return resolved_client
+            async with self._clients_lock:
+                self._set_client_in_entry(session_key, client)
+                self._touch_entry(session_key)
+                self._set_model_in_entry(session_key, current_model)
+                self._set_skills_version_in_entry(session_key, current_skills_version)
+                logger.info(f"[Client] Client created for session={session_key}, model={current_model}")
+                await self._register_managed_client(session_key, client)
+                pending = self._client_creation_futures.pop(session_key, None)
+                if pending is not None and not pending.done():
+                    pending.set_result(client)
+            return client
+        except BaseException as e:
+            async with self._clients_lock:
+                pending = self._client_creation_futures.pop(session_key, None)
+                if pending is not None and not pending.done():
+                    pending.set_exception(e)
+            raise
 
     def _remove_client_state(
         self,
@@ -1503,6 +1543,13 @@ class ClaudeSDKBackend(AgentBackend):
                     if sdk_sid and sdk_sid in session_contexts:
                         session_contexts.pop(sdk_sid, None)
                         logger.debug(f"[State Cleanup] Also cleared sdk_sid mapping: {sdk_sid}")
+
+        # Clean up per-session tool contexts to prevent unbounded memory growth
+        if not preserve_sdk_context and self._tool_adapter:
+            for tool_name in ("message", "cron"):
+                tool = self._tool_adapter.get_tool(tool_name)
+                if tool and hasattr(tool, "clear_context"):
+                    tool.clear_context(session_key)
 
         # Log state cleanup for debugging
         if had_client or had_task_id:
@@ -2030,6 +2077,20 @@ class ClaudeSDKBackend(AgentBackend):
             )
             reconnect_hint = "🔄 会话已重置，开始新的对话..."
 
+        elif session is not None and session.metadata.pop("_needs_compact", None):
+            # Also clear stale reconnect flags set alongside _needs_compact
+            session.metadata.pop("_reconnect_pending", None)
+            session.metadata.pop("_last_error", None)
+            session.metadata.pop("_error_timestamp", None)
+            session.metadata.pop("_fallback_error", None)
+            self.sessions.save(session)
+            logger.info(f"[Payload] Compacting from previous payload error for session={context.session_key}")
+            yield AgentResponse(content="", progress_texts=["📦 正在压缩上一轮过大的会话历史..."])
+            try:
+                await self.compact_session(context.session_key)
+            except Exception as e:
+                logger.warning(f"[Payload] Pre-turn compact failed: {e}")
+
         elif session is not None and session.metadata.pop("_reconnect_pending", None):
             # Session had a previous error, attempting recovery
             last_error = session.metadata.pop("_last_error", "")
@@ -2081,6 +2142,8 @@ class ClaudeSDKBackend(AgentBackend):
             # We need to retry the query in such cases, with a limit to avoid infinite loops
             query_retry = 0
             received_result = False
+            compact_retry_for_payload = False   # Set True after compact to skip one query_retry increment
+            payload_compact_attempted = False   # Whether compact for payload size has been attempted
             while query_retry < self._MAX_QUERY_RETRIES:
                 client = await self._get_or_create_client(context.session_key)
                 if self.client_lifecycle_enabled:
@@ -2220,6 +2283,47 @@ class ClaudeSDKBackend(AgentBackend):
                             # This also syncs to session.metadata and saves
                             await self._set_sdk_session_id_in_entry(context.session_key, message.session_id)
 
+                    # --- Compact-retry for "Request too large" ---
+                    if (
+                        is_terminal_result
+                        and getattr(message, "is_error", False)
+                        and hasattr(message, "result")
+                        and self._is_request_too_large(str(message.result or ""))
+                    ):
+                        if not payload_compact_attempted:
+                            # First time: compact and retry
+                            payload_compact_attempted = True
+                            compact_retry_for_payload = True
+                            logger.warning(
+                                f"[Payload] Request too large for session={context.session_key}, "
+                                "attempting compact and retry"
+                            )
+                            yield AgentResponse(
+                                content="",
+                                progress_texts=["📦 请求过大，正在压缩历史上下文后重试..."],
+                            )
+                            try:
+                                stats = await self.compact_session(context.session_key)
+                                if stats.get("success"):
+                                    logger.info(f"[Payload] Compact succeeded for session={context.session_key}")
+                                    final_content = ""
+                                    break  # Exit async for; received_result stays False → while loop retries
+                                else:
+                                    logger.warning(f"[Payload] Compact returned failure for session={context.session_key}")
+                                    # compact failed, fall through to normal error flow
+                            except Exception as compact_err:
+                                logger.warning(f"[Payload] Compact failed for session={context.session_key}: {compact_err}")
+                                # fall through to normal error handling
+                        else:
+                            # Second time still too large → current message itself is too large
+                            yield AgentResponse(
+                                content="⚠️ 当前消息中的图片数据过大（超过 20MB 限制）。请减少图片数量或压缩图片后重试。",
+                                finish_reason="error",
+                            )
+                            received_result = True
+                            break
+                        # If compact failed, continue to normal convert + yield below
+
                     response = self._message_converter.convert(message) if self._message_converter else None
 
                     if response:
@@ -2239,12 +2343,22 @@ class ClaudeSDKBackend(AgentBackend):
                         not self._is_ephemeral_session(context.session_key)
                         and context.session_key in self._long_running_turns
                     ):
-                        await self.release_client(
-                            context.session_key,
-                            reason="post_long_task",
-                            preserve_sdk_context=True,
+                        task = asyncio.create_task(
+                            self.release_client(
+                                context.session_key,
+                                reason="post_long_task",
+                                preserve_sdk_context=True,
+                            )
                         )
+                        self._background_release_tasks.add(task)
+                        task.add_done_callback(self._on_background_release_done)
                     break  # Got valid result, exit retry loop
+
+                # Compact retry: skip query_retry increment for the one retry after compact
+                if compact_retry_for_payload and not received_result:
+                    compact_retry_for_payload = False  # One-shot: only skip increment once
+                    final_content = ""
+                    continue  # Re-enter while loop to send query again
 
                 # No ResultMessage received - likely stale task notification
                 query_retry += 1
@@ -2291,6 +2405,13 @@ class ClaudeSDKBackend(AgentBackend):
                 "ConnectionResetError", "BrokenPipeError",
             }
             is_recoverable = error_type in recoverable_errors
+
+            # Payload too large should be recoverable (compact can fix it)
+            if not is_recoverable and self._is_request_too_large(str(e)):
+                is_recoverable = True
+                if session is not None:
+                    session.metadata["_needs_compact"] = True
+                logger.info(f"[Payload] Request too large via exception path, marking for compact on next turn")
 
             logger.info(
                 f"[Error Recovery] session={context.session_key}, error={error_type}: {str(e)[:100]}, "
@@ -2353,6 +2474,11 @@ class ClaudeSDKBackend(AgentBackend):
             )
         for session_key in session_keys:
             await self.release_client(session_key, reason="shutdown")
+        # Wait for any fire-and-forget background release tasks
+        if self._background_release_tasks:
+            logger.info("Waiting for %d background release tasks...", len(self._background_release_tasks))
+            await asyncio.gather(*self._background_release_tasks, return_exceptions=True)
+            self._background_release_tasks.clear()
         # Clear session contexts for compact notifications
         self._shared_resources.pop("_session_contexts", None)
         logger.info("Claude SDK backend shutdown complete")
@@ -2534,8 +2660,7 @@ class ClaudeSDKBackend(AgentBackend):
                 saw_result = True
                 compact_stats["usage"] = getattr(message, "usage", None)
                 if session is not None and message.session_id:
-                    session.metadata["sdk_session_id"] = message.session_id
-                    self.sessions.save(session)
+                    await self._set_sdk_session_id_in_entry(session_key, message.session_id)
                 if message.is_error:
                     compact_stats["success"] = False
                     compact_stats["message"] = message.result or "SDK compact request failed"
@@ -2989,7 +3114,10 @@ class ClaudeSDKBackend(AgentBackend):
                     new_entry.channel, new_entry.chat_id = original_context
                 self._session_store.set_sdk_session_id(new_session_key, new_sdk_session_id)
             else:
-                self._get_session_contexts()[new_session_key] = new_sdk_session_id
+                if original_context:
+                    self._get_session_contexts()[new_session_key] = original_context
+                else:
+                    self._get_session_contexts()[new_session_key] = new_sdk_session_id
                 self._get_sdk_session_index()[new_sdk_session_id] = new_session_key
 
             if self.sessions:
@@ -3075,6 +3203,15 @@ class ClaudeSDKBackend(AgentBackend):
                 "error": None,
             }
 
+        except Exception as e:
+            logger.error(f"[SDK Session] Failed to list SDK sessions: {e}")
+            return {
+                "sessions": [],
+                "limit": limit,
+                "offset": offset,
+                "has_more": False,
+                "error": str(e),
+            }
         except Exception as e:
             logger.error(f"[SDK Session] Failed to list SDK sessions: {e}")
             return {

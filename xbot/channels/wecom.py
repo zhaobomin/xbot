@@ -65,7 +65,16 @@ class WecomChannel(BaseChannel):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._generate_req_id = None
         # Store frame headers for each chat to enable replies
-        self._chat_frames: dict[str, Any] = {}
+        self._chat_frames: OrderedDict[str, Any] = OrderedDict()
+
+    def _remember_chat_frame(self, key: str, frame: Any) -> None:
+        """Store reply frames with a bounded cache."""
+        if not key:
+            return
+        self._chat_frames[key] = frame
+        self._chat_frames.move_to_end(key)
+        while len(self._chat_frames) > 1000:
+            self._chat_frames.popitem(last=False)
 
     async def start(self) -> None:
         """Start the WeCom bot with WebSocket long connection."""
@@ -289,9 +298,9 @@ class WecomChannel(BaseChannel):
 
             # Primary reply lookup is chat_id. Keep msg_id as a secondary alias
             # when present, but never make it the only key.
-            self._chat_frames[chat_id] = frame
+            self._remember_chat_frame(chat_id, frame)
             if msg_id:
-                self._chat_frames[msg_id] = frame
+                self._remember_chat_frame(msg_id, frame)
 
             # Forward to message bus
             await self._handle_message(

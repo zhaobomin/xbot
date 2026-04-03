@@ -29,4 +29,3 @@ def append_session_trace(
         }
     )
     session.metadata["runtime_trace"] = trace[-limit:]
-    sessions.save(session)

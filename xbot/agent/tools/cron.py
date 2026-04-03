@@ -17,11 +17,28 @@ class CronTool(Tool):
         self._channel = ""
         self._chat_id = ""
         self._in_cron_context: ContextVar[bool] = ContextVar("cron_in_context", default=False)
+        self._active_session_key: ContextVar[str] = ContextVar("cron_active_session", default="_global")
+        self._contexts: dict[str, tuple[str, str]] = {"_global": ("", "")}
 
-    def set_context(self, channel: str, chat_id: str) -> None:
+    def set_context(self, channel: str, chat_id: str, session_key: str | None = None) -> None:
         """Set the current session context for delivery."""
-        self._channel = channel
-        self._chat_id = chat_id
+        key = session_key or "_global"
+        self._contexts[key] = (channel, chat_id)
+        if key == "_global":
+            self._channel = channel
+            self._chat_id = chat_id
+
+    def set_active_session(self, session_key: str | None) -> None:
+        """Select the task-local session context for subsequent execute calls."""
+        self._active_session_key.set(session_key or "_global")
+
+    def clear_context(self, session_key: str) -> None:
+        """Remove per-session context to prevent unbounded growth."""
+        self._contexts.pop(session_key, None)
+
+    def _resolve_context(self) -> tuple[str, str]:
+        key = self._active_session_key.get()
+        return self._contexts.get(key, self._contexts.get("_global", (self._channel, self._chat_id)))
 
     def set_cron_context(self, active: bool):
         """Mark whether the tool is executing inside a cron job callback."""
@@ -102,7 +119,8 @@ class CronTool(Tool):
     ) -> str:
         if not message:
             return "Error: message is required for add"
-        if not self._channel or not self._chat_id:
+        channel, chat_id = self._resolve_context()
+        if not channel or not chat_id:
             return "Error: no session context (channel/chat_id)"
         if tz and not cron_expr:
             return "Error: tz can only be used with cron_expr"
@@ -141,8 +159,8 @@ class CronTool(Tool):
             schedule=schedule,
             message=message,
             deliver=True,
-            channel=self._channel,
-            to=self._chat_id,
+            channel=channel,
+            to=chat_id,
             delete_after_run=delete_after,
         )
         return f"Created job '{job.name}' (id: {job.id})"

@@ -150,9 +150,11 @@ class BaseProcess(ABC):
         # 2. Human briefing (pre-execution)
         human_briefing = await self._human_briefing(task)
 
-        # 3. Build prompt
-        prompt = self.context.build_task_prompt(
-            task, role,
+        # 3. Build prompt and get media files
+        prompt, media = self.context.build_agent_context(
+            task=task,
+            role=role,
+            session_key=f"crew:{self.crew_config.name}:{task.name}:{uuid.uuid4().hex[:8]}",
             global_context=self.crew_config.global_context,
             human_briefing=human_briefing,
             max_context_length=self.crew_config.max_context_length,
@@ -180,6 +182,7 @@ class BaseProcess(ABC):
                 session_key=session_key,
                 initial_timeout=initial_timeout,
                 use_soft_timeout=use_soft_timeout,
+                media=media,
             )
             if extended_count > 0:
                 quality = "partial"
@@ -268,6 +271,7 @@ class BaseProcess(ABC):
         session_key: str,
         initial_timeout: int,
         use_soft_timeout: bool,
+        media: list[str] | None = None,
     ) -> tuple[str, int]:
         """Execute task with soft timeout and progress detection.
 
@@ -281,6 +285,7 @@ class BaseProcess(ABC):
             session_key: Session identifier
             initial_timeout: Initial timeout in seconds
             use_soft_timeout: If True, extend on progress; if False, hard timeout
+            media: Optional list of media file paths (images, etc.) to include
 
         Returns:
             Tuple of (output, extended_count)
@@ -289,7 +294,7 @@ class BaseProcess(ABC):
 
         if not self._pool_supports_native_streaming():
             output = await asyncio.wait_for(
-                self.pool.run_task(task.agent, prompt, session_key),
+                self.pool.run_task(task.agent, prompt, session_key, media),
                 timeout=initial_timeout,
             )
             return output, 0
@@ -301,7 +306,7 @@ class BaseProcess(ABC):
         output = ""
 
         # Create the async iterator
-        stream = self.pool.run_task_streaming(task.agent, prompt, session_key)
+        stream = self.pool.run_task_streaming(task.agent, prompt, session_key, media)
 
         # Create task for first progress event
         stream_task = asyncio.create_task(stream.__anext__())
@@ -498,6 +503,8 @@ class BaseProcess(ABC):
 
             if action == UserAction.REDO:
                 result, _ = await self._redo_task(task, result)
+                if self.state_manager.get_task_phase(task.name) == TaskPhase.RUNNING:
+                    self.state_manager.transition_task(task.name, TaskPhase.AWAITING_REVIEW)
                 # Continue reviewing the new result
                 continue
 
@@ -596,8 +603,10 @@ class BaseProcess(ABC):
         role = self.crew_config.agents[task.agent]
 
         extra_briefing = f"Previous attempt feedback: {feedback}" if feedback else None
-        prompt = self.context.build_task_prompt(
-            task, role,
+        prompt, media = self.context.build_agent_context(
+            task=task,
+            role=role,
+            session_key=f"crew:{self.crew_config.name}:{task.name}:redo:{uuid.uuid4().hex[:8]}",
             global_context=self.crew_config.global_context,
             human_briefing=extra_briefing,
             max_context_length=self.crew_config.max_context_length,
@@ -627,6 +636,7 @@ class BaseProcess(ABC):
                 session_key=session_key,
                 initial_timeout=initial_timeout,
                 use_soft_timeout=use_soft_timeout,
+                media=media,
             )
         except asyncio.CancelledError:
             output = "Redo cancelled"
@@ -902,7 +912,9 @@ class HierarchicalProcess(BaseProcess):
             config_path=self.config_path,
             started_at=self.started_at,
             on_progress=self.on_progress,
+            llm_repair=self._output_repairer.llm_call,
         )
+        seq._persister = self._persister
         return await seq.execute(ordered_tasks)
 
     async def _get_manager_plan(self, tasks: list[TaskDefinition]) -> list[str] | None:
@@ -969,38 +981,35 @@ class HierarchicalProcess(BaseProcess):
         # Find JSON array using bracket counting
         # This handles arrays containing strings with brackets
         start_idx = output.find('[')
-        if start_idx == -1:
-            return None
+        while start_idx != -1:
+            bracket_count = 0
+            in_string = False
+            escape_next = False
 
-        bracket_count = 0
-        in_string = False
-        escape_next = False
-
-        for i, char in enumerate(output[start_idx:], start_idx):
-            if escape_next:
-                escape_next = False
-                continue
-            if char == '\\' and in_string:
-                escape_next = True
-                continue
-            if char == '"' and not escape_next:
-                in_string = not in_string
-            elif not in_string:
-                if char == '[':
-                    bracket_count += 1
-                elif char == ']':
-                    bracket_count -= 1
-                    if bracket_count == 0:
-                        # Found complete array
-                        try:
-                            plan = json.loads(output[start_idx:i + 1])
-                            if isinstance(plan, list) and all(isinstance(x, str) for x in plan):
-                                return plan
-                        except json.JSONDecodeError:
-                            pass
-                        # Continue searching for another valid array
-                        start_idx = output.find('[', i + 1)
-                        if start_idx == -1:
-                            return None
+            for i, char in enumerate(output[start_idx:], start_idx):
+                if escape_next:
+                    escape_next = False
+                    continue
+                if char == '\\' and in_string:
+                    escape_next = True
+                    continue
+                if char == '"' and not escape_next:
+                    in_string = not in_string
+                elif not in_string:
+                    if char == '[':
+                        bracket_count += 1
+                    elif char == ']':
+                        bracket_count -= 1
+                        if bracket_count == 0:
+                            try:
+                                plan = json.loads(output[start_idx:i + 1])
+                                if isinstance(plan, list) and all(isinstance(x, str) for x in plan):
+                                    return plan
+                            except json.JSONDecodeError:
+                                pass
+                            start_idx = output.find('[', i + 1)
+                            break
+            else:
+                return None
 
         return None

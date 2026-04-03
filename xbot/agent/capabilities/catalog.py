@@ -139,7 +139,7 @@ class CapabilityCatalog:
             sorted(
                 (
                     record["path"],
-                    Path(record["path"]).stat().st_mtime if Path(record["path"]).exists() else -1.0,
+                    self._safe_skill_mtime(Path(record["path"])),
                 )
                 for record in records
             )
@@ -152,9 +152,10 @@ class CapabilityCatalog:
         names: set[str] = set()
         for record in records:
             path = Path(record["path"])
-            if not path.exists():
+            try:
+                parsed = parse_skill_document(path.read_text(encoding="utf-8"))
+            except FileNotFoundError:
                 continue
-            parsed = parse_skill_document(path.read_text(encoding="utf-8"))
             tool_exposable = parsed.frontmatter.get("tool_exposable")
             if isinstance(tool_exposable, str):
                 tool_exposable = tool_exposable.strip().lower() in {"true", "1", "yes", "on"}
@@ -164,6 +165,13 @@ class CapabilityCatalog:
 
         self._skill_tool_name_cache = {cache_key: set(names)}
         return names
+
+    @staticmethod
+    def _safe_skill_mtime(path: Path) -> float:
+        try:
+            return path.stat().st_mtime
+        except FileNotFoundError:
+            return -1.0
 
     @staticmethod
     def _strip_frontmatter(content: str) -> str:

@@ -279,12 +279,14 @@ class ToolAdapter:
 
             # Update tool contexts
             for name, args in {
-                "message": (channel, chat_id, message_id),
-                "cron": (channel, chat_id),
+                "message": {"channel": channel, "chat_id": chat_id, "message_id": message_id, "session_key": session_key},
+                "cron": {"channel": channel, "chat_id": chat_id, "session_key": session_key},
             }.items():
                 tool = self._tools.get(name)
                 if tool and hasattr(tool, "set_context"):
-                    tool.set_context(*args)
+                    tool.set_context(**args)
+                if tool and hasattr(tool, "set_active_session"):
+                    tool.set_active_session(session_key)
 
     def get_tool(self, name: str) -> Any | None:
         """Get a tool by name.

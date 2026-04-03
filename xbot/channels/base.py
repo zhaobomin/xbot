@@ -138,6 +138,10 @@ class BaseChannel(ABC):
         """Return default config for onboard. Override in plugins to auto-populate config.json."""
         return {"enabled": False}
 
+    def check_health(self) -> tuple[bool, str]:
+        """Check channel connectivity. Returns (healthy, detail_message)."""
+        return self._running, "running" if self._running else "stopped"
+
     @property
     def is_running(self) -> bool:
         """Check if the channel is running."""

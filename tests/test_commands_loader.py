@@ -210,6 +210,19 @@ Body content.
             assert loader.is_command("test") is False
             assert loader.is_command("/nonexistent") is False
 
+    def test_is_command_rejects_path_traversal_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            commands_dir = workspace / "commands"
+            commands_dir.mkdir()
+            (workspace / "safe.md").write_text("Content")
+
+            loader = CommandsLoader(workspace)
+
+            assert loader.is_command("/../safe") is False
+            assert loader.is_command("/subdir/safe") is False
+            assert loader.is_command("/..\\safe") is False
+
     def test_get_command_from_text_extracts_name(self) -> None:
         """Test that get_command_from_text extracts command name."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -242,6 +255,19 @@ Body content.
             # Space before / means not a command
             assert loader.get_command_from_text(" /test") is None
             assert loader.get_command_from_text("  /test") is None
+
+    def test_get_command_from_text_rejects_path_traversal_names(self) -> None:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            commands_dir = workspace / "commands"
+            commands_dir.mkdir()
+            (workspace / "safe.md").write_text("Content")
+
+            loader = CommandsLoader(workspace)
+
+            assert loader.get_command_from_text("/../safe") is None
+            assert loader.get_command_from_text("/subdir/safe") is None
+            assert loader.get_command_from_text("/..\\safe") is None
 
 
 class TestStripFrontmatter:

@@ -535,7 +535,7 @@ class PermissionRequestHandler(BasePermissionHandler):
             },
         )
 
-        if response.action == "answer" and response.content:
+        if response.action in {"answer", "reply"} and response.content:
             # 解析用户回复，构建 answers
             answers = self._parse_answers(
                 response.content,

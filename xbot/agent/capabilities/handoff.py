@@ -31,9 +31,9 @@ class HandoffPolicy:
                 when = str(definition.get("when", "")).strip()
                 prompt = str(definition.get("prompt", "")).strip()
             else:
-                description = definition.description.strip()
-                when = getattr(definition, "when", "").strip()
-                prompt = definition.prompt.strip()
+                description = str(getattr(definition, "description", "") or "").strip()
+                when = str(getattr(definition, "when", "") or "").strip()
+                prompt = str(getattr(definition, "prompt", "") or "").strip()
             items.append(
                 HandoffAgentPolicy(
                     name=name,

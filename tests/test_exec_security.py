@@ -67,3 +67,19 @@ async def test_exec_blocks_chained_internal_url():
             command="echo start && curl http://169.254.169.254/latest/meta-data/ && echo done"
         )
     assert "Error" in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    [
+        "rm -rfv demo",
+        "rm -rfi demo",
+        "rm -frv demo",
+    ],
+)
+async def test_exec_blocks_rm_with_extra_flags(command: str):
+    tool = ExecTool()
+    result = await tool.execute(command=command)
+    assert "Error" in result
+    assert "blocked" in result.lower()

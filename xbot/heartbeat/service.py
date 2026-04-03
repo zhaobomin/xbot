@@ -72,6 +72,7 @@ class HeartbeatService:
         on_notify: Callable[[str], Coroutine[Any, Any, None]] | None = None,
         interval_s: int = 30 * 60,
         enabled: bool = True,
+        on_channel_health: Callable[[], dict[str, tuple[bool, str]]] | None = None,
     ):
         self.workspace = workspace
         self._llm_call = llm_call
@@ -79,6 +80,7 @@ class HeartbeatService:
         self.on_notify = on_notify
         self.interval_s = interval_s
         self.enabled = enabled
+        self._on_channel_health = on_channel_health
         self._running = False
         self._task: asyncio.Task | None = None
         self._running_tick: asyncio.Task | None = None  # Track current tick task
@@ -178,6 +180,18 @@ class HeartbeatService:
         if not content:
             logger.debug("Heartbeat: HEARTBEAT.md missing or empty")
             return
+
+        # Channel connectivity check
+        if self._on_channel_health:
+            try:
+                health = self._on_channel_health()
+                for ch_name, (healthy, detail) in health.items():
+                    if not healthy:
+                        logger.warning("Heartbeat: channel %s unhealthy: %s", ch_name, detail)
+                    else:
+                        logger.debug("Heartbeat: channel %s healthy", ch_name)
+            except Exception as e:
+                logger.warning("Heartbeat: channel health check error: %s", e)
 
         logger.info("Heartbeat: checking for tasks...")
 

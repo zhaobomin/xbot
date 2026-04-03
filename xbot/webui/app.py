@@ -23,7 +23,7 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, SecretStr
 
 from xbot.config.schema import MCPServerConfig
 from xbot.cron.types import CronPayload, CronSchedule
@@ -437,7 +437,7 @@ def create_app(
         if provider is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Provider not found")
         if body.api_key is not None:
-            provider.api_key = body.api_key
+            provider.api_key = SecretStr(body.api_key)
         if body.api_base is not None:
             provider.api_base = body.api_base
         if body.extra_headers is not None:
@@ -835,19 +835,37 @@ def create_app(
             for path in sorted(container.config.workspace_path.rglob("*")):
                 if path.is_file():
                     backup_zip.write(path, path.relative_to(container.config.workspace_path))
+        workspace_path = container.config.workspace_path
+        workspace_parent = workspace_path.parent
+        extracted_path = workspace_parent / f".workspace-import-{secrets.token_hex(8)}"
+        staged_old_path = workspace_parent / f".workspace-import-old-{secrets.token_hex(8)}"
         with zipfile.ZipFile(BytesIO(data), "r") as zf:
             for member in zf.namelist():
-                target = (container.config.workspace_path / member).resolve()
-                if not str(target).startswith(str(container.config.workspace_path.resolve())):
+                target = (workspace_path / member).resolve()
+                if not str(target).startswith(str(workspace_path.resolve())):
                     raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid path in archive: {member}")
-            for path in sorted(container.config.workspace_path.iterdir()):
-                if path.name == ".webui":
-                    continue
-                if path.is_dir():
-                    shutil.rmtree(path)
-                else:
-                    path.unlink()
-            zf.extractall(container.config.workspace_path)
+            extracted_path.mkdir(parents=True, exist_ok=True)
+            try:
+                zf.extractall(extracted_path)
+                webui_dir = workspace_path / ".webui"
+                extracted_webui_dir = extracted_path / ".webui"
+                if webui_dir.exists() and not extracted_webui_dir.exists():
+                    shutil.copytree(webui_dir, extracted_webui_dir)
+
+                workspace_path.rename(staged_old_path)
+                extracted_path.rename(workspace_path)
+            except Exception:
+                if staged_old_path.exists() and not workspace_path.exists():
+                    staged_old_path.rename(workspace_path)
+                if extracted_path.exists():
+                    shutil.rmtree(extracted_path, ignore_errors=True)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to import workspace",
+                )
+            else:
+                if staged_old_path.exists():
+                    shutil.rmtree(staged_old_path, ignore_errors=True)
         return {"ok": True, "backup": str(backup_path)}
 
     @app.get("/api/cron/jobs")
@@ -864,7 +882,6 @@ def create_app(
         _get_user_from_auth_header(authorization)
         job = container.cron.add_job(
             name=body.name,
-            enabled=body.enabled,
             schedule=CronSchedule(
                 kind=body.schedule.kind,
                 at_ms=body.schedule.at_ms,
@@ -872,15 +889,16 @@ def create_app(
                 expr=body.schedule.expr,
                 tz=body.schedule.tz,
             ),
-            payload=CronPayload(
-                kind=body.payload.kind,
-                message=body.payload.message,
-                deliver=body.payload.deliver,
-                channel=body.payload.channel,
-                to=body.payload.to,
-            ),
+            message=body.payload.message,
+            deliver=body.payload.deliver,
+            channel=body.payload.channel,
+            to=body.payload.to,
             delete_after_run=body.delete_after_run,
         )
+        if not body.enabled and hasattr(container.cron, "enable_job"):
+            maybe_job = container.cron.enable_job(job.id, enabled=False)
+            if maybe_job is not None:
+                job = maybe_job
         return _serialize_cron_job(job)
 
     @app.put("/api/cron/jobs/{job_id}")
@@ -934,7 +952,9 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
-        job = container.cron.update_job(job_id, enabled=body.enabled)
+        job = container.cron.enable_job(job_id, enabled=body.enabled)
+        if job is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
         return _serialize_cron_job(job)
 
     @app.get("/api/skills")

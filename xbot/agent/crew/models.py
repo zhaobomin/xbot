@@ -81,6 +81,10 @@ class TaskDefinition(BaseModel):
     output_schema: dict[str, Any] | None = None  # JSON schema for validation
     output_template: str | None = None  # Template for structured output
 
+    # Media support for vision capabilities
+    media: list[str] | None = Field(default=None)  # Media file paths (images, etc.)
+    media_mode: Literal["auto", "text_only", "vision"] = Field(default="auto")  # How to process media
+
 
 class CrewConfig(BaseModel):
     """Top-level crew configuration loaded from YAML."""
