@@ -44,7 +44,7 @@ body {
         --accent-foreground: 258 46% 28%;
         --destructive: 0 84% 58%;
         --destructive-foreground: 0 0% 100%;
-        --border: 214 32% 91%;
+        --border: 214 20% 93%;
         --input: 214 32% 91%;
         --ring: 260 73% 62%;
         --radius: 0.75rem;
@@ -52,13 +52,18 @@ body {
         --sidebar-bg: 210 40% 99%;
         --sidebar-fg: 222 47% 11%;
         --sidebar-muted: 215 16% 47%;
-        --sidebar-active-bg: 259 81% 94%;
+        --sidebar-active-bg: 220 14% 95%;
         --sidebar-active-fg: 258 56% 31%;
         --sidebar-hover-bg: 210 40% 96%;
         --sidebar-border: 214 32% 91%;
         --sidebar-section-label: 215 16% 47%;
         --sidebar-edge-shadow: 1px 0 8px rgba(0, 0, 0, 0.04);
         --sidebar-glass-opacity: 0.88;
+        /* Status semantic colors */
+        --success: 160 84% 39%;
+        --success-foreground: 0 0% 100%;
+        --warning: 38 92% 50%;
+        --warning-foreground: 0 0% 100%;
         /* Shadows */
         --shadow-up: 0 -4px 16px rgba(0, 0, 0, 0.04), 0 -1px 3px rgba(0, 0, 0, 0.02);
         --shadow-down: 0 4px 16px rgba(0, 0, 0, 0.04), 0 1px 3px rgba(0, 0, 0, 0.02);
@@ -70,34 +75,39 @@ body {
         /* === Dark Theme — slate neutral + purple accent === */
         --background: 220 13% 10%;
         --foreground: 220 15% 88%;
-        --card: 220 13% 14%;
+        --card: 220 13% 16%;
         --card-foreground: 220 15% 88%;
-        --popover: 220 13% 14%;
+        --popover: 220 13% 16%;
         --popover-foreground: 220 15% 88%;
         --primary: 260 73% 62%;
         --primary-foreground: 0 0% 100%;
-        --secondary: 220 13% 19%;
+        --secondary: 220 13% 20%;
         --secondary-foreground: 220 15% 88%;
-        --muted: 220 13% 19%;
+        --muted: 220 13% 20%;
         --muted-foreground: 220 10% 50%;
         --accent: 258 40% 22%;
         --accent-foreground: 260 80% 78%;
         --destructive: 0 62% 45%;
         --destructive-foreground: 220 15% 88%;
-        --border: 220 13% 18%;
-        --input: 220 13% 22%;
+        --border: 220 12% 22%;
+        --input: 220 13% 11%;
         --ring: 260 73% 62%;
         /* Sidebar — slate neutral */
         --sidebar-bg: 220 14% 8%;
         --sidebar-fg: 220 12% 80%;
         --sidebar-muted: 220 8% 45%;
-        --sidebar-active-bg: 258 40% 18%;
+        --sidebar-active-bg: 220 13% 16%;
         --sidebar-active-fg: 260 80% 76%;
         --sidebar-hover-bg: 220 13% 15%;
-        --sidebar-border: 220 13% 16%;
+        --sidebar-border: 220 12% 20%;
         --sidebar-section-label: 220 8% 38%;
         --sidebar-edge-shadow: 1px 0 12px rgba(0, 0, 0, 0.3);
         --sidebar-glass-opacity: 0.88;
+        /* Status semantic colors */
+        --success: 160 60% 45%;
+        --success-foreground: 0 0% 100%;
+        --warning: 38 70% 50%;
+        --warning-foreground: 0 0% 100%;
         /* Shadows */
         --shadow-up: 0 -6px 24px rgba(0, 0, 0, 0.30), 0 -1px 4px rgba(0, 0, 0, 0.20);
         --shadow-down: 0 6px 24px rgba(0, 0, 0, 0.30), 0 1px 4px rgba(0, 0, 0, 0.20);
@@ -119,8 +129,8 @@ body {
         -moz-osx-font-smoothing: grayscale;
         font-feature-settings: "rlig" 1, "calt" 1;
         background:
-            radial-gradient(circle at top left, rgba(137, 92, 255, 0.05), transparent 28%),
-            radial-gradient(circle at top right, rgba(102, 126, 234, 0.04), transparent 24%),
+            radial-gradient(circle at top left, rgba(137, 92, 255, 0.03), transparent 28%),
+            radial-gradient(circle at top right, rgba(102, 126, 234, 0.02), transparent 24%),
             linear-gradient(180deg, hsl(210 40% 98%) 0%, hsl(210 38% 97%) 100%);
     }
 
@@ -168,4 +178,97 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
     @apply bg-muted-foreground/30;
+}
+
+/* === highlight.js dark theme (scoped to .dark class) === */
+.dark .hljs {
+    color: #c9d1d9;
+    background: transparent;
+}
+
+.dark .hljs-doctag,
+.dark .hljs-keyword,
+.dark .hljs-meta .hljs-keyword,
+.dark .hljs-template-tag,
+.dark .hljs-template-variable,
+.dark .hljs-type,
+.dark .hljs-variable.language_ {
+    color: #ff7b72;
+}
+
+.dark .hljs-title,
+.dark .hljs-title.class_,
+.dark .hljs-title.class_.inherited__,
+.dark .hljs-title.function_ {
+    color: #d2a8ff;
+}
+
+.dark .hljs-attr,
+.dark .hljs-attribute,
+.dark .hljs-literal,
+.dark .hljs-meta,
+.dark .hljs-number,
+.dark .hljs-operator,
+.dark .hljs-variable,
+.dark .hljs-selector-attr,
+.dark .hljs-selector-class,
+.dark .hljs-selector-id {
+    color: #79c0ff;
+}
+
+.dark .hljs-regexp,
+.dark .hljs-string,
+.dark .hljs-meta .hljs-string {
+    color: #a5d6ff;
+}
+
+.dark .hljs-built_in,
+.dark .hljs-symbol {
+    color: #ffa657;
+}
+
+.dark .hljs-comment,
+.dark .hljs-code,
+.dark .hljs-formula {
+    color: #8b949e;
+}
+
+.dark .hljs-name,
+.dark .hljs-quote,
+.dark .hljs-selector-tag,
+.dark .hljs-selector-pseudo {
+    color: #7ee787;
+}
+
+.dark .hljs-subst {
+    color: #c9d1d9;
+}
+
+.dark .hljs-section {
+    color: #1f6feb;
+    font-weight: bold;
+}
+
+.dark .hljs-bullet {
+    color: #f2cc60;
+}
+
+.dark .hljs-emphasis {
+    color: #c9d1d9;
+    font-style: italic;
+}
+
+.dark .hljs-strong {
+    color: #c9d1d9;
+    font-weight: bold;
+}
+
+.dark .hljs-addition {
+    color: #aff5b4;
+    background-color: #033a16;
+}
+
+.dark .hljs-deletion {
+    color: #ffdcd7;
+    background-color: #67060c;
 }

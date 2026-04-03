@@ -50,6 +50,8 @@ import { Skeleton } from "../components/ui/skeleton";
 import { Plus, Pencil, Trash2, ArrowLeft, Clock, MessageSquare, Bot, User, Wrench, Search, History, Power, PowerOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "../components/ui/tooltip";
 import { formatDate, cn } from "../lib/utils";
+import { EmptyState } from "../components/business/empty-state";
+import { Inbox } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -390,7 +392,7 @@ function JobsTab({
                                 <TableRow
                                     key={j.id}
                                     className={cn(
-                                        "hover:bg-muted/30",
+                                        "hover:bg-muted/20",
                                         highlightJobId === j.id && "bg-primary/10 ring-1 ring-primary/30",
                                         cat === "disabled" && "opacity-60"
                                     )}
@@ -419,7 +421,7 @@ function JobsTab({
                                                             <Button
                                                                 size="icon"
                                                                 variant="ghost"
-                                                                className="h-7 w-7 text-emerald-600 hover:text-emerald-700"
+                                                                className="h-7 w-7 text-success hover:text-success/80"
                                                                 onClick={() => toggle.mutate({ id: j.id, enabled: true })}
                                                             >
                                                                 <Power className="h-3.5 w-3.5" />
@@ -488,7 +490,9 @@ function JobsTab({
                             ))}
                             {sortedJobs.length === 0 && (
                                 <TableRow>
-                                    <TableCell colSpan={5} className="text-center text-muted-foreground">{t("common.noData")}</TableCell>
+                                    <TableCell colSpan={5} className="py-8">
+                                        <EmptyState icon={Inbox} title={t("common.noData")} />
+                                    </TableCell>
                                 </TableRow>
                             )}
                         </TableBody>
@@ -541,11 +545,11 @@ function roleIcon(role: string) {
 function roleBgClass(role: string) {
     switch (role) {
         case "user":
-            return "bg-blue-50 dark:bg-blue-950/30 border-blue-200 dark:border-blue-800";
+            return "bg-primary/5 dark:bg-primary/10 border-primary/20 dark:border-primary/15";
         case "assistant":
-            return "bg-emerald-50 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-800";
+            return "bg-success/5 dark:bg-success/10 border-success/20 dark:border-success/15";
         case "tool":
-            return "bg-amber-50 dark:bg-amber-950/30 border-amber-200 dark:border-amber-800";
+            return "bg-warning/5 dark:bg-warning/10 border-warning/20 dark:border-warning/15";
         default:
             return "bg-muted border-border";
     }

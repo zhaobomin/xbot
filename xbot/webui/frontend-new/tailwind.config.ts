@@ -39,6 +39,14 @@ const config: Config = {
                     DEFAULT: "hsl(var(--card))",
                     foreground: "hsl(var(--card-foreground))",
                 },
+                success: {
+                    DEFAULT: "hsl(var(--success))",
+                    foreground: "hsl(var(--success-foreground))",
+                },
+                warning: {
+                    DEFAULT: "hsl(var(--warning))",
+                    foreground: "hsl(var(--warning-foreground))",
+                },
             },
             borderRadius: {
                 xl: "1rem",
@@ -69,9 +77,10 @@ const config: Config = {
                 "2xl": ["24px", { lineHeight: "1.3" }],
             },
             boxShadow: {
+                subtle: "0 1px 2px 0 rgba(0, 0, 0, 0.03)",
                 soft: "0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02)",
                 panel: "0 4px 12px rgba(0, 0, 0, 0.06), 0 1px 3px rgba(0, 0, 0, 0.04)",
-                "card-hover": "0 4px 12px rgba(0, 0, 0, 0.08)",
+                "card-hover": "0 2px 8px rgba(0, 0, 0, 0.06)",
             },
             keyframes: {
                 "fade-in-up": {

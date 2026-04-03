@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useTheme } from "next-themes";
 import { useAuthStore } from "../../stores/auth-store";
 import { cn } from "../../lib/utils";
-import { Sun, Moon, Languages, LogOut, KeyRound } from "lucide-react";
+import { Sun, Moon, Languages, LogOut, KeyRound, Sparkles } from "lucide-react";
 import {
     DropdownMenu,
     DropdownMenuContent,
@@ -36,10 +36,13 @@ export function MobileTopBar() {
                     boxShadow: "var(--shadow-down)",
                 }}
             >
-                {/* Logo */}
-                <div className="flex items-center">
-                    <span className="text-2xl font-black lowercase tracking-[-0.08em] bg-gradient-to-r from-violet-400 via-purple-500 to-indigo-600 bg-clip-text text-transparent">
-                        xbot
+                {/* Logo - unified with sidebar */}
+                <div className="flex items-center gap-1.5">
+                    <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary text-primary-foreground">
+                        <Sparkles className="h-3 w-3" />
+                    </div>
+                    <span className="text-base font-semibold tracking-tight text-foreground">
+                        XBot
                     </span>
                 </div>
 

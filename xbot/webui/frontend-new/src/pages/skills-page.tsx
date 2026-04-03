@@ -32,6 +32,8 @@ import { ConfirmDialog } from "../components/business/confirm-dialog";
 import { Skeleton } from "../components/ui/skeleton";
 import { Plus, Pencil, Trash2, AlertCircle } from "lucide-react";
 import { SectionHeader } from "../components/business/section-header";
+import { EmptyState } from "../components/business/empty-state";
+import { Inbox } from "lucide-react";
 import {
     Tooltip,
     TooltipContent,
@@ -149,7 +151,7 @@ export default function Skills({ hideTitle }: { hideTitle?: boolean } = {}) {
                         </TableHeader>
                         <TableBody>
                             {skills?.map((s) => (
-                                <TableRow key={s.name} className="hover:bg-muted/30">
+                                <TableRow key={s.name} className="hover:bg-muted/20">
                                     <TableCell className="font-mono font-medium">{s.name}</TableCell>
                                     <TableCell className="text-sm text-muted-foreground max-w-xs">
                                         <span className="line-clamp-2">{s.description || "\u2014"}</span>
@@ -211,7 +213,9 @@ export default function Skills({ hideTitle }: { hideTitle?: boolean } = {}) {
                             ))}
                             {(!skills || skills.length === 0) && (
                                 <TableRow>
-                                    <TableCell colSpan={6} className="text-center text-muted-foreground">{t("common.noData")}</TableCell>
+                                    <TableCell colSpan={6} className="py-8">
+                                        <EmptyState icon={Inbox} title={t("common.noData")} />
+                                    </TableCell>
                                 </TableRow>
                             )}
                         </TableBody>

@@ -96,7 +96,7 @@ function RawConfigEditor() {
                     <FileJson className="h-4 w-4 text-muted-foreground" />
                     <span className="text-sm font-medium text-muted-foreground">~/.xbot/config.json</span>
                     {dirty && (
-                        <Badge variant="outline" className="text-xs text-amber-600 border-amber-300 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-700">
+                        <Badge variant="outline" className="text-xs text-warning border-warning/40 bg-warning/10">
                             {t("settings.unsaved")}
                         </Badge>
                     )}
@@ -330,7 +330,7 @@ function ImportExportPanel() {
             <Card>
                 <CardHeader className="pb-3">
                     <CardTitle className="text-sm flex items-center gap-2">
-                        <Upload className="h-4 w-4 text-amber-500" />
+                        <Upload className="h-4 w-4 text-warning" />
                         {t("sysconfig.import")}
                     </CardTitle>
                     <CardDescription className="text-xs">

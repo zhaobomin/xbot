@@ -66,9 +66,17 @@ export function ChatInput({
         }
     }, [value]);
 
+    const MAX_FILE_SIZE = 20 * 1024 * 1024; // 20MB
+
     const handleFilesSelected = useCallback(
         async (files: File[]) => {
             for (const file of files) {
+                if (file.size > MAX_FILE_SIZE) {
+                    toast.error(
+                        `${file.name} exceeds 20MB limit`
+                    );
+                    continue;
+                }
                 const id = nanoid();
                 setAttachments((prev) => [
                     ...prev,
@@ -107,7 +115,7 @@ export function ChatInput({
     );
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        if (e.key === "Enter" && !e.shiftKey) {
+        if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
             e.preventDefault();
             handleSend();
         }
@@ -151,10 +159,10 @@ export function ChatInput({
             <div className="w-full">
                 <div
                     className={cn(
-                        "relative flex flex-col rounded-2xl border bg-background/90 backdrop-blur-xl shadow-lg transition-all",
+                        "relative flex flex-col rounded-2xl border border-border/60 bg-card/95 backdrop-blur-xl shadow-soft transition-all",
                         isWaiting
                             ? "border-primary/40"
-                            : "focus-within:border-primary/60 focus-within:shadow-xl"
+                            : "focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/10"
                     )}
                 >
                     {attachments.length > 0 && (
@@ -206,7 +214,7 @@ export function ChatInput({
                     <div className="flex items-center justify-between px-3 pb-2">
                         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                             {isConnected ? (
-                                <Wifi className="h-3 w-3 text-emerald-500" />
+                                <Wifi className="h-3 w-3 text-success" />
                             ) : (
                                 <WifiOff className="h-3 w-3 text-destructive" />
                             )}
@@ -246,6 +254,7 @@ export function ChatInput({
                                 type="file"
                                 multiple
                                 hidden
+                                accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.md,.json,.py,.js,.ts,.jsx,.tsx,.html,.css,.zip,.tar,.gz"
                                 onChange={(e) => {
                                     if (e.target.files)
                                         handleFilesSelected(Array.from(e.target.files));

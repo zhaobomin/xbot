@@ -284,7 +284,7 @@ export default function MCPServers({ hideTitle }: { hideTitle?: boolean } = {}) 
                         {t("mcp.totalCount")}: <span className="font-medium text-foreground">{totalCount}</span>
                     </span>
                     <span>
-                        <span className="inline-block h-2 w-2 rounded-full bg-emerald-500 mr-1.5" />
+                        <span className="inline-block h-2 w-2 rounded-full bg-success mr-1.5" />
                         {t("mcp.runningCount")}: <span className="font-medium text-foreground">{runningCount}</span>
                     </span>
                     <span>
@@ -309,10 +309,10 @@ export default function MCPServers({ hideTitle }: { hideTitle?: boolean } = {}) 
                         return (
                             <div
                                 key={s.name}
-                                className={`rounded-lg border bg-card relative overflow-hidden transition-all duration-200 hover:bg-muted/30 hover:-translate-y-0.5${!isEnabled ? " opacity-60" : ""}`}
+                                className={`rounded-lg border bg-card relative overflow-hidden transition-all duration-200 hover:shadow-sm hover:bg-muted/20${!isEnabled ? " opacity-60" : ""}`}
                             >
                                 {/* left accent bar */}
-                                <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-lg ${!isEnabled ? "bg-muted-foreground/20" : isRunning ? "bg-emerald-500" : "bg-muted-foreground/20"}`} />
+                                <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-lg ${!isEnabled ? "bg-muted-foreground/20" : isRunning ? "bg-success" : "bg-muted-foreground/20"}`} />
                                 <div className="pl-5 pr-4 py-4">
                                     <div className="flex items-start justify-between gap-4">
                                         <div className="flex-1 min-w-0 space-y-1.5">
@@ -325,11 +325,11 @@ export default function MCPServers({ hideTitle }: { hideTitle?: boolean } = {}) 
                                                 <Badge
                                                     variant="outline"
                                                     className={`text-xs gap-1 ${isRunning
-                                                        ? "border-emerald-500/40 text-emerald-600 bg-emerald-500/10"
+                                                        ? "border-success/40 text-success bg-success/10"
                                                         : "border-muted-foreground/30 text-muted-foreground"
                                                         }`}
                                                 >
-                                                    <span className={`inline-block h-1.5 w-1.5 rounded-full ${isRunning ? "bg-emerald-500" : "bg-muted-foreground/50"
+                                                    <span className={`inline-block h-1.5 w-1.5 rounded-full ${isRunning ? "bg-success" : "bg-muted-foreground/50"
                                                         }`} />
                                                     {isRunning ? t("mcp.running") : t("mcp.stopped")}
                                                 </Badge>
@@ -370,7 +370,7 @@ export default function MCPServers({ hideTitle }: { hideTitle?: boolean } = {}) 
                                             <Button
                                                 size="icon"
                                                 variant="ghost"
-                                                className={`h-8 w-8 ${isEnabled ? "text-muted-foreground hover:text-foreground" : "text-amber-500 hover:text-amber-600"}`}
+                                                className={`h-8 w-8 ${isEnabled ? "text-muted-foreground hover:text-foreground" : "text-warning hover:text-warning/80"}`}
                                                 title={isEnabled ? t("mcp.disable") : t("mcp.enable")}
                                                 disabled={toggle.isPending && toggle.variables?.name === s.name}
                                                 onClick={() => toggle.mutate({ name: s.name, enabled: !isEnabled })}

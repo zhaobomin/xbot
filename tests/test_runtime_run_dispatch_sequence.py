@@ -89,6 +89,9 @@ def _bind_runtime_methods(runtime: _MockRuntimeForRun) -> None:
     runtime._make_task_done_callback = AgentRuntime._make_task_done_callback.__get__(
         runtime, _MockRuntimeForRun
     )
+    runtime._spawn_session_task = AgentRuntime._spawn_session_task.__get__(
+        runtime, _MockRuntimeForRun
+    )
     runtime._set_session_phase = AgentRuntime._set_session_phase.__get__(runtime, _MockRuntimeForRun)
     runtime._sync_session_phase = AgentRuntime._sync_session_phase.__get__(runtime, _MockRuntimeForRun)
     runtime._log_state_snapshot = AgentRuntime._log_state_snapshot.__get__(runtime, _MockRuntimeForRun)

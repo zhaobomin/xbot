@@ -25,7 +25,7 @@ export function ListCard({
     return (
         <Card
             className={cn(
-                "transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover",
+                "transition-all duration-200 hover:shadow-card-hover hover:border-border",
                 onClick && "cursor-pointer",
                 className
             )}
@@ -33,7 +33,7 @@ export function ListCard({
         >
             <CardHeader className="flex flex-row items-start gap-3 space-y-0 pb-2">
                 {icon && (
-                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                    <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-muted text-foreground/70">
                         {icon}
                     </div>
                 )}

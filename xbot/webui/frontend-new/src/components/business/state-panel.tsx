@@ -13,10 +13,10 @@ export function StatePanel({
         <div
             className={cn(
                 "overflow-hidden rounded-2xl border shadow-none",
-                variant === "info" && "border-border/80 bg-card/78",
-                variant === "success" && "border-emerald-200/80 bg-emerald-50/78 dark:border-emerald-800/60 dark:bg-emerald-950/30",
-                variant === "warning" && "border-amber-200/80 bg-amber-50/78 dark:border-amber-800/60 dark:bg-amber-950/30",
-                variant === "empty" && "border-dashed border-border/80 bg-secondary/28"
+                variant === "info" && "border-border/80 bg-card/80",
+                variant === "success" && "border-success/20 bg-success/10 dark:border-success/20 dark:bg-success/10",
+                variant === "warning" && "border-warning/20 bg-warning/10 dark:border-warning/20 dark:bg-warning/10",
+                variant === "empty" && "border-dashed border-border/80 bg-secondary/20"
             )}
         >
             <div className="p-4 sm:p-5">
@@ -26,8 +26,8 @@ export function StatePanel({
                         className={cn(
                             "mt-0.5 h-10 w-1 shrink-0 rounded-full",
                             variant === "info" && "bg-primary/80",
-                            variant === "success" && "bg-emerald-400/90",
-                            variant === "warning" && "bg-amber-400/90",
+                            variant === "success" && "bg-success",
+                            variant === "warning" && "bg-warning",
                             variant === "empty" && "bg-accent-foreground/30"
                         )}
                     />

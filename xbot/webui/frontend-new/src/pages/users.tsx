@@ -67,7 +67,7 @@ export default function Users() {
                     </TableHeader>
                     <TableBody>
                         {users?.map((u) => (
-                            <TableRow key={u.id} className="hover:bg-muted/30">
+                            <TableRow key={u.id} className="hover:bg-muted/20">
                                 <TableCell className="font-mono font-medium">
                                     {u.username}
                                     {u.id === currentUser?.id && (

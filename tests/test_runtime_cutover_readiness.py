@@ -111,6 +111,9 @@ def _bind(runtime: _RuntimeHarness) -> None:
     runtime._make_task_done_callback = AgentRuntime._make_task_done_callback.__get__(
         runtime, _RuntimeHarness
     )
+    runtime._spawn_session_task = AgentRuntime._spawn_session_task.__get__(
+        runtime, _RuntimeHarness
+    )
     runtime._set_session_phase = AgentRuntime._set_session_phase.__get__(runtime, _RuntimeHarness)
     runtime._sync_session_phase = AgentRuntime._sync_session_phase.__get__(runtime, _RuntimeHarness)
     runtime._log_state_snapshot = AgentRuntime._log_state_snapshot.__get__(runtime, _RuntimeHarness)

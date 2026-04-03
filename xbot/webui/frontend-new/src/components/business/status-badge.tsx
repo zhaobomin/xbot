@@ -21,7 +21,7 @@ export function StatusBadge({ running, error, className }: StatusBadgeProps) {
         <Badge
             variant={running ? "default" : "secondary"}
             className={cn(
-                running ? "bg-emerald-500 hover:bg-emerald-600 text-white" : "",
+                running ? "bg-success hover:bg-success/90 text-success-foreground" : "",
                 className
             )}
         >

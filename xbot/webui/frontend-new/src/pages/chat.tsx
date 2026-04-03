@@ -9,6 +9,14 @@ import { useIsMobile } from "../hooks/use-is-mobile";
 import { nanoid } from "nanoid";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import {
+    Dialog,
+    DialogContent,
+    DialogHeader,
+    DialogTitle,
+    DialogDescription,
+    DialogFooter,
+} from "../components/ui/dialog";
 import { ArrowLeft, MessageSquare, Plus, Search, Trash2 } from "lucide-react";
 import { cn, formatDate } from "../lib/utils";
 import { CHANNEL_ICONS } from "../lib/channel-icons";
@@ -85,6 +93,7 @@ export default function Chat() {
     const isAdmin = user?.role === "admin";
     const myPrefix = `web:${user?.id}:`;
     const [search, setSearch] = useState("");
+    const [deleteKey, setDeleteKey] = useState<string | null>(null);
     const mySessions = useMemo(
         () =>
             isAdmin
@@ -167,21 +176,21 @@ export default function Chat() {
                             "w-full flex-1 min-h-0 pt-14 bg-background",
                             mobileShowChat && "hidden"
                         )
-                        : "w-52 min-w-0 rounded-xl border border-border bg-card"
+                        : "w-56 min-w-0 rounded-xl border border-border bg-card"
                 )}
                 style={
                     isMobile
                         ? undefined
                         : {
-                            width: "13rem",
+                            width: "14rem",
                             minWidth: 0,
-                            maxWidth: "13rem",
+                            maxWidth: "14rem",
                             boxShadow: "var(--shadow-card)",
                         }
                 }
             >
                 {!isMobile && (
-                    <div className="flex shrink-0 items-center justify-between px-3 py-2">
+                    <div className="flex shrink-0 items-center justify-between border-b border-border/40 px-3 py-2">
                         <span className="text-sm font-semibold">{t("chat.sessions")}</span>
                         <button
                             onClick={newChat}
@@ -240,11 +249,17 @@ export default function Chat() {
                                 <div
                                     key={s.key}
                                     className={cn(
-                                        "group relative flex cursor-pointer items-center gap-3 rounded-xl transition-colors",
-                                        isMobile ? "px-3 py-3" : "px-2 py-1.5",
+                                        "group relative flex cursor-pointer items-center gap-3 transition-colors",
+                                        isMobile
+                                            ? "px-3 py-3 rounded-xl"
+                                            : "px-2 py-1.5 border-l-2 rounded-r-md",
                                         active
-                                            ? "bg-primary/10 text-primary"
-                                            : "hover:bg-muted/60"
+                                            ? isMobile
+                                                ? "bg-primary/10 text-primary"
+                                                : "border-primary text-primary bg-muted/50"
+                                            : isMobile
+                                                ? "hover:bg-muted/60"
+                                                : "border-transparent hover:bg-muted/60"
                                     )}
                                     onClick={() => switchSession(s.key)}
                                 >
@@ -252,7 +267,7 @@ export default function Chat() {
                                         className={cn(
                                             "flex shrink-0 items-center justify-center rounded-full leading-none",
                                             isMobile ? "h-11 w-11 text-xl" : "h-6 w-6 text-sm",
-                                            active ? "bg-primary/15" : "bg-muted"
+                                            active ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"
                                         )}
                                     >
                                         {CHANNEL_ICONS[channel] ?? "\ud83d\udcac"}
@@ -320,17 +335,7 @@ export default function Chat() {
                                         )}
                                         onClick={(e) => {
                                             e.stopPropagation();
-                                            if (active) {
-                                                const idx = displaySessions.findIndex(
-                                                    (x) => x.key === s.key
-                                                );
-                                                const next =
-                                                    displaySessions[idx + 1] ??
-                                                    displaySessions[idx - 1];
-                                                if (next) switchSession(next.key);
-                                                else newChat();
-                                            }
-                                            deleteSession.mutate(s.key);
+                                            setDeleteKey(s.key);
                                         }}
                                     >
                                         <Trash2
@@ -413,6 +418,39 @@ export default function Chat() {
                 )}
                 <ChatWindow />
             </div>
+
+            <Dialog open={!!deleteKey} onOpenChange={(open) => !open && setDeleteKey(null)}>
+                <DialogContent className="max-w-sm">
+                    <DialogHeader>
+                        <DialogTitle>{t("chat.deleteSession") ?? "Delete Session"}</DialogTitle>
+                        <DialogDescription>
+                            {t("chat.deleteSessionConfirm") ?? "This session and all its messages will be permanently deleted. This action cannot be undone."}
+                        </DialogDescription>
+                    </DialogHeader>
+                    <DialogFooter>
+                        <Button variant="ghost" onClick={() => setDeleteKey(null)}>
+                            {t("common.cancel") ?? "Cancel"}
+                        </Button>
+                        <Button
+                            variant="destructive"
+                            onClick={() => {
+                                if (!deleteKey) return;
+                                const isActive = deleteKey === currentSessionKey;
+                                if (isActive) {
+                                    const idx = displaySessions.findIndex((x) => x.key === deleteKey);
+                                    const next = displaySessions[idx + 1] ?? displaySessions[idx - 1];
+                                    if (next) switchSession(next.key);
+                                    else newChat();
+                                }
+                                deleteSession.mutate(deleteKey);
+                                setDeleteKey(null);
+                            }}
+                        >
+                            {t("common.delete") ?? "Delete"}
+                        </Button>
+                    </DialogFooter>
+                </DialogContent>
+            </Dialog>
         </div>
     );
 }

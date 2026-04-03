@@ -7,6 +7,7 @@ import { ChatWebSocket, type WsMessage } from "../../lib/ws";
 import { MessageBubble } from "./message-bubble";
 import { ChatInput } from "./chat-input";
 import { useRevokeMessage } from "../../hooks/use-sessions";
+import { ArrowDown } from "lucide-react";
 
 export function ChatWindow() {
     const { t } = useTranslation();
@@ -43,6 +44,26 @@ export function ChatWindow() {
     const handleWsMessageRef = useRef<(msg: WsMessage) => void>(() => { });
     const [isConnected, setIsConnected] = useState(false);
     const revokeMessage = useRevokeMessage();
+    const isNearBottomRef = useRef(true);
+    const [showScrollBtn, setShowScrollBtn] = useState(false);
+
+    // Track scroll position to determine if user is near bottom
+    useEffect(() => {
+        const el = scrollContainerRef.current;
+        if (!el) return;
+        const handleScroll = () => {
+            const threshold = 120;
+            const nearBottom =
+                el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+            isNearBottomRef.current = nearBottom;
+            setShowScrollBtn((prev) => {
+                const next = !nearBottom;
+                return prev === next ? prev : next;
+            });
+        };
+        el.addEventListener("scroll", handleScroll, { passive: true });
+        return () => el.removeEventListener("scroll", handleScroll);
+    }, []);
 
     useEffect(() => {
         const ws = new ChatWebSocket(
@@ -64,7 +85,7 @@ export function ChatWindow() {
 
     useEffect(() => {
         const el = scrollContainerRef.current;
-        if (el) el.scrollTop = el.scrollHeight;
+        if (el && isNearBottomRef.current) el.scrollTop = el.scrollHeight;
     }, [messages, progressText]);
 
     const handleWsMessage = useCallback(
@@ -146,7 +167,7 @@ export function ChatWindow() {
                     addMessage({
                         id: nanoid(),
                         role: "assistant",
-                        content: `\u26a0\ufe0f ${msg.content ?? t("common.error")}`,
+                        content: `⚠️ ${msg.content ?? t("common.error")}`,
                         timestamp: new Date().toISOString(),
                     });
                 }
@@ -228,53 +249,69 @@ export function ChatWindow() {
         [currentSessionKey, messages, revokeMessage]
     );
 
+    const scrollToBottom = useCallback(() => {
+        const el = scrollContainerRef.current;
+        if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+    }, []);
+
     return (
         <div className="flex flex-1 min-h-0 flex-col">
-            <div
-                ref={scrollContainerRef}
-                className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden px-4 py-6"
-            >
-                {messages.length === 0 ? (
-                    <div className="flex h-full min-h-[300px] flex-col items-center justify-center gap-5">
-                        <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-primary/10 ring-1 ring-primary/15 shadow-inner">
-                            <span className="text-3xl text-primary select-none leading-none">
-                                ✦
-                            </span>
+            <div className="relative flex-1 min-h-0">
+                <div
+                    ref={scrollContainerRef}
+                    className="h-full overflow-y-auto overflow-x-hidden px-4 py-6"
+                >
+                    {messages.length === 0 ? (
+                        <div className="flex h-full min-h-[300px] flex-col items-center justify-center gap-5">
+                            <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-muted ring-1 ring-border/50">
+                                <span className="text-3xl text-primary select-none leading-none">
+                                    ✦
+                                </span>
+                            </div>
+                            <div className="text-center space-y-1.5">
+                                <p className="font-semibold text-foreground/90">xbot</p>
+                                <p className="text-sm text-muted-foreground">
+                                    {t("chat.noMessages")}
+                                </p>
+                            </div>
                         </div>
-                        <div className="text-center space-y-1.5">
-                            <p className="font-semibold text-foreground/90">xbot</p>
-                            <p className="text-sm text-muted-foreground">
-                                {t("chat.noMessages")}
-                            </p>
+                    ) : (
+                        <div className="space-y-5">
+                            {visibleMessages.map((msg) => (
+                                <MessageBubble
+                                    key={msg.id}
+                                    message={msg}
+                                    onRevoke={handleRevoke}
+                                />
+                            ))}
                         </div>
-                    </div>
-                ) : (
-                    <div className="space-y-4">
-                        {visibleMessages.map((msg) => (
-                            <MessageBubble
-                                key={msg.id}
-                                message={msg}
-                                onRevoke={handleRevoke}
-                            />
-                        ))}
-                    </div>
+                    )}
+                    {isWaiting && progressText && (
+                        <div className="mt-4 flex items-start gap-3 px-4">
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-bold text-foreground/70 shadow-sm">
+                                x
+                            </div>
+                            <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-2.5 text-sm text-muted-foreground flex items-center gap-2">
+                                <span className="flex gap-1">
+                                    <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:0ms]" />
+                                    <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:150ms]" />
+                                    <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:300ms]" />
+                                </span>
+                                <span className="truncate max-w-xs">{progressText}</span>
+                            </div>
+                        </div>
+                    )}
+                    <div ref={bottomRef} />
+                </div>
+                {showScrollBtn && (
+                    <button
+                        onClick={scrollToBottom}
+                        className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-background/95 border border-border shadow-md text-muted-foreground hover:text-foreground backdrop-blur-sm transition-all duration-200"
+                        aria-label="Scroll to bottom"
+                    >
+                        <ArrowDown className="h-4 w-4" />
+                    </button>
                 )}
-                {isWaiting && progressText && (
-                    <div className="mt-4 flex items-start gap-3 px-4">
-                        <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-primary/12 text-xs font-black lowercase text-primary shadow-sm">
-                            x
-                        </div>
-                        <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-2.5 text-sm text-muted-foreground flex items-center gap-2">
-                            <span className="flex gap-1">
-                                <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:0ms]" />
-                                <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:150ms]" />
-                                <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:300ms]" />
-                            </span>
-                            <span className="truncate max-w-xs">{progressText}</span>
-                        </div>
-                    </div>
-                )}
-                <div ref={bottomRef} />
             </div>
             <ChatInput
                 onSend={handleSend}

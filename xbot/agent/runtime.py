@@ -248,10 +248,7 @@ class AgentRuntime:
             self._state_coordinator.force_transition(
                 msg.session_key, SessionPhase.RUNNING, reason="dispatch_start"
             )
-            task = asyncio.create_task(self._dispatch(msg))
-            AgentRuntime._tag_task_for_session(task, msg.session_key)
-            self._state_coordinator.register_task(msg.session_key, task)
-            task.add_done_callback(self._make_task_done_callback(msg.session_key))
+            task = self._spawn_session_task(self._dispatch(msg), msg.session_key)
 
     async def _handle_permission_response(self, msg: InboundMessage) -> bool:
         """Delegate permission-response handling."""
@@ -694,39 +691,16 @@ class AgentRuntime:
         backend_task_stopped = False
         interrupt_result: dict[str, Any] = {"interrupted": False, "usage": None}
         cleared_requests = {"permission": False, "interaction": False}
+        parent_cancel: asyncio.CancelledError | None = None
 
         try:
             # Cancel and wait for tasks (outside transaction as it's async I/O)
             tasks = self._state_coordinator.pop_active_tasks(session_key)
             cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
-            for task in tasks:
-                try:
-                    await task
-                except (asyncio.CancelledError, Exception):
-                    pass
-
-            # Extra cleanup: scan for any orphaned tasks that might have been missed
-            # This handles edge cases where tasks were created but not properly registered
-            all_current_tasks = asyncio.all_tasks()
-            orphaned_tasks = []
-            for task in all_current_tasks:
-                if task in tasks or task.done():
-                    continue
-                if AgentRuntime._task_belongs_to_session(task, session_key):
-                    orphaned_tasks.append(task)
-
-            if orphaned_tasks:
-                logger.warning(
-                    f"Found {len(orphaned_tasks)} orphaned task(s) for session {session_key}, cancelling..."
-                )
-                for task in orphaned_tasks:
-                    if not task.done():
-                        task.cancel()
-                        try:
-                            await task
-                        except (asyncio.CancelledError, Exception):
-                            pass
-                        cancelled += 1
+            if tasks:
+                # gather with return_exceptions=True collects child errors without
+                # swallowing a CancelledError aimed at the parent coroutine.
+                await asyncio.gather(*tasks, return_exceptions=True)
 
             # Backend cleanup (async I/O)
             backend_cancelled = await self.router.backend.cancel_session(session_key)
@@ -739,9 +713,10 @@ class AgentRuntime:
             if self.bus is not None:
                 if hasattr(self.bus, "aclear_session_requests"):
                     cleared_requests = await self.bus.aclear_session_requests(session_key)
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as exc:
             logger.warning(f"terminate_session cancelled for {session_key}, continuing cleanup")
-            # Continue to final cleanup even if cancelled
+            # Finish final state cleanup, then re-raise so parent cancellation is preserved.
+            parent_cancel = exc
         except Exception as e:
             logger.warning(f"Error during terminate_session cleanup: {e}")
             # Continue to final cleanup even if backend operations fail
@@ -759,6 +734,9 @@ class AgentRuntime:
         # For hard_reset, reset state to fresh IDLE (instead of clear which deletes)
         if hard_reset:
             self._state_coordinator.reset_session(session_key)
+
+        if parent_cancel is not None:
+            raise parent_cancel
 
         return {
             "cancelled": cancelled,
@@ -1192,9 +1170,10 @@ class AgentRuntime:
         self._state_coordinator.force_transition(
             msg.session_key, SessionPhase.RUNNING, reason="managed_direct_start"
         )
-        task = asyncio.create_task(self._run_managed_direct_turn(msg, on_progress=on_progress))
-        AgentRuntime._tag_task_for_session(task, msg.session_key)
-        self._state_coordinator.register_task(msg.session_key, task)
+        task = self._spawn_session_task(
+            self._run_managed_direct_turn(msg, on_progress=on_progress),
+            msg.session_key,
+        )
 
         try:
             return await task
@@ -2006,6 +1985,23 @@ class AgentRuntime:
     def _record_background_task_error(self, task_name: str, exc: BaseException) -> None:
         """Record background task failure without leaking unhandled-task warnings."""
         logger.warning("Background task '%s' failed: %s", task_name, exc)
+
+    def _spawn_session_task(
+        self,
+        coro: Coroutine[Any, Any, Any],
+        session_key: str,
+    ) -> asyncio.Task:
+        """Atomically create, tag, register, and attach done-callback for a session task.
+
+        This eliminates the race window between create_task() and register_task()
+        that previously allowed orphan tasks to escape tracking.
+        """
+        task = asyncio.create_task(coro)
+        # Tag + register + callback in one synchronous block (no await in between)
+        AgentRuntime._tag_task_for_session(task, session_key)
+        self._state_coordinator.register_task(session_key, task)
+        task.add_done_callback(self._make_task_done_callback(session_key))
+        return task
 
     def _spawn_background_task(self, coro: Coroutine[Any, Any, Any], task_name: str) -> asyncio.Task:
         """Create a background task and always retrieve exceptions."""

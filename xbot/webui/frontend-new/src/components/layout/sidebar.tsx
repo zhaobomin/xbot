@@ -19,6 +19,7 @@ import {
     KeyRound,
     PanelLeftClose,
     PanelLeftOpen,
+    Sparkles,
 } from "lucide-react";
 import {
     DropdownMenu,
@@ -30,6 +31,12 @@ import {
     DropdownMenuSubTrigger,
     DropdownMenuTrigger,
 } from "../ui/dropdown-menu";
+import {
+    Tooltip,
+    TooltipContent,
+    TooltipProvider,
+    TooltipTrigger,
+} from "../ui/tooltip";
 import { useState } from "react";
 import { ChangePasswordDialog } from "./change-password-dialog";
 
@@ -64,23 +71,32 @@ function NavLink({
 }) {
     const { t } = useTranslation();
     const Icon = item.icon;
-    return (
+
+    const linkContent = (
         <Link
             to={item.path}
-            title={collapsed ? t(item.label) : undefined}
             className={cn(
-                "group flex items-center rounded-lg text-sm font-medium transition-all duration-200",
+                "group relative flex items-center text-sm font-medium transition-all duration-200",
                 collapsed
-                    ? "justify-center py-2.5 mx-auto w-10"
-                    : "gap-3 px-3 py-2 hover:translate-x-0.5",
+                    ? "justify-center py-2.5 mx-auto w-10 rounded-lg"
+                    : "gap-3 px-3 py-2 rounded-lg mx-1",
                 active
-                    ? "bg-primary/10 text-primary"
-                    : "text-[hsl(var(--sidebar-fg))] hover:bg-[hsl(var(--sidebar-hover-bg))]"
+                    ? collapsed
+                        ? "bg-primary/12 text-primary"
+                        : "bg-primary/10 text-primary font-semibold"
+                    : cn(
+                        "text-[hsl(var(--sidebar-fg))]",
+                        "hover:bg-[hsl(var(--sidebar-hover-bg))] hover:translate-x-0.5"
+                    )
             )}
         >
+            {/* Active indicator bar - expanded only */}
+            {active && !collapsed && (
+                <span className="absolute left-0 top-1/2 -translate-y-1/2 h-[60%] w-[3px] rounded-full bg-primary" />
+            )}
             <Icon
                 className={cn(
-                    "h-4 w-4 shrink-0 transition-colors",
+                    "h-4 w-4 shrink-0 transition-colors duration-200",
                     active
                         ? "text-primary"
                         : "text-[hsl(var(--sidebar-muted))] group-hover:text-[hsl(var(--sidebar-fg))]"
@@ -89,6 +105,19 @@ function NavLink({
             {!collapsed && <span className="truncate">{t(item.label)}</span>}
         </Link>
     );
+
+    if (collapsed) {
+        return (
+            <Tooltip delayDuration={0}>
+                <TooltipTrigger asChild>{linkContent}</TooltipTrigger>
+                <TooltipContent side="right" className="font-medium">
+                    {t(item.label)}
+                </TooltipContent>
+            </Tooltip>
+        );
+    }
+
+    return linkContent;
 }
 
 interface SidebarProps {
@@ -113,95 +142,84 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     const currentLangLabel = LANG_LABELS[i18n.language] ?? "English";
 
     return (
-        <aside
-            className={cn(
-                "flex h-full flex-col border-r border-border transition-[width] duration-300 ease-in-out overflow-hidden",
-                collapsed ? "w-[60px]" : "w-[240px]"
-            )}
-            style={{
-                background: "hsl(var(--sidebar-bg))",
-                boxShadow: "var(--sidebar-edge-shadow)",
-            }}
-        >
-            {/* Logo + collapse toggle */}
-            <div
+        <TooltipProvider>
+            <aside
                 className={cn(
-                    "group flex h-14 shrink-0 items-center",
-                    collapsed ? "justify-center px-1" : "justify-between pl-4 pr-2"
+                    "flex h-full flex-col border-r border-border/60 transition-[width] duration-300 ease-in-out overflow-hidden",
+                    collapsed ? "w-[60px]" : "w-[240px]"
                 )}
+                style={{
+                    background: "hsl(var(--sidebar-bg))",
+                    boxShadow: "var(--sidebar-edge-shadow)",
+                }}
             >
-                {!collapsed && (
-                    <div className="flex h-9 items-center">
-                        <span className="text-[1.75rem] font-black lowercase tracking-[-0.08em] bg-gradient-to-r from-violet-400 via-purple-500 to-indigo-600 bg-clip-text text-transparent">
-                            xbot
-                        </span>
-                    </div>
-                )}
-                {collapsed && (
-                    <div className="flex h-9 w-9 items-center justify-center rounded-xl border border-primary/20 bg-primary/10">
-                        <span className="text-sm font-black lowercase text-primary">x</span>
-                    </div>
-                )}
-                <button
-                    onClick={onToggle}
-                    title={collapsed ? t("nav.expand") : t("nav.collapse")}
+                {/* Logo + collapse toggle */}
+                <div
                     className={cn(
-                        "flex h-7 w-7 items-center justify-center rounded-md transition-all duration-200",
-                        "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]",
-                        "opacity-0 group-hover:opacity-100",
-                        collapsed && "opacity-100"
+                        "group flex h-14 shrink-0 items-center",
+                        collapsed ? "justify-center px-1" : "justify-between pl-3 pr-2"
                     )}
                 >
-                    {collapsed ? (
-                        <PanelLeftOpen className="h-4 w-4" />
-                    ) : (
-                        <PanelLeftClose className="h-4 w-4" />
-                    )}
-                </button>
-            </div>
-
-            {/* Nav */}
-            <nav className="flex-1 overflow-y-auto px-2 py-3">
-                {/* General section */}
-                <div className="mb-2">
                     {!collapsed && (
-                        <p
-                            className="mb-1 px-3 text-xs font-semibold uppercase tracking-wider"
-                            style={{ color: "hsl(var(--sidebar-section-label))" }}
-                        >
-                            {t("nav.section.general")}
-                        </p>
+                        <div className="flex h-9 items-center gap-2">
+                            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+                                <Sparkles className="h-3.5 w-3.5" />
+                            </div>
+                            <span className="text-lg font-semibold tracking-tight text-foreground">
+                                XBot
+                            </span>
+                        </div>
                     )}
-                    <div className="space-y-0.5">
-                        {GENERAL_ITEMS.map((item) => (
-                            <NavLink
-                                key={item.path}
-                                item={item}
-                                active={isActive(item)}
-                                collapsed={collapsed}
-                            />
-                        ))}
-                    </div>
+                    {collapsed && (
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
+                            <Sparkles className="h-4 w-4" />
+                        </div>
+                    )}
+                    {!collapsed && (
+                        <button
+                            onClick={onToggle}
+                            title={t("nav.collapse")}
+                            className={cn(
+                                "flex h-7 w-7 items-center justify-center rounded-md transition-all duration-200",
+                                "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]",
+                                "opacity-0 group-hover:opacity-100"
+                            )}
+                        >
+                            <PanelLeftClose className="h-4 w-4" />
+                        </button>
+                    )}
                 </div>
 
-                {/* Admin section */}
-                {isAdmin && (
-                    <div
-                        className={cn(
-                            "mt-4",
-                            collapsed && "border-t border-[hsl(var(--sidebar-border))] pt-2"
-                        )}
-                    >
+                {/* Expand button for collapsed state */}
+                {collapsed && (
+                    <div className="flex justify-center pb-1">
+                        <button
+                            onClick={onToggle}
+                            title={t("nav.expand")}
+                            className={cn(
+                                "flex h-7 w-7 items-center justify-center rounded-md transition-all duration-200",
+                                "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]"
+                            )}
+                        >
+                            <PanelLeftOpen className="h-4 w-4" />
+                        </button>
+                    </div>
+                )}
+
+                {/* Nav */}
+                <nav className="flex-1 overflow-y-auto px-2 py-3">
+                    {/* General section */}
+                    <div className="mb-2">
                         {!collapsed && (
                             <p
-                                className="mb-1 px-3 text-xs font-semibold uppercase tracking-wider"
+                                className="mb-2 px-4 text-xs font-semibold uppercase tracking-[0.15em]"
                                 style={{ color: "hsl(var(--sidebar-section-label))" }}
                             >
-                                {t("nav.section.admin")}
+                                {t("nav.section.general")}
                             </p>
                         )}
-                        <div className="space-y-0.5">
-                            {ADMIN_ITEMS.map((item) => (
+                        <div className="space-y-1">
+                            {GENERAL_ITEMS.map((item) => (
                                 <NavLink
                                     key={item.path}
                                     item={item}
@@ -211,168 +229,215 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                             ))}
                         </div>
                     </div>
-                )}
-            </nav>
 
-            {/* Bottom: user + theme toggle */}
-            <div
-                className="shrink-0 pb-3"
-                style={{ borderTop: "1px solid hsl(var(--sidebar-border))" }}
-            >
-                {collapsed ? (
-                    <div className="mt-2 flex flex-col items-center gap-1">
-                        <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                                <button
-                                    title={user?.username}
-                                    className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 hover:bg-primary/25 transition-colors"
+                    {/* Admin section */}
+                    {isAdmin && (
+                        <div className={cn("mt-6 pt-4", collapsed && "mt-4 pt-2")}>
+                            {/* Gradient separator */}
+                            <div
+                                className={cn("mx-3 mb-3 h-px", collapsed && "mx-2 mb-2")}
+                                style={{
+                                    background:
+                                        "linear-gradient(to right, transparent, hsl(var(--sidebar-border)), transparent)",
+                                }}
+                            />
+                            {!collapsed && (
+                                <p
+                                    className="mb-2 px-4 text-xs font-semibold uppercase tracking-[0.15em]"
+                                    style={{ color: "hsl(var(--sidebar-section-label))" }}
                                 >
-                                    <span className="text-xs font-bold text-primary">
-                                        {user?.username?.[0]?.toUpperCase() ?? "?"}
-                                    </span>
-                                </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent side="right" align="end" className="w-48">
-                                <DropdownMenuSub>
-                                    <DropdownMenuSubTrigger>
-                                        <Languages className="mr-2 h-4 w-4" />
-                                        {currentLangLabel}
-                                    </DropdownMenuSubTrigger>
-                                    <DropdownMenuSubContent>
-                                        {Object.entries(LANG_LABELS).map(([code, label]) => (
-                                            <DropdownMenuItem
-                                                key={code}
-                                                onClick={() => i18n.changeLanguage(code)}
-                                                className={
-                                                    i18n.language === code
-                                                        ? "font-semibold text-primary"
-                                                        : ""
-                                                }
-                                            >
-                                                {label}
-                                            </DropdownMenuItem>
-                                        ))}
-                                    </DropdownMenuSubContent>
-                                </DropdownMenuSub>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem onClick={() => setShowChangePwd(true)}>
-                                    <KeyRound className="mr-2 h-4 w-4" />
-                                    {t("auth.changePassword")}
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                    onClick={clearAuth}
-                                    className="text-destructive focus:text-destructive"
-                                >
-                                    <LogOut className="mr-2 h-4 w-4" />
-                                    {t("auth.logout")}
-                                </DropdownMenuItem>
-                            </DropdownMenuContent>
-                        </DropdownMenu>
-                        <button
-                            onClick={() =>
-                                setTheme(resolvedTheme === "dark" ? "light" : "dark")
-                            }
-                            title={
-                                resolvedTheme === "dark"
-                                    ? t("common.lightMode")
-                                    : t("common.darkMode")
-                            }
-                            className={cn(
-                                "flex h-8 w-8 items-center justify-center rounded-md transition-colors",
-                                "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]"
+                                    {t("nav.section.admin")}
+                                </p>
                             )}
-                        >
-                            {resolvedTheme === "dark" ? (
-                                <Sun className="h-3.5 w-3.5" />
-                            ) : (
-                                <Moon className="h-3.5 w-3.5" />
-                            )}
-                        </button>
-                    </div>
-                ) : (
-                    <div className="mt-1 px-2 flex items-center gap-1">
-                        <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                                <button
-                                    className={cn(
-                                        "flex min-w-0 flex-1 items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200",
-                                        "text-[hsl(var(--sidebar-fg))] hover:bg-[hsl(var(--sidebar-hover-bg))]"
-                                    )}
-                                >
-                                    <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
-                                        {user?.username?.[0]?.toUpperCase() ?? "?"}
-                                    </div>
-                                    <span className="flex-1 truncate text-left">
-                                        {user?.username}
-                                    </span>
-                                </button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent side="right" align="end" className="w-48">
-                                <DropdownMenuSub>
-                                    <DropdownMenuSubTrigger>
-                                        <Languages className="mr-2 h-4 w-4" />
-                                        {currentLangLabel}
-                                    </DropdownMenuSubTrigger>
-                                    <DropdownMenuSubContent>
-                                        {Object.entries(LANG_LABELS).map(([code, label]) => (
-                                            <DropdownMenuItem
-                                                key={code}
-                                                onClick={() => i18n.changeLanguage(code)}
-                                                className={
-                                                    i18n.language === code
-                                                        ? "font-semibold text-primary"
-                                                        : ""
-                                                }
-                                            >
-                                                {label}
-                                            </DropdownMenuItem>
-                                        ))}
-                                    </DropdownMenuSubContent>
-                                </DropdownMenuSub>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem onClick={() => setShowChangePwd(true)}>
-                                    <KeyRound className="mr-2 h-4 w-4" />
-                                    {t("auth.changePassword")}
-                                </DropdownMenuItem>
-                                <DropdownMenuSeparator />
-                                <DropdownMenuItem
-                                    onClick={clearAuth}
-                                    className="text-destructive focus:text-destructive"
-                                >
-                                    <LogOut className="mr-2 h-4 w-4" />
-                                    {t("auth.logout")}
-                                </DropdownMenuItem>
-                            </DropdownMenuContent>
-                        </DropdownMenu>
-                        <button
-                            onClick={() =>
-                                setTheme(resolvedTheme === "dark" ? "light" : "dark")
-                            }
-                            title={
-                                resolvedTheme === "dark"
-                                    ? t("common.lightMode")
-                                    : t("common.darkMode")
-                            }
-                            className={cn(
-                                "flex h-8 w-8 shrink-0 items-center justify-center rounded-md transition-colors",
-                                "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]"
-                            )}
-                        >
-                            {resolvedTheme === "dark" ? (
-                                <Sun className="h-3.5 w-3.5" />
-                            ) : (
-                                <Moon className="h-3.5 w-3.5" />
-                            )}
-                        </button>
-                    </div>
-                )}
-            </div>
+                            <div className="space-y-1">
+                                {ADMIN_ITEMS.map((item) => (
+                                    <NavLink
+                                        key={item.path}
+                                        item={item}
+                                        active={isActive(item)}
+                                        collapsed={collapsed}
+                                    />
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                </nav>
 
-            <ChangePasswordDialog
-                open={showChangePwd}
-                onClose={() => setShowChangePwd(false)}
-            />
-        </aside>
+                {/* Bottom: user + theme toggle */}
+                <div className="shrink-0 px-2 pb-3">
+                    {/* Gradient top border */}
+                    <div
+                        className="mx-2 mb-3 h-px"
+                        style={{
+                            background:
+                                "linear-gradient(to right, transparent, hsl(var(--sidebar-border)), transparent)",
+                        }}
+                    />
+
+                    {collapsed ? (
+                        <div className="flex flex-col items-center gap-1.5">
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <button
+                                        title={user?.username}
+                                        className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 ring-2 ring-primary/10 shadow-sm hover:ring-primary/25 transition-all duration-200"
+                                    >
+                                        <span className="text-xs font-bold text-primary">
+                                            {user?.username?.[0]?.toUpperCase() ?? "?"}
+                                        </span>
+                                    </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent side="right" align="end" className="w-48">
+                                    <DropdownMenuSub>
+                                        <DropdownMenuSubTrigger>
+                                            <Languages className="mr-2 h-4 w-4" />
+                                            {currentLangLabel}
+                                        </DropdownMenuSubTrigger>
+                                        <DropdownMenuSubContent>
+                                            {Object.entries(LANG_LABELS).map(([code, label]) => (
+                                                <DropdownMenuItem
+                                                    key={code}
+                                                    onClick={() => i18n.changeLanguage(code)}
+                                                    className={
+                                                        i18n.language === code
+                                                            ? "font-semibold text-primary"
+                                                            : ""
+                                                    }
+                                                >
+                                                    {label}
+                                                </DropdownMenuItem>
+                                            ))}
+                                        </DropdownMenuSubContent>
+                                    </DropdownMenuSub>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem onClick={() => setShowChangePwd(true)}>
+                                        <KeyRound className="mr-2 h-4 w-4" />
+                                        {t("auth.changePassword")}
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem
+                                        onClick={clearAuth}
+                                        className="text-destructive focus:text-destructive"
+                                    >
+                                        <LogOut className="mr-2 h-4 w-4" />
+                                        {t("auth.logout")}
+                                    </DropdownMenuItem>
+                                </DropdownMenuContent>
+                            </DropdownMenu>
+                            <Tooltip delayDuration={0}>
+                                <TooltipTrigger asChild>
+                                    <button
+                                        onClick={() =>
+                                            setTheme(resolvedTheme === "dark" ? "light" : "dark")
+                                        }
+                                        className={cn(
+                                            "flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-200",
+                                            "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]"
+                                        )}
+                                    >
+                                        {resolvedTheme === "dark" ? (
+                                            <Sun className="h-3.5 w-3.5" />
+                                        ) : (
+                                            <Moon className="h-3.5 w-3.5" />
+                                        )}
+                                    </button>
+                                </TooltipTrigger>
+                                <TooltipContent side="right">
+                                    {resolvedTheme === "dark"
+                                        ? t("common.lightMode")
+                                        : t("common.darkMode")}
+                                </TooltipContent>
+                            </Tooltip>
+                        </div>
+                    ) : (
+                        <div className="space-y-0.5">
+                            {/* User row */}
+                            <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                    <button
+                                        className={cn(
+                                            "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200",
+                                            "text-[hsl(var(--sidebar-fg))] hover:bg-[hsl(var(--sidebar-hover-bg))]"
+                                        )}
+                                    >
+                                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/15 ring-2 ring-primary/10 shadow-sm">
+                                            <span className="text-xs font-bold text-primary">
+                                                {user?.username?.[0]?.toUpperCase() ?? "?"}
+                                            </span>
+                                        </div>
+                                        <span className="flex-1 truncate text-left">
+                                            {user?.username}
+                                        </span>
+                                    </button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent side="right" align="end" className="w-48">
+                                    <DropdownMenuSub>
+                                        <DropdownMenuSubTrigger>
+                                            <Languages className="mr-2 h-4 w-4" />
+                                            {currentLangLabel}
+                                        </DropdownMenuSubTrigger>
+                                        <DropdownMenuSubContent>
+                                            {Object.entries(LANG_LABELS).map(([code, label]) => (
+                                                <DropdownMenuItem
+                                                    key={code}
+                                                    onClick={() => i18n.changeLanguage(code)}
+                                                    className={
+                                                        i18n.language === code
+                                                            ? "font-semibold text-primary"
+                                                            : ""
+                                                    }
+                                                >
+                                                    {label}
+                                                </DropdownMenuItem>
+                                            ))}
+                                        </DropdownMenuSubContent>
+                                    </DropdownMenuSub>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem onClick={() => setShowChangePwd(true)}>
+                                        <KeyRound className="mr-2 h-4 w-4" />
+                                        {t("auth.changePassword")}
+                                    </DropdownMenuItem>
+                                    <DropdownMenuSeparator />
+                                    <DropdownMenuItem
+                                        onClick={clearAuth}
+                                        className="text-destructive focus:text-destructive"
+                                    >
+                                        <LogOut className="mr-2 h-4 w-4" />
+                                        {t("auth.logout")}
+                                    </DropdownMenuItem>
+                                </DropdownMenuContent>
+                            </DropdownMenu>
+
+                            {/* Theme toggle row */}
+                            <button
+                                onClick={() =>
+                                    setTheme(resolvedTheme === "dark" ? "light" : "dark")
+                                }
+                                className={cn(
+                                    "flex w-full items-center gap-3 rounded-lg px-3 py-1.5 text-sm transition-all duration-200",
+                                    "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]"
+                                )}
+                            >
+                                {resolvedTheme === "dark" ? (
+                                    <Sun className="h-4 w-4" />
+                                ) : (
+                                    <Moon className="h-4 w-4" />
+                                )}
+                                <span>
+                                    {resolvedTheme === "dark"
+                                        ? t("common.lightMode")
+                                        : t("common.darkMode")}
+                                </span>
+                            </button>
+                        </div>
+                    )}
+                </div>
+
+                <ChangePasswordDialog
+                    open={showChangePwd}
+                    onClose={() => setShowChangePwd(false)}
+                />
+            </aside>
+        </TooltipProvider>
     );
 }

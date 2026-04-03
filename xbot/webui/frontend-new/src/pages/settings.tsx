@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
-import { ArrowLeft, ChevronDown, ChevronRight, X, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, ChevronDown, ChevronRight, X, Plus, Trash2, Loader2 } from "lucide-react";
 import { useIsMobile } from "../hooks/use-is-mobile";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../components/ui/tabs";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "../components/ui/card";
@@ -251,6 +251,7 @@ function ProvidersTab() {
                                     <div className="flex justify-end sm:justify-start">
                                         <Button size="sm" onClick={() => handleSave(p)}
                                             disabled={update.isPending}>
+                                            {update.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                                             {t("providers.save")}
                                         </Button>
                                     </div>
@@ -274,7 +275,7 @@ function ProvidersTab() {
                     }}
                 />
                 <Button size="sm" variant="secondary" onClick={handleCreateCustom} disabled={create.isPending}>
-                    <Plus className="h-4 w-4 mr-1" />
+                    {create.isPending ? <Loader2 className="h-4 w-4 mr-1 animate-spin" /> : <Plus className="h-4 w-4 mr-1" />}
                     {t("providers.addCustom")}
                 </Button>
             </div>
@@ -408,19 +409,19 @@ function AgentTab() {
                                 </div>
                                 <div className="space-y-1">
                                     <Label>{t("settings.maxTokens")}</Label>
-                                    <Input type="number" value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} />
+                                    <Input type="number" value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} placeholder="4096" />
                                 </div>
                                 <div className="space-y-1">
                                     <Label>{t("settings.temperature")}</Label>
-                                    <Input type="number" step="0.1" min="0" max="2" value={temperature} onChange={(e) => setTemperature(e.target.value)} />
+                                    <Input type="number" step="0.1" min="0" max="2" value={temperature} onChange={(e) => setTemperature(e.target.value)} placeholder="0.7" />
                                 </div>
                                 <div className="space-y-1">
                                     <Label>{t("settings.maxToolIterations")}</Label>
-                                    <Input type="number" value={maxToolIter} onChange={(e) => setMaxToolIter(e.target.value)} />
+                                    <Input type="number" value={maxToolIter} onChange={(e) => setMaxToolIter(e.target.value)} placeholder="30" />
                                 </div>
                                 <div className="space-y-1">
                                     <Label>{t("settings.contextWindowTokens")}</Label>
-                                    <Input type="number" value={memoryWindow} onChange={(e) => setMemoryWindow(e.target.value)} />
+                                    <Input type="number" value={memoryWindow} onChange={(e) => setMemoryWindow(e.target.value)} placeholder="128000" />
                                 </div>
                                 <div className="space-y-1">
                                     <Label>{t("settings.reasoningEffort")}</Label>
@@ -449,7 +450,10 @@ function AgentTab() {
                                 </div>
                             </div>
                             <div className="flex justify-end sm:justify-start">
-                                <Button onClick={handleSaveAgent} disabled={updateAgent.isPending}>{t("settings.save")}</Button>
+                                <Button onClick={handleSaveAgent} disabled={updateAgent.isPending}>
+                                    {updateAgent.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                                    {t("settings.save")}
+                                </Button>
                             </div>
                         </>
                     )}
@@ -472,7 +476,7 @@ function AgentTab() {
                                 </div>
                                 <div className="space-y-1">
                                     <Label>{t("settings.port")}</Label>
-                                    <Input type="number" value={port} onChange={(e) => setPort(e.target.value)} />
+                                    <Input type="number" value={port} onChange={(e) => setPort(e.target.value)} placeholder="18790" />
                                 </div>
                             </div>
                             <div className="flex items-center gap-3">
@@ -482,7 +486,7 @@ function AgentTab() {
                             {heartbeatEnabled && (
                                 <div className="space-y-1 max-w-xs">
                                     <Label>{t("settings.heartbeatInterval")}</Label>
-                                    <Input type="number" value={heartbeatInterval} onChange={(e) => setHeartbeatInterval(e.target.value)} />
+                                    <Input type="number" value={heartbeatInterval} onChange={(e) => setHeartbeatInterval(e.target.value)} placeholder="30" />
                                 </div>
                             )}
                             <div className="flex justify-end sm:justify-start">
@@ -543,6 +547,7 @@ function WorkspaceFileEditor({ name }: { name: string }) {
                     />
                     <div className="flex items-center justify-between sm:justify-start gap-2">
                         <Button size="sm" onClick={handleSave} disabled={save.isPending || !dirty}>
+                            {save.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                             {t("settings.save")}
                         </Button>
                         {dirty && <span className="text-xs text-muted-foreground">{t("settings.unsaved")}</span>}
@@ -609,8 +614,8 @@ function WorkspaceTab() {
                         key={name}
                         onClick={() => setSelected(name)}
                         className={`w-full text-left px-3 py-2 rounded-md transition-colors ${desktopSelected === name
-                                ? "bg-primary text-primary-foreground"
-                                : "hover:bg-muted"
+                            ? "bg-primary text-primary-foreground"
+                            : "hover:bg-muted"
                             }`}
                     >
                         <div className="text-sm font-mono font-medium leading-tight">{name}</div>

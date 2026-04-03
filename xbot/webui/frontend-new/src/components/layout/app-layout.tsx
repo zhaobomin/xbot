@@ -43,7 +43,7 @@ export default function AppLayout() {
                     "relative flex-1 min-w-0",
                     isChatPage
                         ? "flex flex-col overflow-hidden"
-                        : cn("overflow-auto", isMobile ? "p-3 pt-14" : "p-4 lg:p-6")
+                        : cn("overflow-auto", isMobile ? "p-3 pt-14" : "p-5 lg:p-8")
                 )}
                 style={
                     isMobile

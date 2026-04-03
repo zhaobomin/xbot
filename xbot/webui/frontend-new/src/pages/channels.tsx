@@ -23,7 +23,7 @@ import {
 import { SecretInput } from "../components/business/secret-input";
 import { StatusBadge } from "../components/business/status-badge";
 import { Skeleton } from "../components/ui/skeleton";
-import { RefreshCw, ChevronDown, ChevronRight, QrCode, CheckCircle2, Clock } from "lucide-react";
+import { RefreshCw, ChevronDown, ChevronRight, QrCode, CheckCircle2, Clock, Loader2 } from "lucide-react";
 import { isMasked } from "../lib/utils";
 import { toast } from "sonner";
 import { SectionHeader } from "../components/business/section-header";
@@ -89,8 +89,8 @@ function WeixinQrPanel({ loggedIn, onLoginSuccess }: { loggedIn: boolean; onLogi
                 <div className="flex items-center gap-2 text-sm">
                     {loggedIn || done ? (
                         <>
-                            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                            <span className="text-emerald-600 font-medium">{t("channels.weixin.loggedIn")}</span>
+                            <CheckCircle2 className="h-4 w-4 text-success" />
+                            <span className="text-success font-medium">{t("channels.weixin.loggedIn")}</span>
                         </>
                     ) : (
                         <>
@@ -119,7 +119,7 @@ function WeixinQrPanel({ loggedIn, onLoginSuccess }: { loggedIn: boolean; onLogi
                             {scanUrl}
                         </div>
                     )}
-                    <p className={`text-xs ${qrStatus?.status === "scaned" ? "text-emerald-600" : "text-muted-foreground"}`}>
+                    <p className={`text-xs ${qrStatus?.status === "scaned" ? "text-success" : "text-muted-foreground"}`}>
                         {statusText()}
                     </p>
                 </div>
@@ -303,6 +303,7 @@ export default function Channels() {
                                                     onClick={() => handleSave(ch.name, ch.config)}
                                                     disabled={update.isPending}
                                                 >
+                                                    {update.isPending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                                                     {t("channels.save")}
                                                 </Button>
                                             </div>

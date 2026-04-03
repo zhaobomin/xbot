@@ -10,12 +10,12 @@ interface SectionHeaderProps {
 
 export function SectionHeader({ eyebrow, title, description, actions, className }: SectionHeaderProps) {
     return (
-        <div className={cn("mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between", className)}>
+        <div className={cn("mb-8 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between", className)}>
             <div className="min-w-0">
                 {eyebrow && (
-                    <div className="mb-1.5 text-xs font-medium text-primary/70">{eyebrow}</div>
+                    <div className="mb-1.5 text-xs font-medium uppercase tracking-wider text-muted-foreground">{eyebrow}</div>
                 )}
-                <h1 className="text-xl font-semibold text-foreground">{title}</h1>
+                <h1 className="text-xl font-semibold tracking-tight text-foreground">{title}</h1>
                 {description && (
                     <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{description}</p>
                 )}

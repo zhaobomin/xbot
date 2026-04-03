@@ -34,8 +34,8 @@ export default defineConfig({
                 type: "module",
             },
             manifest: {
-                name: "xbot",
-                short_name: "xbot",
+                name: "XBot",
+                short_name: "XBot",
                 description: "xbot AI Agent Management Interface",
                 theme_color: "#462584",
                 background_color: "#f8f7fc",

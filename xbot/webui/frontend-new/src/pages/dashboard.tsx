@@ -43,6 +43,7 @@ export default function Dashboard() {
             sub: t("dashboard.running"),
             iconColor: "text-violet-500",
             iconBg: "bg-violet-50 dark:bg-violet-950/50",
+            topBorder: "border-t-violet-400/60",
         },
         {
             label: t("dashboard.skills"),
@@ -51,6 +52,7 @@ export default function Dashboard() {
             sub: t("dashboard.active"),
             iconColor: "text-sky-500",
             iconBg: "bg-sky-50 dark:bg-sky-950/50",
+            topBorder: "border-t-sky-400/60",
         },
         {
             label: t("dashboard.cronJobs"),
@@ -59,6 +61,7 @@ export default function Dashboard() {
             sub: t("dashboard.active"),
             iconColor: "text-amber-500",
             iconBg: "bg-amber-50 dark:bg-amber-950/50",
+            topBorder: "border-t-amber-400/60",
         },
         {
             label: t("dashboard.sessions"),
@@ -67,6 +70,7 @@ export default function Dashboard() {
             sub: t("dashboard.active"),
             iconColor: "text-emerald-500",
             iconBg: "bg-emerald-50 dark:bg-emerald-950/50",
+            topBorder: "border-t-emerald-400/60",
         },
     ];
 
@@ -75,21 +79,21 @@ export default function Dashboard() {
             <SectionHeader title={t("nav.dashboard")} />
 
             {/* Stat cards */}
-            <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
                 {stats.map((stat) => {
                     const Icon = stat.icon;
                     return (
-                        <Card key={stat.label} className="overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover">
+                        <Card key={stat.label} className={cn("overflow-hidden border-t-2 transition-all duration-200 hover:shadow-card-hover", stat.topBorder)}>
                             <CardContent className="p-3 sm:p-5">
                                 <div className="flex items-start justify-between gap-2">
                                     <div className="min-w-0">
-                                        <p className="text-xs font-medium text-muted-foreground leading-snug truncate">
+                                        <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground leading-snug truncate">
                                             {stat.label}
                                         </p>
                                         {stat.value === null ? (
                                             <Skeleton className="mt-1.5 h-7 w-12" />
                                         ) : (
-                                            <div className="mt-1 text-xl font-bold tracking-tight sm:text-2xl">
+                                            <div className="mt-1 text-2xl font-bold tracking-tighter sm:text-3xl">
                                                 {stat.value}
                                             </div>
                                         )}
@@ -147,7 +151,7 @@ export default function Dashboard() {
                                             hasError
                                                 ? "border-destructive/40 bg-destructive/5"
                                                 : isRunning
-                                                    ? "border-emerald-500/30 bg-emerald-500/5"
+                                                    ? "border-success/30 bg-success/5"
                                                     : "border-border bg-muted/30"
                                         )}
                                     >
@@ -160,7 +164,7 @@ export default function Dashboard() {
                                             {hasError ? (
                                                 <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
                                             ) : isRunning ? (
-                                                <CheckCircle2 className="h-4 w-4 text-emerald-500 shrink-0 mt-0.5" />
+                                                <CheckCircle2 className="h-4 w-4 text-success shrink-0 mt-0.5" />
                                             ) : (
                                                 <XCircle className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
                                             )}
@@ -187,7 +191,7 @@ export default function Dashboard() {
                                                     className={cn(
                                                         "text-xs px-1.5 py-0",
                                                         isRunning
-                                                            ? "bg-emerald-500 hover:bg-emerald-600 text-white"
+                                                            ? "bg-success hover:bg-success/90 text-success-foreground"
                                                             : ""
                                                     )}
                                                 >

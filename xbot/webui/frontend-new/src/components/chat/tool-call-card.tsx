@@ -32,7 +32,7 @@ export function ToolCallCard({ tool }: ToolCallCardProps) {
                             <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-violet-500/70">
                                 Input
                             </div>
-                            <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-[11px] text-violet-900/80 dark:text-violet-200/70">
+                            <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs text-violet-900/80 dark:text-violet-200/70">
                                 {tool.input}
                             </pre>
                         </div>
@@ -42,7 +42,7 @@ export function ToolCallCard({ tool }: ToolCallCardProps) {
                             <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-violet-500/70">
                                 Output
                             </div>
-                            <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-[11px] text-violet-900/80 dark:text-violet-200/70">
+                            <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs text-violet-900/80 dark:text-violet-200/70">
                                 {tool.output}
                             </pre>
                         </div>

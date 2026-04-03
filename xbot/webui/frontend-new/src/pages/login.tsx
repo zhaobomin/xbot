@@ -78,8 +78,8 @@ export default function Login() {
                 </DropdownMenu>
             </div>
 
-            <Card className="w-full max-w-sm rounded-2xl border border-border bg-card shadow-sm">
-                <CardHeader className="text-center space-y-3 pb-4">
+            <Card className="w-full max-w-sm rounded-2xl border border-border/60 bg-card shadow-panel">
+                <CardHeader className="text-center space-y-3 pb-6">
                     <div className="flex justify-center">
                         <div className="flex h-14 min-w-[84px] items-center justify-center rounded-2xl border border-border bg-secondary/50 px-5">
                             <span className="text-2xl font-black lowercase tracking-tight bg-gradient-to-r from-violet-500 via-purple-500 to-indigo-600 bg-clip-text text-transparent">
@@ -97,7 +97,7 @@ export default function Login() {
                     </div>
                 </CardHeader>
                 <CardContent>
-                    <form onSubmit={handleLogin} className="space-y-4">
+                    <form onSubmit={handleLogin} className="space-y-5">
                         {error && (
                             <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
                                 {error}
@@ -114,7 +114,7 @@ export default function Login() {
                                     value={username}
                                     onChange={(e) => setUsername(e.target.value)}
                                     autoComplete="username"
-                                    className="pl-10 h-10"
+                                    className="pl-10 h-11"
                                     placeholder={t("auth.username")}
                                 />
                             </div>
@@ -131,14 +131,14 @@ export default function Login() {
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
                                     autoComplete="current-password"
-                                    className="pl-10 h-10"
+                                    className="pl-10 h-11"
                                     placeholder={t("auth.password")}
                                 />
                             </div>
                         </div>
                         <Button
                             type="submit"
-                            className="w-full h-10 mt-6 font-semibold"
+                            className="w-full h-11 mt-8 font-semibold"
                             isLoading={loading}
                         >
                             {loading ? t("common.loading") : t("auth.loginButton")}
