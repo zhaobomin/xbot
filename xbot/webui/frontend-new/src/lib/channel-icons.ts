@@ -1,0 +1,15 @@
+export const CHANNEL_ICONS: Record<string, string> = {
+    weixin: "\ud83d\udc9a",
+    wecom: "\ud83c\udfe2",
+    web: "\ud83d\udcac",
+    telegram: "\u2708\ufe0f",
+    whatsapp: "\ud83d\udcac",
+    discord: "\ud83c\udfae",
+    feishu: "\ud83d\udc26",
+    dingtalk: "\ud83d\udd14",
+    email: "\ud83d\udce7",
+    slack: "\u26a1",
+    qq: "\ud83d\udc27",
+    matrix: "\ud83d\udd37",
+    mochat: "\ud83d\udcbc",
+};
