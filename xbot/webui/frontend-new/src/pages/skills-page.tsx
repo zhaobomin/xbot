@@ -31,6 +31,7 @@ import { Label } from "../components/ui/label";
 import { ConfirmDialog } from "../components/business/confirm-dialog";
 import { Skeleton } from "../components/ui/skeleton";
 import { Plus, Pencil, Trash2, AlertCircle } from "lucide-react";
+import { SectionHeader } from "../components/business/section-header";
 import {
     Tooltip,
     TooltipContent,
@@ -112,16 +113,24 @@ export default function Skills({ hideTitle }: { hideTitle?: boolean } = {}) {
 
     return (
         <div className="space-y-4">
-            <div className={hideTitle ? "flex justify-end" : "flex items-center justify-between"}>
-                {!hideTitle && <h1 className="text-2xl font-semibold">{t("skills.title")}</h1>}
-                <Button
-                    size="sm"
-                    onClick={() => { setTargetName(""); setMode("create"); }}
-                >
-                    <Plus className="mr-2 h-4 w-4" />
-                    {t("skills.add")}
-                </Button>
-            </div>
+            {!hideTitle ? (
+                <SectionHeader
+                    title={t("skills.title")}
+                    actions={
+                        <Button size="sm" onClick={() => { setTargetName(""); setMode("create"); }}>
+                            <Plus className="mr-2 h-4 w-4" />
+                            {t("skills.add")}
+                        </Button>
+                    }
+                />
+            ) : (
+                <div className="flex justify-end">
+                    <Button size="sm" onClick={() => { setTargetName(""); setMode("create"); }}>
+                        <Plus className="mr-2 h-4 w-4" />
+                        {t("skills.add")}
+                    </Button>
+                </div>
+            )}
 
             {isLoading ? (
                 <div className="space-y-2">{[...Array(4)].map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
@@ -140,7 +149,7 @@ export default function Skills({ hideTitle }: { hideTitle?: boolean } = {}) {
                         </TableHeader>
                         <TableBody>
                             {skills?.map((s) => (
-                                <TableRow key={s.name}>
+                                <TableRow key={s.name} className="hover:bg-muted/30">
                                     <TableCell className="font-mono font-medium">{s.name}</TableCell>
                                     <TableCell className="text-sm text-muted-foreground max-w-xs">
                                         <span className="line-clamp-2">{s.description || "\u2014"}</span>

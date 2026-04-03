@@ -1,22 +1,26 @@
 import { cn } from "../../lib/utils";
 
 interface SectionHeaderProps {
+    eyebrow?: string;
     title: string;
     description?: string;
-    action?: React.ReactNode;
+    actions?: React.ReactNode;
     className?: string;
 }
 
-export function SectionHeader({ title, description, action, className }: SectionHeaderProps) {
+export function SectionHeader({ eyebrow, title, description, actions, className }: SectionHeaderProps) {
     return (
-        <div className={cn("flex items-start justify-between gap-4", className)}>
+        <div className={cn("mb-6 flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between", className)}>
             <div className="min-w-0">
-                <h2 className="text-lg font-semibold tracking-tight text-foreground">{title}</h2>
+                {eyebrow && (
+                    <div className="mb-1.5 text-xs font-medium text-primary/70">{eyebrow}</div>
+                )}
+                <h1 className="text-xl font-semibold text-foreground">{title}</h1>
                 {description && (
-                    <p className="mt-0.5 text-sm text-muted-foreground">{description}</p>
+                    <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{description}</p>
                 )}
             </div>
-            {action && <div className="shrink-0">{action}</div>}
+            {actions && <div className="flex items-center gap-2 shrink-0">{actions}</div>}
         </div>
     );
 }

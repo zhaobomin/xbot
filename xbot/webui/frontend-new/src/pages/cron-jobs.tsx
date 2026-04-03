@@ -390,6 +390,7 @@ function JobsTab({
                                 <TableRow
                                     key={j.id}
                                     className={cn(
+                                        "hover:bg-muted/30",
                                         highlightJobId === j.id && "bg-primary/10 ring-1 ring-primary/30",
                                         cat === "disabled" && "opacity-60"
                                     )}

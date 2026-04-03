@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
+import { SectionHeader } from "../components/business/section-header";
 import api from "../lib/api";
 import { useAuthStore } from "../stores/auth-store";
 import { Badge } from "../components/ui/badge";
@@ -32,6 +33,8 @@ export default function Users() {
 
     return (
         <div className="space-y-4">
+            <SectionHeader title={t("nav.users")} />
+
             <div className="rounded-lg border bg-muted/30 p-4">
                 <div className="flex items-center gap-2">
                     <Badge>{t("users.singleAdminBadge")}</Badge>
@@ -64,7 +67,7 @@ export default function Users() {
                     </TableHeader>
                     <TableBody>
                         {users?.map((u) => (
-                            <TableRow key={u.id}>
+                            <TableRow key={u.id} className="hover:bg-muted/30">
                                 <TableCell className="font-mono font-medium">
                                     {u.username}
                                     {u.id === currentUser?.id && (

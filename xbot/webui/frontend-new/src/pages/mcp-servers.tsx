@@ -30,8 +30,10 @@ import {
 import { Badge } from "../components/ui/badge";
 import { ConfirmDialog } from "../components/business/confirm-dialog";
 import { Skeleton } from "../components/ui/skeleton";
-import { Plus, Pencil, Trash2, Terminal, Globe, Upload, Wrench, Power, Loader2 } from "lucide-react";
+import { Plus, Pencil, Trash2, Terminal, Globe, Upload, Wrench, Power, Loader2, Inbox } from "lucide-react";
 import { toast } from "sonner";
+import { SectionHeader } from "../components/business/section-header";
+import { EmptyState } from "../components/business/empty-state";
 
 type McpType = "stdio" | "http" | "sse";
 type DialogMode = "manual" | "json";
@@ -245,9 +247,24 @@ export default function MCPServers({ hideTitle }: { hideTitle?: boolean } = {}) 
     return (
         <div className="space-y-4">
             {/* Header */}
-            <div className="flex items-center justify-between">
-                {!hideTitle && <h1 className="text-2xl font-semibold">{t("mcp.title")}</h1>}
-                <div className="flex items-center gap-2 ml-auto">
+            {!hideTitle ? (
+                <SectionHeader
+                    title={t("mcp.title")}
+                    actions={
+                        <div className="flex items-center gap-2">
+                            <Button size="sm" variant="outline" onClick={() => openCreate("json")}>
+                                <Upload className="mr-2 h-4 w-4" />
+                                {t("mcp.importConfig")}
+                            </Button>
+                            <Button size="sm" onClick={() => openCreate("manual")}>
+                                <Plus className="mr-2 h-4 w-4" />
+                                {t("mcp.add")}
+                            </Button>
+                        </div>
+                    }
+                />
+            ) : (
+                <div className="flex items-center gap-2 justify-end">
                     <Button size="sm" variant="outline" onClick={() => openCreate("json")}>
                         <Upload className="mr-2 h-4 w-4" />
                         {t("mcp.importConfig")}
@@ -257,7 +274,7 @@ export default function MCPServers({ hideTitle }: { hideTitle?: boolean } = {}) 
                         {t("mcp.add")}
                     </Button>
                 </div>
-            </div>
+            )}
 
             {/* Summary bar */}
             {(servers && servers.length > 0) && (
@@ -292,7 +309,7 @@ export default function MCPServers({ hideTitle }: { hideTitle?: boolean } = {}) 
                         return (
                             <div
                                 key={s.name}
-                                className={`rounded-lg border bg-card relative overflow-hidden transition-colors hover:bg-muted/30${!isEnabled ? " opacity-60" : ""}`}
+                                className={`rounded-lg border bg-card relative overflow-hidden transition-all duration-200 hover:bg-muted/30 hover:-translate-y-0.5${!isEnabled ? " opacity-60" : ""}`}
                             >
                                 {/* left accent bar */}
                                 <div className={`absolute left-0 top-0 bottom-0 w-1 rounded-l-lg ${!isEnabled ? "bg-muted-foreground/20" : isRunning ? "bg-emerald-500" : "bg-muted-foreground/20"}`} />
@@ -308,8 +325,8 @@ export default function MCPServers({ hideTitle }: { hideTitle?: boolean } = {}) 
                                                 <Badge
                                                     variant="outline"
                                                     className={`text-xs gap-1 ${isRunning
-                                                            ? "border-emerald-500/40 text-emerald-600 bg-emerald-500/10"
-                                                            : "border-muted-foreground/30 text-muted-foreground"
+                                                        ? "border-emerald-500/40 text-emerald-600 bg-emerald-500/10"
+                                                        : "border-muted-foreground/30 text-muted-foreground"
                                                         }`}
                                                 >
                                                     <span className={`inline-block h-1.5 w-1.5 rounded-full ${isRunning ? "bg-emerald-500" : "bg-muted-foreground/50"
@@ -376,9 +393,7 @@ export default function MCPServers({ hideTitle }: { hideTitle?: boolean } = {}) 
                         );
                     })}
                     {(!servers || servers.length === 0) && (
-                        <div className="rounded-lg border border-dashed p-8 text-center text-muted-foreground text-sm">
-                            {t("common.noData")}
-                        </div>
+                        <EmptyState icon={Inbox} title={t("common.noData")} />
                     )}
                 </div>
             )}
@@ -394,8 +409,8 @@ export default function MCPServers({ hideTitle }: { hideTitle?: boolean } = {}) 
                         <div className="flex rounded-lg border p-0.5 gap-0.5 bg-muted/40 text-sm">
                             <button
                                 className={`flex-1 rounded-md px-3 py-1.5 transition-colors ${dialogMode === "json"
-                                        ? "bg-background shadow-sm font-medium"
-                                        : "text-muted-foreground hover:text-foreground"
+                                    ? "bg-background shadow-sm font-medium"
+                                    : "text-muted-foreground hover:text-foreground"
                                     }`}
                                 onClick={() => setDialogMode("json")}
                             >
@@ -403,8 +418,8 @@ export default function MCPServers({ hideTitle }: { hideTitle?: boolean } = {}) 
                             </button>
                             <button
                                 className={`flex-1 rounded-md px-3 py-1.5 transition-colors ${dialogMode === "manual"
-                                        ? "bg-background shadow-sm font-medium"
-                                        : "text-muted-foreground hover:text-foreground"
+                                    ? "bg-background shadow-sm font-medium"
+                                    : "text-muted-foreground hover:text-foreground"
                                     }`}
                                 onClick={() => setDialogMode("manual")}
                             >

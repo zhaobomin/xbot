@@ -17,6 +17,9 @@ import {
     XCircle,
 } from "lucide-react";
 import { cn } from "../lib/utils";
+import { SectionHeader } from "../components/business/section-header";
+import { EmptyState } from "../components/business/empty-state";
+import { Inbox } from "lucide-react";
 
 export default function Dashboard() {
     const { t } = useTranslation();
@@ -69,12 +72,14 @@ export default function Dashboard() {
 
     return (
         <div className="space-y-6">
+            <SectionHeader title={t("nav.dashboard")} />
+
             {/* Stat cards */}
             <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                 {stats.map((stat) => {
                     const Icon = stat.icon;
                     return (
-                        <Card key={stat.label} className="overflow-hidden">
+                        <Card key={stat.label} className="overflow-hidden transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover">
                             <CardContent className="p-3 sm:p-5">
                                 <div className="flex items-start justify-between gap-2">
                                     <div className="min-w-0">
@@ -128,9 +133,7 @@ export default function Dashboard() {
                             ))}
                         </div>
                     ) : !channels || channels.length === 0 ? (
-                        <p className="text-sm text-muted-foreground">
-                            {t("common.noData")}
-                        </p>
+                        <EmptyState icon={Inbox} title={t("common.noData")} />
                     ) : (
                         <div className="grid grid-cols-2 gap-2 sm:grid-cols-2 lg:grid-cols-3">
                             {channels.map((ch) => {
@@ -140,7 +143,7 @@ export default function Dashboard() {
                                     <div
                                         key={ch.name}
                                         className={cn(
-                                            "rounded-lg border p-3 flex flex-col gap-2 transition-colors",
+                                            "rounded-lg border p-3 flex flex-col gap-2 transition-all duration-200 hover:shadow-sm",
                                             hasError
                                                 ? "border-destructive/40 bg-destructive/5"
                                                 : isRunning

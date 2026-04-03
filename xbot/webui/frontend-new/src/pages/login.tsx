@@ -29,9 +29,11 @@ export default function Login() {
     const [username, setUsername] = useState("");
     const [password, setPassword] = useState("");
     const [loading, setLoading] = useState(false);
+    const [error, setError] = useState("");
 
     const handleLogin = async (e: React.FormEvent) => {
         e.preventDefault();
+        setError("");
         if (!username.trim() || !password.trim()) {
             toast.error(t("auth.fieldRequired"));
             return;
@@ -43,30 +45,22 @@ export default function Login() {
             setAuth(user, access_token);
             navigate("/dashboard");
         } catch {
-            toast.error(t("auth.loginFailed"));
+            setError(t("auth.loginFailed"));
         } finally {
             setLoading(false);
         }
     };
 
-    const LANG_LABELS: Record<string, string> = { zh: "中文", en: "English" };
+    const LANG_LABELS: Record<string, string> = { zh: "\u4e2d\u6587", en: "English" };
     const getLanguageLabel = () => LANG_LABELS[i18n.language] ?? "English";
 
     return (
-        <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gradient-to-br from-violet-50 via-white to-purple-100 dark:from-gray-950 dark:via-gray-900 dark:to-violet-950 px-4">
-            {/* Decorative background circles */}
-            <div className="absolute top-0 left-0 w-96 h-96 bg-violet-200/30 dark:bg-violet-900/20 rounded-full blur-3xl -translate-x-1/2 -translate-y-1/2" />
-            <div className="absolute bottom-0 right-0 w-96 h-96 bg-purple-300/30 dark:bg-purple-800/20 rounded-full blur-3xl translate-x-1/2 translate-y-1/2" />
-
+        <div className="relative flex min-h-screen items-center justify-center bg-background px-4">
             {/* Language switcher */}
             <div className="absolute top-4 right-4">
                 <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                        <Button
-                            variant="outline"
-                            size="sm"
-                            className="gap-2 backdrop-blur-sm bg-white/50 dark:bg-gray-900/50"
-                        >
+                        <Button variant="outline" size="sm" className="gap-2">
                             <Languages className="h-4 w-4" />
                             {getLanguageLabel()}
                         </Button>
@@ -84,20 +78,17 @@ export default function Login() {
                 </DropdownMenu>
             </div>
 
-            <Card className="w-full max-w-sm shadow-2xl backdrop-blur-sm bg-white/80 dark:bg-gray-900/80 border-violet-200/50 dark:border-violet-900/50 animate-in fade-in zoom-in duration-500">
+            <Card className="w-full max-w-sm rounded-2xl border border-border bg-card shadow-sm">
                 <CardHeader className="text-center space-y-3 pb-4">
                     <div className="flex justify-center">
-                        <div className="relative">
-                            <div className="absolute inset-0 rounded-3xl bg-violet-400/20 blur-xl animate-pulse" />
-                            <div className="relative flex h-16 min-w-[96px] items-center justify-center rounded-3xl border border-violet-200/70 bg-white/90 px-5 shadow-lg dark:border-violet-900/50 dark:bg-gray-900/90">
-                                <span className="text-3xl font-black lowercase tracking-tight bg-gradient-to-r from-violet-500 via-purple-500 to-indigo-600 bg-clip-text text-transparent">
-                                    xbot
-                                </span>
-                            </div>
+                        <div className="flex h-14 min-w-[84px] items-center justify-center rounded-2xl border border-border bg-secondary/50 px-5">
+                            <span className="text-2xl font-black lowercase tracking-tight bg-gradient-to-r from-violet-500 via-purple-500 to-indigo-600 bg-clip-text text-transparent">
+                                xbot
+                            </span>
                         </div>
                     </div>
                     <div>
-                        <CardTitle className="text-2xl font-bold bg-gradient-to-r from-violet-600 to-purple-500 bg-clip-text text-transparent">
+                        <CardTitle className="text-xl font-bold text-foreground">
                             xbot
                         </CardTitle>
                         <CardDescription className="text-sm mt-1">
@@ -107,12 +98,17 @@ export default function Login() {
                 </CardHeader>
                 <CardContent>
                     <form onSubmit={handleLogin} className="space-y-4">
+                        {error && (
+                            <div className="rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                                {error}
+                            </div>
+                        )}
                         <div className="space-y-2">
                             <Label htmlFor="username" className="text-sm font-medium">
                                 {t("auth.username")}
                             </Label>
                             <div className="relative">
-                                <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-primary" />
+                                <User className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                                 <Input
                                     id="username"
                                     value={username}
@@ -128,7 +124,7 @@ export default function Login() {
                                 {t("auth.password")}
                             </Label>
                             <div className="relative">
-                                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-primary" />
+                                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                                 <Input
                                     id="password"
                                     type="password"
@@ -142,8 +138,8 @@ export default function Login() {
                         </div>
                         <Button
                             type="submit"
-                            className="w-full h-10 mt-6 font-semibold shadow-xl shadow-primary/30 transition-all duration-300 hover:scale-[1.02]"
-                            disabled={loading}
+                            className="w-full h-10 mt-6 font-semibold"
+                            isLoading={loading}
                         >
                             {loading ? t("common.loading") : t("auth.loginButton")}
                         </Button>

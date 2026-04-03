@@ -167,7 +167,7 @@ export default function Chat() {
                             "w-full flex-1 min-h-0 pt-14 bg-background",
                             mobileShowChat && "hidden"
                         )
-                        : "w-52 min-w-0 rounded-xl bg-card"
+                        : "w-52 min-w-0 rounded-xl border border-border bg-card"
                 )}
                 style={
                     isMobile
@@ -382,7 +382,7 @@ export default function Chat() {
                             "w-full flex-1 min-h-0",
                             !mobileShowChat && "hidden"
                         )
-                        : "flex-1 rounded-xl bg-card"
+                        : "flex-1 rounded-xl border border-border bg-card"
                 )}
                 style={
                     isMobile ? undefined : { boxShadow: "var(--shadow-card)" }

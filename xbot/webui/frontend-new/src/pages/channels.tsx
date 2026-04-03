@@ -26,6 +26,7 @@ import { Skeleton } from "../components/ui/skeleton";
 import { RefreshCw, ChevronDown, ChevronRight, QrCode, CheckCircle2, Clock } from "lucide-react";
 import { isMasked } from "../lib/utils";
 import { toast } from "sonner";
+import { SectionHeader } from "../components/business/section-header";
 
 import { CHANNEL_ICONS } from "../lib/channel-icons";
 
@@ -168,17 +169,20 @@ export default function Channels() {
 
     return (
         <div className="space-y-4">
-            <div className="flex justify-end">
-                <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => reloadAll.mutate()}
-                    disabled={reloadAll.isPending}
-                >
-                    <RefreshCw className="mr-2 h-4 w-4" />
-                    {t("channels.reloadAll")}
-                </Button>
-            </div>
+            <SectionHeader
+                title={t("nav.channels")}
+                actions={
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => reloadAll.mutate()}
+                        disabled={reloadAll.isPending}
+                    >
+                        <RefreshCw className="mr-2 h-4 w-4" />
+                        {t("channels.reloadAll")}
+                    </Button>
+                }
+            />
 
             {isLoading ? (
                 <div className="space-y-3">
@@ -193,7 +197,7 @@ export default function Channels() {
                             ([k, v]) => k !== "enabled" && k !== "loggedIn" && (typeof v === "string" || typeof v === "number" || typeof v === "boolean" || Array.isArray(v))
                         );
                         return (
-                            <Card key={ch.name} className={ch.enabled ? "" : "opacity-60"}>
+                            <Card key={ch.name} className={`transition-all duration-200 hover:-translate-y-0.5 hover:shadow-sm${ch.enabled ? "" : " opacity-60"}`}>
                                 <CardHeader className="flex flex-row items-center gap-3 py-3 px-4">
                                     <button
                                         className="flex flex-1 items-center gap-3 text-left"

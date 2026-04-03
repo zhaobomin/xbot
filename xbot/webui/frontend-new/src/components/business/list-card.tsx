@@ -25,7 +25,7 @@ export function ListCard({
     return (
         <Card
             className={cn(
-                "transition-shadow hover:shadow-panel",
+                "transition-all duration-200 hover:-translate-y-0.5 hover:shadow-card-hover",
                 onClick && "cursor-pointer",
                 className
             )}
