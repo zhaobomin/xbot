@@ -85,9 +85,45 @@ def main():
     print()
 
     # ---------------------------------------------------------------
-    # Step 2: 给没有 frontmatter 的文件添加
+    # Step 2: 如果 MEMORY.md 是旧的内联内容，先备份到 legacy-memory.md
     # ---------------------------------------------------------------
-    print("[Step 2] 检查需要添加 frontmatter 的文件...\n")
+    print("[Step 2] 检查 MEMORY.md 是否包含旧的内联内容...\n")
+    if INDEX_PATH.exists():
+        index_content = INDEX_PATH.read_text(encoding="utf-8").strip()
+        # 新格式索引的每一行都以 "- [" 开头（或 "> WARNING"），
+        # 如果超过一半的行不是这种格式，说明是旧的内联内容
+        idx_lines = [l for l in index_content.splitlines() if l.strip()]
+        non_index = sum(
+            1 for l in idx_lines
+            if not l.strip().startswith("- [") and not l.strip().startswith("> WARNING")
+        )
+        is_legacy = len(idx_lines) > 0 and non_index > len(idx_lines) * 0.5
+
+        if is_legacy:
+            backup_path = MEMORY_DIR / "project" / "legacy-memory.md"
+            desc = extract_description(index_content)
+            print(f"  MEMORY.md 包含旧格式内联内容 ({len(index_content)}B)")
+            print(f"  将备份到: project/legacy-memory.md")
+            print(f"  -> description: {desc}")
+
+            if not DRY_RUN:
+                backup_path.parent.mkdir(parents=True, exist_ok=True)
+                if not backup_path.exists():
+                    new_content = add_frontmatter(index_content, "Legacy Memory", desc, "project")
+                    backup_path.write_text(new_content, encoding="utf-8")
+                    print(f"  ✓ 已备份旧内容到 project/legacy-memory.md")
+                else:
+                    print(f"  ! project/legacy-memory.md 已存在，跳过备份")
+            print()
+        else:
+            print(f"  MEMORY.md 已经是索引格式，无需备份。\n")
+    else:
+        print(f"  MEMORY.md 不存在，跳过。\n")
+
+    # ---------------------------------------------------------------
+    # Step 3: 给没有 frontmatter 的文件添加
+    # ---------------------------------------------------------------
+    print("[Step 3] 检查需要添加 frontmatter 的文件...\n")
     files_to_fix = []
     for f in all_files:
         if f.name == "MEMORY.md":
@@ -116,11 +152,11 @@ def main():
             print()
 
     # ---------------------------------------------------------------
-    # Step 3: 检查 project/legacy-memory.md 的 description
+    # Step 4: 检查 project/legacy-memory.md 的 description
     # ---------------------------------------------------------------
     legacy_path = MEMORY_DIR / "project" / "legacy-memory.md"
     if legacy_path.exists():
-        print("[Step 3] 检查 legacy-memory.md 的 description...\n")
+        print("[Step 4] 检查 legacy-memory.md 的 description...\n")
         content = legacy_path.read_text(encoding="utf-8")
         if "Migrated from old MEMORY.md" in content:
             # 提取更好的 description
@@ -142,9 +178,9 @@ def main():
         print()
 
     # ---------------------------------------------------------------
-    # Step 4: 重建 MEMORY.md 索引
+    # Step 5: 重建 MEMORY.md 索引
     # ---------------------------------------------------------------
-    print("[Step 4] 重建 MEMORY.md 索引...\n")
+    print("[Step 5] 重建 MEMORY.md 索引...\n")
     if DRY_RUN:
         print("  (dry-run 跳过，apply 模式会自动重建)")
     else:
