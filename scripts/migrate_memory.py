@@ -1,27 +1,20 @@
 #!/usr/bin/env python3
 """
-xbot memory 迁移辅助脚本
+xbot memory 迁移脚本
 
 功能：
   1. 扫描 memory 目录，显示文件状态
-  2. 如果 MEMORY.md 是旧的内联内容，备份到 workspace 根目录
-  3. 重建 MEMORY.md 索引
-
-不会自动添加 frontmatter 或修改任何 memory 文件内容。
-frontmatter 格式参考（需要你手动添加到每个 .md 文件开头）：
-
-  ---
-  name: 文件显示名称
-  description: 一句话描述，用于关键词匹配
-  type: user|project|entity
-  updated_at: 2026-04-05T00:00:00
-  ---
+  2. 如果 MEMORY.md 是旧内联内容，保存为 legacy-memory.md 并加 frontmatter
+  3. 给所有缺少 frontmatter 的 .md 文件统一添加 frontmatter
+  4. 重建 MEMORY.md 索引
 
 使用方法:
   python3 migrate_memory.py [workspace_path]          # dry-run
   python3 migrate_memory.py [workspace_path] --apply  # 执行
 """
+import re
 import sys
+from datetime import datetime
 from pathlib import Path
 
 
@@ -30,10 +23,9 @@ def has_frontmatter(content: str) -> bool:
 
 
 def is_index_format(content: str) -> bool:
-    """判断内容是否是新格式的索引（每行都是 '- [' 或 '> WARNING'）"""
     lines = [l for l in content.strip().splitlines() if l.strip()]
     if not lines:
-        return True  # 空文件视为有效索引
+        return True
     non_index = sum(
         1 for l in lines
         if not l.strip().startswith("- [") and not l.strip().startswith("> WARNING")
@@ -41,8 +33,45 @@ def is_index_format(content: str) -> bool:
     return non_index <= len(lines) * 0.5
 
 
+def extract_description(body: str, limit: int = 100) -> str:
+    """提取干净的描述文本，去掉 markdown 格式符号。"""
+    parts = []
+    total = 0
+    for line in body.splitlines():
+        # 去掉 markdown 标记
+        stripped = line.strip()
+        stripped = re.sub(r"^#{1,6}\s+", "", stripped)       # 标题
+        stripped = re.sub(r"^>\s*", "", stripped)             # 引用
+        stripped = re.sub(r"^[-*]\s+", "", stripped)          # 列表
+        stripped = re.sub(r"^\d+\.\s+", "", stripped)         # 有序列表
+        stripped = re.sub(r"\*\*([^*]+)\*\*", r"\1", stripped)  # 粗体
+        stripped = re.sub(r"[`*_~]", "", stripped)            # 内联格式
+        stripped = stripped.strip()
+        if not stripped or stripped == "---":
+            continue
+        needed = len(stripped) + (2 if parts else 0)
+        if total + needed > limit:
+            if not parts:
+                return stripped[:limit - 1] + "…"
+            break
+        parts.append(stripped)
+        total += needed
+    return "; ".join(parts) if parts else "Memory topic"
+
+
+def make_frontmatter(name: str, description: str, memory_type: str) -> str:
+    now = datetime.now().isoformat(timespec="seconds")
+    return (
+        "---\n"
+        f"name: {name}\n"
+        f"description: {description}\n"
+        f"type: {memory_type}\n"
+        f"updated_at: {now}\n"
+        "---\n\n"
+    )
+
+
 def main():
-    # 解析参数
     args = [a for a in sys.argv[1:] if a != "--apply"]
     apply_mode = "--apply" in sys.argv
     workspace = Path(args[0]) if args else Path("/home/xbot/.xbot/workspace")
@@ -68,7 +97,6 @@ def main():
     # ------------------------------------------------------------------
     print("[Step 1] 扫描 memory 目录...\n")
     all_files = sorted(memory_dir.rglob("*.md"))
-    need_frontmatter = []
     for f in all_files:
         rel = str(f.relative_to(memory_dir))
         size = f.stat().st_size
@@ -79,50 +107,72 @@ def main():
             status = "OK"
         else:
             status = "!! 缺少 frontmatter"
-            need_frontmatter.append(rel)
         print(f"  {rel:<40s}  {size:>6d}B  {status}")
     print()
 
-    if need_frontmatter:
-        print("  以下文件缺少 frontmatter，请手动添加：")
-        for rel in need_frontmatter:
-            print(f"    - {rel}")
-        print()
-        print("  frontmatter 格式：")
-        print("    ---")
-        print("    name: 显示名称")
-        print("    description: 一句话描述（用于关键词匹配召回）")
-        print("    type: user|project|entity")
-        print("    updated_at: 2026-04-05T00:00:00")
-        print("    ---")
-        print()
-
     # ------------------------------------------------------------------
-    # Step 2: 备份旧 MEMORY.md
+    # Step 2: 如果 MEMORY.md 是旧内联内容，保存为 legacy-memory.md
     # ------------------------------------------------------------------
     print("[Step 2] 检查 MEMORY.md...\n")
+    legacy_saved = False
     if index_path.exists():
         content = index_path.read_text(encoding="utf-8")
         if is_index_format(content):
-            print("  已经是索引格式，无需备份。\n")
+            print("  已经是索引格式，无需迁移。\n")
         else:
-            backup_path = workspace / "MEMORY_BACKUP.md"
-            print(f"  包含旧的内联内容 ({len(content.strip())}B)")
-            print(f"  备份到: {backup_path}")
+            legacy_path = memory_dir / "legacy-memory.md"
+            name = "Legacy Memory"
+            desc = extract_description(content)
+            print(f"  包含旧内联内容 ({len(content.strip())}B)")
+            print(f"  -> 保存为: legacy-memory.md")
+            print(f"  -> name: {name}")
+            print(f"  -> description: {desc}")
+            print(f"  -> type: project")
             if apply_mode:
-                if not backup_path.exists():
-                    backup_path.write_text(content, encoding="utf-8")
-                    print("  -> 已备份")
+                if not legacy_path.exists():
+                    fm = make_frontmatter(name, desc, "project")
+                    legacy_path.write_text(fm + content.strip() + "\n", encoding="utf-8")
+                    print("  ✓ 已保存")
+                    legacy_saved = True
                 else:
-                    print("  -> MEMORY_BACKUP.md 已存在，跳过")
+                    print("  ! legacy-memory.md 已存在，跳过")
             print()
     else:
         print("  MEMORY.md 不存在。\n")
 
     # ------------------------------------------------------------------
-    # Step 3: 重建索引
+    # Step 3: 统一给所有缺 frontmatter 的文件添加
     # ------------------------------------------------------------------
-    print("[Step 3] 重建 MEMORY.md 索引...\n")
+    print("[Step 3] 统一添加 frontmatter...\n")
+    # 重新扫描（Step 2 可能新增了 legacy-memory.md）
+    target_files = sorted(memory_dir.rglob("*.md"))
+    count = 0
+    for f in target_files:
+        if f.name == "MEMORY.md":
+            continue
+        content = f.read_text(encoding="utf-8")
+        if has_frontmatter(content):
+            continue
+        name = f.stem.replace("_", " ").replace("-", " ").title()
+        desc = extract_description(content)
+        print(f"  {str(f.relative_to(memory_dir))}")
+        print(f"    -> name: {name}")
+        print(f"    -> description: {desc}")
+        print(f"    -> type: project")
+        if apply_mode:
+            fm = make_frontmatter(name, desc, "project")
+            f.write_text(fm + content.strip() + "\n", encoding="utf-8")
+            print(f"    ✓ 已添加")
+        count += 1
+        print()
+
+    if count == 0:
+        print("  所有文件都已有 frontmatter。\n")
+
+    # ------------------------------------------------------------------
+    # Step 4: 重建索引
+    # ------------------------------------------------------------------
+    print("[Step 4] 重建 MEMORY.md 索引...\n")
     if apply_mode:
         try:
             proj_root = str(Path(__file__).resolve().parent.parent)
@@ -131,7 +181,7 @@ def main():
             from xbot.memory.memdir.store import MemoryDirStore
             store = MemoryDirStore(workspace)
             store.rebuild_index()
-            print("  -> 索引已重建\n")
+            print("  ✓ 索引已重建\n")
             print("  新的 MEMORY.md:")
             print("  " + "-" * 50)
             for line in index_path.read_text(encoding="utf-8").splitlines():
@@ -145,15 +195,17 @@ def main():
 
     if not apply_mode:
         print("=" * 60)
-        print("  确认无误后运行:")
+        print("  以上是 dry-run 预览。确认后运行:")
         print(f"  python3 {sys.argv[0]} {workspace} --apply")
+        print()
+        print("  apply 后如需调整 type 或 description，")
+        print("  直接编辑对应文件的 frontmatter 然后重新运行即可。")
         print("=" * 60)
     else:
         print("=" * 60)
-        print("  完成！")
-        if need_frontmatter:
-            print("  注意：还有文件缺少 frontmatter，请手动添加后")
-            print("  重新运行此脚本来更新索引。")
+        print("  迁移完成！")
+        print("  如需调整 type 或 description，直接编辑文件的")
+        print("  frontmatter，然后重新运行此脚本更新索引。")
         print("=" * 60)
 
 
