@@ -58,6 +58,7 @@ def _make_header(
     description: str,
     filename: str = "test.md",
     file_path: Path | None = None,
+    memory_type: str = "project",
 ) -> MemoryHeader:
     return MemoryHeader(
         filename=filename,
@@ -65,7 +66,7 @@ def _make_header(
         mtime_ms=1000.0,
         name=name,
         description=description,
-        memory_type="project",
+        memory_type=memory_type,
     )
 
 
@@ -90,10 +91,10 @@ class TestSelectRelevantMemoriesCjk:
             _make_header("Dashboard", "latency monitoring", "dashboard.md"),
         ]
         result = select_relevant_memories("用户偏好设置", headers)
-        assert len(result) == 0
+        assert not any(h.name == "Dashboard" for h in result)
 
     def test_single_chinese_char_returns_empty(self) -> None:
-        """Single char generates no bigrams -> returns empty."""
+        """Single char generates no bigrams -> returns empty (no user-type headers)."""
         headers = [
             _make_header("用户信息", "阿六的信息", "user.md"),
         ]
@@ -141,7 +142,53 @@ class TestSelectRelevantMemoriesCjk:
             _make_header("高匹配", "阿六老板的偏好设置", "high.md"),
         ]
         result = select_relevant_memories("阿六老板的偏好", headers)
-        assert result[0].name == "高匹配"
+        # Filter out any always-surfaced user-type headers
+        non_user = [h for h in result if h.memory_type != "user"]
+        assert non_user[0].name == "高匹配"
+
+
+# ---------------------------------------------------------------------------
+# user-type memories always surfaced
+# ---------------------------------------------------------------------------
+
+class TestUserTypeAlwaysSurfaced:
+    def test_user_type_returned_even_without_keyword_match(self) -> None:
+        """user-type memories should always be returned regardless of query."""
+        headers = [
+            _make_header("用户信息", "阿六老板的个人信息", "profile.md", memory_type="user"),
+            _make_header("项目状态", "xbot deployment", "project.md"),
+        ]
+        result = select_relevant_memories("今天天气怎么样", headers)
+        assert any(h.name == "用户信息" for h in result)
+
+    def test_user_type_returned_on_empty_query(self) -> None:
+        """Empty query still returns user-type headers."""
+        headers = [
+            _make_header("偏好设置", "输出格式", "prefs.md", memory_type="user"),
+        ]
+        result = select_relevant_memories("", headers)
+        assert len(result) == 1
+
+    def test_user_type_plus_keyword_match(self) -> None:
+        """user-type always included + keyword-matched project headers."""
+        headers = [
+            _make_header("用户信息", "阿六", "profile.md", memory_type="user"),
+            _make_header("xbot 项目", "xbot项目配置", "xbot.md"),
+            _make_header("天气预报", "北京今日天气", "weather.md"),
+        ]
+        result = select_relevant_memories("xbot 项目配置", headers)
+        names = [h.name for h in result]
+        assert "用户信息" in names
+        assert "xbot 项目" in names
+        assert "天气预报" not in names
+
+    def test_user_type_not_duplicated_when_also_keyword_matched(self) -> None:
+        """If a user-type header also matches keywords, it should appear only once."""
+        headers = [
+            _make_header("用户信息", "阿六老板的偏好", "profile.md", memory_type="user"),
+        ]
+        result = select_relevant_memories("阿六老板", headers)
+        assert len(result) == 1
 
 
 # ---------------------------------------------------------------------------

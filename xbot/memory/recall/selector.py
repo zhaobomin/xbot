@@ -19,23 +19,30 @@ def _extract_cjk_bigrams(text: str) -> set[str]:
 
 
 def select_relevant_memories(query: str, headers: list[MemoryHeader]) -> list[MemoryHeader]:
+    # user-type memories are always relevant (identity, preferences, etc.)
+    always = [h for h in headers if h.memory_type == "user"]
+
     if not query or not query.strip():
-        return []
+        return always[:MAX_RELEVANT_MEMORIES]
     # ASCII word tokens (min length 3)
     ascii_terms = {token.lower() for token in re.findall(r"[a-zA-Z0-9_-]+", query) if len(token) > 2}
     # CJK character bigrams for Chinese/Japanese/Korean matching
     cjk_terms = _extract_cjk_bigrams(query)
     # Require at least 2 ASCII terms or any CJK bigrams to avoid over-broad matching
     if not cjk_terms and len(ascii_terms) <= 1:
-        return []
+        return always[:MAX_RELEVANT_MEMORIES]
     if not ascii_terms and not cjk_terms:
-        return []
+        return always[:MAX_RELEVANT_MEMORIES]
+    always_paths = {h.file_path for h in always}
     scored: list[tuple[int, MemoryHeader]] = []
     for header in headers:
+        if header.file_path in always_paths:
+            continue  # already included
         haystack = f"{header.name or ''} {header.filename} {header.description or ''}".lower()
         score = sum(1 for term in ascii_terms if term in haystack)
         score += sum(1 for bigram in cjk_terms if bigram in haystack)
         if score > 0:
             scored.append((score, header))
     scored.sort(key=lambda item: (item[0], item[1].mtime_ms), reverse=True)
-    return [header for _, header in scored[:MAX_RELEVANT_MEMORIES]]
+    remaining = MAX_RELEVANT_MEMORIES - len(always)
+    return always + [header for _, header in scored[:remaining]]
