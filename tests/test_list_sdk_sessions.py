@@ -26,13 +26,11 @@ class TestListSdkSessions:
         """List sessions with default parameters."""
         backend = _create_backend()
 
-        created_at = int(datetime(2026, 3, 30, 10, 0, 0).timestamp())
         last_modified = int(datetime(2026, 3, 30, 11, 0, 0).timestamp())
         session = SDKSessionInfo(
             session_id="sdk_123",
             summary="Fallback Summary",
             custom_title="Test Session",
-            created_at=created_at,
             last_modified=last_modified,
             file_size=2048,
         )
@@ -46,7 +44,7 @@ class TestListSdkSessions:
             assert len(result["sessions"]) == 1
             assert result["sessions"][0]["session_id"] == "sdk_123"
             assert result["sessions"][0]["title"] == "Test Session"
-            assert result["sessions"][0]["created_at"] == datetime.fromtimestamp(created_at).isoformat()
+            assert result["sessions"][0]["created_at"] is None
             assert result["sessions"][0]["updated_at"] == datetime.fromtimestamp(last_modified).isoformat()
             assert result["sessions"][0]["file_size"] == 2048
             mock_list.assert_called_once()
@@ -59,7 +57,6 @@ class TestListSdkSessions:
             session_id="sdk_456",
             summary="Summary Title",
             custom_title=None,
-            created_at=None,
             last_modified=last_modified,
             file_size=None,
         )
@@ -159,7 +156,6 @@ class TestListSdkSessions:
                 session_id=f"sdk_{i}",
                 summary=f"Session {i}",
                 custom_title=None,
-                created_at=None,
                 last_modified=int(datetime(2026, 3, 30, 12, 0, 0).timestamp()) + i,
                 file_size=i,
             )

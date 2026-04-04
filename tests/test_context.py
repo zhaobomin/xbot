@@ -1,8 +1,6 @@
 """Tests for context builder."""
 
 from pathlib import Path
-from unittest.mock import MagicMock, patch
-
 import pytest
 
 from xbot.agent.context.builder import ContextBuilder
@@ -19,12 +17,12 @@ class TestContextBuilder:
     @pytest.fixture
     def builder(self, workspace: Path) -> ContextBuilder:
         """Create a context builder."""
-        return ContextBuilder(workspace, use_reme=False)
+        return ContextBuilder(workspace)
 
     def test_init(self, builder: ContextBuilder, workspace: Path) -> None:
         """Test initialization."""
         assert builder.workspace == workspace
-        assert builder.using_reme is False
+        assert builder.memory is not None
 
     def test_bootstrap_files_constant(self) -> None:
         """Test that bootstrap files are defined."""
@@ -62,7 +60,7 @@ class TestContextBuilder:
         agents_file = workspace / "AGENTS.md"
         agents_file.write_text("# Agent Instructions\n\nBe helpful.")
 
-        builder = ContextBuilder(workspace, use_reme=False)
+        builder = ContextBuilder(workspace)
         result = builder._load_bootstrap_files()
 
         assert "AGENTS.md" in result
@@ -73,7 +71,7 @@ class TestContextBuilder:
         (workspace / "AGENTS.md").write_text("Agent content")
         (workspace / "SOUL.md").write_text("Soul content")
 
-        builder = ContextBuilder(workspace, use_reme=False)
+        builder = ContextBuilder(workspace)
         result = builder._load_bootstrap_files()
 
         assert "AGENTS.md" in result
@@ -162,17 +160,6 @@ class TestContextBuilder:
         assert result[0]["role"] == "assistant"
         assert result[0]["tool_calls"] == tool_calls
 
-
-class TestContextBuilderWithReMe:
-    """Tests for ContextBuilder with ReMe."""
-
-    def test_reme_not_available_fallback(self, tmp_path: Path) -> None:
-        """Test fallback when ReMe is not available."""
-        with patch("xbot.agent.memory.reme._REME_AVAILABLE", False):
-            builder = ContextBuilder(tmp_path, use_reme=True)
-            assert builder.using_reme is False
-
-    def test_reme_disabled(self, tmp_path: Path) -> None:
-        """Test with ReMe explicitly disabled."""
-        builder = ContextBuilder(tmp_path, use_reme=False)
-        assert builder.using_reme is False
+def test_context_builder_uses_claude_style_memory_by_default(tmp_path: Path) -> None:
+    builder = ContextBuilder(tmp_path)
+    assert builder.memory.index_path.name == "MEMORY.md"

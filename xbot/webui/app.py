@@ -27,6 +27,7 @@ from pydantic import BaseModel, Field, SecretStr
 
 from xbot.config.schema import MCPServerConfig
 from xbot.cron.types import CronPayload, CronSchedule
+from xbot.memory.integration.api import read_workspace_memory_snapshot
 from xbot.webui.auth import AuthManager, UserStore
 from xbot.webui.services import ServiceContainer
 from xbot.webui.session_keys import to_internal_session_key
@@ -375,16 +376,11 @@ def create_app(
     async def get_session_memory(
         session_key: str,
         authorization: str | None = Header(default=None),
-    ) -> dict[str, str]:
+    ) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
         session_key  # reserved for future per-session memory lookup
         workspace = container.config.workspace_path
-        memory_file = workspace / "MEMORY.md"
-        history_file = workspace / "HISTORY.md"
-        return {
-            "memory": memory_file.read_text(encoding="utf-8") if memory_file.exists() else "",
-            "history": history_file.read_text(encoding="utf-8") if history_file.exists() else "",
-        }
+        return read_workspace_memory_snapshot(workspace)
 
     @app.delete("/api/sessions/{session_key:path}/messages/{index}")
     async def revoke_session_message(

@@ -49,7 +49,7 @@ class TestDeleteSdkSession:
         backend._get_sdk_session_id_from_entry = MagicMock(return_value="sdk_123")
 
         # Mock delete_session
-        with patch("claude_agent_sdk.delete_session") as mock_delete:
+        with patch("claude_agent_sdk.delete_session", create=True) as mock_delete:
             result = await backend.delete_sdk_session("session1")
 
             assert result["deleted"] is True
@@ -74,7 +74,7 @@ class TestDeleteSdkSession:
         backend._get_sdk_session_id_from_entry = MagicMock(return_value="sdk_123")
         backend._set_sdk_session_id_in_entry = AsyncMock()
 
-        with patch("claude_agent_sdk.delete_session"):
+        with patch("claude_agent_sdk.delete_session", create=True):
             await backend.delete_sdk_session("session1")
 
             # Verify the SDK session ID was cleared
@@ -87,7 +87,7 @@ class TestDeleteSdkSession:
         backend._get_sdk_session_id_from_entry = MagicMock(return_value="sdk_123")
         backend._set_sdk_session_id_in_entry = AsyncMock()
 
-        with patch("claude_agent_sdk.delete_session") as mock_delete:
+        with patch("claude_agent_sdk.delete_session", create=True) as mock_delete:
             mock_delete.side_effect = FileNotFoundError("File not found")
 
             result = await backend.delete_sdk_session("session1")
@@ -101,7 +101,7 @@ class TestDeleteSdkSession:
         backend = _create_backend()
         backend._get_sdk_session_id_from_entry = MagicMock(return_value="sdk_123")
 
-        with patch("claude_agent_sdk.delete_session") as mock_delete:
+        with patch("claude_agent_sdk.delete_session", create=True) as mock_delete:
             mock_delete.side_effect = PermissionError("Permission denied")
 
             result = await backend.delete_sdk_session("session1")
@@ -123,7 +123,7 @@ class TestDeleteSdkSession:
         backend.sessions.save = MagicMock()
         backend._set_sdk_session_id_in_entry = AsyncMock()
 
-        with patch("claude_agent_sdk.delete_session"):
+        with patch("claude_agent_sdk.delete_session", create=True):
             await backend.delete_sdk_session("session1")
 
             # Verify the session metadata was updated
@@ -158,7 +158,7 @@ class TestDeleteSdkSessionEdgeCases:
         backend._shared_resources = {"_session_contexts": {"session1": "sdk_abc123xyz"}}
         backend._sdk_session_ids = {"sdk_abc123xyz": "session1"}
 
-        with patch("claude_agent_sdk.delete_session"):
+        with patch("claude_agent_sdk.delete_session", create=True):
             result = await backend.delete_sdk_session("session1")
 
             assert result["sdk_session_id"] == "sdk_abc123xyz"
@@ -181,7 +181,7 @@ class TestDeleteSdkSessionStateConsistency:
         backend._active_task_ids = {"session1": "task1"}
         backend._active_request_ids = {"session1": "uuid1"}
 
-        with patch("claude_agent_sdk.delete_session"):
+        with patch("claude_agent_sdk.delete_session", create=True):
             await backend.delete_sdk_session("session1")
 
             assert "session1" not in backend._clients
@@ -207,7 +207,7 @@ class TestDeleteSdkSessionStateConsistency:
         backend.sessions.get = MagicMock(return_value=mock_session)
         backend.sessions.save = MagicMock()
 
-        with patch("claude_agent_sdk.delete_session") as mock_delete:
+        with patch("claude_agent_sdk.delete_session", create=True) as mock_delete:
             result = await backend.delete_sdk_session("session1")
 
             assert result["deleted"] is True

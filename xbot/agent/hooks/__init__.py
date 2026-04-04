@@ -55,6 +55,7 @@ class CompactHookHandler:
         self,
         enabled: bool = True,
         message_callback: Callable[[str, str], None] | None = None,
+        pre_compact_callbacks: list[Callable[[str], Any]] | None = None,
     ):
         """Initialize the compact hook handler.
 
@@ -63,9 +64,12 @@ class CompactHookHandler:
             message_callback: Optional async callback(session_id, message) to send
                              notification to the user's channel. The callback receives
                              the session_id and the notification message.
+            pre_compact_callbacks: Optional list of async callbacks(session_key) invoked
+                                  before compaction (e.g. memory extraction, session summary).
         """
         self.enabled = enabled
         self.message_callback = message_callback
+        self.pre_compact_callbacks = pre_compact_callbacks or []
         self._recent_events: list[CompactEvent] = []
 
     async def __call__(
@@ -150,6 +154,16 @@ class CompactHookHandler:
             except Exception as e:
                 logger.warning(f"Failed to send compact notification: {e}")
 
+        # Fire pre-compact callbacks (e.g. memory extraction, session summary).
+        # Errors are logged but never block the compaction itself.
+        for cb in self.pre_compact_callbacks:
+            try:
+                result = cb(str(session_key))
+                if inspect.isawaitable(result):
+                    await result
+            except Exception as e:
+                logger.warning("[PreCompact Hook] pre_compact_callback failed: %s", e)
+
         # Return notification message as systemMessage for CLI
         return {
             "systemMessage": notification_msg
@@ -179,6 +193,7 @@ class CompactHookHandler:
 def build_compact_hook(
     enabled: bool = True,
     message_callback: Callable[[str, str], None] | None = None,
+    pre_compact_callbacks: list[Callable[[str], Any]] | None = None,
 ) -> dict[str, list]:
     """Build the PreCompact hook configuration.
 
@@ -186,6 +201,8 @@ def build_compact_hook(
         enabled: Whether to enable compaction notifications
         message_callback: Optional callback(session_key, message) to send
                          notification to the user's channel.
+        pre_compact_callbacks: Optional list of async callbacks(session_key)
+                              invoked before compaction begins.
 
     Returns:
         Hook configuration dict for ClaudeAgentOptions.hooks
@@ -198,7 +215,11 @@ def build_compact_hook(
     if not enabled:
         return {}
 
-    handler = CompactHookHandler(enabled=True, message_callback=message_callback)
+    handler = CompactHookHandler(
+        enabled=True,
+        message_callback=message_callback,
+        pre_compact_callbacks=pre_compact_callbacks or [],
+    )
     return {
         "PreCompact": [{"hooks": [handler]}]
     }

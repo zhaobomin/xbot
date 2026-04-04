@@ -81,10 +81,6 @@ class ClaudeSDKAgentConfig(Base):
     compact_notify: bool = True  # 是否在压缩上下文时发送通知
     include_partial_messages: bool = False  # Disable SDK partial/delta messages by default for stable output
     extra_args: dict[str, str | None] = Field(default_factory=dict)  # Extra Claude Code CLI flags
-    # Memory consolidation 策略："off"=禁用，"async"=异步后台，"sync"=同步阻塞
-    # 默认禁用，避免异步任务阻塞和 ReMe 初始化超时问题。需要时可手动启用 "async"
-    memory_consolidation_mode: Literal["off", "async", "sync"] = "off"
-
     # Client pool configuration
     max_clients: int = Field(default=100, description="Maximum number of concurrent SDK clients in the pool")
     client_ttl_seconds: int = Field(default=3600, description="Time-to-live for idle clients in seconds (1 hour)")
@@ -209,10 +205,11 @@ class ExecToolConfig(Base):
 class MemoryConfig(Base):
     """Memory system configuration."""
 
-    provider: Literal["file", "reme"] = "reme"  # Memory backend
-    enable_vector_search: bool = False  # Enable vector search (requires more memory)
-    llm_model: str = "gpt-4.1-nano"  # LLM for summarization
-    embedding_model: str = "text-embedding-3-small"  # Embedding model for vector search
+    auto_memory_enabled: bool = True
+    extract_memories_enabled: bool = True
+    auto_dream_enabled: bool = True
+    auto_dream_min_hours: int = 24
+    auto_dream_min_sessions: int = 5
 
 
 class MCPServerConfig(Base):

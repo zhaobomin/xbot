@@ -28,11 +28,13 @@ from xbot.agent.capabilities.catalog import CapabilityCatalog, canonical_tool_na
 from xbot.agent.capabilities.policy import CapabilityPolicy
 from xbot.agent.context.builder import ContextBuilder
 from xbot.agent.capabilities.handoff import HandoffPolicy
-from xbot.agent.memory.store import MemoryConsolidator
 from xbot.agent.interaction.event_formatter import (
     format_compact_event,
     format_task_notification,
 )
+from xbot.memory.integration.turn_hooks import MemoryTurnHooks
+from xbot.memory.workers.auto_dream import AutoDreamWorker, execute_auto_dream
+from xbot.memory.workers.extract_memories import ExtractMemoriesWorker, execute_extract_memories
 from xbot.agent.protocol import AgentBackend, AgentContext, AgentResponse
 from xbot.agent.monitoring.trace import append_session_trace
 from xbot.agent.tools.base import Tool
@@ -152,7 +154,7 @@ class ClaudeSDKBackend(AgentBackend):
         self._session_commands: dict[str, list[str]] = {}
         self.tools: Any = None
         self.sessions: SessionManager | None = None
-        self.memory_consolidator: MemoryConsolidator | None = None
+        self.memory_turn_hooks: MemoryTurnHooks | None = None
         self._context_builder: ContextBuilder | None = None
         self._handoff_policy: HandoffPolicy | None = None
         self._capability_policy: CapabilityPolicy | None = None
@@ -1097,18 +1099,24 @@ class ClaudeSDKBackend(AgentBackend):
         workspace_path = Path(shared_resources.get("workspace", config.defaults.workspace))
         runtime_config = shared_resources.get("config")
         memory_config = getattr(getattr(runtime_config, "tools", None), "memory", None)
-        memory_provider = getattr(memory_config, "provider", "file")
-        use_reme = memory_provider == "reme"
-        enable_vector_search = bool(getattr(memory_config, "enable_vector_search", False))
-        llm_model = getattr(memory_config, "llm_model", None)
-        llm_config = {"model_name": llm_model} if llm_model else None
 
-        self._context_builder = ContextBuilder(
+        self._context_builder = ContextBuilder(workspace_path)
+        self.memory_turn_hooks = MemoryTurnHooks(
             workspace_path,
-            use_reme=use_reme,
-            llm_config=llm_config,
-            enable_vector_search=enable_vector_search,
+            extractor=ExtractMemoriesWorker(
+                workspace_path,
+                runner=self._execute_extract_memories_runner,
+            ),
+            dreamer=AutoDreamWorker(
+                workspace_path,
+                runner=self._execute_auto_dream_runner,
+                min_hours=int(getattr(memory_config, "auto_dream_min_hours", 24)),
+                min_sessions=int(getattr(memory_config, "auto_dream_min_sessions", 5)),
+            ),
+            extract_enabled=bool(getattr(memory_config, "extract_memories_enabled", True)),
+            auto_dream_enabled=bool(getattr(memory_config, "auto_dream_enabled", True)),
         )
+        self._shared_resources["memory_turn_hooks"] = self.memory_turn_hooks
         self._capabilities = CapabilityCatalog(workspace_path)
         self._handoff_policy = HandoffPolicy(self.sdk_config.agents if self.sdk_config else None)
         self._capability_policy = CapabilityPolicy(
@@ -1179,18 +1187,6 @@ class ClaudeSDKBackend(AgentBackend):
                 self._skill_manager.sync_tools_to_adapter(self._tool_adapter)
         except ImportError:
             logger.warning("ToolAdapter not available")
-
-        # Initialize memory consolidator (use backend directly, no separate provider)
-        if self.sessions and self._context_builder:
-            self.memory_consolidator = MemoryConsolidator(
-                workspace=Path(shared_resources.get("workspace", config.defaults.workspace)),
-                backend=self,
-                sessions=self.sessions,
-                context_window_tokens=config.defaults.context_window_tokens,
-                build_messages=self._context_builder.build_messages,
-                get_tool_definitions=self._get_tool_definitions,
-                memory_store=self._context_builder.memory,
-            )
 
         # Initialize permission handler
         self._permission_handler = shared_resources.get("permission_handler")
@@ -1688,6 +1684,8 @@ class ClaudeSDKBackend(AgentBackend):
         media: list[str],
         session_id: str,
         request_uuid: str | None = None,
+        *,
+        recall_task: asyncio.Task | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
         """Yield a single user message with image blocks and/or file references.
 
@@ -1695,6 +1693,7 @@ class ClaudeSDKBackend(AgentBackend):
             prompt: The text prompt
             media: List of media file paths
             session_id: SDK session identifier
+            recall_task: Optional background memory recall task
         """
         file_ref_blocks, image_paths, audio_paths = self._classify_media_paths(media)
         image_blocks = self._build_image_content_blocks(image_paths)
@@ -1718,13 +1717,67 @@ class ClaudeSDKBackend(AgentBackend):
 
         yield message
 
+        # Await recall and yield memory message (same as _build_text_query)
+        if recall_task is not None:
+            recalled_text = ""
+            try:
+                recalled_text = await recall_task
+            except Exception:
+                pass  # recall failure is non-fatal
+            if recalled_text:
+                logger.info("[Memory Recall] Injecting %d bytes of recalled memories (multimodal)", len(recalled_text))
+                yield {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": (
+                            "<system-reminder>\n# Relevant Memories\n\n"
+                            f"{recalled_text}\n</system-reminder>"
+                        ),
+                    },
+                    "parent_tool_use_id": None,
+                    "session_id": session_id,
+                    "uuid": str(uuid.uuid4()),
+                }
+
     async def _build_text_query(
         self,
         prompt: str,
         session_id: str,
         request_uuid: str,
+        *,
+        recall_task: asyncio.Task | None = None,
+        working_summary: dict[str, Any] | None = None,
     ) -> AsyncIterator[dict[str, Any]]:
-        """Yield a single text-only user message with a caller-generated UUID."""
+        """Yield user message immediately, then await recall and yield memory if available."""
+        # 0. 如果有 working_summary（fresh start / compact 后），注入上下文恢复提示
+        if working_summary:
+            summary_lines: list[str] = []
+            for key in ("current_goals", "key_decisions", "in_progress", "important_facts"):
+                items = working_summary.get(key)
+                if items:
+                    label = key.replace("_", " ").title()
+                    summary_lines.append(f"## {label}")
+                    for item in items:
+                        summary_lines.append(f"- {item}")
+            if summary_lines:
+                yield {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": (
+                            "<system-reminder>\n# Previous Session Context\n\n"
+                            + "\n".join(summary_lines)
+                            + "\n</system-reminder>"
+                        ),
+                    },
+                    "parent_tool_use_id": None,
+                    "session_id": session_id,
+                    "uuid": str(uuid.uuid4()),
+                }
+                logger.info("[SessionSummary] Injected working_summary into query")
+
+        # 1. 立即 yield 用户消息（零延迟）
         yield {
             "type": "user",
             "message": {"role": "user", "content": prompt},
@@ -1732,6 +1785,30 @@ class ClaudeSDKBackend(AgentBackend):
             "session_id": session_id,
             "uuid": request_uuid,
         }
+
+        # 2. 如果有 recall task，等待完成后 yield 记忆消息
+        if recall_task is not None:
+            recalled_text = ""
+            try:
+                recalled_text = await recall_task
+            except Exception:
+                pass  # recall 失败/取消 → 静默跳过
+
+            if recalled_text:
+                logger.info("[Memory Recall] Injecting %d bytes of recalled memories", len(recalled_text))
+                yield {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": (
+                            "<system-reminder>\n# Relevant Memories\n\n"
+                            f"{recalled_text}\n</system-reminder>"
+                        ),
+                    },
+                    "parent_tool_use_id": None,
+                    "session_id": session_id,
+                    "uuid": str(uuid.uuid4()),
+                }
 
     async def _cleanup_stale_clients_unlocked(self) -> list[tuple["ClaudeSDKClient", str]]:
         """Remove clients that have been idle longer than TTL.
@@ -2111,7 +2188,19 @@ class ClaudeSDKBackend(AgentBackend):
         if session is not None:
             session.add_message("user", context.prompt)
             self.sessions.save(session)
-            # Consolidation moved to after assistant message only (single trigger per turn)
+            # Memory workers run after the assistant message only (single trigger per turn)
+
+        # ---- 初始化后台 task 变量（在 try 之外，确保 except 可访问） ----
+        recall_task: asyncio.Task | None = None
+        query_send_task: asyncio.Task | None = None
+
+        # 尽早启动 recall task（与后续 client setup 并行运行）
+        if self._context_builder and context.prompt.strip():
+            recall_task = asyncio.create_task(
+                self._context_builder.memory_context.recall_relevant_memories(
+                    context.prompt, self
+                )
+            )
 
         try:
             final_content = ""
@@ -2158,21 +2247,43 @@ class ClaudeSDKBackend(AgentBackend):
                 self._set_request_id_in_entry(context.session_key, request_uuid)
                 self._long_running_turns.discard(context.session_key)
 
+                # Clean up previous retry's query_send_task if any
+                if query_send_task is not None and not query_send_task.done():
+                    query_send_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await query_send_task
+                    query_send_task = None
+
                 if context.media:
                     logger.info(f"[Backend Process] Multimodal query with {len(context.media)} media file(s)")
-                    await client.query(
-                        self._build_multimodal_query(
-                            prompt,
-                            context.media,
-                            _query_session_id,
-                            request_uuid,
-                        ),
-                        session_id=_query_session_id,
+                    query_send_task = asyncio.create_task(
+                        client.query(
+                            self._build_multimodal_query(
+                                prompt,
+                                context.media,
+                                _query_session_id,
+                                request_uuid,
+                                recall_task=recall_task,
+                            ),
+                            session_id=_query_session_id,
+                        )
                     )
                 else:
-                    await client.query(
-                        self._build_text_query(prompt, _query_session_id, request_uuid),
-                        session_id=_query_session_id,
+                    # Extract working_summary for fresh-start context injection.
+                    _working_summary = None
+                    if session is not None:
+                        _working_summary = session.metadata.pop("working_summary", None)
+                        if _working_summary:
+                            self.sessions.save(session)
+                    query_send_task = asyncio.create_task(
+                        client.query(
+                            self._build_text_query(
+                                prompt, _query_session_id, request_uuid,
+                                recall_task=recall_task,
+                                working_summary=_working_summary,
+                            ),
+                            session_id=_query_session_id,
+                        )
                     )
                 logger.info(f"[Backend Process] Query sent, waiting for response for session={context.session_key}")
 
@@ -2340,6 +2451,15 @@ class ClaudeSDKBackend(AgentBackend):
                         task.add_done_callback(self._on_background_release_done)
                     break  # Got valid result, exit retry loop
 
+                # 给 event loop 一次调度，确保 query_send_task 有机会完成
+                if query_send_task is not None and not query_send_task.done():
+                    await asyncio.sleep(0)
+                # 检查 query_send_task 是否因异常失败（传播给 except 块处理）
+                if query_send_task is not None and query_send_task.done():
+                    exc = query_send_task.exception()
+                    if exc is not None:
+                        raise exc
+
                 # Compact retry: skip query_retry increment for the one retry after compact
                 if compact_retry_for_payload and not received_result:
                     compact_retry_for_payload = False  # One-shot: only skip increment once
@@ -2364,21 +2484,42 @@ class ClaudeSDKBackend(AgentBackend):
             if session is not None and final_content:
                 session.add_message("assistant", final_content)
                 self.sessions.save(session)
-                mode = getattr(self.sdk_config, "memory_consolidation_mode", "off")
-                if self.memory_consolidator and mode == "sync":
-                    await self.memory_consolidator.maybe_consolidate_by_tokens(session)
-                elif self.memory_consolidator and mode == "async":
-                    async def _safe_consolidate():
+                if self.memory_turn_hooks:
+                    async def _safe_memory_turn_hooks() -> None:
                         try:
-                            await self.memory_consolidator.maybe_consolidate_by_tokens(session)
+                            await self.memory_turn_hooks.handle_turn_end(
+                                context.session_key,
+                                messages=session.messages,
+                                is_subagent=bool(context.metadata.get("is_subagent")),
+                                direct_memory_write=False,
+                            )
                         except asyncio.CancelledError:
-                            logger.debug(f"Memory consolidation cancelled for session {context.session_key}")
                             raise
                         except Exception as e:
-                            logger.warning(f"Async memory consolidation failed for {context.session_key}: {e}")
-                    asyncio.create_task(_safe_consolidate())
+                            logger.warning(
+                                "Async memory turn hooks failed for %s: %s",
+                                context.session_key,
+                                e,
+                            )
+
+                    asyncio.create_task(_safe_memory_turn_hooks())
+
+            # ---- 正常退出：等待后台 query_send_task 完成 ----
+            if query_send_task is not None and not query_send_task.done():
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await query_send_task
 
         except Exception as e:
+            # ---- 清理后台 task ----
+            if query_send_task is not None and not query_send_task.done():
+                query_send_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await query_send_task
+            if recall_task is not None and not recall_task.done():
+                recall_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await recall_task
+
             # === 诊断日志: 错误恢复 ===
             error_type = type(e).__name__
             await self.release_client(context.session_key, reason="error recovery")
@@ -2410,8 +2551,13 @@ class ClaudeSDKBackend(AgentBackend):
                 session.metadata["_reconnect_pending"] = True
                 session.metadata["_last_error"] = str(e)[:500]
                 session.metadata["_error_timestamp"] = datetime.now().isoformat()
-                # For non-recoverable errors, mark for fresh start instead of recovery
+                # For non-recoverable errors, generate a summary then mark for fresh start.
                 if not is_recoverable:
+                    try:
+                        from xbot.memory.workers.session_summary import generate_session_summary
+                        await generate_session_summary(self, session)
+                    except Exception:
+                        logger.debug("[SessionSummary] summary before fresh start failed", exc_info=True)
                     session.metadata["_fresh_start_required"] = True
                 self.sessions.save(session)
 
@@ -2479,13 +2625,34 @@ class ClaudeSDKBackend(AgentBackend):
 
         if self.sessions:
             session = self.sessions.get_or_create(session_key)
-            snapshot = session.messages[session.last_consolidated:]
-            if snapshot and self.memory_consolidator:
-                await self.memory_consolidator.archive_messages(snapshot)
             session.clear()
             session.metadata.pop("sdk_session_id", None)
             self.sessions.save(session)
             self.sessions.invalidate(session_key)
+
+    async def _execute_extract_memories_runner(
+        self,
+        session_key: str,
+        messages: list[dict],
+        direct_memory_write: bool,
+    ) -> bool:
+        if direct_memory_write:
+            return True
+        workspace = Path(self._shared_resources.get("workspace", "."))
+        return await execute_extract_memories(
+            self,
+            workspace=workspace,
+            session_key=session_key,
+            messages=messages,
+        )
+
+    async def _execute_auto_dream_runner(self, session_key: str) -> bool:
+        workspace = Path(self._shared_resources.get("workspace", "."))
+        return await execute_auto_dream(
+            self,
+            workspace=workspace,
+            session_key=session_key,
+        )
 
     async def cancel_session(self, session_key: str) -> int:
         """Cancel active work for a session."""
@@ -2721,11 +2888,11 @@ class ClaudeSDKBackend(AgentBackend):
         )
         return f"{capability_summary} | {policy_summary} | {handoff} | {runtime}"
 
-    def _resolve_consolidation_provider(self) -> tuple[str, str, dict[str, str] | None]:
-        """Resolve API credentials/base URL for direct consolidation calls."""
+    def _resolve_auxiliary_provider(self) -> tuple[str, str, dict[str, str] | None]:
+        """Resolve API credentials/base URL for direct auxiliary worker calls."""
         config = self._shared_resources.get("config")
         if config is None:
-            raise ValueError("Missing runtime config for consolidation")
+            raise ValueError("Missing runtime config for auxiliary call")
 
         provider_name, _ = resolve_sdk_provider_and_model(config)
         spec = get_provider_spec(provider_name)
@@ -2753,11 +2920,11 @@ class ClaudeSDKBackend(AgentBackend):
         base_url = provider_config.api_base if provider_config.api_base else spec.default_base_url
         return api_key_value, base_url, provider_config.extra_headers
 
-    def _resolve_consolidation_model(self) -> str:
-        """Resolve model name for direct consolidation calls."""
+    def _resolve_auxiliary_model(self) -> str:
+        """Resolve model name for direct auxiliary worker calls."""
         config = self._shared_resources.get("config")
         if config is None:
-            raise ValueError("Missing runtime config for consolidation")
+            raise ValueError("Missing runtime config for auxiliary call")
         _, model = resolve_sdk_provider_and_model(config)
         return model
 
@@ -2790,10 +2957,10 @@ class ClaudeSDKBackend(AgentBackend):
         import httpx
 
         try:
-            api_key, base_url, extra_headers = self._resolve_consolidation_provider()
-            model = self._resolve_consolidation_model()
+            api_key, base_url, extra_headers = self._resolve_auxiliary_provider()
+            model = self._resolve_auxiliary_model()
         except Exception as e:
-            logger.warning(f"Consolidation config resolution failed: {e}")
+            logger.warning(f"Auxiliary config resolution failed: {e}")
             return LLMResponse(
                 content=f"Error calling LLM: {str(e)}",
                 finish_reason="error",
@@ -2894,7 +3061,7 @@ class ClaudeSDKBackend(AgentBackend):
                 if code in retryable_statuses and attempt < len(retry_delays):
                     await asyncio.sleep(retry_delays[attempt])
                     continue
-                logger.warning(f"Consolidation HTTP error {code}: {e}")
+                logger.warning(f"Auxiliary HTTP error {code}: {e}")
                 return LLMResponse(
                     content=f"Error calling LLM: {str(e)}",
                     finish_reason="error",
@@ -2903,13 +3070,13 @@ class ClaudeSDKBackend(AgentBackend):
                 if attempt < len(retry_delays):
                     await asyncio.sleep(retry_delays[attempt])
                     continue
-                logger.warning(f"Consolidation network error: {e}")
+                logger.warning(f"Auxiliary network error: {e}")
                 return LLMResponse(
                     content=f"Error calling LLM: {str(e)}",
                     finish_reason="error",
                 )
             except Exception as e:
-                logger.warning(f"Consolidation request failed: {e}")
+                logger.warning(f"Auxiliary request failed: {e}")
                 return LLMResponse(
                     content=f"Error calling LLM: {str(e)}",
                     finish_reason="error",
@@ -2958,21 +3125,6 @@ class ClaudeSDKBackend(AgentBackend):
                 "output_tokens": usage.get("output_tokens", 0),
             },
         )
-
-    async def call_for_consolidation(
-        self,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: str | dict[str, Any] | None = None,
-    ) -> "LLMResponse":
-        """Backward-compatible wrapper for memory consolidation calls."""
-        return await self.call_for_auxiliary(
-            messages=messages,
-            tools=tools,
-            tool_choice=tool_choice,
-            max_tokens=2048,
-        )
-
     # === SDK Session Management ===
 
     async def delete_sdk_session(self, session_key: str) -> dict[str, Any]:
@@ -3174,7 +3326,7 @@ class ClaudeSDKBackend(AgentBackend):
                 session_list.append({
                     "session_id": s.session_id,
                     "title": s.custom_title or s.summary,
-                    "created_at": datetime.fromtimestamp(s.created_at).isoformat() if s.created_at else None,
+                    "created_at": datetime.fromtimestamp(getattr(s, "created_at")).isoformat() if getattr(s, "created_at", None) else None,
                     "updated_at": datetime.fromtimestamp(s.last_modified).isoformat() if s.last_modified else None,
                     "file_size": s.file_size,
                 })
@@ -3189,15 +3341,6 @@ class ClaudeSDKBackend(AgentBackend):
                 "error": None,
             }
 
-        except Exception as e:
-            logger.error(f"[SDK Session] Failed to list SDK sessions: {e}")
-            return {
-                "sessions": [],
-                "limit": limit,
-                "offset": offset,
-                "has_more": False,
-                "error": str(e),
-            }
         except Exception as e:
             logger.error(f"[SDK Session] Failed to list SDK sessions: {e}")
             return {

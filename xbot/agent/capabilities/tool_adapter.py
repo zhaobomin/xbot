@@ -15,6 +15,7 @@ from xbot.agent.tools.web import WebSearchTool, WebFetchTool
 from xbot.agent.tools.message import MessageTool
 from xbot.agent.tools.cron import CronTool
 from xbot.agent.tools.memory import MemoryTool
+from xbot.memory.integration.tool_adapter import resolve_memory_store
 from xbot.agent.tools.skill_loader import LoadSkillContentTool
 from xbot.logging import get_logger
 
@@ -168,7 +169,7 @@ class ToolAdapter:
         )
 
         # Memory tool - for reading, searching, and writing long-term memory
-        memory_store = self.shared_resources.get("memory_store")
+        memory_store = resolve_memory_store(self.workspace, self.shared_resources)
         self._tools["memory"] = MemoryTool(
             workspace=self.workspace,
             memory_store=memory_store,

@@ -27,7 +27,7 @@ class TestDeleteSdkSessionLockProtection:
         backend.sessions = None
 
         # Track if mappings were cleared (this happens under lock)
-        with patch("claude_agent_sdk.delete_session") as mock_delete:
+        with patch("claude_agent_sdk.delete_session", create=True) as mock_delete:
             mock_delete.return_value = None
             result = await backend.delete_sdk_session("test_session")
 
@@ -53,7 +53,7 @@ class TestDeleteSdkSessionLockProtection:
         backend._active_request_ids = {}
         backend.sessions = None
 
-        with patch("claude_agent_sdk.delete_session") as mock_delete:
+        with patch("claude_agent_sdk.delete_session", create=True) as mock_delete:
             mock_delete.return_value = None
             result = await backend.delete_sdk_session("test_session")
 
@@ -93,7 +93,7 @@ class TestDeleteSdkSessionLockProtection:
         backend._shared_resources = {"_session_contexts": {"test_session": ("telegram", "1"), "sdk_123": ("telegram", "1")}}
         backend.sessions = None
 
-        with patch("claude_agent_sdk.delete_session") as mock_delete:
+        with patch("claude_agent_sdk.delete_session", create=True) as mock_delete:
             mock_delete.return_value = None
             result = await backend.delete_sdk_session("test_session")
 
@@ -120,7 +120,7 @@ class TestForkSdkSessionLockProtection:
         mock_fork_result = MagicMock()
         mock_fork_result.session_id = "sdk_new_456"
 
-        with patch("claude_agent_sdk.fork_session") as mock_fork:
+        with patch("claude_agent_sdk.fork_session", create=True) as mock_fork:
             mock_fork.return_value = mock_fork_result
             result = await backend.fork_sdk_session("test_session")
 
@@ -155,7 +155,7 @@ class TestForkSdkSessionLockProtection:
         mock_fork_result = MagicMock()
         mock_fork_result.session_id = "sdk_new_456"
 
-        with patch("claude_agent_sdk.fork_session") as mock_fork:
+        with patch("claude_agent_sdk.fork_session", create=True) as mock_fork:
             mock_fork.return_value = mock_fork_result
             result = await backend.fork_sdk_session("test_session")
 
@@ -198,7 +198,7 @@ class TestForkSdkSessionLockProtection:
         backend._sdk_session_ids = {"sdk_123": "test_session"}
         backend.sessions = None
 
-        with patch("claude_agent_sdk.fork_session") as mock_fork:
+        with patch("claude_agent_sdk.fork_session", create=True) as mock_fork:
             mock_fork.side_effect = FileNotFoundError("SDK session file not found")
             result = await backend.fork_sdk_session("test_session")
 
@@ -247,7 +247,7 @@ class TestBidirectionalMappingConsistency:
         backend._active_request_ids = {}
         backend.sessions = None
 
-        with patch("claude_agent_sdk.delete_session") as mock_delete:
+        with patch("claude_agent_sdk.delete_session", create=True) as mock_delete:
             mock_delete.return_value = None
             result = await backend.delete_sdk_session("session_a")
 
@@ -273,7 +273,7 @@ class TestBidirectionalMappingConsistency:
         mock_fork_result = MagicMock()
         mock_fork_result.session_id = "sdk_new"
 
-        with patch("claude_agent_sdk.fork_session") as mock_fork:
+        with patch("claude_agent_sdk.fork_session", create=True) as mock_fork:
             mock_fork.return_value = mock_fork_result
             result = await backend.fork_sdk_session("session_a")
 

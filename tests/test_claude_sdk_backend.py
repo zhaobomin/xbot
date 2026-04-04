@@ -844,7 +844,6 @@ class TestClaudeSDKBackendLifecycle:
             compact_notify=False,
             include_partial_messages=False,
             max_turns=4,
-            memory_consolidation_mode="off",
         )
         backend._tool_adapter = MagicMock()
         backend._tool_adapter._tools = {}
@@ -1050,6 +1049,52 @@ class TestOptionsBuilder:
             options = builder.build(include_agents=False)
 
             assert options.agents is None
+            assert options.setting_sources == ["local"]
+
+    def test_build_limits_sdk_setting_sources_to_local_only(self):
+        class _FakeClaudeAgentOptions:
+            def __init__(self, **kwargs):
+                self.__dict__.update(kwargs)
+
+        with patch.dict(
+            "sys.modules",
+            {
+                "claude_agent_sdk": MagicMock(ClaudeAgentOptions=_FakeClaudeAgentOptions),
+                "claude_agent_sdk.types": MagicMock(HookMatcher=MagicMock()),
+            },
+        ):
+            from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+            from xbot.config.schema import Config
+
+            sdk_config = MagicMock()
+            sdk_config.max_turns = 3
+            sdk_config.permission_mode = "acceptEdits"
+            sdk_config.hooks = {}
+            sdk_config.compact_notify = False
+            sdk_config.extra_args = {}
+            sdk_config.disallowed_tools = []
+            sdk_config.mcp_servers = {}
+
+            builder = OptionsBuilder(
+                shared_resources={"config": Config()},
+                sdk_config=sdk_config,
+                skill_converter=None,
+                tool_adapter=None,
+                sessions=None,
+                context_builder=None,
+                handoff_policy=None,
+                capability_policy=None,
+            )
+            builder._build_env_config = MagicMock(return_value={"ANTHROPIC_BASE_URL": "https://coding.dashscope.aliyuncs.com/apps/anthropic"})
+            builder._get_model_name = MagicMock(return_value="glm-5")
+            builder._build_mcp_servers = MagicMock(return_value={})
+            builder._get_resume_session = MagicMock(return_value=None)
+            builder._build_hooks = MagicMock(return_value=None)
+            builder._build_system_prompt = MagicMock(return_value="base prompt")
+
+            options = builder.build()
+
+            assert options.setting_sources == ["local"]
 
     def test_build_system_prompt_does_not_include_delegation_policy(self):
         with patch.dict(
@@ -1621,10 +1666,10 @@ class TestOptionsBuilder:
 
 
 class TestClaudeSDKBackendMemoryConfig:
-    """Tests for memory backend configuration wiring."""
+    """Tests for Claude-style memory configuration wiring."""
 
     @pytest.mark.asyncio
-    async def test_initialize_uses_file_memory_provider(self, tmp_path):
+    async def test_initialize_wires_memory_context_and_turn_hooks(self, tmp_path):
         with patch.dict(
             "sys.modules",
             {
@@ -1637,27 +1682,33 @@ class TestClaudeSDKBackendMemoryConfig:
 
             config = Config()
             config.agents.defaults.provider = "auto"
-            config.tools.memory.provider = "file"
-            config.tools.memory.enable_vector_search = True
-            config.tools.memory.llm_model = "gpt-4.1-nano"
+            config.tools.memory.extract_memories_enabled = True
+            config.tools.memory.auto_dream_enabled = False
 
             captured = {}
 
             class _FakeContextBuilder:
-                def __init__(self, workspace, use_reme=True, llm_config=None, enable_vector_search=False):
+                def __init__(self, workspace, **kwargs):
                     captured["workspace"] = workspace
-                    captured["use_reme"] = use_reme
-                    captured["llm_config"] = llm_config
-                    captured["enable_vector_search"] = enable_vector_search
+                    captured["context_kwargs"] = kwargs
                     self.memory = object()
                     self.skills = None  # Skills loader (None for test)
 
                 def build_messages(self, *args, **kwargs):
                     return []
 
+            class _FakeTurnHooks:
+                def __init__(self, workspace, **kwargs):
+                    captured["hooks_workspace"] = workspace
+                    captured["extract_enabled"] = kwargs["extract_enabled"]
+                    captured["auto_dream_enabled"] = kwargs["auto_dream_enabled"]
+
             backend = ClaudeSDKBackend()
 
-            with patch("xbot.agent.backends.claude_sdk_backend.ContextBuilder", _FakeContextBuilder):
+            with (
+                patch("xbot.agent.backends.claude_sdk_backend.ContextBuilder", _FakeContextBuilder),
+                patch("xbot.agent.backends.claude_sdk_backend.MemoryTurnHooks", _FakeTurnHooks),
+            ):
                 await backend.initialize(
                     config.agents,
                     {
@@ -1668,9 +1719,10 @@ class TestClaudeSDKBackendMemoryConfig:
                 )
 
             assert captured["workspace"] == tmp_path
-            assert captured["use_reme"] is False
-            assert captured["enable_vector_search"] is True
-            assert captured["llm_config"] == {"model_name": "gpt-4.1-nano"}
+            assert captured["context_kwargs"] == {}
+            assert captured["hooks_workspace"] == tmp_path
+            assert captured["extract_enabled"] is True
+            assert captured["auto_dream_enabled"] is False
 
     def test_build_mcp_servers_with_dict_config(self):
         """Test that dict configs are passed through unchanged."""
@@ -2919,6 +2971,10 @@ class TestBackendInputRequiredInteraction:
 
 
 class TestMessageConverterRateLimit:
+    @pytest.mark.skipif(
+        not hasattr(__import__("claude_agent_sdk"), "RateLimitEvent"),
+        reason="RateLimitEvent not available in installed claude_agent_sdk",
+    )
     def test_convert_rate_limit_event_is_visible(self):
         from claude_agent_sdk import RateLimitEvent, RateLimitInfo
         from xbot.agent.backends.claude_sdk_backend import MessageConverter
@@ -2943,11 +2999,11 @@ class TestMessageConverterRateLimit:
         assert "rate limited" in response.progress_texts[0].lower()
 
 
-class TestClaudeSDKBackendConsolidationCall:
-    """Tests for direct consolidation API call behavior."""
+class TestClaudeSDKBackendAuxiliaryCall:
+    """Tests for direct auxiliary API call behavior."""
 
     @pytest.mark.asyncio
-    async def test_call_for_consolidation_resolves_provider_and_parses_tool_result(self):
+    async def test_call_for_auxiliary_resolves_provider_and_parses_tool_result(self):
         import httpx
 
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
@@ -2997,7 +3053,7 @@ class TestClaudeSDKBackendConsolidationCall:
                 )
 
         with patch("httpx.AsyncClient", _FakeClient):
-            response = await backend.call_for_consolidation(
+            response = await backend.call_for_auxiliary(
                 messages=[
                     {"role": "system", "content": "sys"},
                     {"role": "user", "content": "hello"},
@@ -3026,7 +3082,7 @@ class TestClaudeSDKBackendConsolidationCall:
         assert response.usage["output_tokens"] == 7
 
     @pytest.mark.asyncio
-    async def test_call_for_consolidation_retries_retryable_http_status(self):
+    async def test_call_for_auxiliary_retries_retryable_http_status(self):
         import httpx
 
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
@@ -3067,7 +3123,7 @@ class TestClaudeSDKBackendConsolidationCall:
         sleep_mock = AsyncMock()
         with patch("httpx.AsyncClient", return_value=_FlakyClient()):
             with patch("xbot.agent.backends.claude_sdk_backend.asyncio.sleep", sleep_mock):
-                response = await backend.call_for_consolidation(
+                response = await backend.call_for_auxiliary(
                     messages=[{"role": "user", "content": "hello"}],
                 )
 

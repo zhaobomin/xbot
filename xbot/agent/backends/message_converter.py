@@ -28,7 +28,6 @@ if TYPE_CHECKING:
 try:
     from claude_agent_sdk.types import (
         AssistantMessage,
-        RateLimitEvent,
         ResultMessage,
         StreamEvent,
         SystemMessage,
@@ -44,6 +43,12 @@ try:
 except ImportError:
     SDK_AVAILABLE = False
     logger.warning("claude-agent-sdk not installed. MessageConverter will not be available.")
+
+# RateLimitEvent may not be available in older SDK versions
+try:
+    from claude_agent_sdk.types import RateLimitEvent  # type: ignore[attr-defined]
+except ImportError:
+    RateLimitEvent = None  # type: ignore[assignment,misc]
 
 
 class MessageConverter:
@@ -98,7 +103,7 @@ class MessageConverter:
             return self._convert_system_message(message)
         elif isinstance(message, ResultMessage):
             return self._convert_result_message(message)
-        elif isinstance(message, RateLimitEvent):
+        elif RateLimitEvent is not None and isinstance(message, RateLimitEvent):
             return self._convert_rate_limit_event(message)
         return None
 

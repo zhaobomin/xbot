@@ -10,6 +10,11 @@
     "timeout": 60
   },
   "memory": {
-    "provider": "reme"
+    "auto_memory_enabled": true,
+    "extract_memories_enabled": true,
+    "auto_dream_enabled": true,
+    "auto_dream_min_hours": 24,
+    "auto_dream_min_sessions": 5,
+    "memory_recall_max_files": 5
   }
 }

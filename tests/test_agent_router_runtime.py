@@ -86,6 +86,101 @@ async def test_router_runtime_process_direct_routes_through_selected_backend(tmp
 
 
 @pytest.mark.asyncio
+async def test_router_runtime_memory_commands_execute_locally(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    backend = _FakeBackend()
+
+    class _BackendFactory:
+        def __call__(self):
+            return backend
+
+    AgentRouter._backends = {"claude_sdk": _BackendFactory()}  # type: ignore[dict-item]
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    remember = await runtime.process_direct("/remember Release freeze starts on 2026-04-05")
+    memories = await runtime.process_direct("/memories")
+    read_back = await runtime.process_direct("/memory-read Release freeze starts on 2026-04-05")
+    search = await runtime.process_direct("/memory-search freeze")
+    forget = await runtime.process_direct("/forget release freeze")
+    memories_after = await runtime.process_direct("/memories")
+
+    assert "Saved memory topic" in remember
+    assert "Release freeze starts on 2026-04-05" in memories
+    assert "# Release freeze starts on 2026-04-05" in read_back
+    assert "Release freeze starts on 2026-04-05" in search
+    assert "Deleted 1 memory topic" in forget
+    assert "No memories found." in memories_after
+    assert backend.initialized is True
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_memory_commands_do_not_override_workspace_commands(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+
+    commands_dir = tmp_path / "commands"
+    commands_dir.mkdir()
+    (commands_dir / "shipit.md").write_text("# Ship it\n\nDeploy the app.")
+
+    AgentRouter._backends = {"claude_sdk": _FakeBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    response = await runtime.process_direct("/shipit check release notes")
+
+    assert response.startswith("echo:[Workspace Command: /shipit]")
+
+
+@pytest.mark.asyncio
+async def test_router_runtime_memory_command_updates_workspace_snapshot(tmp_path) -> None:
+    from xbot.agent.runtime import AgentRuntime
+    from xbot.bus.queue import MessageBus
+    from xbot.memory.integration.api import read_workspace_memory_snapshot
+
+    AgentRouter._backends = {"claude_sdk": _FakeBackend}
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    runtime = AgentRuntime(
+        config=config,
+        shared_resources={
+            "bus": MessageBus(),
+            "workspace": tmp_path,
+            "config": config,
+        },
+    )
+
+    await runtime.process_direct("/remember The incident dashboard is grafana/internal/d/incidents")
+    snapshot = read_workspace_memory_snapshot(tmp_path)
+
+    assert any(topic["name"] == "The incident dashboard is grafana/internal/d/incidents" for topic in snapshot["topics"])
+
+
+@pytest.mark.asyncio
 async def test_router_runtime_blocks_local_only_noninteractive_slash_command(tmp_path) -> None:
     from xbot.agent.runtime import AgentRuntime
     from xbot.bus.queue import MessageBus

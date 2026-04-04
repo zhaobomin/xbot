@@ -1,6 +1,6 @@
 ---
 name: memory
-description: Two-layer memory system with grep-based recall.
+description: Claude-style durable memory with indexed topic files and relevant recall.
 always: true
 ---
 
@@ -8,30 +8,32 @@ always: true
 
 ## Structure
 
-- `memory/MEMORY.md` — Long-term facts (preferences, project context, relationships). Always loaded into your context.
-- `memory/HISTORY.md` — Append-only event log. NOT loaded into context. Search it with grep-style tools or in-memory filters. Each entry starts with [YYYY-MM-DD HH:MM].
+- `memory/MEMORY.md` — Index only. Always loaded into context.
+- `memory/<type>/*.md` — Durable memory topics, where `<type>` is one of `user`, `feedback`, `project`, `reference`.
 
-## Search Past Events
+MEMORY.md is an index, not a memory body. Put details in topic files, not in the index.
 
-Choose the search method based on file size:
+## Recall And Verification
 
-- Small `memory/HISTORY.md`: use `read_file`, then search in-memory
-- Large or long-lived `memory/HISTORY.md`: use the `exec` tool for targeted search
+- Read `MEMORY.md` first to find candidate topics.
+- Read relevant topic files when the user references prior decisions, preferences, or external references.
+- If a memory mentions a path, function, or flag, verify it against the repo before acting on it.
+- If the user says to ignore memory, proceed as if `MEMORY.md` were empty.
 
-Examples:
-- **Linux/macOS:** `grep -i "keyword" memory/HISTORY.md`
-- **Windows:** `findstr /i "keyword" memory\HISTORY.md`
-- **Cross-platform Python:** `python -c "from pathlib import Path; text = Path('memory/HISTORY.md').read_text(encoding='utf-8'); print('\n'.join([l for l in text.splitlines() if 'keyword' in l.lower()][-20:]))"`
+## What To Save
 
-Prefer targeted command-line search for large history files.
-
-## When to Update MEMORY.md
-
-Write important facts immediately using `edit_file` or `write_file`:
+Write durable facts as topic files:
 - User preferences ("I prefer dark mode")
-- Project context ("The API uses OAuth2")
-- Relationships ("Alice is the project lead")
+- Collaboration feedback ("Use rg before grep")
+- Project context that cannot be inferred from the repo
+- External references and dashboards
 
-## Auto-consolidation
+Do not save:
+- Code structure, file trees, or git history
+- Temporary session state
+- Facts already encoded in `CLAUDE.md`
 
-Old conversations are automatically summarized and appended to HISTORY.md when the session grows large. Long-term facts are extracted to MEMORY.md. You don't need to manage this.
+## Background Memory Workers
+
+- Turn-end extraction updates topic files from recent conversation signal.
+- Auto Dream periodically consolidates and prunes durable memory across sessions.

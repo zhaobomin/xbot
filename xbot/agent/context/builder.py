@@ -13,13 +13,11 @@ logger = get_logger(__name__)
 from xbot.utils.helpers import current_time_str
 
 from xbot.agent.context.commands import CommandsLoader
-from xbot.agent.memory.store import MemoryStore
 from xbot.agent.capabilities.skills_loader import SkillsLoader
+from xbot.memory.integration.context_provider import MemoryContextProvider
+from xbot.memory.memdir.store import MemoryDirStore
 from xbot.utils.helpers import build_assistant_message, detect_image_mime
 from xbot.utils.file_reader import FileType, classify_file, format_file_reference
-
-if TYPE_CHECKING:
-    from xbot.agent.memory.reme import ReMeMemoryStore
 
 
 class ContextBuilder:
@@ -31,52 +29,17 @@ class ContextBuilder:
     def __init__(
         self,
         workspace: Path,
-        use_reme: bool = True,
-        llm_config: dict[str, Any] | None = None,
-        enable_vector_search: bool = False,
     ):
         """Initialize context builder.
 
         Args:
             workspace: Workspace directory
-            use_reme: Use ReMe memory backend if available
-            llm_config: LLM configuration for memory summarization
-            enable_vector_search: Enable vector-based memory search
         """
         self.workspace = workspace
         self.skills = SkillsLoader(workspace)
         self.commands = CommandsLoader(workspace)
-
-        reme_available = False
-        reme_store_cls = None
-        if use_reme:
-            try:
-                from xbot.agent.memory.reme import ReMeMemoryStore as _ReMeMemoryStore, _REME_AVAILABLE
-
-                reme_available = bool(_REME_AVAILABLE)
-                reme_store_cls = _ReMeMemoryStore
-            except Exception as e:
-                logger.debug(f"ReMe import failed, using fallback memory: {e}")
-
-        # Initialize memory store
-        if use_reme and reme_available and reme_store_cls is not None:
-            self.memory: "ReMeMemoryStore | MemoryStore" = reme_store_cls(
-                workspace=workspace,
-                llm_config=llm_config,
-                enable_vector_search=enable_vector_search,
-            )
-            self._using_reme = True
-            logger.debug("Using ReMe memory backend")
-        else:
-            self.memory = MemoryStore(workspace)
-            self._using_reme = False
-            if use_reme and not reme_available:
-                logger.debug("ReMe not available, using fallback memory")
-
-    @property
-    def using_reme(self) -> bool:
-        """Check if using ReMe backend."""
-        return self._using_reme
+        self.memory = MemoryDirStore(workspace)
+        self.memory_context = MemoryContextProvider(workspace, memory_store=self.memory)
 
     def build_system_prompt(
         self,
@@ -99,15 +62,27 @@ class ContextBuilder:
         if bootstrap:
             parts.append(bootstrap)
 
-        memory = self.memory.get_memory_context()
-        if memory:
-            parts.append(f"# Memory\n\n{memory}")
+        fragments = self.memory_context.build_fragments(
+            user_message=user_message,
+            file_paths=file_paths or [],
+        )
+        if fragments.instructions:
+            parts.append(fragments.instructions)
 
-        # Build lightweight Skills Catalog (Claude Code Level 1)
-        # Full skill content is loaded on-demand via load_skill_content tool (Level 2)
+        # Skills Catalog before Memory Index: maximise the stable prefix for
+        # Anthropic auto-caching.  Identity → Bootstrap → Instructions → Skills
+        # are all session-stable; Memory Index (semi-stable, changes on CRUD)
+        # goes last so only the tail is invalidated.
         skills_catalog = self._build_skills_catalog()
         if skills_catalog:
             parts.append(skills_catalog)
+
+        if fragments.memory_index:
+            parts.append(fragments.memory_index)
+
+        # Note: relevant_memories is NOT injected into the system prompt.
+        # The SDK path uses recall_relevant_memories() which injects recalled
+        # content as a <system-reminder> user message instead.
 
         return "\n\n---\n\n".join(parts)
 
@@ -187,7 +162,7 @@ You are xbot, a helpful AI assistant.
 ## Workspace
 Your workspace is at: {workspace_path}
 - Long-term memory: {workspace_path}/memory/MEMORY.md (write important facts here)
-- History log: {workspace_path}/memory/HISTORY.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
+- Memory topics: {workspace_path}/memory/<type>/*.md
 - Custom skills: {workspace_path}/skills/{{skill-name}}/SKILL.md
 
 {platform_policy}
@@ -260,7 +235,6 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         return [
             {"role": "system", "content": self.build_system_prompt(
                 skill_names,
-                user_message=current_message,
                 code_context=code_context,
                 file_paths=file_paths,
             )},

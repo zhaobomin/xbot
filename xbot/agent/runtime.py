@@ -14,7 +14,7 @@ from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Coroutine, TypeAlias
 
-from xbot.logging import get_logger
+from xbot.logging import correlation_id_var, get_logger, session_key_var
 
 logger = get_logger(__name__)
 
@@ -41,6 +41,8 @@ from xbot.agent.state.machine import (
 from xbot.agent.monitoring.trace import append_session_trace
 from xbot.bus.events import InboundMessage, OutboundMessage
 from xbot.config.paths import get_data_dir
+from xbot.memory.integration.command_router import MemoryCommandRouter
+from xbot.memory.integration.service import MemoryService
 
 
 # Type alias for progress callback
@@ -162,6 +164,11 @@ class AgentRuntime:
         self.commands = CommandsLoader(
             Path(self.shared_resources.get("workspace", config.agents.defaults.workspace))
         )
+        self.memory_commands = MemoryCommandRouter()
+        self.memory_service = MemoryService(
+            Path(self.shared_resources.get("workspace", config.agents.defaults.workspace)),
+            backend=self.router._backend,
+        )
         self._running = False
 
         # Use state machine for session state management
@@ -211,6 +218,7 @@ class AgentRuntime:
 
     async def initialize(self) -> None:
         await self.router.initialize()
+        self.memory_service.backend = self.router._backend
 
     async def run(self) -> None:
         if self.bus is None:
@@ -265,6 +273,12 @@ class AgentRuntime:
         """
         # Note: Task registration happens in run() when creating the task.
         # When _dispatch is called directly (tests), there's no task registration.
+
+        # Set request-scoped correlation context for structured logging.
+        import uuid as _uuid
+
+        correlation_id_var.set(_uuid.uuid4().hex[:8])
+        session_key_var.set(msg.session_key)
 
         # === 诊断日志: 请求入口 ===
         current_phase = self._state_coordinator.get_phase(msg.session_key)
@@ -417,6 +431,9 @@ class AgentRuntime:
                 ),
                 metadata=msg.metadata or {},
             )
+        memory_response = await self._handle_memory_command(msg)
+        if memory_response is not None:
+            return memory_response
 
         # Debug: Log slash commands going to SDK
         if cmd.startswith("/"):
@@ -1078,6 +1095,13 @@ class AgentRuntime:
         on_progress=None,
         media: list[str] | None = None,
     ) -> str:
+        # Set correlation context for CLI / direct calls.
+        import uuid as _uuid
+
+        if not correlation_id_var.get(""):
+            correlation_id_var.set(_uuid.uuid4().hex[:8])
+        session_key_var.set(session_key)
+
         normalized_session_key = self._normalize_cli_session_key(
             session_key, allow_internal=False
         )
@@ -1415,6 +1439,13 @@ class AgentRuntime:
             "/new — Clear session locally and start fresh",
             "/compact — Compact context (summarize history)",
             "",
+            "Memory commands:",
+            "/remember <text> — Save an explicit durable memory immediately",
+            "/forget <query> — Delete matching durable memories",
+            "/memories — List durable memory topics",
+            "/memory-read <topic-or-path> — Read one memory topic",
+            "/memory-search <query> — Search memory topics",
+            "",
             "SDK commands (forwarded):",
         ]
 
@@ -1445,6 +1476,46 @@ class AgentRuntime:
             lines.extend(f"{command} — local command, not supported in xbot headless mode yet" for command in unsupported_local_only)
 
         return "\n".join(lines)
+
+    async def _handle_memory_command(self, msg: InboundMessage) -> OutboundMessage | None:
+        command = self.memory_commands.parse(msg.content)
+        if command is None:
+            return None
+        self.memory_service.backend = self.router._backend
+
+        if command.name == "/remember":
+            content = await self.memory_service.remember(
+                command.argument or "",
+                msg.session_key,
+                metadata=msg.metadata or {},
+            )
+        elif command.name == "/forget":
+            content = await self.memory_service.forget(command.argument or "", msg.session_key)
+        elif command.name == "/memories":
+            content = self.memory_service.list_memories()
+        elif command.name == "/memory-read":
+            argument = command.argument or ""
+            content = (
+                "Usage: /memory-read <topic-or-path>"
+                if not argument.strip()
+                else self.memory_service.read_memory(argument)
+            )
+        elif command.name == "/memory-search":
+            argument = command.argument or ""
+            content = (
+                "Usage: /memory-search <query>"
+                if not argument.strip()
+                else self.memory_service.search_memories(argument)
+            )
+        else:
+            return None
+
+        return OutboundMessage(
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+            content=content,
+            metadata=msg.metadata or {},
+        )
 
     @staticmethod
     def _tool_hint(

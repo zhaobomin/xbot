@@ -23,7 +23,7 @@ from xbot.exceptions import (
     ToolExecutionError,
     PermissionRequestError,
     LegacyXbotMemoryError,
-    MemoryConsolidationError,
+    MemoryWorkerError,
     MemoryStoreError,
     XbotMemoryError,
 )
@@ -111,7 +111,7 @@ class TestExceptionHierarchy:
 
     def test_memory_errors(self):
         """Test memory error hierarchy."""
-        assert issubclass(MemoryConsolidationError, XbotMemoryError)
+        assert issubclass(MemoryWorkerError, XbotMemoryError)
         assert issubclass(MemoryStoreError, XbotMemoryError)
         assert issubclass(XbotMemoryError, XbotError)
         # Backward compatibility alias

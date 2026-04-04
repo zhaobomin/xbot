@@ -128,6 +128,9 @@ class OptionsBuilder:
             model=model,
             max_turns=self._sdk_config.max_turns,
             permission_mode=self._sdk_config.permission_mode,
+            # Isolate xbot's provider/runtime config from user-level Claude CLI settings
+            # such as ~/.claude/settings.json, which can override base URL and model env.
+            setting_sources=["local"],
             include_partial_messages=getattr(self._sdk_config, "include_partial_messages", False),
             resume=resume_session,
             mcp_servers=mcp_servers if mcp_servers else None,
@@ -283,9 +286,39 @@ class OptionsBuilder:
                         f"no running event loop available. Error: {e}"
                     )
 
+            # Build pre-compact callbacks (memory extraction before compaction)
+            pre_compact_cbs: list[Any] = []
+            sessions_mgr = self._sessions
+            memory_hooks = self._shared_resources.get("memory_turn_hooks")
+            if memory_hooks is not None:
+
+                async def _extract_before_compact(session_key: str) -> None:
+                    msgs = None
+                    if sessions_mgr is not None:
+                        s = sessions_mgr.get(session_key)
+                        if s is not None:
+                            msgs = s.messages
+                    await memory_hooks.force_extract(session_key, messages=msgs)
+
+                pre_compact_cbs.append(_extract_before_compact)
+
+            # Generate a working summary before compaction so context survives.
+            backend_ref = self._shared_resources.get("backend")
+            if backend_ref is not None and sessions_mgr is not None:
+
+                async def _summarise_before_compact(session_key: str) -> None:
+                    s = sessions_mgr.get(session_key)
+                    if s is None:
+                        return
+                    from xbot.memory.workers.session_summary import generate_session_summary
+                    await generate_session_summary(backend_ref, s)
+
+                pre_compact_cbs.append(_summarise_before_compact)
+
             compact_handler = CompactHookHandler(
                 enabled=True,
                 message_callback=send_compact_notification,
+                pre_compact_callbacks=pre_compact_cbs,
             )
             hooks.setdefault("PreCompact", []).append(HookMatcher(hooks=[compact_handler]))
             logger.info("[Hooks] Added PreCompact hook with CompactHookHandler, hooks keys=%s", list(hooks.keys()))

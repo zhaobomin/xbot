@@ -20,7 +20,6 @@ from xbot.agent.crew.output.format import OutputParser
 from xbot.agent.crew.planner.models import Capability, RolePoolConfig, RoleTier
 from xbot.agent.crew.planner.role_pool import RolePoolManager
 from xbot.agent.hooks import CompactHookHandler
-from xbot.agent.memory.store import MemoryConsolidator
 from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 from xbot.agent.monitoring.alerting import AlertConfig, AlertService
 from xbot.agent.state.machine import SessionPhase, SessionStateMachine
@@ -162,39 +161,6 @@ async def test_load_skill_content_tool_accepts_extra_kwargs() -> None:
     tool = LoadSkillContentTool(skills_loader=_FakeSkillLoader())
     result = await tool.execute(skill_name="demo", unexpected="value")
     assert "# Skill: demo" in result
-
-
-def test_memory_consolidator_lock_is_stable(tmp_path: Path) -> None:
-    consolidator = MemoryConsolidator(
-        workspace=tmp_path,
-        backend=_make_mock_backend(),
-        sessions=SessionManager(tmp_path),
-        context_window_tokens=10000,
-        build_messages=lambda **kwargs: [],
-        get_tool_definitions=lambda: [],
-    )
-    assert consolidator.get_lock("session:1") is consolidator.get_lock("session:1")
-
-
-@pytest.mark.asyncio
-async def test_memory_consolidator_cleans_up_idle_lock_after_consolidation(tmp_path: Path) -> None:
-    consolidator = MemoryConsolidator(
-        workspace=tmp_path,
-        backend=_make_mock_backend(),
-        sessions=SessionManager(tmp_path),
-        context_window_tokens=10000,
-        build_messages=lambda **kwargs: [],
-        get_tool_definitions=lambda: [],
-    )
-    session = Session(key="test:cleanup")
-    session.messages = [{"role": "user", "content": "hi", "timestamp": "2024-01-01"}]
-
-    with patch.object(consolidator, "estimate_session_prompt_tokens", return_value=(8000, "mock")), patch.object(
-        consolidator, "pick_consolidation_boundary", return_value=(0, 1)
-    ), patch.object(consolidator, "consolidate_messages", AsyncMock(return_value=True)):
-        await consolidator.maybe_consolidate_by_tokens(session)
-
-    assert "test:cleanup" not in consolidator._locks
 
 
 def test_split_message_rejects_non_positive_limits() -> None:
@@ -339,11 +305,11 @@ def test_tool_registry_does_not_treat_error_prefix_as_failure() -> None:
 def test_memory_search_short_results_do_not_append_fake_ellipsis(tmp_path: Path) -> None:
     tool = MemoryTool(tmp_path)
 
-    class _Store:
-        async def search_memory(self, query: str, max_results: int):
-            return [{"source": "memo", "score": 0.9, "memory": "short text"}]
+    class _Service:
+        def search_memories(self, query: str, max_results: int = 5) -> str:
+            return "- short text [note] — A short note"
 
-    tool._get_memory_store = lambda: _Store()
+    tool._get_memory_service = lambda: _Service()  # type: ignore[assignment]
 
     result = asyncio.run(tool._search(query="short", max_results=5))
 
@@ -369,7 +335,7 @@ def test_slack_channel_open_dm_policy_is_not_blocked_by_empty_allowlist() -> Non
 
 
 def test_context_builder_skills_catalog_only_lists_skills_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    builder = ContextBuilder(tmp_path, use_reme=False)
+    builder = ContextBuilder(tmp_path)
     skills = [{"name": "demo", "description": "desc", "available": True}]
     calls = {"list_skills": 0}
     monkeypatch.setattr(builder.skills, "list_available_skills", lambda: skills)

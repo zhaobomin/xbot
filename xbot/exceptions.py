@@ -24,7 +24,7 @@ Exception Hierarchy:
     │   ├── ToolExecutionError
     │   └── PermissionRequestError
     └── XbotMemoryError
-        ├── MemoryConsolidationError
+        ├── MemoryWorkerError
         └── MemoryStoreError
 """
 
@@ -192,9 +192,13 @@ class XbotMemoryError(XbotError):
     pass
 
 
-class MemoryConsolidationError(XbotMemoryError):
-    """Raised when memory consolidation fails."""
+class MemoryWorkerError(XbotMemoryError):
+    """Raised when a memory worker operation fails."""
     pass
+
+
+# Backward compatibility alias while callers migrate off the old name.
+MemoryConsolidationError = MemoryWorkerError
 
 
 class MemoryStoreError(XbotMemoryError):

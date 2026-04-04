@@ -1,272 +1,159 @@
-"""Memory tool for reading, searching, and writing long-term memory.
-
-This tool wraps ReMeMemoryStore to provide memory operations.
-Compatible with existing MEMORY.md format.
-"""
+"""Claude-style memory tool for topic-file durable memory."""
 
 from __future__ import annotations
 
-import re
 from pathlib import Path
 from typing import Any
 
 from xbot.agent.tools.base import Tool
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
+from xbot.memory.integration.service import MemoryService
+from xbot.memory.memdir.store import MemoryDirStore
 
 
 class MemoryTool(Tool):
-    """Tool for memory operations.
-
-    Actions:
-    - read: Read current long-term memory (all or specific section)
-    - search: Search memory using vector + BM25 hybrid search
-    - write: Write or update a section in memory
-    - append: Append content to history log
-    """
+    """Tool for Claude-style topic-file memory operations."""
 
     name = "memory"
-    description = "Read, search, and write long-term memory. Use to remember important facts or recall past information."
+    description = "Read, search, and manage long-term memory topics."
 
     parameters = {
         "type": "object",
         "properties": {
             "action": {
                 "type": "string",
-                "enum": ["read", "search", "write", "append"],
-                "description": "Action to perform: read, search, write, or append"
+                "enum": [
+                    "list",
+                    "read",
+                    "search",
+                    "write_topic",
+                    "update_topic",
+                    "delete_topic",
+                ],
+                "description": "Memory action to perform.",
             },
-            "section": {
+            "path": {
                 "type": "string",
-                "description": "For read: section name to read (optional, reads all if not specified). For write: section name to create/update."
-            },
-            "content": {
-                "type": "string",
-                "description": "For write: content to write (markdown). For append: entry to append to history."
+                "description": "Topic file path for read, update, or delete.",
             },
             "query": {
                 "type": "string",
-                "description": "For search: search query"
+                "description": "Search query.",
+            },
+            "memory_type": {
+                "type": "string",
+                "enum": ["user", "feedback", "project", "reference"],
+                "description": "Topic type for write_topic.",
+            },
+            "title": {
+                "type": "string",
+                "description": "Topic title for write_topic.",
+            },
+            "description": {
+                "type": "string",
+                "description": "One-line topic description.",
+            },
+            "content": {
+                "type": "string",
+                "description": "Topic content for write or update.",
             },
             "max_results": {
                 "type": "integer",
-                "description": "For search: maximum results to return (default 5)",
-                "default": 5
-            }
+                "default": 5,
+                "description": "Maximum search results.",
+            },
         },
-        "required": ["action"]
+        "required": ["action"],
     }
 
     def __init__(
         self,
         workspace: str | Path,
         memory_store: Any = None,
+        memory_service: MemoryService | None = None,
     ):
-        """Initialize memory tool.
-
-        Args:
-            workspace: Workspace directory
-            memory_store: Optional ReMeMemoryStore instance (will be created if not provided)
-        """
         self.workspace = Path(workspace)
-        self.memory_dir = self.workspace / "memory"
-        self.memory_file = self.memory_dir / "MEMORY.md"
-        self.history_file = self.memory_dir / "HISTORY.md"
         self._memory_store = memory_store
+        self._memory_service = memory_service
 
-    def _get_memory_store(self):
-        """Get or create memory store."""
+    def _get_memory_service(self) -> MemoryService:
+        if self._memory_service is None:
+            self._memory_service = MemoryService(self.workspace, store=self._get_memory_store())
+        return self._memory_service
+
+    def _get_memory_store(self) -> MemoryDirStore:
         if self._memory_store is None:
-            from xbot.agent.memory.reme import ReMeMemoryStore
-            self._memory_store = ReMeMemoryStore(self.workspace)
+            self._memory_store = MemoryDirStore(self.workspace)
         return self._memory_store
 
     async def execute(
         self,
         action: str,
-        section: str | None = None,
-        content: str | None = None,
+        path: str | None = None,
         query: str | None = None,
+        memory_type: str | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        content: str | None = None,
         max_results: int = 5,
-        **kwargs,
+        **_: Any,
     ) -> str:
-        """Execute memory action.
-
-        Args:
-            action: Action to perform
-            section: Section name for read/write
-            content: Content for write/append
-            query: Search query
-            max_results: Max search results
-
-        Returns:
-            Result string
-        """
+        if action == "list":
+            return self._list()
         if action == "read":
-            return self._read(section)
-        elif action == "search":
+            return self._read(path)
+        if action == "search":
             return await self._search(query, max_results)
-        elif action == "write":
-            return self._write(section, content)
-        elif action == "append":
-            return self._append(content)
-        else:
-            return f"Unknown action: {action}"
+        if action == "write_topic":
+            return self._write_topic(memory_type, title, description, content)
+        if action == "update_topic":
+            return self._update_topic(path, content, description)
+        if action == "delete_topic":
+            return self._delete_topic(path)
+        return f"Unknown action: {action}"
 
-    def _read(self, section: str | None = None) -> str:
-        """Read memory content.
+    def _list(self) -> str:
+        return self._get_memory_service().list_memories()
 
-        Args:
-            section: Optional section name to read
-
-        Returns:
-            Memory content
-        """
-        if not self.memory_file.exists():
-            return "No long-term memory found."
-
-        content = self.memory_file.read_text(encoding="utf-8")
-
-        if section is None:
-            return content
-
-        # Extract specific section
-        pattern = rf"(^## {re.escape(section)}.*?)(?=^## |\Z)"
-        match = re.search(pattern, content, re.MULTILINE | re.DOTALL)
-        if match:
-            return match.group(1).strip()
-        return f"Section '{section}' not found."
+    def _read(self, path: str | None) -> str:
+        if not path:
+            return self._get_memory_store().load_index_for_prompt()
+        return self._get_memory_service().read_memory(path)
 
     async def _search(self, query: str | None, max_results: int) -> str:
-        """Search memory.
-
-        Args:
-            query: Search query
-            max_results: Maximum results
-
-        Returns:
-            Search results
-        """
         if not query:
             return "Please provide a search query."
+        return self._get_memory_service().search_memories(query, max_results=max_results)
 
-        store = self._get_memory_store()
+    def _write_topic(
+        self,
+        memory_type: str | None,
+        title: str | None,
+        description: str | None,
+        content: str | None,
+    ) -> str:
+        if not memory_type or not title or not description or not content:
+            return "Please provide memory_type, title, description, and content."
+        path = self._get_memory_store().create_memory(
+            memory_type=memory_type,  # type: ignore[arg-type]
+            title=title,
+            description=description,
+            body=content,
+        )
+        return f"Saved memory topic at {path}"
 
-        # Try ReMe search first
-        try:
-            results = await store.search_memory(query, max_results)
-            if results:
-                lines = [f"Found {len(results)} result(s):\n"]
-                for i, r in enumerate(results, 1):
-                    lines.append(f"### Result {i}")
-                    lines.append(f"Source: {r.get('source', 'unknown')}")
-                    lines.append(f"Score: {r.get('score', 0):.2f}")
-                    memory_text = r.get("memory", "")
-                    preview = memory_text[:500]
-                    suffix = "..." if len(memory_text) > 500 else ""
-                    lines.append(f"Content:\n{preview}{suffix}")
-                    lines.append("")
-                return "\n".join(lines)
-        except Exception as e:
-            logger.warning(f"ReMe search failed: {e}, using fallback")
+    def _update_topic(
+        self,
+        path: str | None,
+        content: str | None,
+        description: str | None,
+    ) -> str:
+        if not path or not content:
+            return "Please provide path and content."
+        self._get_memory_store().update_memory(Path(path), body=content, description=description)
+        return f"Updated memory topic at {path}"
 
-        # Fallback: simple grep
-        return self._fallback_search(query, max_results)
-
-    def _fallback_search(self, query: str, max_results: int) -> str:
-        """Fallback search using simple text matching."""
-        results = []
-        query_lower = query.lower()
-
-        if self.memory_file.exists():
-            content = self.memory_file.read_text(encoding="utf-8")
-            lines = content.split("\n")
-            for i, line in enumerate(lines):
-                if query_lower in line.lower():
-                    # Get context around the match
-                    start = max(0, i - 2)
-                    end = min(len(lines), i + 3)
-                    context = "\n".join(lines[start:end])
-                    results.append(f"Line {i+1}:\n{context}")
-
-        if self.history_file.exists():
-            content = self.history_file.read_text(encoding="utf-8")
-            lines = content.split("\n")
-            for line in lines:
-                if query_lower in line.lower() and len(results) < max_results:
-                    results.append(f"[History] {line[:200]}...")
-
-        if not results:
-            return f"No results found for '{query}'."
-
-        return f"Found {len(results[:max_results])} result(s):\n\n" + "\n\n---\n\n".join(results[:max_results])
-
-    def _write(self, section: str | None, content: str | None) -> str:
-        """Write or update a section in memory.
-
-        Args:
-            section: Section name (required)
-            content: Content to write (required)
-
-        Returns:
-            Result message
-        """
-        if not section:
-            return "Please provide a section name."
-        if not content:
-            return "Please provide content to write."
-
-        # Ensure memory directory exists
-        self.memory_dir.mkdir(parents=True, exist_ok=True)
-
-        # Read existing content
-        existing = ""
-        if self.memory_file.exists():
-            existing = self.memory_file.read_text(encoding="utf-8")
-
-        # Check if section exists
-        pattern = rf"(^## {re.escape(section)}.*?)(?=^## |\Z)"
-        match = re.search(pattern, existing, re.MULTILINE | re.DOTALL)
-
-        new_section = f"## {section}\n\n{content}\n\n"
-
-        if match:
-            # Update existing section
-            updated = existing[:match.start()] + new_section + existing[match.end():]
-        else:
-            # Add new section before the footer
-            footer_pattern = r"\n---\n\n\*This file is automatically updated"
-            if re.search(footer_pattern, existing):
-                replacement = f"\n\n{new_section}---\n\n*This file is automatically updated"
-                updated = re.sub(footer_pattern, lambda _m: replacement, existing)
-            else:
-                updated = existing + "\n\n" + new_section
-
-        self.memory_file.write_text(updated.rstrip() + "\n", encoding="utf-8")
-        return f"Section '{section}' written to memory."
-
-    def _append(self, content: str | None) -> str:
-        """Append entry to history log.
-
-        Args:
-            content: Entry to append
-
-        Returns:
-            Result message
-        """
-        if not content:
-            return "Please provide content to append."
-
-        from datetime import datetime
-
-        # Ensure memory directory exists
-        self.memory_dir.mkdir(parents=True, exist_ok=True)
-
-        timestamp = datetime.now().strftime("[%Y-%m-%d %H:%M]")
-        entry = f"{timestamp} {content}\n\n"
-
-        with open(self.history_file, "a", encoding="utf-8") as f:
-            f.write(entry)
-
-        return f"Entry appended to history log."
+    def _delete_topic(self, path: str | None) -> str:
+        if not path:
+            return "Please provide path."
+        self._get_memory_store().delete_memory(Path(path))
+        return f"Deleted memory topic at {path}"

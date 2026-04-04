@@ -1,265 +1,115 @@
-"""Tests for MemoryTool."""
+"""Tests for Claude-style MemoryTool."""
 
 import asyncio
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from xbot.agent.tools.memory import MemoryTool
+from xbot.memory.memdir.store import MemoryDirStore
 
 
 @pytest.fixture
-def temp_workspace():
-    """Create a temporary workspace with sample memory."""
-    with tempfile.TemporaryDirectory() as tmpdir:
-        workspace = Path(tmpdir)
-        memory_dir = workspace / "memory"
-        memory_dir.mkdir(parents=True)
-
-        # Create sample MEMORY.md
-        memory_content = """# Long-term Memory
-
-This file stores important information.
-
-## User Information
-
-- **Name**: Test User
-- **Role**: Developer
-
-## Preferences
-
-- **Language**: Chinese
-- **Style**: Casual
-
----
-
-*This file is automatically updated.*
-"""
-        (memory_dir / "MEMORY.md").write_text(memory_content, encoding="utf-8")
-
-        # Create sample HISTORY.md
-        history_content = """[2026-01-01 10:00] User asked about weather.
-
-[2026-01-02 15:30] Discussed coding preferences.
-"""
-        (memory_dir / "HISTORY.md").write_text(history_content, encoding="utf-8")
-
-        yield workspace
+def temp_workspace(tmp_path: Path) -> Path:
+    return tmp_path
 
 
-class TestMemoryToolRead:
-    """Tests for memory read action."""
+class TestMemoryTool:
+    def test_list_memories(self, temp_workspace: Path) -> None:
+        store = MemoryDirStore(temp_workspace)
+        store.create_memory(
+            memory_type="user",
+            title="Senior backend engineer",
+            description="User is experienced in backend systems",
+            body="User is experienced in backend systems.",
+        )
+        tool = MemoryTool(workspace=temp_workspace, memory_store=store)
 
-    def test_read_all(self, temp_workspace):
-        """Test reading all memory."""
-        tool = MemoryTool(workspace=temp_workspace)
-        result = asyncio.run(tool.execute(action="read"))
+        result = asyncio.run(tool.execute(action="list"))
 
-        assert "User Information" in result
-        assert "Test User" in result
-        assert "Preferences" in result
+        assert "Senior backend engineer" in result
+        assert "user" in result
 
-    def test_read_section(self, temp_workspace):
-        """Test reading a specific section."""
-        tool = MemoryTool(workspace=temp_workspace)
-        result = asyncio.run(tool.execute(action="read", section="User Information"))
+    def test_read_memory_topic(self, temp_workspace: Path) -> None:
+        store = MemoryDirStore(temp_workspace)
+        path = store.create_memory(
+            memory_type="feedback",
+            title="Use rg",
+            description="Prefer rg for search",
+            body="Use rg.\n\n**Why:** Faster.\n**How to apply:** Use rg first.",
+        )
+        tool = MemoryTool(workspace=temp_workspace, memory_store=store)
 
-        assert "Test User" in result
-        assert "Developer" in result
-        assert "Preferences" not in result
+        result = asyncio.run(tool.execute(action="read", path=str(path)))
 
-    def test_read_nonexistent_section(self, temp_workspace):
-        """Test reading a section that doesn't exist."""
-        tool = MemoryTool(workspace=temp_workspace)
-        result = asyncio.run(tool.execute(action="read", section="Nonexistent"))
+        assert "Prefer rg for search" in result
+        assert "**Why:** Faster." in result
 
-        assert "not found" in result.lower()
+    def test_search_memories(self, temp_workspace: Path) -> None:
+        store = MemoryDirStore(temp_workspace)
+        store.create_memory(
+            memory_type="reference",
+            title="Latency dashboard",
+            description="Grafana latency dashboard for request path work",
+            body="grafana/internal/d/api-latency",
+        )
+        tool = MemoryTool(workspace=temp_workspace, memory_store=store)
 
-    def test_read_empty_memory(self):
-        """Test reading when no memory file exists."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tool = MemoryTool(workspace=tmpdir)
-            result = asyncio.run(tool.execute(action="read"))
+        result = asyncio.run(tool.execute(action="search", query="latency dashboard"))
 
-            assert "No long-term memory" in result
+        assert "Latency dashboard" in result
+        assert "Grafana latency dashboard" in result
 
-
-class TestMemoryToolSearch:
-    """Tests for memory search action."""
-
-    def test_search_basic(self, temp_workspace):
-        """Test basic search."""
-        tool = MemoryTool(workspace=temp_workspace)
-        result = asyncio.run(tool.execute(action="search", query="Test User"))
-
-        assert "result" in result.lower()
-
-    def test_search_no_query(self, temp_workspace):
-        """Test search without query."""
-        tool = MemoryTool(workspace=temp_workspace)
-        result = asyncio.run(tool.execute(action="search", query=None))
-
-        assert "provide a search query" in result.lower()
-
-    def test_search_no_results(self, temp_workspace):
-        """Test search with no matching results."""
-        tool = MemoryTool(workspace=temp_workspace)
-        result = asyncio.run(tool.execute(action="search", query="xyznonexistent123"))
-
-        assert "No results" in result or "0 result" in result.lower()
-
-
-class TestMemoryToolWrite:
-    """Tests for memory write action."""
-
-    def test_write_new_section(self, temp_workspace):
-        """Test writing a new section."""
-        tool = MemoryTool(workspace=temp_workspace)
-        result = asyncio.run(tool.execute(
-            action="write",
-            section="New Section",
-            content="This is new content."
-        ))
-
-        assert "written to memory" in result.lower()
-
-        # Verify it was written
-        content = (temp_workspace / "memory" / "MEMORY.md").read_text()
-        assert "New Section" in content
-        assert "new content" in content
-
-    def test_write_update_section(self, temp_workspace):
-        """Test updating an existing section."""
-        tool = MemoryTool(workspace=temp_workspace)
-        result = asyncio.run(tool.execute(
-            action="write",
-            section="User Information",
-            content="- **Name**: Updated Name\n- **Role**: Manager"
-        ))
-
-        assert "written to memory" in result.lower()
-
-        # Verify it was updated
-        content = (temp_workspace / "memory" / "MEMORY.md").read_text()
-        assert "Updated Name" in content
-        assert "Test User" not in content
-
-    def test_write_no_section(self, temp_workspace):
-        """Test write without section name."""
-        tool = MemoryTool(workspace=temp_workspace)
-        result = asyncio.run(tool.execute(action="write", content="some content"))
-
-        assert "provide a section name" in result.lower()
-
-    def test_write_no_content(self, temp_workspace):
-        """Test write without content."""
-        tool = MemoryTool(workspace=temp_workspace)
-        result = asyncio.run(tool.execute(action="write", section="Test Section"))
-
-        assert "provide content" in result.lower()
-
-    def test_write_preserves_other_sections(self, temp_workspace):
-        """Test that writing doesn't affect other sections."""
+    def test_write_topic(self, temp_workspace: Path) -> None:
         tool = MemoryTool(workspace=temp_workspace)
 
-        asyncio.run(tool.execute(
-            action="write",
-            section="User Information",
-            content="- **Name**: New Name"
-        ))
+        result = asyncio.run(
+            tool.execute(
+                action="write_topic",
+                memory_type="project",
+                title="Release freeze",
+                description="Release freeze starts 2026-04-05",
+                content="Release freeze starts 2026-04-05.\n\n**Why:** Release cut.\n**How to apply:** Avoid risky merges.",
+            )
+        )
 
-        content = (temp_workspace / "memory" / "MEMORY.md").read_text()
-        assert "Preferences" in content  # Other section preserved
-        assert "Chinese" in content  # Other section content preserved
+        assert "saved" in result.lower()
+        index = (temp_workspace / "memory" / "MEMORY.md").read_text(encoding="utf-8")
+        assert "Release freeze" in index
 
-    def test_write_preserves_backreference_like_content(self, temp_workspace):
-        """Content containing regex backreferences should be written literally."""
-        tool = MemoryTool(workspace=temp_workspace)
+    def test_update_topic(self, temp_workspace: Path) -> None:
+        store = MemoryDirStore(temp_workspace)
+        path = store.create_memory(
+            memory_type="project",
+            title="Release freeze",
+            description="Release freeze starts 2026-04-05",
+            body="old",
+        )
+        tool = MemoryTool(workspace=temp_workspace, memory_store=store)
 
-        asyncio.run(tool.execute(
-            action="write",
-            section="Escapes",
-            content=r"literal \1 and \g<0> should stay untouched",
-        ))
+        result = asyncio.run(
+            tool.execute(
+                action="update_topic",
+                path=str(path),
+                content="new body",
+                description="Updated release freeze",
+            )
+        )
 
-        content = (temp_workspace / "memory" / "MEMORY.md").read_text(encoding="utf-8")
-        assert r"literal \1 and \g<0> should stay untouched" in content
+        assert "updated" in result.lower()
+        assert "new body" in path.read_text(encoding="utf-8")
 
+    def test_delete_topic(self, temp_workspace: Path) -> None:
+        store = MemoryDirStore(temp_workspace)
+        path = store.create_memory(
+            memory_type="reference",
+            title="Old dashboard",
+            description="old dashboard",
+            body="body",
+        )
+        tool = MemoryTool(workspace=temp_workspace, memory_store=store)
 
-class TestMemoryToolAppend:
-    """Tests for memory append action."""
+        result = asyncio.run(tool.execute(action="delete_topic", path=str(path)))
 
-    def test_append_history(self, temp_workspace):
-        """Test appending to history."""
-        tool = MemoryTool(workspace=temp_workspace)
-        result = asyncio.run(tool.execute(
-            action="append",
-            content="Test entry for history."
-        ))
-
-        assert "appended to history" in result.lower()
-
-        # Verify it was appended
-        content = (temp_workspace / "memory" / "HISTORY.md").read_text()
-        assert "Test entry for history" in content
-
-    def test_append_no_content(self, temp_workspace):
-        """Test append without content."""
-        tool = MemoryTool(workspace=temp_workspace)
-        result = asyncio.run(tool.execute(action="append"))
-
-        assert "provide content" in result.lower()
-
-    def test_append_creates_file(self):
-        """Test that append creates history file if it doesn't exist."""
-        with tempfile.TemporaryDirectory() as tmpdir:
-            tool = MemoryTool(workspace=tmpdir)
-            result = asyncio.run(tool.execute(
-                action="append",
-                content="First entry."
-            ))
-
-            assert "appended to history" in result.lower()
-            assert (Path(tmpdir) / "memory" / "HISTORY.md").exists()
-
-
-class TestMemoryToolEdgeCases:
-    """Edge case tests."""
-
-    def test_unknown_action(self, temp_workspace):
-        """Test unknown action."""
-        tool = MemoryTool(workspace=temp_workspace)
-        result = asyncio.run(tool.execute(action="unknown"))
-
-        assert "Unknown action" in result
-
-    def test_special_characters_in_section(self, temp_workspace):
-        """Test section name with special characters."""
-        tool = MemoryTool(workspace=temp_workspace)
-        result = asyncio.run(tool.execute(
-            action="write",
-            section="Test (Special) [Chars]",
-            content="Content with special chars."
-        ))
-
-        # Should not crash
-        assert "written" in result.lower()
-
-    def test_multiline_content(self, temp_workspace):
-        """Test writing multiline content."""
-        tool = MemoryTool(workspace=temp_workspace)
-        content = """Line 1
-Line 2
-Line 3"""
-        result = asyncio.run(tool.execute(
-            action="write",
-            section="Multiline",
-            content=content
-        ))
-
-        assert "written" in result.lower()
-
-        written = (temp_workspace / "memory" / "MEMORY.md").read_text()
-        assert "Line 1" in written
-        assert "Line 3" in written
+        assert "deleted" in result.lower()
+        assert not path.exists()

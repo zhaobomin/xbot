@@ -45,7 +45,7 @@ class TestForkSdkSession:
         mock_result = MagicMock()
         mock_result.session_id = "sdk_fork_456"
 
-        with patch("claude_agent_sdk.fork_session") as mock_fork:
+        with patch("claude_agent_sdk.fork_session", create=True) as mock_fork:
             mock_fork.return_value = mock_result
 
             result = await backend.fork_sdk_session("session1")
@@ -65,7 +65,7 @@ class TestForkSdkSession:
         mock_result = MagicMock()
         mock_result.session_id = "sdk_fork_456"
 
-        with patch("claude_agent_sdk.fork_session") as mock_fork:
+        with patch("claude_agent_sdk.fork_session", create=True) as mock_fork:
             mock_fork.return_value = mock_result
 
             result = await backend.fork_sdk_session("session1", up_to_message_id="msg_005")
@@ -83,7 +83,7 @@ class TestForkSdkSession:
         mock_result = MagicMock()
         mock_result.session_id = "sdk_fork_456"
 
-        with patch("claude_agent_sdk.fork_session") as mock_fork:
+        with patch("claude_agent_sdk.fork_session", create=True) as mock_fork:
             mock_fork.return_value = mock_result
 
             result = await backend.fork_sdk_session("session1", title="Forked Session")
@@ -111,7 +111,7 @@ class TestForkSdkSession:
         mock_result = MagicMock()
         mock_result.session_id = "sdk_fork_456"
 
-        with patch("claude_agent_sdk.fork_session") as mock_fork:
+        with patch("claude_agent_sdk.fork_session", create=True) as mock_fork:
             mock_fork.return_value = mock_result
 
             result = await backend.fork_sdk_session("session1")
@@ -130,7 +130,7 @@ class TestForkSdkSession:
         mock_result = MagicMock()
         mock_result.session_id = "sdk_fork_456"
 
-        with patch("claude_agent_sdk.fork_session") as mock_fork:
+        with patch("claude_agent_sdk.fork_session", create=True) as mock_fork:
             mock_fork.return_value = mock_result
 
             result = await backend.fork_sdk_session("session1")
@@ -151,7 +151,7 @@ class TestForkSdkSession:
         mock_result = MagicMock()
         mock_result.session_id = "sdk_fork_456"
 
-        with patch("claude_agent_sdk.fork_session") as mock_fork:
+        with patch("claude_agent_sdk.fork_session", create=True) as mock_fork:
             mock_fork.return_value = mock_result
 
             await backend.fork_sdk_session("session1")
@@ -177,7 +177,7 @@ class TestForkSdkSession:
         mock_result = MagicMock()
         mock_result.session_id = "sdk_fork_456"
 
-        with patch("claude_agent_sdk.fork_session") as mock_fork:
+        with patch("claude_agent_sdk.fork_session", create=True) as mock_fork:
             mock_fork.return_value = mock_result
 
             result = await backend.fork_sdk_session("session1", up_to_message_id="msg_005")
@@ -199,7 +199,7 @@ class TestForkSdkSessionErrorHandling:
         backend._shared_resources = {"_session_contexts": {"session1": "sdk_123"}}
         backend._sdk_session_ids = {"sdk_123": "session1"}
 
-        with patch("claude_agent_sdk.fork_session") as mock_fork:
+        with patch("claude_agent_sdk.fork_session", create=True) as mock_fork:
             mock_fork.side_effect = RuntimeError("SDK fork error")
 
             result = await backend.fork_sdk_session("session1")
@@ -214,7 +214,7 @@ class TestForkSdkSessionErrorHandling:
         backend._shared_resources = {"_session_contexts": {"session1": "sdk_123"}}
         backend._sdk_session_ids = {"sdk_123": "session1"}
 
-        with patch("claude_agent_sdk.fork_session") as mock_fork:
+        with patch("claude_agent_sdk.fork_session", create=True) as mock_fork:
             mock_fork.side_effect = ValueError("Message not found")
 
             result = await backend.fork_sdk_session("session1", up_to_message_id="invalid")

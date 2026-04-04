@@ -3,6 +3,7 @@
 import json
 import os
 import shutil
+import uuid as _uuid
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -30,25 +31,24 @@ class Session:
     Stores messages in JSONL format for easy reading and persistence.
 
     Important: Messages are append-only for LLM cache efficiency.
-    The consolidation process writes summaries to MEMORY.md/HISTORY.md
-    but does NOT modify the messages list or get_history() output.
+    The memory workers may extract durable memories from session history,
+    but do NOT modify the messages list or get_history() output.
 
     ## Design Note: Dual History Management
 
     xbot and Claude SDK maintain separate history management systems:
 
-    - **xbot Session.messages**: Used for memory consolidation (MEMORY.md/HISTORY.md)
-      and token estimation to trigger consolidation. The `last_consolidated` offset
-      tracks which messages have been archived.
+    - **xbot Session.messages**: Used as transcript input for durable memory extraction
+      and other background memory workers.
 
     - **Claude SDK session**: Manages its own conversation history via the `resume`
       parameter in ClaudeAgentOptions. SDK uses `sdk_session_id` to restore context.
 
     These two systems are intentionally independent:
-    - xbot consolidation → persistent long-term memory (survives restarts)
+    - xbot memory workers → persistent long-term memory (survives restarts)
     - SDK history → context window management (temporary, per-session)
 
-    This separation allows xbot to maintain searchable memory archives while
+    This separation allows xbot to maintain durable memory files while
     letting the SDK handle context window optimization independently.
     """
 
@@ -65,8 +65,9 @@ class Session:
             "role": role,
             "content": content,
             "timestamp": datetime.now().isoformat(),
-            **kwargs
+            **kwargs,
         }
+        msg.setdefault("uuid", str(_uuid.uuid4()))
         self.messages.append(msg)
         self.updated_at = datetime.now()
 
