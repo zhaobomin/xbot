@@ -81,7 +81,7 @@ def main():
         size = f.stat().st_size
         content = f.read_text(encoding="utf-8")
         fm = "✓ 有frontmatter" if has_frontmatter(content) else "✗ 无frontmatter"
-        print(f"  {rel:<40s}  {size:>6d}B  {fm}")
+        print(f"  {str(rel):<40s}  {size:>6d}B  {fm}")
     print()
 
     # ---------------------------------------------------------------
