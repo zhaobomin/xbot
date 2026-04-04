@@ -5,12 +5,15 @@ from datetime import datetime
 from pathlib import Path
 import re
 
+from xbot.logging import get_logger
 from xbot.memory.memdir.frontmatter import parse_frontmatter
 from xbot.memory.memdir.index import render_index
 from xbot.memory.memdir.paths import get_memory_dir
 from xbot.memory.memdir.scan import scan_memory_files
 from xbot.memory.memdir.types import VALID_MEMORY_TYPES
 from xbot.memory.models import MemoryDocument, MemoryHeader, MemoryType
+
+logger = get_logger(__name__)
 
 
 class MemoryDirStore:
@@ -58,7 +61,55 @@ class MemoryDirStore:
     def load_index_for_prompt(self) -> str:
         if not self.index_path.exists():
             self.rebuild_index()
-        return self.index_path.read_text(encoding="utf-8")
+            return self.index_path.read_text(encoding="utf-8")
+        content = self.index_path.read_text(encoding="utf-8")
+        if self._is_legacy_memory_content(content):
+            self._migrate_legacy_memory(content)
+            return self.index_path.read_text(encoding="utf-8")
+        return content
+
+    # ------------------------------------------------------------------
+    # Legacy MEMORY.md migration
+    # ------------------------------------------------------------------
+
+    def _is_legacy_memory_content(self, content: str) -> bool:
+        """Return True if MEMORY.md looks like old-style inline content, not an index.
+
+        The new index format only contains lines like ``- [name](path)`` or
+        ``> WARNING:`` overflow notices.  Legacy files typically have
+        frontmatter (``---``), numbered lists, or plain prose.
+        """
+        stripped = content.strip()
+        if not stripped:
+            return False
+        if stripped.startswith("---"):
+            return True
+        lines = [line for line in stripped.splitlines() if line.strip()]
+        if not lines:
+            return False
+        non_index = sum(
+            1 for line in lines
+            if not line.strip().startswith("- [") and not line.strip().startswith("> WARNING")
+        )
+        return non_index > len(lines) * 0.5
+
+    def _migrate_legacy_memory(self, content: str) -> None:
+        """Save legacy inline MEMORY.md as a memory file, then rebuild index."""
+        logger.info("[MemoryMigration] Detected legacy MEMORY.md with inline content, migrating…")
+        backup_dir = self.memory_dir / "project"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        backup_path = backup_dir / "legacy-memory.md"
+        if not backup_path.exists():
+            fm, body = parse_frontmatter(content)
+            if not body.strip():
+                body = content
+            self._atomic_write(
+                backup_path,
+                self._render_document("project", "Legacy Memory", "Migrated from old MEMORY.md", body),
+            )
+            logger.info("[MemoryMigration] Saved legacy content → %s", backup_path)
+        self.rebuild_index()
+        logger.info("[MemoryMigration] Index rebuilt. Migration complete.")
 
     def read_memory(self, path: Path) -> MemoryDocument:
         managed_path = self.resolve_managed_path(path)
