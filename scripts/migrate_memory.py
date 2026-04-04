@@ -100,15 +100,15 @@ def main():
         is_legacy = len(idx_lines) > 0 and non_index > len(idx_lines) * 0.5
 
         if is_legacy:
-            backup_path = MEMORY_DIR / "MEMORY_BACKUP.md"
+            backup_path = WORKSPACE / "MEMORY_BACKUP.md"
             print(f"  MEMORY.md 包含旧格式内联内容 ({len(index_content)}B)")
-            print(f"  将原样备份到: MEMORY_BACKUP.md (不做任何分类)")
+            print(f"  将原样备份到: {backup_path} (memory 目录外，不会被索引)")
             print(f"  备份后你可以手动将内容拆分到对应的 memory 文件中")
 
             if not DRY_RUN:
                 if not backup_path.exists():
                     backup_path.write_text(index_content + "\n", encoding="utf-8")
-                    print(f"  ✓ 已备份到 MEMORY_BACKUP.md")
+                    print(f"  ✓ 已备份到 {backup_path}")
                 else:
                     print(f"  ! MEMORY_BACKUP.md 已存在，跳过备份")
             print()
