@@ -1,189 +1,159 @@
 #!/usr/bin/env python3
 """
-xbot memory 手动迁移脚本
+xbot memory 迁移辅助脚本
+
+功能：
+  1. 扫描 memory 目录，显示文件状态
+  2. 如果 MEMORY.md 是旧的内联内容，备份到 workspace 根目录
+  3. 重建 MEMORY.md 索引
+
+不会自动添加 frontmatter 或修改任何 memory 文件内容。
+frontmatter 格式参考（需要你手动添加到每个 .md 文件开头）：
+
+  ---
+  name: 文件显示名称
+  description: 一句话描述，用于关键词匹配
+  type: user|project|entity
+  updated_at: 2026-04-05T00:00:00
+  ---
 
 使用方法:
-  1. 上传到服务器
-  2. python3 migrate_memory.py          # 先 dry-run 看看会做什么
-  3. python3 migrate_memory.py --apply  # 确认没问题后执行
+  python3 migrate_memory.py [workspace_path]          # dry-run
+  python3 migrate_memory.py [workspace_path] --apply  # 执行
 """
 import sys
-import os
 from pathlib import Path
-from datetime import datetime
-
-WORKSPACE = Path("/home/xbot/.xbot/workspace")
-MEMORY_DIR = WORKSPACE / "memory"
-INDEX_PATH = MEMORY_DIR / "MEMORY.md"
-
-DRY_RUN = "--apply" not in sys.argv
 
 
 def has_frontmatter(content: str) -> bool:
     return content.strip().startswith("---")
 
 
-def add_frontmatter(content: str, name: str, description: str, memory_type: str = "project") -> str:
-    now = datetime.now().isoformat(timespec="seconds")
-    return (
-        "---\n"
-        f"name: {name}\n"
-        f"description: {description}\n"
-        f"type: {memory_type}\n"
-        f"updated_at: {now}\n"
-        "---\n\n"
-        f"{content.strip()}\n"
+def is_index_format(content: str) -> bool:
+    """判断内容是否是新格式的索引（每行都是 '- [' 或 '> WARNING'）"""
+    lines = [l for l in content.strip().splitlines() if l.strip()]
+    if not lines:
+        return True  # 空文件视为有效索引
+    non_index = sum(
+        1 for l in lines
+        if not l.strip().startswith("- [") and not l.strip().startswith("> WARNING")
     )
-
-
-def extract_description(body: str, limit: int = 120) -> str:
-    """从正文提取前几行作为 description。"""
-    parts = []
-    total = 0
-    for line in body.splitlines():
-        stripped = line.strip().lstrip("#").strip().strip("-").strip()
-        if not stripped or stripped == "---":
-            continue
-        compact = " ".join(stripped.split())
-        needed = len(compact) + (2 if parts else 0)
-        if total + needed > limit:
-            if not parts:
-                return compact[: limit - 1].rstrip() + "…"
-            break
-        parts.append(compact)
-        total += needed
-    return "; ".join(parts) if parts else "Memory topic"
+    return non_index <= len(lines) * 0.5
 
 
 def main():
-    if DRY_RUN:
+    # 解析参数
+    args = [a for a in sys.argv[1:] if a != "--apply"]
+    apply_mode = "--apply" in sys.argv
+    workspace = Path(args[0]) if args else Path("/home/xbot/.xbot/workspace")
+    memory_dir = workspace / "memory"
+    index_path = memory_dir / "MEMORY.md"
+
+    if apply_mode:
         print("=" * 60)
-        print("  DRY RUN 模式 - 只显示会做什么，不实际修改")
-        print("  确认无误后运行: python3 migrate_memory.py --apply")
+        print("  APPLY 模式 - 正在执行")
         print("=" * 60)
     else:
         print("=" * 60)
-        print("  APPLY 模式 - 正在执行迁移")
+        print("  DRY RUN 模式 - 只显示，不修改")
         print("=" * 60)
     print()
 
-    if not MEMORY_DIR.exists():
-        print(f"[ERROR] Memory 目录不存在: {MEMORY_DIR}")
+    if not memory_dir.exists():
+        print(f"[ERROR] Memory 目录不存在: {memory_dir}")
         return
 
-    # ---------------------------------------------------------------
-    # Step 1: 扫描所有 .md 文件
-    # ---------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Step 1: 扫描
+    # ------------------------------------------------------------------
     print("[Step 1] 扫描 memory 目录...\n")
-    all_files = sorted(MEMORY_DIR.rglob("*.md"))
+    all_files = sorted(memory_dir.rglob("*.md"))
+    need_frontmatter = []
     for f in all_files:
-        rel = f.relative_to(MEMORY_DIR)
+        rel = str(f.relative_to(memory_dir))
         size = f.stat().st_size
         content = f.read_text(encoding="utf-8")
-        fm = "✓ 有frontmatter" if has_frontmatter(content) else "✗ 无frontmatter"
-        print(f"  {str(rel):<40s}  {size:>6d}B  {fm}")
+        if f.name == "MEMORY.md":
+            status = "(索引文件)"
+        elif has_frontmatter(content):
+            status = "OK"
+        else:
+            status = "!! 缺少 frontmatter"
+            need_frontmatter.append(rel)
+        print(f"  {rel:<40s}  {size:>6d}B  {status}")
     print()
 
-    # ---------------------------------------------------------------
-    # Step 2: 如果 MEMORY.md 是旧的内联内容，先备份再重建
-    # ---------------------------------------------------------------
-    print("[Step 2] 检查 MEMORY.md 是否包含旧的内联内容...\n")
-    if INDEX_PATH.exists():
-        index_content = INDEX_PATH.read_text(encoding="utf-8").strip()
-        # 新格式索引的每一行都以 "- [" 开头（或 "> WARNING"），
-        # 如果超过一半的行不是这种格式，说明是旧的内联内容
-        idx_lines = [l for l in index_content.splitlines() if l.strip()]
-        non_index = sum(
-            1 for l in idx_lines
-            if not l.strip().startswith("- [") and not l.strip().startswith("> WARNING")
-        )
-        is_legacy = len(idx_lines) > 0 and non_index > len(idx_lines) * 0.5
+    if need_frontmatter:
+        print("  以下文件缺少 frontmatter，请手动添加：")
+        for rel in need_frontmatter:
+            print(f"    - {rel}")
+        print()
+        print("  frontmatter 格式：")
+        print("    ---")
+        print("    name: 显示名称")
+        print("    description: 一句话描述（用于关键词匹配召回）")
+        print("    type: user|project|entity")
+        print("    updated_at: 2026-04-05T00:00:00")
+        print("    ---")
+        print()
 
-        if is_legacy:
-            backup_path = WORKSPACE / "MEMORY_BACKUP.md"
-            print(f"  MEMORY.md 包含旧格式内联内容 ({len(index_content)}B)")
-            print(f"  将原样备份到: {backup_path} (memory 目录外，不会被索引)")
-            print(f"  备份后你可以手动将内容拆分到对应的 memory 文件中")
-
-            if not DRY_RUN:
-                if not backup_path.exists():
-                    backup_path.write_text(index_content + "\n", encoding="utf-8")
-                    print(f"  ✓ 已备份到 {backup_path}")
-                else:
-                    print(f"  ! MEMORY_BACKUP.md 已存在，跳过备份")
-            print()
+    # ------------------------------------------------------------------
+    # Step 2: 备份旧 MEMORY.md
+    # ------------------------------------------------------------------
+    print("[Step 2] 检查 MEMORY.md...\n")
+    if index_path.exists():
+        content = index_path.read_text(encoding="utf-8")
+        if is_index_format(content):
+            print("  已经是索引格式，无需备份。\n")
         else:
-            print(f"  MEMORY.md 已经是索引格式，无需备份。\n")
-    else:
-        print(f"  MEMORY.md 不存在，跳过。\n")
-
-    # ---------------------------------------------------------------
-    # Step 3: 给没有 frontmatter 的文件添加
-    # ---------------------------------------------------------------
-    print("[Step 3] 检查需要添加 frontmatter 的文件...\n")
-    files_to_fix = []
-    for f in all_files:
-        if f.name == "MEMORY.md":
-            continue
-        content = f.read_text(encoding="utf-8")
-        if not has_frontmatter(content):
-            files_to_fix.append(f)
-
-    if not files_to_fix:
-        print("  所有文件都已有 frontmatter，跳过。\n")
-    else:
-        for f in files_to_fix:
-            rel = f.relative_to(MEMORY_DIR)
-            content = f.read_text(encoding="utf-8")
-            name = f.stem.replace("_", " ").replace("-", " ").title()
-            desc = extract_description(content)
-            print(f"  {rel}")
-            print(f"    -> name: {name}")
-            print(f"    -> description: {desc}")
-            print(f"    -> type: project")
-
-            if not DRY_RUN:
-                new_content = add_frontmatter(content, name, desc, "project")
-                f.write_text(new_content, encoding="utf-8")
-                print(f"    ✓ 已写入 frontmatter")
+            backup_path = workspace / "MEMORY_BACKUP.md"
+            print(f"  包含旧的内联内容 ({len(content.strip())}B)")
+            print(f"  备份到: {backup_path}")
+            if apply_mode:
+                if not backup_path.exists():
+                    backup_path.write_text(content, encoding="utf-8")
+                    print("  -> 已备份")
+                else:
+                    print("  -> MEMORY_BACKUP.md 已存在，跳过")
             print()
-
-    # ---------------------------------------------------------------
-    # ---------------------------------------------------------------
-    # Step 4: 重建 MEMORY.md 索引
-    # ---------------------------------------------------------------
-    print("[Step 4] 重建 MEMORY.md 索引...\n")
-    if DRY_RUN:
-        print("  (dry-run 跳过，apply 模式会自动重建)")
     else:
-        # 直接用 xbot 的 rebuild_index
+        print("  MEMORY.md 不存在。\n")
+
+    # ------------------------------------------------------------------
+    # Step 3: 重建索引
+    # ------------------------------------------------------------------
+    print("[Step 3] 重建 MEMORY.md 索引...\n")
+    if apply_mode:
         try:
-            sys.path.insert(0, str(WORKSPACE.parent.parent))
+            proj_root = str(Path(__file__).resolve().parent.parent)
+            if proj_root not in sys.path:
+                sys.path.insert(0, proj_root)
             from xbot.memory.memdir.store import MemoryDirStore
-            store = MemoryDirStore(WORKSPACE)
+            store = MemoryDirStore(workspace)
             store.rebuild_index()
-            print(f"  ✓ 索引已重建")
-            print()
-            print("  新的 MEMORY.md 内容:")
+            print("  -> 索引已重建\n")
+            print("  新的 MEMORY.md:")
             print("  " + "-" * 50)
-            for line in INDEX_PATH.read_text(encoding="utf-8").splitlines():
+            for line in index_path.read_text(encoding="utf-8").splitlines():
                 print(f"  {line}")
         except Exception as e:
-            print(f"  [WARN] 无法用 xbot 重建索引: {e}")
-            print(f"  请手动删除 {INDEX_PATH}，下次启动时会自动重建。")
+            print(f"  [ERROR] 重建失败: {e}")
+            print(f"  可以手动删除 {index_path}，下次启动会自动重建。")
+    else:
+        print("  (dry-run 跳过)")
     print()
 
-    # ---------------------------------------------------------------
-    # Done
-    # ---------------------------------------------------------------
-    if DRY_RUN:
+    if not apply_mode:
         print("=" * 60)
-        print("  以上是 dry-run 结果。确认无误后运行:")
-        print("  python3 migrate_memory.py --apply")
+        print("  确认无误后运行:")
+        print(f"  python3 {sys.argv[0]} {workspace} --apply")
         print("=" * 60)
     else:
         print("=" * 60)
-        print("  迁移完成！重启 xbot 后生效。")
+        print("  完成！")
+        if need_frontmatter:
+            print("  注意：还有文件缺少 frontmatter，请手动添加后")
+            print("  重新运行此脚本来更新索引。")
         print("=" * 60)
 
 
