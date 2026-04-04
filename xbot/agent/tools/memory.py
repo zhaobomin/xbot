@@ -33,7 +33,7 @@ class MemoryTool(Tool):
             },
             "path": {
                 "type": "string",
-                "description": "Topic file path for read, update, or delete.",
+                "description": "Topic file path (e.g. 'project/legacy-memory.md'). For 'read': omit to get the index, or provide a path to read that topic.",
             },
             "query": {
                 "type": "string",
@@ -116,7 +116,14 @@ class MemoryTool(Tool):
 
     def _read(self, path: str | None) -> str:
         if not path:
-            return self._get_memory_store().load_index_for_prompt()
+            index = self._get_memory_store().load_index_for_prompt()
+            if not index.strip():
+                return "No memory topics found."
+            return (
+                "Below is the memory index. To read a specific topic, "
+                "call this tool again with action='read' and path set to "
+                "the relative path shown in parentheses.\n\n" + index
+            )
         return self._get_memory_service().read_memory(path)
 
     async def _search(self, query: str | None, max_results: int) -> str:
