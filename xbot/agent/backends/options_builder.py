@@ -128,6 +128,9 @@ class OptionsBuilder:
             model=model,
             max_turns=self._sdk_config.max_turns,
             permission_mode=self._sdk_config.permission_mode,
+            # Isolate xbot's provider/runtime config from user-level Claude CLI settings
+            # such as ~/.claude/settings.json, which can override base URL and model env.
+            setting_sources=["local"],
             include_partial_messages=getattr(self._sdk_config, "include_partial_messages", False),
             resume=resume_session,
             mcp_servers=mcp_servers if mcp_servers else None,
