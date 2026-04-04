@@ -1,6 +1,6 @@
 [project]
 name = "xbot"
-version = "0.3.33"
+version = "0.3.34"
 description = "A lightweight personal AI assistant framework"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
@@ -52,7 +52,7 @@ dependencies = [
     "chardet>=3.0.2,<6.0.0",
     "openai>=2.8.0",
     "tiktoken>=0.12.0,<1.0.0",
-    "claude-agent-sdk>=0.1.54,<1.0.0",
+    "claude-agent-sdk>=0.1.56,<1.0.0",
     "reme-ai>=0.3.0,<1.0.0",
 ]
 

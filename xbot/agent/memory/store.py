@@ -19,6 +19,48 @@ if TYPE_CHECKING:
     from xbot.session.manager import Session, SessionManager
 
 
+# === Consolidation Prompt Templates ===
+
+CONSOLIDATION_SYSTEM_PROMPT = """You are a memory consolidation agent. Extract important information from conversations and save it for future sessions.
+
+## Extraction Guidelines
+
+### → MEMORY.md (Long-term Facts)
+Extract to long-term memory if:
+- User stated preferences or constraints
+- Project context that will be referenced later
+- Important configuration or relationships
+- Decisions that affect future behavior
+
+### → HISTORY.md (Event Log)
+Format: `[YYYY-MM-DD HH:MM] <summary>`
+Extract to history if:
+- Task completed or failed with outcome
+- Bug found and fix applied
+- Decision made with brief reasoning
+- Learning or insight discovered
+
+### → Ignore
+- Casual conversation without substance
+- Routine tool execution details
+- Temporary context without future value
+
+Be selective - only extract information that will be useful in future sessions."""
+
+CONSOLIDATION_USER_TEMPLATE = """## Current Long-term Memory
+{current_memory}
+
+## Conversation to Process
+{formatted_messages}
+
+## Context Size
+- Current MEMORY.md: ~{memory_tokens} tokens
+- Conversation: ~{conversation_tokens} tokens
+
+Call the save_memory tool with your extraction."""
+
+# === Tool Definition ===
+
 _SAVE_MEMORY_TOOL = [
     {
         "type": "function",
@@ -30,13 +72,15 @@ _SAVE_MEMORY_TOOL = [
                 "properties": {
                     "history_entry": {
                         "type": "string",
-                        "description": "A paragraph summarizing key events/decisions/topics. "
-                        "Start with [YYYY-MM-DD HH:MM]. Include detail useful for grep search.",
+                        "description": "A paragraph for HISTORY.md summarizing key events, decisions, or outcomes. "
+                        "Start with [YYYY-MM-DD HH:MM]. Include details useful for grep search. "
+                        "Examples: task completions, bug fixes, decisions made, insights discovered.",
                     },
                     "memory_update": {
                         "type": "string",
-                        "description": "Full updated long-term memory as markdown. Include all existing "
-                        "facts plus new ones. Return unchanged if nothing new.",
+                        "description": "Full updated MEMORY.md content as markdown. Include all existing "
+                        "facts plus new ones. Remove obsolete information. "
+                        "Return 'NO_CHANGE' if nothing new to add.",
                     },
                 },
                 "required": ["history_entry", "memory_update"],
@@ -86,7 +130,11 @@ class MemoryStore:
 
     def read_long_term(self) -> str:
         if self.memory_file.exists():
-            return self.memory_file.read_text(encoding="utf-8")
+            try:
+                return self.memory_file.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                logger.warning("Memory file contains invalid UTF-8, returning empty")
+                return ""
         return ""
 
     def write_long_term(self, content: str) -> None:
@@ -104,11 +152,25 @@ class MemoryStore:
     def _format_messages(messages: list[dict]) -> str:
         lines = []
         for message in messages:
-            if not message.get("content"):
+            # Skip messages with neither content nor tool_calls
+            has_content = message.get("content")
+            has_tool_calls = message.get("tool_calls")
+
+            if not has_content and not has_tool_calls:
                 continue
-            tools = f" [tools: {', '.join(message['tools_used'])}]" if message.get("tools_used") else ""
+
+            # Format tool_calls if present
+            tool_info = ""
+            if has_tool_calls:
+                tool_names = [tc.get("name", "?") for tc in has_tool_calls]
+                tool_info = f" [tools: {', '.join(tool_names)}]"
+            elif message.get("tools_used"):
+                tool_info = f" [tools: {', '.join(message['tools_used'])}]"
+
+            content = has_content if has_content else f"(tool calls: {len(has_tool_calls)})"
+
             lines.append(
-                f"[{message.get('timestamp', '?')[:16]}] {message['role'].upper()}{tools}: {message['content']}"
+                f"[{message.get('timestamp', '?')[:16]}] {message['role'].upper()}{tool_info}: {content}"
             )
         return "\n".join(lines)
 
@@ -122,16 +184,27 @@ class MemoryStore:
             return True
 
         current_memory = self.read_long_term()
-        prompt = f"""Process this conversation and call the save_memory tool with your consolidation.
+        formatted_messages = self._format_messages(messages)
 
-## Current Long-term Memory
-{current_memory or "(empty)"}
+        # Estimate token counts for context size hint
+        from xbot.utils.helpers import estimate_prompt_tokens
+        memory_tokens = estimate_prompt_tokens([
+            {"role": "user", "content": current_memory}
+        ]) if current_memory else 0
+        conversation_tokens = estimate_prompt_tokens([
+            {"role": "user", "content": formatted_messages}
+        ])
 
-## Conversation to Process
-{self._format_messages(messages)}"""
+        # Build prompt using the template
+        prompt = CONSOLIDATION_USER_TEMPLATE.format(
+            current_memory=current_memory or "(empty)",
+            formatted_messages=formatted_messages,
+            memory_tokens=memory_tokens,
+            conversation_tokens=conversation_tokens,
+        )
 
         chat_messages = [
-            {"role": "system", "content": "You are a memory consolidation agent. Call the save_memory tool with your consolidation of the conversation."},
+            {"role": "system", "content": CONSOLIDATION_SYSTEM_PROMPT},
             {"role": "user", "content": prompt},
         ]
 
@@ -185,8 +258,15 @@ class MemoryStore:
                 return self._fail_or_raw_archive(messages)
 
             self.append_history(entry)
-            update = _ensure_text(update)
-            if update != current_memory:
+            update = _ensure_text(update).strip()
+
+            # Handle NO_CHANGE indicator - don't update memory
+            if update.upper() == "NO_CHANGE":
+                logger.debug("Memory consolidation: LLM returned NO_CHANGE, keeping existing memory")
+            elif not update:
+                # Empty update - keep existing memory
+                logger.debug("Memory consolidation: empty memory_update, keeping existing memory")
+            elif update != current_memory:
                 self.write_long_term(update)
 
             self._consecutive_failures = 0
@@ -243,6 +323,9 @@ class MemoryConsolidator:
     """
 
     _MAX_CONSOLIDATION_ROUNDS = 5
+    TRIGGER_RATIO = 0.7  # 触发阈值比例：context_window 的 70%
+    MIN_RESERVE_TURNS = 5  # 最小保留对话轮数
+    MIN_RESERVE_TOKENS = 5_000  # 最小保留 tokens
 
     def __init__(
         self,
@@ -285,22 +368,44 @@ class MemoryConsolidator:
         session: Session,
         tokens_to_remove: int,
     ) -> tuple[int, int] | None:
-        """Pick a user-turn boundary that removes enough old prompt tokens."""
+        """Pick a user-turn boundary that removes enough old prompt tokens.
+
+        Respects MIN_RESERVE_TURNS to always keep the last N turns unconsolidated.
+        """
         start = session.last_consolidated
-        if start >= len(session.messages) or tokens_to_remove <= 0:
+        total_messages = len(session.messages)
+
+        if start >= total_messages or tokens_to_remove <= 0:
+            return None
+
+        # 计算最小保留边界：保留最后 MIN_RESERVE_TURNS 轮对话
+        # 每轮 = 1 user + 1 assistant = 2 messages
+        min_reserve_messages = self.MIN_RESERVE_TURNS * 2
+        max_consolidate_idx = total_messages - min_reserve_messages
+
+        # 如果对话太短，无法保留最小轮数，则不归档
+        if max_consolidate_idx <= start:
+            logger.debug(
+                "Cannot consolidate: need to reserve %s turns (%s messages), "
+                "only %s messages available after start",
+                self.MIN_RESERVE_TURNS,
+                min_reserve_messages,
+                total_messages - start,
+            )
             return None
 
         removed_tokens = 0
-        last_boundary: tuple[int, int] | None = None
-        for idx in range(start, len(session.messages)):
+        last_valid_boundary: tuple[int, int] | None = None
+
+        for idx in range(start, max_consolidate_idx):
             message = session.messages[idx]
             if idx > start and message.get("role") == "user":
-                last_boundary = (idx, removed_tokens)
+                last_valid_boundary = (idx, removed_tokens)
                 if removed_tokens >= tokens_to_remove:
-                    return last_boundary
+                    return last_valid_boundary
             removed_tokens += estimate_message_tokens(message)
 
-        return last_boundary
+        return last_valid_boundary
 
     def estimate_session_prompt_tokens(self, session: Session) -> tuple[int, str]:
         """Estimate current prompt size for the normal session history view."""
@@ -329,15 +434,17 @@ class MemoryConsolidator:
         return True
 
     async def maybe_consolidate_by_tokens(self, session: Session) -> None:
-        """Loop: archive old messages until prompt fits within half the context window."""
+        """Loop: archive old messages until prompt fits within (1 - TRIGGER_RATIO) of context window."""
         if not session.messages or self.context_window_tokens <= 0:
             return
 
         lock = self.get_lock(session.key)
         try:
             async with lock:
-                target = self.context_window_tokens // 2
-                trigger_threshold = target  # 触发阈值：context_window 的一半
+                # 使用 70% 阈值：触发阈值 = context_window * 0.7
+                # 目标 = context_window * 0.3（保留 30% 空间）
+                trigger_threshold = int(self.context_window_tokens * self.TRIGGER_RATIO)
+                target = int(self.context_window_tokens * (1 - self.TRIGGER_RATIO))
                 estimated, source = self.estimate_session_prompt_tokens(session)
                 if estimated <= 0:
                     return
@@ -390,13 +497,15 @@ class MemoryConsolidator:
         finally:
             self._cleanup_lock_if_idle(session.key, lock)
 
-    async def force_consolidate(self, session: Session) -> dict[str, Any]:
-        """Force consolidate all unconsolidated messages in a session.
+    async def force_consolidate(self, session: Session, reserve_last_n: int | None = None) -> dict[str, Any]:
+        """Force consolidate unconsolidated messages in a session.
 
         This is triggered by the /compact command.
 
         Args:
             session: The session to consolidate
+            reserve_last_n: Number of turns to reserve. None = use MIN_RESERVE_TURNS,
+                           0 = consolidate all (no reserve)
 
         Returns:
             Dict with consolidation stats: {
@@ -414,14 +523,43 @@ class MemoryConsolidator:
                 "success": True,
             }
 
+        # Use MIN_RESERVE_TURNS if reserve_last_n is None, otherwise use provided value
+        # reserve_last_n=0 means consolidate all (no reserve)
+        reserve_turns = self.MIN_RESERVE_TURNS if reserve_last_n is None else reserve_last_n
+        reserve_messages = reserve_turns * 2
+
         lock = self.get_lock(session.key)
         try:
             async with lock:
                 # Get tokens before
                 tokens_before, _ = self.estimate_session_prompt_tokens(session)
 
-                # Get unconsolidated messages
-                unconsolidated = session.messages[session.last_consolidated:]
+                # Calculate safe boundary respecting reserve
+                total_messages = len(session.messages)
+                max_consolidate_idx = total_messages - reserve_messages
+
+                # Start from last_consolidated
+                start = session.last_consolidated
+
+                # If conversation too short to reserve, don't consolidate (unless reserve=0)
+                if reserve_turns > 0 and max_consolidate_idx <= start:
+                    logger.debug(
+                        "Force consolidation: cannot consolidate, need to reserve %s turns (%s messages)",
+                        reserve_turns,
+                        reserve_messages,
+                    )
+                    return {
+                        "messages_consolidated": 0,
+                        "tokens_before": tokens_before,
+                        "tokens_after": tokens_before,
+                        "success": True,
+                    }
+
+                # When reserve=0, consolidate all unconsolidated messages
+                end_idx = max_consolidate_idx if reserve_turns > 0 else total_messages
+
+                # Get messages to consolidate
+                unconsolidated = session.messages[start:end_idx]
                 if not unconsolidated:
                     return {
                         "messages_consolidated": 0,
@@ -432,16 +570,17 @@ class MemoryConsolidator:
 
                 messages_count = len(unconsolidated)
                 logger.info(
-                    "Force consolidation for %s: %s messages, %s tokens",
+                    "Force consolidation for %s: %s messages, %s tokens (reserving %s turns)",
                     session.key,
                     messages_count,
                     tokens_before,
+                    reserve_turns,
                 )
 
-                # Consolidate all unconsolidated messages
+                # Consolidate selected messages
                 success = await self.consolidate_messages(unconsolidated)
                 if success:
-                    session.last_consolidated = len(session.messages)
+                    session.last_consolidated = start + messages_count
                     self.sessions.save(session)
 
                 # Get tokens after

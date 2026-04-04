@@ -2111,21 +2111,7 @@ class ClaudeSDKBackend(AgentBackend):
         if session is not None:
             session.add_message("user", context.prompt)
             self.sessions.save(session)
-            mode = getattr(self.sdk_config, "memory_consolidation_mode", "off")
-            if self.memory_consolidator and mode == "sync":
-                await self.memory_consolidator.maybe_consolidate_by_tokens(session)
-            elif self.memory_consolidator and mode == "async":
-                # Wrap consolidation in a task with error handling to prevent unhandled exceptions
-                async def _safe_consolidate():
-                    try:
-                        await self.memory_consolidator.maybe_consolidate_by_tokens(session)
-                    except asyncio.CancelledError:
-                        logger.debug(f"Memory consolidation cancelled for session {context.session_key}")
-                        raise
-                    except Exception as e:
-                        # Log but don't propagate - consolidation is non-critical
-                        logger.warning(f"Async memory consolidation failed for {context.session_key}: {e}")
-                asyncio.create_task(_safe_consolidate())
+            # Consolidation moved to after assistant message only (single trigger per turn)
 
         try:
             final_content = ""
