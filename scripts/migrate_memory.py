@@ -85,7 +85,7 @@ def main():
     print()
 
     # ---------------------------------------------------------------
-    # Step 2: 如果 MEMORY.md 是旧的内联内容，先备份到 legacy-memory.md
+    # Step 2: 如果 MEMORY.md 是旧的内联内容，先备份再重建
     # ---------------------------------------------------------------
     print("[Step 2] 检查 MEMORY.md 是否包含旧的内联内容...\n")
     if INDEX_PATH.exists():
@@ -100,20 +100,17 @@ def main():
         is_legacy = len(idx_lines) > 0 and non_index > len(idx_lines) * 0.5
 
         if is_legacy:
-            backup_path = MEMORY_DIR / "project" / "legacy-memory.md"
-            desc = extract_description(index_content)
+            backup_path = MEMORY_DIR / "MEMORY_BACKUP.md"
             print(f"  MEMORY.md 包含旧格式内联内容 ({len(index_content)}B)")
-            print(f"  将备份到: project/legacy-memory.md")
-            print(f"  -> description: {desc}")
+            print(f"  将原样备份到: MEMORY_BACKUP.md (不做任何分类)")
+            print(f"  备份后你可以手动将内容拆分到对应的 memory 文件中")
 
             if not DRY_RUN:
-                backup_path.parent.mkdir(parents=True, exist_ok=True)
                 if not backup_path.exists():
-                    new_content = add_frontmatter(index_content, "Legacy Memory", desc, "project")
-                    backup_path.write_text(new_content, encoding="utf-8")
-                    print(f"  ✓ 已备份旧内容到 project/legacy-memory.md")
+                    backup_path.write_text(index_content + "\n", encoding="utf-8")
+                    print(f"  ✓ 已备份到 MEMORY_BACKUP.md")
                 else:
-                    print(f"  ! project/legacy-memory.md 已存在，跳过备份")
+                    print(f"  ! MEMORY_BACKUP.md 已存在，跳过备份")
             print()
         else:
             print(f"  MEMORY.md 已经是索引格式，无需备份。\n")
@@ -152,35 +149,10 @@ def main():
             print()
 
     # ---------------------------------------------------------------
-    # Step 4: 检查 project/legacy-memory.md 的 description
     # ---------------------------------------------------------------
-    legacy_path = MEMORY_DIR / "project" / "legacy-memory.md"
-    if legacy_path.exists():
-        print("[Step 4] 检查 legacy-memory.md 的 description...\n")
-        content = legacy_path.read_text(encoding="utf-8")
-        if "Migrated from old MEMORY.md" in content:
-            # 提取更好的 description
-            lines = content.split("---")
-            body = lines[-1] if len(lines) >= 3 else content
-            new_desc = extract_description(body)
-            print(f"  当前 description: Migrated from old MEMORY.md")
-            print(f"  建议改为:          {new_desc}")
-
-            if not DRY_RUN:
-                new_content = content.replace(
-                    "description: Migrated from old MEMORY.md",
-                    f"description: {new_desc}",
-                )
-                legacy_path.write_text(new_content, encoding="utf-8")
-                print(f"  ✓ 已更新 description")
-        else:
-            print(f"  description 已经不是默认值，跳过。")
-        print()
-
+    # Step 4: 重建 MEMORY.md 索引
     # ---------------------------------------------------------------
-    # Step 5: 重建 MEMORY.md 索引
-    # ---------------------------------------------------------------
-    print("[Step 5] 重建 MEMORY.md 索引...\n")
+    print("[Step 4] 重建 MEMORY.md 索引...\n")
     if DRY_RUN:
         print("  (dry-run 跳过，apply 模式会自动重建)")
     else:
