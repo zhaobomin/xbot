@@ -205,5 +205,9 @@ class SessionManager:
                 task.cancel()
                 count += 1
 
+        # Wait for all tasks to complete their cancellation
+        if state.tasks:
+            await asyncio.gather(*state.tasks, return_exceptions=True)
+
         state.tasks = []
         return count

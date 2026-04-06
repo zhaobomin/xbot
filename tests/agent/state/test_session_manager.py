@@ -1,5 +1,6 @@
 """Tests for SessionManager."""
 
+import asyncio
 from unittest.mock import MagicMock
 
 import pytest
@@ -238,3 +239,69 @@ async def test_list_client_sessions():
     manager.set_client("slack:C2", mock_client)
     sessions = manager.list_client_sessions()
     assert set(sessions) == {"slack:C1", "slack:C2"}
+
+
+@pytest.mark.asyncio
+async def test_register_task():
+    """Test register_task adds task to session."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+
+    async def dummy_task():
+        await asyncio.sleep(1)
+
+    task = asyncio.create_task(dummy_task())
+    manager.register_task("slack:C12345", task)
+    state = manager.get("slack:C12345")
+    assert task in state.tasks
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+
+
+@pytest.mark.asyncio
+async def test_get_active_tasks():
+    """Test get_active_tasks returns session tasks."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+
+    async def dummy_task():
+        await asyncio.sleep(1)
+
+    task1 = asyncio.create_task(dummy_task())
+    task2 = asyncio.create_task(dummy_task())
+    manager.register_task("slack:C12345", task1)
+    manager.register_task("slack:C12345", task2)
+    tasks = manager.get_active_tasks("slack:C12345")
+    assert task1 in tasks
+    assert task2 in tasks
+    for t in [task1, task2]:
+        t.cancel()
+        try:
+            await t
+        except asyncio.CancelledError:
+            pass
+
+
+@pytest.mark.asyncio
+async def test_cancel_all_tasks():
+    """Test cancel_all_tasks cancels and clears session tasks."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+
+    async def dummy_task():
+        await asyncio.sleep(10)
+
+    task1 = asyncio.create_task(dummy_task())
+    task2 = asyncio.create_task(dummy_task())
+    manager.register_task("slack:C12345", task1)
+    manager.register_task("slack:C12345", task2)
+
+    count = await manager.cancel_all_tasks("slack:C12345")
+    assert count == 2
+    assert task1.cancelled() or task1.done()
+    assert task2.cancelled() or task2.done()
+    state = manager.get("slack:C12345")
+    assert len(state.tasks) == 0
