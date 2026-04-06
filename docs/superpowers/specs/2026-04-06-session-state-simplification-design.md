@@ -81,25 +81,224 @@ class SessionState:
 
 ### New Architecture
 
+#### Layer Comparison
+
 ```
-Before (5 layers):
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     BEFORE: 5 Layers + 11 Dicts                         │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ Runtime Layer                                                    │   │
+│  │  ├── _state_machine: SessionStateMachine (9 phases)             │   │
+│  │  ├── _session_store: SessionStore                                │   │
+│  │  └── _state_coordinator: SessionStateCoordinator                 │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                              ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ Adapter Layer                                                    │   │
+│  │  └── SessionStateAdapter (dual-write to legacy dicts)           │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                              ▼                                          │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ Legacy Dicts (11 dicts in Backend)                              │   │
+│  │  ├── _clients, _client_models, _sdk_session_ids                 │   │
+│  │  ├── _session_contexts, _client_last_used                       │   │
+│  │  ├── _active_task_ids, _active_request_ids                      │   │
+│  │  ├── _session_commands, _client_skills_versions                 │   │
+│  │  └── _long_running_turns, _client_creation_futures              │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  Total: ~3000 lines of state management code                           │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
 
-Runtime
-  ├── _state_machine: SessionStateMachine
-  ├── _session_store: SessionStore
-  └── _state_coordinator: SessionStateCoordinator
+                              ═══════════════
+                                 ▼ ▼ ▼ ▼
+                              ═══════════════
 
-Backend
-  ├── _state_adapter: SessionStateAdapter (dual-write)
-  └── 11 legacy dicts
+┌─────────────────────────────────────────────────────────────────────────┐
+│                     AFTER: 1 Layer + SessionManager                     │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ SessionManager (Single source of truth)                         │   │
+│  │                                                                  │   │
+│  │  _sessions: dict[str, SessionState]                             │   │
+│  │  _sdk_index: dict[str, str]  # sdk_id → session_key             │   │
+│  │  _global_lock: asyncio.Lock                                     │   │
+│  │                                                                  │   │
+│  │  Methods:                                                        │   │
+│  │  • get/get_or_create/get_by_sdk_id                              │   │
+│  │  • set_routing / resolve_routing                                │   │
+│  │  • set_client / get_client                                      │   │
+│  │  • start_request / end_request (phase transition)               │   │
+│  │  • register_task / cancel_all_tasks                             │   │
+│  │  • cleanup_session                                              │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  Total: ~400 lines of state management code                            │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
-After (1 layer):
+#### Data Flow Architecture
 
-Runtime
-  └── session_manager: SessionManager
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                           Message Flow                                   │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  Channel (Slack/Feishu/etc.)                                            │
+│       │                                                                 │
+│       ▼                                                                 │
+│  ┌─────────────────┐                                                    │
+│  │ InboundMessage  │  session_key = "slack:C12345"                     │
+│  │ channel,chat_id │                                                    │
+│  └────────┬────────┘                                                    │
+│           │                                                             │
+│           ▼                                                             │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ Runtime                                                          │   │
+│  │                                                                  │   │
+│  │  1. session_manager.can_start_request(session_key)              │   │
+│  │     └─ Check phase == IDLE                                      │   │
+│  │                                                                  │   │
+│  │  2. session_manager.start_request(session_key)                  │   │
+│  │     └─ Set phase = RUNNING                                      │   │
+│  │                                                                  │   │
+│  │  3. Backend.query(session_key, message)                         │   │
+│  └──────────────────────────┬──────────────────────────────────────┘   │
+│                             │                                           │
+│                             ▼                                           │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ SessionManager                                                   │   │
+│  │                                                                  │   │
+│  │  session_key ──► SessionState                                   │   │
+│  │                    ├── client (SDK client)                      │   │
+│  │                    ├── phase = RUNNING                          │   │
+│  │                    ├── channel, chat_id                         │   │
+│  │                    └── tasks[] (asyncio tasks)                 │   │
+│  └──────────────────────────┬──────────────────────────────────────┘   │
+│                             │                                           │
+│                             ▼                                           │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ Claude SDK Client                                                │   │
+│  │                                                                  │   │
+│  │  • session_id (UUID)                                            │   │
+│  │  • conversation history (managed by SDK)                        │   │
+│  │  • context usage (get_context_usage())                          │   │
+│  │  • interrupt() for cancellation                                 │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
 
-Backend
-  └── (direct access to session_manager)
+#### SessionState Internal Structure
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                        SessionState                                      │
+│                    (One per active session)                              │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ IDENTITY (xbot-managed)                                          │   │
+│  ├─────────────────────────────────────────────────────────────────┤   │
+│  │ session_key: str          "slack:C12345"                         │   │
+│  │ sdk_session_id: str|None  "uuid-abc-123"                         │   │
+│  │ channel: str              "slack"                                │   │
+│  │ chat_id: str              "C12345"                               │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ RUNTIME STATE (xbot-managed)                                     │   │
+│  ├─────────────────────────────────────────────────────────────────┤   │
+│  │ phase: SessionPhase       IDLE/RUNNING/WAITING_*/STOPPING/ERROR │   │
+│  │ lock: asyncio.Lock        Per-session concurrency control       │   │
+│  │ tasks: list[Task]         Active asyncio tasks for cancellation │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  ┌─────────────────────────────────────────────────────────────────┐   │
+│  │ CONNECTION (xbot-managed)                                        │   │
+│  ├─────────────────────────────────────────────────────────────────┤   │
+│  │ client: ClaudeSDKClient    SDK client instance                  │   │
+│  │ client_pid: int|None       For force kill if disconnect fails  │   │
+│  │ process_handle: Any|None   Process handle for force kill       │   │
+│  │ last_active: float         For TTL cleanup                      │   │
+│  └─────────────────────────────────────────────────────────────────┘   │
+│                                                                         │
+│  ═══════════════════════════════════════════════════════════════════   │
+│                                                                         │
+│  NOT NEEDED (SDK-managed):                                              │
+│  ─────────────────────────                                              │
+│  ❌ model, skills_version   → SDK options track this                   │
+│  ❌ commands                → SDK manages internally                   │
+│  ❌ current_task_id         → Use interrupt() instead                  │
+│  ❌ current_request_id      → SDK handles correlation                  │
+│  ❌ conversation history    → SDK persists to JSONL files              │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Responsibility Boundaries
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                    xbot vs SDK Responsibilities                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌───────────────────────────────┐  ┌───────────────────────────────┐  │
+│  │      xbot SessionManager      │  │        Claude SDK             │  │
+│  ├───────────────────────────────┤  ├───────────────────────────────┤  │
+│  │                               │  │                               │  │
+│  │  ✅ Session lifecycle         │  │  ✅ Conversation history      │  │
+│  │  ✅ Phase state machine       │  │  ✅ Context management        │  │
+│  │  ✅ Concurrency control       │  │  ✅ Memory files              │  │
+│  │  ✅ Connection pooling        │  │  ✅ MCP tools                 │  │
+│  │  ✅ Request routing           │  │  ✅ Skills                    │  │
+│  │     (channel/chat_id)        │  │  ✅ Model selection           │  │
+│  │  ✅ Task cancellation         │  │  ✅ Token counting            │  │
+│  │  ✅ Force kill orphan proc    │  │  ✅ Session persistence       │  │
+│  │                               │  │     (JSONL files)            │  │
+│  │  ❌ Conversation history      │  │                               │  │
+│  │  ❌ Context usage             │  │  ❌ Channel routing           │  │
+│  │  ❌ Memory/MCP/Skills state   │  │  ❌ Concurrency control       │  │
+│  │                               │  │  ❌ Connection pooling        │  │
+│  └───────────────────────────────┘  └───────────────────────────────┘  │
+│                                                                         │
+│  API Boundary:                                                          │
+│  ─────────────                                                          │
+│  • client.interrupt()       → Cancel request (no task_id needed)       │
+│  • client.get_context_usage() → Get token usage                        │
+│  • ResultMessage.session_id  → SDK returns its session UUID            │
+│  • session_manager maps sdk_session_id ↔ session_key ↔ (channel,chat)  │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Code Organization
+
+```
+Before:                               After:
+────────                              ────────
+
+xbot/agent/state/                     xbot/agent/state/
+├── __init__.py                       ├── __init__.py
+├── machine.py          (390 lines)   ├── session_manager.py  (400 lines) ✨ NEW
+├── store.py            (615 lines)   └── (deleted: ~2600 lines)
+├── context_mapping.py  (313 lines)
+├── snapshot.py         (135 lines)   
+├── checker.py          (300 lines)   ────────────────────────────────
+├── transaction.py      (500 lines)   
+├── coordinator.py      (503 lines)   Net reduction: ~2200 lines
+└── session_state_adapter.py (480 lines)
+
+xbot/agent/backends/
+└── claude_sdk_backend.py
+    └── 11 legacy dicts (in __init__)
+
+Total: ~3000 lines                    Total: ~400 lines
 ```
 
 ### SessionManager API
