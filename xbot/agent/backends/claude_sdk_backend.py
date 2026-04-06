@@ -396,6 +396,22 @@ class ClaudeSDKBackend(AgentBackend):
         elif session_key in self._clients:
             del self._clients[session_key]
 
+    def _get_last_active(self, session_key: str) -> float:
+        """Get last active time - dual mode."""
+        if self._use_new_state and self._state_manager:
+            state = self._state_manager.get(session_key)
+            return state.last_active if state else 0.0
+        return self._client_last_used.get(session_key, 0.0)
+
+    def _update_last_active(self, session_key: str) -> None:
+        """Update last active time - dual mode."""
+        if self._use_new_state and self._state_manager:
+            state = self._state_manager.get(session_key)
+            if state:
+                state.last_active = time.time()
+        else:
+            self._client_last_used[session_key] = time.time()
+
     # === SDK session ID and context helpers ===
 
     def _get_sdk_session_id_from_entry(self, session_key: str) -> str | None:
