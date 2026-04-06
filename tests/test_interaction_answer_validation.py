@@ -16,7 +16,7 @@ class MockRuntime:
 
     def __init__(self):
         self.bus = MessageBus()
-        self._state_coordinator = MagicMock()
+        self.session_manager = MagicMock()
         self._interaction_retry_counts: dict[str, int] = {}
 
     def _is_local_runtime_command(self, content: str) -> bool:
@@ -33,8 +33,8 @@ class TestAnswerValidation:
     @pytest.mark.asyncio
     async def test_valid_answer_exact_match(self, handler, runtime, mock_transaction):
         """Test exact match with valid option."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         # Setup interaction request with valid options
         request = InteractionRequest(
@@ -66,8 +66,8 @@ class TestAnswerValidation:
     @pytest.mark.asyncio
     async def test_valid_answer_case_insensitive(self, handler, runtime, mock_transaction):
         """Test case-insensitive match."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         request = InteractionRequest(
             request_id="req-123",
@@ -96,8 +96,8 @@ class TestAnswerValidation:
     @pytest.mark.asyncio
     async def test_invalid_answer_first_retry(self, handler, runtime, mock_transaction):
         """Test invalid answer triggers first retry."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         request = InteractionRequest(
             request_id="req-123",
@@ -137,8 +137,8 @@ class TestAnswerValidation:
     @pytest.mark.asyncio
     async def test_invalid_answer_max_retries(self, handler, runtime, mock_transaction):
         """Test max retries (3) cancels interaction."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         request = InteractionRequest(
             request_id="req-123",
@@ -178,8 +178,8 @@ class TestAnswerValidation:
     @pytest.mark.asyncio
     async def test_valid_answer_after_invalid(self, handler, runtime, mock_transaction):
         """Test valid answer after previous invalid attempts."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         request = InteractionRequest(
             request_id="req-123",
@@ -210,8 +210,8 @@ class TestAnswerValidation:
     @pytest.mark.asyncio
     async def test_suggested_mode_accepts_custom_answer(self, handler, runtime, mock_transaction):
         """Suggested mode should allow free-text answers outside suggestions."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         request = InteractionRequest(
             request_id="req-123",
@@ -243,8 +243,8 @@ class TestAnswerValidation:
     @pytest.mark.asyncio
     async def test_suggested_mode_normalizes_matching_answer(self, handler, runtime, mock_transaction):
         """Suggested mode should still normalize when user input matches a suggestion."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         request = InteractionRequest(
             request_id="req-123",
@@ -277,8 +277,8 @@ class TestAnswerValidation:
     @pytest.mark.asyncio
     async def test_no_valid_options_metadata(self, handler, runtime, mock_transaction):
         """Test interaction without valid_options skips validation."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         request = InteractionRequest(
             request_id="req-123",
@@ -307,8 +307,8 @@ class TestAnswerValidation:
     @pytest.mark.asyncio
     async def test_non_question_kind_skips_validation(self, handler, runtime, mock_transaction):
         """Test non-question kind skips validation."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         request = InteractionRequest(
             request_id="req-123",
@@ -337,8 +337,8 @@ class TestAnswerValidation:
     @pytest.mark.asyncio
     async def test_whitespace_trimming(self, handler, runtime, mock_transaction):
         """Test whitespace is trimmed before matching."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         request = InteractionRequest(
             request_id="req-123",
@@ -369,8 +369,8 @@ class TestAnswerValidation:
         self, handler, runtime, mock_transaction
     ):
         """Strict multi-question replies should validate each comma-separated answer."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         request = InteractionRequest(
             request_id="req-123",
@@ -407,8 +407,8 @@ class TestAnswerValidation:
         self, handler, runtime, mock_transaction
     ):
         """Strict multi-question replies should reject answers invalid for that specific question."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         request = InteractionRequest(
             request_id="req-123",
@@ -463,8 +463,8 @@ class TestRetryCountManagement:
     @pytest.mark.asyncio
     async def test_retry_count_cleanup_on_success(self, handler, runtime, mock_transaction):
         """Test retry count is cleaned up on successful answer."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         # Simulate previous failed attempts
         runtime._interaction_retry_counts["telegram:oc_123"] = 2

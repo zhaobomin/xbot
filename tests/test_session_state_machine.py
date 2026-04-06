@@ -166,7 +166,8 @@ class TestSessionState:
 
     def test_default_values(self):
         """Test default values."""
-        state = SessionState()
+        state = SessionState(session_key="test:123")
+        assert state.session_key == "test:123"
         assert state.phase == SessionPhase.IDLE
         assert state.reason == ""
         assert state.previous_phase is None
@@ -175,11 +176,13 @@ class TestSessionState:
     def test_custom_values(self):
         """Test custom values."""
         state = SessionState(
+            session_key="test:456",
             phase=SessionPhase.RUNNING,
             reason="testing",
             previous_phase=SessionPhase.IDLE,
             transition_count=5,
         )
+        assert state.session_key == "test:456"
         assert state.phase == SessionPhase.RUNNING
         assert state.reason == "testing"
         assert state.previous_phase == SessionPhase.IDLE

@@ -21,7 +21,7 @@ class MockRuntime:
 
     def __init__(self):
         self.bus = MessageBus()
-        self._state_coordinator = MagicMock()
+        self.session_manager = MagicMock()
         self._interaction_retry_counts: dict[str, int] = {}
 
     def _is_local_runtime_command(self, content: str) -> bool:
@@ -78,8 +78,8 @@ class TestBugFixes:
         After fix: retry count is cleaned up in all early return paths.
         """
         # Set state to WAITING_PERMISSION (not in allowed states)
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_PERMISSION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_PERMISSION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         # Setup pending interaction request (required to pass early check)
         request = InteractionRequest(
@@ -115,8 +115,8 @@ class TestBugFixes:
     @pytest.mark.asyncio
     async def test_stopping_state_cleanup_retry_count(self, handler, runtime, mock_transaction):
         """Bug 6: STOPPING state should also clean up retry count."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.STOPPING
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.STOPPING
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         # Setup pending interaction request
         request = InteractionRequest(
@@ -149,8 +149,8 @@ class TestBugFixes:
     @pytest.mark.asyncio
     async def test_error_state_cleanup_retry_count(self, handler, runtime, mock_transaction):
         """Bug 6: ERROR state should also clean up retry count."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.ERROR
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.ERROR
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         # Setup pending interaction request
         request = InteractionRequest(
@@ -186,8 +186,8 @@ class TestBugFixes:
 
         This ensures the fix doesn't break the normal retry mechanism.
         """
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         # Setup interaction request with valid options
         request = InteractionRequest(
@@ -231,8 +231,8 @@ class TestBugFixes:
         Before fix: Only 'question' type showed options
         After fix: 'approval', 'confirmation', and 'question' all show options
         """
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         # Create approval request with options
         request = InteractionRequest(
@@ -264,8 +264,8 @@ class TestBugFixes:
     @pytest.mark.asyncio
     async def test_confirmation_interaction_sends_with_options(self, handler, runtime, mock_transaction):
         """Bug 7: Confirmation type interactions should display options list."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         request = InteractionRequest(
             request_id="req-confirm",
@@ -301,8 +301,8 @@ class TestBugFixes:
         Before fix: Only matched option was recorded
         After fix: original_input is stored in response metadata
         """
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         request = InteractionRequest(
             request_id="req-original",
@@ -341,8 +341,8 @@ class TestBugFixes:
         Before fix: matched_option variable was used before assignment
         After fix: content is only set to matched_option inside the if block
         """
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         # Request without valid_options
         request = InteractionRequest(
@@ -379,8 +379,8 @@ class TestBugFixes:
 
         Regression test for UnboundLocalError on matched_option.
         """
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         # Confirmation without valid_options
         request = InteractionRequest(
@@ -414,8 +414,8 @@ class TestBugFixes:
         Before fix: Error message showed potentially modified content
         After fix: Error message shows original_input
         """
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         request = InteractionRequest(
             request_id="req-error-msg",
@@ -457,8 +457,8 @@ class TestBugFixes:
     @pytest.mark.asyncio
     async def test_retry_count_cleaned_on_max_retries(self, handler, runtime, mock_transaction):
         """Verify retry count is cleaned up after 3 failed attempts."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         request = InteractionRequest(
             request_id="req-max-retry",
@@ -496,8 +496,8 @@ class TestBugFixes:
     @pytest.mark.asyncio
     async def test_retry_count_cleaned_on_success(self, handler, runtime, mock_transaction):
         """Verify retry count is cleaned up after successful answer."""
-        runtime._state_coordinator.get_phase.return_value = SessionPhase.WAITING_INTERACTION
-        runtime._state_coordinator.transaction.return_value = mock_transaction
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
 
         request = InteractionRequest(
             request_id="req-success",

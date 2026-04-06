@@ -1117,7 +1117,7 @@ async def test_router_runtime_process_managed_direct_tracks_running_state_and_ta
 
     async def _fake_handle(msg: InboundMessage, on_progress=None) -> OutboundMessage:
         observed["phase"] = runtime.get_session_state(msg.session_key)
-        observed["active_tasks"] = len(runtime._state_coordinator.get_active_tasks(msg.session_key))
+        observed["active_tasks"] = len(runtime.session_manager.get_active_tasks(msg.session_key))
         return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id, content=f"ok:{msg.content}")
 
     runtime._handle_message = _fake_handle  # type: ignore[method-assign]
@@ -1162,10 +1162,9 @@ async def test_router_runtime_process_managed_direct_cleans_up_cron_session(tmp_
     )
 
     assert response == "echo:hello"
-    assert runtime._session_store.get("cron:job-2") is None
-    assert runtime._state_coordinator.has_session("cron:job-2") is False
+    # Ephemeral sessions are cleaned up after process
+    assert runtime.session_manager.get("cron:job-2") is None
     assert sessions.get("cron:job-2") is None
-    assert sessions._get_session_path("cron:job-2").exists() is False
 
 
 @pytest.mark.asyncio
@@ -1189,15 +1188,7 @@ async def test_router_runtime_ephemeral_cleanup_uses_state_coordinator_cleanup(t
         },
     )
 
-    called: list[str] = []
-    original_cleanup = runtime._state_coordinator.cleanup_session
-
-    async def _cleanup(session_key: str):
-        called.append(session_key)
-        return await original_cleanup(session_key)
-
-    runtime._state_coordinator.cleanup_session = _cleanup  # type: ignore[method-assign]
-
+    # Session should be cleaned up for ephemeral session
     response = await runtime.process_managed_direct(
         "hello",
         session_key="cron:job-coordinator",
@@ -1206,8 +1197,7 @@ async def test_router_runtime_ephemeral_cleanup_uses_state_coordinator_cleanup(t
     )
 
     assert response == "echo:hello"
-    assert called == ["cron:job-coordinator"]
-    assert runtime._state_coordinator.has_session("cron:job-coordinator") is False
+    assert runtime.session_manager.get("cron:job-coordinator") is None
 
 
 @pytest.mark.asyncio

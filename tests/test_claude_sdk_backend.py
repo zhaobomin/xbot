@@ -162,7 +162,7 @@ class TestClaudeSDKBackendSkillProgress:
     @pytest.mark.asyncio
     async def test_skill_progress_callback_prefers_current_session_from_session_store(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.state.store import SessionStore
+        from xbot.agent.state.session_manager import SessionManager
 
         published = []
 
@@ -177,16 +177,16 @@ class TestClaudeSDKBackendSkillProgress:
         backend = ClaudeSDKBackend()
         backend._permission_handler = _PermissionHandler()
 
-        session_store = SessionStore()
+        session_store = SessionManager()
         older = session_store.get_or_create("session:older")
         older.channel = "feishu"
         older.chat_id = "chat-older"
-        older.last_used = 10
+        older.last_active = 10
 
         active = session_store.get_or_create("session:active")
         active.channel = "telegram"
         active.chat_id = "chat-active"
-        active.last_used = 20
+        active.last_active = 20
 
         callback = backend._create_skill_progress_callback(
             {
@@ -206,7 +206,7 @@ class TestClaudeSDKBackendSkillProgress:
     @pytest.mark.asyncio
     async def test_skill_progress_callback_falls_back_to_recent_session_store_entry(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.state.store import SessionStore
+        from xbot.agent.state.session_manager import SessionManager
 
         published = []
 
@@ -216,16 +216,16 @@ class TestClaudeSDKBackendSkillProgress:
 
         backend = ClaudeSDKBackend()
 
-        session_store = SessionStore()
+        session_store = SessionManager()
         older = session_store.get_or_create("session:older")
         older.channel = "feishu"
         older.chat_id = "chat-older"
-        older.last_used = 10
+        older.last_active = 10
 
         newer = session_store.get_or_create("session:newer")
         newer.channel = "telegram"
         newer.chat_id = "chat-newer"
-        newer.last_used = 30
+        newer.last_active = 30
 
         callback = backend._create_skill_progress_callback(
             {
@@ -499,18 +499,17 @@ class TestClaudeSDKBackendShutdown:
             for client in mock_clients.values():
                 client.disconnect.assert_called_once()
 
-            assert backend._get_state_adapter().list_client_session_keys() == []
+            assert backend.state_manager.list_client_session_keys() == []
 
     @pytest.mark.asyncio
     async def test_shutdown_clears_session_store_clients(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.state.store import SessionStore
+        from xbot.agent.state.session_manager import SessionManager
 
         backend = ClaudeSDKBackend()
-        backend._session_store = SessionStore()
-        backend._use_session_store = True
-        entry1 = backend._session_store.get_or_create("s1")
-        entry2 = backend._session_store.get_or_create("s2")
+        backend.state_manager = SessionManager()
+        entry1 = backend.state_manager.get_or_create("s1")
+        entry2 = backend.state_manager.get_or_create("s2")
         client1 = MagicMock()
         client1.disconnect = AsyncMock()
         client2 = MagicMock()
@@ -522,8 +521,8 @@ class TestClaudeSDKBackendShutdown:
 
         client1.disconnect.assert_awaited_once()
         client2.disconnect.assert_awaited_once()
-        assert backend._session_store.get("s1").client is None
-        assert backend._session_store.get("s2").client is None
+        assert backend.state_manager.get("s1").client is None
+        assert backend.state_manager.get("s2").client is None
 
     @pytest.mark.asyncio
     async def test_shutdown_cancels_client_scavenger(self):
@@ -567,16 +566,15 @@ class TestClaudeSDKBackendLifecycle:
     @pytest.mark.asyncio
     async def test_scavenger_cleans_idle_client_without_new_requests(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.state.store import SessionStore
+        from xbot.agent.state.session_manager import SessionManager
 
         backend = ClaudeSDKBackend()
-        backend._session_store = SessionStore()
-        backend._use_session_store = True
-        entry = backend._session_store.get_or_create("cli:idle")
+        backend.state_manager = SessionManager()
+        entry = backend.state_manager.get_or_create("cli:idle")
         client = MagicMock()
         client.disconnect = AsyncMock()
         entry.client = client
-        entry.last_used = time.time() - 100
+        entry.last_active = time.time() - 100
         backend.sdk_config = MagicMock(
             client_lifecycle_enabled=True,
             client_scavenger_enabled=True,
@@ -597,12 +595,11 @@ class TestClaudeSDKBackendLifecycle:
     @pytest.mark.asyncio
     async def test_release_client_marks_leaked_on_disconnect_timeout(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.state.store import SessionStore
+        from xbot.agent.state.session_manager import SessionManager
 
         backend = ClaudeSDKBackend()
-        backend._session_store = SessionStore()
-        backend._use_session_store = True
-        entry = backend._session_store.get_or_create("cli:leak")
+        backend.state_manager = SessionManager()
+        entry = backend.state_manager.get_or_create("cli:leak")
 
         async def _hang_disconnect():
             await asyncio.sleep(10)
@@ -632,14 +629,13 @@ class TestClaudeSDKBackendLifecycle:
     @pytest.mark.asyncio
     async def test_release_client_preserves_sdk_session_for_non_ephemeral_session(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.state.store import SessionStore
+        from xbot.agent.state.session_manager import SessionManager
 
         backend = ClaudeSDKBackend()
-        backend._session_store = SessionStore()
-        backend._use_session_store = True
-        entry = backend._session_store.get_or_create("cli:keep-context")
+        backend.state_manager = SessionManager()
+        entry = backend.state_manager.get_or_create("cli:keep-context")
         entry.client = MagicMock(disconnect=AsyncMock())
-        backend._session_store.set_sdk_session_id("cli:keep-context", "sdk-keep")
+        await backend.state_manager.set_sdk_session_id("cli:keep-context", "sdk-keep")
 
         backend.sessions = MagicMock()
         session = MagicMock()
@@ -649,36 +645,34 @@ class TestClaudeSDKBackendLifecycle:
         released = await backend.release_client("cli:keep-context", reason="test-preserve")
 
         assert released is True
-        assert backend._session_store.get("cli:keep-context").sdk_session_id == "sdk-keep"
+        assert backend.state_manager.get("cli:keep-context").sdk_session_id == "sdk-keep"
         diagnostics = backend.get_client_lifecycle_diagnostics()
         assert diagnostics["clients"]["cli:keep-context"]["sdk_session_id"] == "sdk-keep"
 
     @pytest.mark.asyncio
     async def test_release_client_clears_sdk_session_for_ephemeral_session(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.state.store import SessionStore
+        from xbot.agent.state.session_manager import SessionManager
 
         backend = ClaudeSDKBackend()
-        backend._session_store = SessionStore()
-        backend._use_session_store = True
-        entry = backend._session_store.get_or_create("cron:job-1")
+        backend.state_manager = SessionManager()
+        entry = backend.state_manager.get_or_create("cron:job-1")
         entry.client = MagicMock(disconnect=AsyncMock())
-        backend._session_store.set_sdk_session_id("cron:job-1", "sdk-ephemeral")
+        await backend.state_manager.set_sdk_session_id("cron:job-1", "sdk-ephemeral")
 
         released = await backend.release_client("cron:job-1", reason="ephemeral_turn_end")
 
         assert released is True
-        assert backend._session_store.get("cron:job-1").sdk_session_id is None
+        assert backend.state_manager.get("cron:job-1").sdk_session_id is None
 
     @pytest.mark.asyncio
     async def test_release_client_force_kills_and_preserves_sdk_session_on_disconnect_failure(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.state.store import SessionStore
+        from xbot.agent.state.session_manager import SessionManager
 
         backend = ClaudeSDKBackend()
-        backend._session_store = SessionStore()
-        backend._use_session_store = True
-        entry = backend._session_store.get_or_create("cli:killed")
+        backend.state_manager = SessionManager()
+        entry = backend.state_manager.get_or_create("cli:killed")
 
         async def _hang_disconnect():
             await asyncio.sleep(10)
@@ -691,7 +685,7 @@ class TestClaudeSDKBackendLifecycle:
         client.disconnect = _hang_disconnect
         client.process = process
         entry.client = client
-        backend._session_store.set_sdk_session_id("cli:killed", "sdk-killed")
+        await backend.state_manager.set_sdk_session_id("cli:killed", "sdk-killed")
         backend.sdk_config = MagicMock(
             client_lifecycle_enabled=True,
             client_scavenger_enabled=True,
@@ -707,19 +701,18 @@ class TestClaudeSDKBackendLifecycle:
         released = await backend.release_client("cli:killed", reason="test-timeout")
 
         assert released is True
-        assert backend._session_store.get("cli:killed").sdk_session_id == "sdk-killed"
+        assert backend.state_manager.get("cli:killed").sdk_session_id == "sdk-killed"
         diagnostics = backend.get_client_lifecycle_diagnostics()
         assert diagnostics["clients"]["cli:killed"]["disconnect_state"] == "killed"
 
     @pytest.mark.asyncio
     async def test_release_client_records_fallback_diagnostics_when_lifecycle_disabled(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.state.store import SessionStore
+        from xbot.agent.state.session_manager import SessionManager
 
         backend = ClaudeSDKBackend()
-        backend._session_store = SessionStore()
-        backend._use_session_store = True
-        entry = backend._session_store.get_or_create("cli:fallback-leak")
+        backend.state_manager = SessionManager()
+        entry = backend.state_manager.get_or_create("cli:fallback-leak")
 
         async def _hang_disconnect():
             await asyncio.sleep(10)
@@ -727,7 +720,7 @@ class TestClaudeSDKBackendLifecycle:
         client = MagicMock()
         client.disconnect = _hang_disconnect
         entry.client = client
-        backend._session_store.set_sdk_session_id("cli:fallback-leak", "sdk-fallback")
+        await backend.state_manager.set_sdk_session_id("cli:fallback-leak", "sdk-fallback")
         backend.sdk_config = MagicMock(
             client_lifecycle_enabled=False,
             client_scavenger_enabled=False,
@@ -743,7 +736,7 @@ class TestClaudeSDKBackendLifecycle:
         released = await backend.release_client("cli:fallback-leak", reason="test-timeout")
 
         assert released is False
-        assert backend._session_store.get("cli:fallback-leak").sdk_session_id == "sdk-fallback"
+        assert backend.state_manager.get("cli:fallback-leak").sdk_session_id == "sdk-fallback"
         diagnostics = backend.get_client_lifecycle_diagnostics()
         assert diagnostics["fallback"]["counts"]["leaked"] == 1
         assert diagnostics["fallback"]["last_failure"]["session_key"] == "cli:fallback-leak"
@@ -751,12 +744,11 @@ class TestClaudeSDKBackendLifecycle:
     @pytest.mark.asyncio
     async def test_release_client_is_idempotent(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.state.store import SessionStore
+        from xbot.agent.state.session_manager import SessionManager
 
         backend = ClaudeSDKBackend()
-        backend._session_store = SessionStore()
-        backend._use_session_store = True
-        entry = backend._session_store.get_or_create("cli:idempotent")
+        backend.state_manager = SessionManager()
+        entry = backend.state_manager.get_or_create("cli:idempotent")
         client = MagicMock()
         client.disconnect = AsyncMock()
         entry.client = client
@@ -782,18 +774,17 @@ class TestClaudeSDKBackendLifecycle:
     @pytest.mark.asyncio
     async def test_get_or_create_client_returns_new_client_even_if_old_cleanup_mutates_state(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.state.store import SessionStore
+        from xbot.agent.state.session_manager import SessionManager
 
         backend = ClaudeSDKBackend()
-        backend._session_store = SessionStore()
-        backend._use_session_store = True
+        backend.state_manager = SessionManager()
         backend._build_options = MagicMock(return_value=MagicMock())
         backend._skill_manager = MagicMock(version="skills-v1")
         backend._options_builder = MagicMock()
         backend._options_builder._get_model_name.side_effect = ["model-b"]
 
         old_client = MagicMock(name="old-client")
-        entry = backend._session_store.get_or_create("s1")
+        entry = backend.state_manager.get_or_create("s1")
         entry.client = old_client
         entry.model = "model-a"
         entry.skills_version = "skills-v1"
@@ -820,11 +811,10 @@ class TestClaudeSDKBackendLifecycle:
     @pytest.mark.asyncio
     async def test_lru_eviction_updates_lifecycle_state_for_evicted_session(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.state.store import SessionStore
+        from xbot.agent.state.session_manager import SessionManager
 
         backend = ClaudeSDKBackend()
-        backend._session_store = SessionStore()
-        backend._use_session_store = True
+        backend.state_manager = SessionManager()
         backend.sdk_config = MagicMock(
             max_clients=1,
             client_lifecycle_enabled=True,
@@ -865,11 +855,10 @@ class TestClaudeSDKBackendLifecycle:
     @pytest.mark.asyncio
     async def test_client_recreation_keeps_new_lifecycle_state_connected(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.state.store import SessionStore
+        from xbot.agent.state.session_manager import SessionManager
 
         backend = ClaudeSDKBackend()
-        backend._session_store = SessionStore()
-        backend._use_session_store = True
+        backend.state_manager = SessionManager()
         backend.sdk_config = MagicMock(
             max_clients=10,
             client_lifecycle_enabled=True,
@@ -1517,14 +1506,14 @@ class TestOptionsBuilder:
     async def test_build_hooks_compact_notification_uses_session_store_before_legacy_dict(self):
         from claude_agent_sdk.types import HookMatcher
         from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
-        from xbot.agent.state.store import SessionStore
+        from xbot.agent.state.session_manager import SessionManager
 
         outbound_calls = []
-        session_store = SessionStore()
+        session_store = SessionManager()
         entry = session_store.get_or_create("session:store")
         entry.channel = "telegram"
         entry.chat_id = "chat-store"
-        session_store.set_sdk_session_id("session:store", "sdk-store")
+        await session_store.set_sdk_session_id("session:store", "sdk-store")
 
         class _Bus:
             async def publish_outbound(self, message):
@@ -2090,12 +2079,11 @@ class TestInterruptSession:
     @pytest.mark.asyncio
     async def test_interrupt_session_clears_session_store_state(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
-        from xbot.agent.state.store import SessionStore
+        from xbot.agent.state.session_manager import SessionManager
 
         backend = ClaudeSDKBackend()
-        backend._session_store = SessionStore()
-        backend._use_session_store = True
-        entry = backend._session_store.get_or_create("test_session")
+        backend.state_manager = SessionManager()
+        entry = backend.state_manager.get_or_create("test_session")
         mock_client = MagicMock()
         mock_client.interrupt = AsyncMock()
         mock_client.disconnect = AsyncMock()
@@ -2106,7 +2094,7 @@ class TestInterruptSession:
 
         mock_client.receive_messages = mock_receive_messages
         entry.client = mock_client
-        backend._session_store.set_sdk_session_id("test_session", "sdk_1")
+        await backend.state_manager.set_sdk_session_id("test_session", "sdk_1")
         entry.tasks = [MagicMock()]
         entry.task_id = "task_1"
         entry.request_id = "req_1"
@@ -2118,7 +2106,7 @@ class TestInterruptSession:
         assert entry.tasks == []
         assert entry.task_id is None
         assert entry.request_id is None
-        assert backend._session_store.get_by_sdk_id("sdk_1") is entry
+        assert backend.state_manager.get_by_sdk_id("sdk_1") is entry
 
     @pytest.mark.asyncio
     async def test_interrupt_session_exception(self):
@@ -2503,8 +2491,11 @@ class TestCompactSession:
         """compact_session should request SDK-native /compact and parse compact stats."""
         from claude_agent_sdk.types import ResultMessage, SystemMessage
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.state.session_manager import SessionManager
 
         backend = ClaudeSDKBackend()
+        backend.state_manager = SessionManager()
+        backend.state_manager.get_or_create("test_session")
 
         mock_sessions = MagicMock()
         mock_session = MagicMock()
@@ -2543,8 +2534,9 @@ class TestCompactSession:
         assert result["tokens_before"] == 1200
         assert result["tokens_after"] == 450
         assert result["usage"] == {"input_tokens": 12, "output_tokens": 3}
-        assert mock_session.metadata["sdk_session_id"] == "sdk-session-1"
-        mock_sessions.save.assert_called()
+        # SDK session ID is stored in state_manager
+        state = backend.state_manager.get("test_session")
+        assert state.sdk_session_id == "sdk-session-1"
 
     @pytest.mark.asyncio
     async def test_compact_session_without_boundary_keeps_default_stats(self):

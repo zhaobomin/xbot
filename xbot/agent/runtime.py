@@ -188,6 +188,9 @@ class AgentRuntime:
         # Retry count tracking for interaction responses (max 3 retries for invalid answers)
         self._interaction_retry_counts: dict[str, int] = {}
 
+        # State consistency checking
+        self._state_check_enabled = True
+
         # Register backend state sync callbacks
         self.shared_resources["on_backend_client_cleanup"] = self._on_backend_client_cleanup
         self._shutdown_lock = asyncio.Lock()

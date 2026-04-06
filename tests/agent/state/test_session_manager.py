@@ -42,7 +42,7 @@ async def test_set_sdk_session_id_creates_mapping():
     manager = SessionManager()
     state = manager.get_or_create("slack:C12345")
 
-    manager.set_sdk_session_id("slack:C12345", "sdk-uuid-abc-123")
+    await manager.set_sdk_session_id("slack:C12345", "sdk-uuid-abc-123")
 
     assert state.sdk_session_id == "sdk-uuid-abc-123"
     assert manager.get_by_sdk_id("sdk-uuid-abc-123") is state
@@ -53,10 +53,10 @@ async def test_set_sdk_session_id_updates_mapping():
     """Test that set_sdk_session_id updates existing mapping."""
     manager = SessionManager()
     state = manager.get_or_create("slack:C12345")
-    manager.set_sdk_session_id("slack:C12345", "sdk-uuid-old")
+    await manager.set_sdk_session_id("slack:C12345", "sdk-uuid-old")
 
     # Update to new SDK session ID
-    manager.set_sdk_session_id("slack:C12345", "sdk-uuid-new")
+    await manager.set_sdk_session_id("slack:C12345", "sdk-uuid-new")
 
     assert state.sdk_session_id == "sdk-uuid-new"
     assert manager.get_by_sdk_id("sdk-uuid-old") is None  # Old mapping removed
@@ -112,7 +112,7 @@ async def test_resolve_routing_by_sdk_session_id():
     manager = SessionManager()
     manager.get_or_create("slack:C12345")
     manager.set_routing("slack:C12345", "slack", "C12345")
-    manager.set_sdk_session_id("slack:C12345", "sdk-uuid-abc")
+    await manager.set_sdk_session_id("slack:C12345", "sdk-uuid-abc")
 
     result = manager.resolve_routing("sdk-uuid-abc")
     assert result == ("slack:C12345", "slack", "C12345")
@@ -313,7 +313,7 @@ async def test_cleanup_session():
     """Test cleanup_session removes session and mappings."""
     manager = SessionManager()
     manager.get_or_create("slack:C12345")
-    manager.set_sdk_session_id("slack:C12345", "sdk-uuid-abc")
+    await manager.set_sdk_session_id("slack:C12345", "sdk-uuid-abc")
 
     await manager.cleanup_session("slack:C12345")
 

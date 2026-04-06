@@ -34,7 +34,7 @@ class RuntimeResponseHandlers:
 
     @property
     def _state_coordinator(self):
-        return self._runtime._state_coordinator
+        return self._runtime.session_manager
 
     async def handle_permission_response(self, msg: InboundMessage) -> bool:
         """Check if the message is a permission response and handle it."""

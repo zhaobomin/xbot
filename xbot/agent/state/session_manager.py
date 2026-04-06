@@ -55,7 +55,7 @@ class SessionManager:
 
     # === SDK Session ID ===
 
-    def set_sdk_session_id(self, session_key: str, sdk_id: str | None) -> None:
+    def _set_sdk_session_id_impl(self, session_key: str, sdk_id: str | None) -> None:
         """Set SDK session UUID and update bidirectional mapping.
 
         - If sdk_id is None, clears the mapping
@@ -74,6 +74,10 @@ class SessionManager:
         state.sdk_session_id = sdk_id
         if sdk_id:
             self._sdk_index[sdk_id] = session_key
+
+    async def set_sdk_session_id(self, session_key: str, sdk_id: str | None) -> None:
+        """Set SDK session UUID and update bidirectional mapping (async for compatibility)."""
+        self._set_sdk_session_id_impl(session_key, sdk_id)
 
     # === Routing ===
 
@@ -393,12 +397,44 @@ class SessionManager:
 
     # === Transaction (async context manager) ===
 
+    class _Transaction:
+        """Transaction object for atomic state changes."""
+
+        def __init__(self, manager: "SessionManager", session_key: str, validate_on_commit: bool = True):
+            self.manager = manager
+            self.session_key = session_key
+            self.validate_on_commit = validate_on_commit
+            self._phase_set = False
+            self._lock_acquired = False
+
+        def set_phase(self, phase: SessionPhase, reason: str = "") -> None:
+            """Set session phase within transaction."""
+            self.manager.force_transition(self.session_key, phase, reason=reason)
+            self._phase_set = True
+
+        def acquire_lock(self) -> None:
+            """Mark that lock should be acquired (no-op in new implementation)."""
+            self._lock_acquired = True
+
+        def release_lock(self) -> None:
+            """Release lock (no-op in new implementation)."""
+            self._lock_acquired = False
+
+        def set_sdk_session_id(self, sdk_session_id: str | None) -> None:
+            """Set SDK session ID within transaction."""
+            self.manager._set_sdk_session_id_impl(self.session_key, sdk_session_id)
+
+        def clear_sdk_session_id(self) -> None:
+            """Clear SDK session ID within transaction."""
+            self.manager._set_sdk_session_id_impl(self.session_key, None)
+
     @asynccontextmanager
-    async def transaction(self, session_key: str):
-        """Async context manager for locking."""
+    async def transaction(self, session_key: str, validate_on_commit: bool = True):
+        """Async context manager for transactional state changes."""
+        tx = self._Transaction(self, session_key, validate_on_commit)
         lock = self.get_lock(session_key)
         async with lock:
-            yield
+            yield tx
 
     # === Session Reset ===
 
@@ -490,10 +526,6 @@ class SessionManager:
         state = self.get(session_key)
         return state.sdk_session_id if state else None
 
-    async def set_sdk_session_id(self, session_key: str, sdk_session_id: str | None) -> None:
-        """Set SDK session ID (async version for compatibility)."""
-        self.set_sdk_session_id(session_key, sdk_session_id)
-
     def get_context_by_session_key(self, session_key: str) -> tuple[str, str] | None:
         """Get channel and chat_id by session key."""
         return self.get_routing(session_key)
@@ -558,18 +590,51 @@ class SessionManager:
                 state.chat_id = ""
             state.tasks.clear()
 
-    def detach_runtime_state(self, session_key: str) -> dict[str, Any]:
+    def detach_runtime_state(self, session_key: str, preserve_sdk_context: bool = False) -> dict[str, Any]:
         """Detach runtime state from session."""
         state = self.get(session_key)
         if not state:
             return {}
+
+        client = state.client
+        sdk_session_id = state.sdk_session_id if preserve_sdk_context else None
+        channel = state.channel if preserve_sdk_context else ""
+        chat_id = state.chat_id if preserve_sdk_context else ""
+        model = state.model
+
+        # Clear state
+        state.client = None
+        if not preserve_sdk_context:
+            state.sdk_session_id = None
+            self._sdk_index.pop(sdk_session_id, None)
+            state.channel = ""
+            state.chat_id = ""
+        state.tasks.clear()
+        state.task_id = None
+        state.request_id = None
+
         return {
-            "client": state.client,
-            "sdk_session_id": state.sdk_session_id,
-            "channel": state.channel,
-            "chat_id": state.chat_id,
-            "model": state.model,
+            "client": client,
+            "sdk_session_id": sdk_session_id,
+            "channel": channel,
+            "chat_id": chat_id,
+            "model": model,
         }
+
+    def clear_all_contexts(self) -> None:
+        """Clear all session contexts."""
+        for state in self._sessions.values():
+            state.channel = ""
+            state.chat_id = ""
+
+    def enforce_legacy_context_limit(self, limit: int) -> None:
+        """Enforce a limit on the number of sessions stored (for legacy compatibility).
+
+        This is a no-op in the new SessionManager since we don't enforce limits here.
+        The limit is managed by the backend's own scavenger process.
+        """
+        # No-op - the new SessionManager doesn't enforce limits
+        pass
 
     def clear_context(self, session_key: str) -> None:
         """Clear context for session."""

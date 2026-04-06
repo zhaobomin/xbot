@@ -31,7 +31,7 @@ async def test_agent_runtime_task_cleanup():
     task = runtime._spawn_session_task(long_running(), session_key)
     
     # Verify task is registered
-    active_tasks = runtime._state_coordinator.get_active_tasks(session_key)
+    active_tasks = runtime.session_manager.get_active_tasks(session_key)
     assert task in active_tasks
     
     # Shutdown runtime
@@ -47,4 +47,4 @@ async def test_agent_runtime_task_cleanup():
     assert task.done()
     
     # Check if any tasks remain in coordinator
-    assert len(runtime._state_coordinator.get_active_tasks(session_key)) == 0
+    assert len(runtime.session_manager.get_active_tasks(session_key)) == 0

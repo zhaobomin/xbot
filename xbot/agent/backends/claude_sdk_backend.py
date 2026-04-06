@@ -858,6 +858,11 @@ class ClaudeSDKBackend(AgentBackend):
             self._state_manager = StateSessionManager()
         return self._state_manager
 
+    @state_manager.setter
+    def state_manager(self, value: StateSessionManager) -> None:
+        """Set state manager (for testing)."""
+        self._state_manager = value
+
     def _clear_legacy_tracking_state(self, session_key: str, sdk_session_id: str | None, *, clear_context: bool = False) -> None:
         """Clear legacy tracking dictionaries for a session."""
         self.state_manager.clear_tracking_state(
@@ -1098,9 +1103,11 @@ class ClaudeSDKBackend(AgentBackend):
                     entry = session_store.get(session_key)
                     if entry is None or not entry.channel or not entry.chat_id:
                         continue
-                    if entry.last_used >= newest_last_used:
+                    # Use last_active (SessionManager) or last_used (legacy SessionStore)
+                    last_used = getattr(entry, "last_active", getattr(entry, "last_used", 0))
+                    if last_used >= newest_last_used:
                         newest_entry = entry
-                        newest_last_used = entry.last_used
+                        newest_last_used = last_used
                 if newest_entry is not None:
                     return (newest_entry.channel, newest_entry.chat_id)
 
@@ -1314,10 +1321,11 @@ class ClaudeSDKBackend(AgentBackend):
                 had_sdk_sid = True
 
         # Get client and clear all state
-        client = self.state_manager.detach_runtime_state(
+        state_dict = self.state_manager.detach_runtime_state(
             session_key,
             preserve_sdk_context=preserve_sdk_context,
         )
+        client = state_dict.get("client") if isinstance(state_dict, dict) else state_dict
 
         # Clear session context for compact notifications
         if not preserve_sdk_context:
