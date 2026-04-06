@@ -135,3 +135,75 @@ class SessionManager:
             return
         state.phase = phase
         state.last_active = time.time()
+
+    # === Connection ===
+
+    def set_client(self, session_key: str, client: ClaudeSDKClient) -> None:
+        """Set SDK client for session."""
+        state = self.get_or_create(session_key)
+        state.client = client
+        state.last_active = time.time()
+
+    def get_client(self, session_key: str) -> ClaudeSDKClient | None:
+        """Get SDK client for session."""
+        state = self.get(session_key)
+        if state is None:
+            return None
+        return state.client
+
+    def has_client(self, session_key: str) -> bool:
+        """Check if session has an active client."""
+        state = self.get(session_key)
+        return state is not None and state.client is not None
+
+    def list_client_sessions(self) -> list[str]:
+        """List all sessions that have active clients."""
+        return [
+            key for key, state in self._sessions.items()
+            if state.client is not None
+        ]
+
+    def set_process_info(
+        self,
+        session_key: str,
+        pid: int | None,
+        handle: Any | None
+    ) -> None:
+        """Set process tracking info for force kill capability."""
+        state = self.get(session_key)
+        if state is None:
+            return
+        state.client_pid = pid
+        state.process_handle = handle
+
+    # === Tasks ===
+
+    def register_task(self, session_key: str, task: asyncio.Task) -> None:
+        """Register an asyncio.Task for tracking."""
+        state = self.get(session_key)
+        if state is None:
+            logger.warning(f"register_task: session {session_key} not found")
+            return
+        state.tasks.append(task)
+
+    def get_active_tasks(self, session_key: str) -> list[asyncio.Task]:
+        """Get all active asyncio.Tasks for session."""
+        state = self.get(session_key)
+        if state is None:
+            return []
+        return list(state.tasks)
+
+    async def cancel_all_tasks(self, session_key: str) -> int:
+        """Cancel all active tasks for session. Returns count cancelled."""
+        state = self.get(session_key)
+        if state is None:
+            return 0
+
+        count = 0
+        for task in state.tasks:
+            if not task.done():
+                task.cancel()
+                count += 1
+
+        state.tasks = []
+        return count

@@ -1,5 +1,7 @@
 """Tests for SessionManager."""
 
+from unittest.mock import MagicMock
+
 import pytest
 
 from xbot.agent.state.session_manager import SessionManager
@@ -189,3 +191,50 @@ async def test_end_request_can_set_custom_phase():
 
     state = manager.get("slack:C12345")
     assert state.phase == SessionPhase.ERROR
+
+
+@pytest.mark.asyncio
+async def test_set_client():
+    """Test set_client stores client in session state."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+    mock_client = MagicMock()
+    manager.set_client("slack:C12345", mock_client)
+    state = manager.get("slack:C12345")
+    assert state.client is mock_client
+
+
+@pytest.mark.asyncio
+async def test_get_client():
+    """Test get_client retrieves client."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+    mock_client = MagicMock()
+    manager.set_client("slack:C12345", mock_client)
+    client = manager.get_client("slack:C12345")
+    assert client is mock_client
+
+
+@pytest.mark.asyncio
+async def test_has_client():
+    """Test has_client checks if session has client."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+    assert manager.has_client("slack:C12345") is False
+    mock_client = MagicMock()
+    manager.set_client("slack:C12345", mock_client)
+    assert manager.has_client("slack:C12345") is True
+
+
+@pytest.mark.asyncio
+async def test_list_client_sessions():
+    """Test list_client_sessions returns sessions with clients."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C1")
+    manager.get_or_create("slack:C2")
+    manager.get_or_create("slack:C3")
+    mock_client = MagicMock()
+    manager.set_client("slack:C1", mock_client)
+    manager.set_client("slack:C2", mock_client)
+    sessions = manager.list_client_sessions()
+    assert set(sessions) == {"slack:C1", "slack:C2"}
