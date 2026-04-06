@@ -150,10 +150,8 @@ class ClaudeSDKBackend(AgentBackend):
         self._clients: dict[str, ClaudeSDKClient] = {}
         self._clients_lock = asyncio.Lock()
         self._client_last_used: dict[str, float] = {}  # Track last usage time for TTL cleanup
-        self._client_models: dict[str, str] = {}  # Track model used for each client (for model change detection)
         self._active_task_ids: dict[str, str] = {}
         self._long_running_turns: set[str] = set()
-        self._session_commands: dict[str, list[str]] = {}
         self.tools: Any = None
         self.sessions: SessionManager | None = None
         self.memory_consolidator: MemoryConsolidator | None = None
@@ -164,7 +162,6 @@ class ClaudeSDKBackend(AgentBackend):
         self._message_converter: MessageConverter | None = None
         self._permission_handler: Any = None
         self._skill_manager: Any = None
-        self._client_skills_versions: dict[str, str | None] = {}  # Track skills version per client
         self._sdk_session_ids: dict[str, str] = {}  # SDK session ID to session key mapping
         self._adapter_epoch: int = 0  # Bumped on initialize() to detect stale adapters
 
@@ -174,7 +171,7 @@ class ClaudeSDKBackend(AgentBackend):
         self._client_lifecycle = ClientLifecycleManager()
         self._client_scavenger_task: asyncio.Task | None = None
         self._background_release_tasks: set[asyncio.Task] = set()  # Track fire-and-forget release tasks
-        self._client_creation_futures: dict[str, asyncio.Future] = {}
+        self._client_creation_locks: dict[str, asyncio.Lock] = {}  # Per-session locks for coordinating concurrent creation
         self._session_contexts_lock = asyncio.Lock()  # Protect _session_contexts dict access
         self._fallback_release_diagnostics: dict[str, Any] = {
             "counts": {"disconnected": 0, "killed": 0, "leaked": 0},
@@ -273,9 +270,6 @@ class ClaudeSDKBackend(AgentBackend):
             use_session_store=self._uses_session_store(),
             shared_resources=getattr(self, "_shared_resources", None),
             sessions=getattr(self, "sessions", None),
-            legacy_models=getattr(self, "_client_models", None),
-            legacy_skills_versions=getattr(self, "_client_skills_versions", None),
-            legacy_commands=getattr(self, "_session_commands", None),
             legacy_last_used=getattr(self, "_client_last_used", None),
             legacy_task_ids=getattr(self, "_active_task_ids", None),
             legacy_clients=getattr(self, "_clients", None),
@@ -1293,16 +1287,18 @@ class ClaudeSDKBackend(AgentBackend):
         Returns:
             ClaudeSDKClient instance for the session
         """
-        # Collect clients that need to be disconnected (outside lock)
-        clients_to_disconnect: list[tuple["ClaudeSDKClient", str, str]] = []
-        creation_future: asyncio.Future | None = None
-        should_create = False
         current_model = self._options_builder._get_model_name() if self._options_builder else None
         current_skills_version = self._skill_manager.version if self._skill_manager else None
 
+        # Use per-session lock to coordinate concurrent creation for same session
         async with self._clients_lock:
+            if session_key not in self._client_creation_locks:
+                self._client_creation_locks[session_key] = asyncio.Lock()
+            session_creation_lock = self._client_creation_locks[session_key]
 
-            # Check if client exists and model/skills haven't changed
+        # Acquire per-session lock to prevent concurrent creation for same session
+        async with session_creation_lock:
+            # Check if client already exists (another task may have created it)
             if self._has_client_in_entry(session_key):
                 cached_model = self._get_model_from_entry(session_key)
                 cached_skills = self._get_skills_version_from_entry(session_key)
@@ -1326,43 +1322,24 @@ class ClaudeSDKBackend(AgentBackend):
                     logger.info(f"[Client] Recreating client for session={session_key}: {', '.join(reasons)}")
                     old_client = self._remove_client_state(session_key)
                     if old_client is not None:
-                        # Defer disconnect to outside the lock
-                        clients_to_disconnect.append((old_client, session_key, "model/skills change"))
+                        await self._finalize_detached_client_cleanup(
+                            session_key,
+                            old_client,
+                            reason="client recreation (model/skills change)",
+                        )
 
-            creation_future = self._client_creation_futures.get(session_key)
-            if creation_future is None:
-                creation_future = asyncio.get_running_loop().create_future()
-                self._client_creation_futures[session_key] = creation_future
-                should_create = True
+            # Check if we need to evict clients before creating new one
+            client_count = len(self._get_state_adapter().list_client_session_keys())
+            if client_count >= self.max_clients:
+                evicted_client, evicted_key = await self._evict_lru_client_unlocked()
+                if evicted_client is not None:
+                    await self._finalize_detached_client_cleanup(
+                        evicted_key,
+                        evicted_client,
+                        reason="client recreation (LRU eviction)",
+                    )
 
-            if should_create:
-                client_count = len(self._get_state_adapter().list_client_session_keys())
-                if client_count >= self.max_clients:
-                    evicted_client, evicted_key = await self._evict_lru_client_unlocked()
-                    if evicted_client is not None:
-                        clients_to_disconnect.append((evicted_client, evicted_key, "LRU eviction"))
-
-        # Disconnect old clients outside the lock
-        for old_client, client_key, reason in clients_to_disconnect:
-            await self._finalize_detached_client_cleanup(
-                client_key,
-                old_client,
-                reason=f"client recreation ({reason})",
-            )
-            # Notify runtime to sync state
-            on_cleanup = self._shared_resources.get("on_backend_client_cleanup")
-            if on_cleanup:
-                try:
-                    await on_cleanup(client_key)
-                except Exception as e:
-                    logger.debug(f"Error in backend client cleanup callback: {e}")
-
-        if not should_create:
-            assert creation_future is not None
-            return await asyncio.shield(creation_future)
-
-        assert creation_future is not None
-        try:
+            # Create new client
             client_start = time.perf_counter()
             logger.debug(f"[Client] Creating new client for session={session_key}")
 
@@ -1381,27 +1358,13 @@ class ClaudeSDKBackend(AgentBackend):
             total_time = time.perf_counter() - client_start
             logger.debug(f"[Client] Total client creation took {total_time:.2f}s for session={session_key}")
 
-            async with self._clients_lock:
-                self._set_client_in_entry(session_key, client)
-                self._touch_entry(session_key)
-                self._set_model_in_entry(session_key, current_model)
-                self._set_skills_version_in_entry(session_key, current_skills_version)
-                logger.debug(f"[Client] Client created for session={session_key}, model={current_model}")
-                await self._register_managed_client(session_key, client)
-                # Set result BEFORE popping to avoid race condition
-                pending = self._client_creation_futures.get(session_key)
-                if pending is not None and not pending.done():
-                    pending.set_result(client)
-                self._client_creation_futures.pop(session_key, None)
+            self._set_client_in_entry(session_key, client)
+            self._touch_entry(session_key)
+            self._set_model_in_entry(session_key, current_model)
+            self._set_skills_version_in_entry(session_key, current_skills_version)
+            logger.debug(f"[Client] Client created for session={session_key}, model={current_model}")
+            await self._register_managed_client(session_key, client)
             return client
-        except BaseException as e:
-            async with self._clients_lock:
-                # Set exception BEFORE popping to avoid race condition
-                pending = self._client_creation_futures.get(session_key)
-                if pending is not None and not pending.done():
-                    pending.set_exception(e)
-                self._client_creation_futures.pop(session_key, None)
-            raise
 
     def _remove_client_state(
         self,
