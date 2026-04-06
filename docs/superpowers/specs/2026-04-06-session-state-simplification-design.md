@@ -416,6 +416,53 @@ await client.stop_task(task_id)
 - `interrupt_session()` → unchanged (uses `interrupt()`)
 - `reset_session()` → change from `stop_task(task_id)` to `interrupt()`
 
+### Concurrent Request Protection
+
+**Current Bug**: The existing code uses `force_transition()` which bypasses phase checks, allowing concurrent requests to mix messages.
+
+```python
+# Current (BUG):
+self._state_coordinator.force_transition(
+    msg.session_key, SessionPhase.RUNNING, reason="dispatch_start"
+)  # ⚠️ Overwrites phase without checking!
+```
+
+**Fix**: Check phase before starting a new request.
+
+```python
+# New (FIXED):
+if not session_manager.can_start_request(session_key):
+    await bus.publish_outbound(OutboundMessage(
+        channel=msg.channel,
+        chat_id=msg.chat_id,
+        content="⏳ 正在处理上一个请求，请稍候再试。",
+    ))
+    continue
+
+session_manager.start_request(session_key)
+```
+
+**Strategy**: Direct rejection (simplest approach). Users can retry or use `!stop` to cancel the running request.
+
+**Implementation in SessionManager**:
+
+```python
+def can_start_request(self, session_key: str) -> bool:
+    """Check if a new request can be started."""
+    state = self.get(session_key)
+    if state is None:
+        return True
+    return state.phase == SessionPhase.IDLE
+
+def start_request(self, session_key: str) -> bool:
+    """Transition to RUNNING phase. Returns False if not IDLE."""
+    state = self.get_or_create(session_key)
+    if state.phase != SessionPhase.IDLE:
+        return False
+    state.phase = SessionPhase.RUNNING
+    return True
+```
+
 ### File Changes
 
 #### Deleted Files (~1500 lines total)
