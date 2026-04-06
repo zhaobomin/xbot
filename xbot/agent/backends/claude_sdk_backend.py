@@ -152,7 +152,6 @@ class ClaudeSDKBackend(AgentBackend):
         self._client_last_used: dict[str, float] = {}  # Track last usage time for TTL cleanup
         self._client_models: dict[str, str] = {}  # Track model used for each client (for model change detection)
         self._active_task_ids: dict[str, str] = {}
-        self._active_request_ids: dict[str, str] = {}  # Track request IDs for request-response validation
         self._long_running_turns: set[str] = set()
         self._session_commands: dict[str, list[str]] = {}
         self.tools: Any = None
@@ -279,7 +278,6 @@ class ClaudeSDKBackend(AgentBackend):
             legacy_commands=getattr(self, "_session_commands", None),
             legacy_last_used=getattr(self, "_client_last_used", None),
             legacy_task_ids=getattr(self, "_active_task_ids", None),
-            legacy_request_ids=getattr(self, "_active_request_ids", None),
             legacy_clients=getattr(self, "_clients", None),
             legacy_sdk_session_ids=getattr(self, "_sdk_session_ids", None),
         )
