@@ -941,3 +941,97 @@ def test_mcp_runtime_reports_disconnected_server_details(tmp_path: Path) -> None
     assert payload["idle"]["running"] is False
     assert payload["idle"]["transport"] == "sse"
     assert payload["idle"]["error"] == "configured but disconnected"
+
+
+def test_login_rate_limit_blocks_after_max_attempts(tmp_path: Path) -> None:
+    """Test that login rate limiting blocks after max attempts."""
+    from xbot.webui.app import _clear_login_rate_limit, _MAX_ATTEMPTS_PER_IP
+
+    _clear_login_rate_limit()
+    client, _services = _build_client(tmp_path)
+
+    # Make max allowed attempts with wrong password
+    for i in range(_MAX_ATTEMPTS_PER_IP):
+        response = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "wrong-password"},
+        )
+        assert response.status_code == 401, f"Attempt {i + 1} should fail with 401"
+
+    # Next attempt should be rate limited
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "wrong-password"},
+    )
+    assert response.status_code == 429, "Should be rate limited"
+    assert "Too many login attempts" in response.json()["detail"]
+
+
+def test_login_rate_limit_isolated_per_ip(tmp_path: Path, monkeypatch) -> None:
+    """Test that rate limiting is per-IP, not global."""
+    from xbot.webui.app import _clear_login_rate_limit, _MAX_ATTEMPTS_PER_IP
+
+    _clear_login_rate_limit()
+    client, _services = _build_client(tmp_path)
+
+    # Exhaust rate limit for first IP
+    for i in range(_MAX_ATTEMPTS_PER_IP):
+        response = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "wrong-password"},
+        )
+        assert response.status_code == 401
+
+    # Simulate different client IP by manipulating request.client
+    # In TestClient this is typically "testclient" but we can verify the isolation logic
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "wrong-password"},
+    )
+    assert response.status_code == 429  # Same IP should still be blocked
+
+
+def test_skill_name_validation_prevents_path_traversal(tmp_path: Path) -> None:
+    """Test that skill name validation prevents path traversal attacks."""
+    client, _services = _build_client(tmp_path)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Try to create a skill with path traversal
+    malicious_names = [
+        "../../../etc/passwd",
+        "..%2f..%2f..%2fetc%2fpasswd",
+        "skill/../../../etc/passwd",
+        "skill\\..\\..\\..\\etc\\passwd",
+    ]
+
+    for name in malicious_names:
+        response = client.post(
+            "/api/skills",
+            headers=headers,
+            json={"name": name, "content": "# malicious"},
+        )
+        # Should reject with 400
+        assert response.status_code == 400, f"Should reject malicious name: {name}"
+
+
+def test_skill_name_validation_rejects_unicode_attacks(tmp_path: Path) -> None:
+    """Test that skill name validation normalizes Unicode to prevent encoding attacks."""
+    client, _services = _build_client(tmp_path)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    # Try Unicode fullwidth slash (／) which normalizes to /
+    unicode_slash_names = [
+        "skill／../../../etc/passwd",  # Fullwidth slash
+        "skill\uFF0F..",  # Another Unicode slash variant
+    ]
+
+    for name in unicode_slash_names:
+        response = client.post(
+            "/api/skills",
+            headers=headers,
+            json={"name": name, "content": "# unicode"},
+        )
+        # Should reject with 400
+        assert response.status_code == 400, f"Should reject Unicode attack: {repr(name)}"

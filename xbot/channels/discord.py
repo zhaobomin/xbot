@@ -25,6 +25,8 @@ DISCORD_API_BASE = "https://discord.com/api/v10"
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024  # 20MB
 MAX_MESSAGE_LEN = 2000  # Discord message character limit
 DEDUP_TTL_SECONDS = 300  # 5 minutes TTL for message deduplication
+MAX_RECONNECT_ATTEMPTS = 10  # Maximum reconnect attempts before circuit breaker
+CIRCUIT_BREAKER_TIMEOUT = 300  # 5 minutes cooldown after max reconnect attempts
 
 
 class DiscordConfig(Base):
@@ -88,12 +90,25 @@ class DiscordChannel(BaseChannel):
                 break
             except Exception as e:
                 logger.warning("Discord gateway error: %s", e)
-                if self._running:
-                    # Exponential backoff: 1, 2, 4, 8, 16, 32, 60, 60, ...
-                    delay = min(INITIAL_RECONNECT_DELAY * (2 ** self._reconnect_attempts), MAX_RECONNECT_DELAY)
-                    self._reconnect_attempts += 1
-                    logger.info("Reconnecting to Discord gateway in %ds (attempt %d)...", delay, self._reconnect_attempts)
-                    await asyncio.sleep(delay)
+                if not self._running:
+                    break
+
+                # Circuit breaker: if max reconnect attempts reached, wait longer
+                if self._reconnect_attempts >= MAX_RECONNECT_ATTEMPTS:
+                    logger.error(
+                        "Discord: max reconnect attempts (%d) reached, entering circuit breaker for %ds",
+                        MAX_RECONNECT_ATTEMPTS,
+                        CIRCUIT_BREAKER_TIMEOUT,
+                    )
+                    await asyncio.sleep(CIRCUIT_BREAKER_TIMEOUT)
+                    self._reconnect_attempts = 0  # Reset after circuit breaker
+                    continue
+
+                # Exponential backoff: 1, 2, 4, 8, 16, 32, 60, 60, ...
+                delay = min(INITIAL_RECONNECT_DELAY * (2 ** self._reconnect_attempts), MAX_RECONNECT_DELAY)
+                self._reconnect_attempts += 1
+                logger.info("Reconnecting to Discord gateway in %ds (attempt %d/%d)...", delay, self._reconnect_attempts, MAX_RECONNECT_ATTEMPTS)
+                await asyncio.sleep(delay)
 
     async def stop(self) -> None:
         """Stop the Discord channel."""
