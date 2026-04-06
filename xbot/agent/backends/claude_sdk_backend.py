@@ -150,7 +150,6 @@ class ClaudeSDKBackend(AgentBackend):
         self._clients: dict[str, ClaudeSDKClient] = {}
         self._clients_lock = asyncio.Lock()
         self._client_last_used: dict[str, float] = {}  # Track last usage time for TTL cleanup
-        self._active_task_ids: dict[str, str] = {}
         self._long_running_turns: set[str] = set()
         self.tools: Any = None
         self.sessions: SessionManager | None = None
@@ -271,7 +270,6 @@ class ClaudeSDKBackend(AgentBackend):
             shared_resources=getattr(self, "_shared_resources", None),
             sessions=getattr(self, "sessions", None),
             legacy_last_used=getattr(self, "_client_last_used", None),
-            legacy_task_ids=getattr(self, "_active_task_ids", None),
             legacy_clients=getattr(self, "_clients", None),
             legacy_sdk_session_ids=getattr(self, "_sdk_session_ids", None),
         )
@@ -2354,20 +2352,17 @@ class ClaudeSDKBackend(AgentBackend):
         return commands
 
     async def stop_active_task(self, session_key: str) -> bool:
-        """Stop the latest active SDK task for a session."""
-        task_id = self._get_task_id_from_entry(session_key)
-        if not task_id:
-            return False
+        """Stop the latest active SDK task for a session using interrupt."""
         client = self._get_client_from_entry(session_key)
         if client is None:
             return False
         try:
-            await client.stop_task(task_id)
+            await client.interrupt()
             self._set_task_id_in_entry(session_key, None)
-            logger.info(f"Stopped SDK task for session {session_key}: {task_id}")
+            logger.info(f"Interrupted SDK client for session {session_key}")
             return True
         except Exception as e:
-            logger.warning(f"Failed to stop SDK task for session {session_key}: {e}")
+            logger.warning(f"Failed to interrupt SDK client for session {session_key}: {e}")
             return False
 
     async def interrupt_session(self, session_key: str) -> dict[str, Any]:
@@ -2511,15 +2506,13 @@ class ClaudeSDKBackend(AgentBackend):
 
     async def _reset_session_client_state(self, session_key: str) -> None:
         """Reset SDK client/task state for a session after incomplete interaction."""
-        task_id = self._get_task_id_from_entry(session_key)
         client = self._get_client_from_entry(session_key)
-        if client is not None and task_id:
-            try:
-                await client.stop_task(task_id)
-                logger.info(f"[Reset Session] session={session_key}, stopped task={task_id}")
-            except Exception:
-                logger.debug("Failed to stop active task while resetting session state")
         if client is not None:
+            try:
+                await client.interrupt()
+                logger.info(f"[Reset Session] session={session_key}, sent interrupt signal")
+            except Exception:
+                logger.debug("Failed to interrupt client while resetting session state")
             await self.release_client(session_key, reason="force reset session state")
         logger.info(f"[Reset Session] session={session_key} client state reset complete")
 
