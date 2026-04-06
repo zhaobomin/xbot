@@ -189,6 +189,7 @@ class AgentRuntime:
 
         # Register backend state sync callbacks
         self.shared_resources["on_backend_client_cleanup"] = self._on_backend_client_cleanup
+        self._shutdown_lock = asyncio.Lock()
 
     @property
     def backend(self) -> "ClaudeSDKBackend":
@@ -211,6 +212,50 @@ class AgentRuntime:
 
     async def initialize(self) -> None:
         await self.router.initialize()
+
+    async def __aenter__(self) -> "AgentRuntime":
+        """Enter async context manager."""
+        return self
+
+    async def __aexit__(self, exc_type: type[BaseException] | None, exc_val: BaseException | None, exc_tb: Any) -> None:
+        """Exit async context manager and shutdown."""
+        await self.shutdown()
+
+    async def shutdown(self) -> None:
+        """Shutdown the agent runtime and clean up all resources.
+
+        This cancels all active session tasks, disconnects all backends,
+        and releases the message bus.
+        """
+        async with self._shutdown_lock:
+            if not self._running and not self._session_store.list_keys():
+                return
+
+            logger.info("Agent runtime shutting down...")
+            self._running = False
+
+            # 1. Shutdown router/backend (disconnects clients)
+            try:
+                await self.router.shutdown()
+            except Exception as e:
+                logger.warning("Error during router shutdown: %s", e)
+
+            # 2. Cancel and await all active session tasks
+            all_keys = self._session_store.list_keys()
+            if all_keys:
+                logger.info("Cancelling %d active session(s)...", len(all_keys))
+                for key in all_keys:
+                    try:
+                        # This cancels all tasks for this session key
+                        cancelled_count = await self._session_store.delete(key, delete_sdk_file=False)
+                        logger.debug("Cancelled %s tasks for session %s", cancelled_count.get("cancelled", 0), key)
+                    except Exception as e:
+                        logger.warning("Error cleaning up session %s: %s", key, e)
+
+            # 3. Shutdown bus if we own it
+            # (In multi-instance mode, bus might be shared, so we just clear our listeners)
+            
+            logger.info("Agent runtime shutdown complete")
 
     async def run(self) -> None:
         if self.bus is None:
@@ -248,7 +293,7 @@ class AgentRuntime:
             self._state_coordinator.force_transition(
                 msg.session_key, SessionPhase.RUNNING, reason="dispatch_start"
             )
-            task = self._spawn_session_task(self._dispatch(msg), msg.session_key)
+            task = await self._spawn_session_task(self._dispatch(msg), msg.session_key)
 
     async def _handle_permission_response(self, msg: InboundMessage) -> bool:
         """Delegate permission-response handling."""
@@ -1170,7 +1215,7 @@ class AgentRuntime:
         self._state_coordinator.force_transition(
             msg.session_key, SessionPhase.RUNNING, reason="managed_direct_start"
         )
-        task = self._spawn_session_task(
+        task = await self._spawn_session_task(
             self._run_managed_direct_turn(msg, on_progress=on_progress),
             msg.session_key,
         )
@@ -1986,7 +2031,7 @@ class AgentRuntime:
         """Record background task failure without leaking unhandled-task warnings."""
         logger.warning("Background task '%s' failed: %s", task_name, exc)
 
-    def _spawn_session_task(
+    async def _spawn_session_task(
         self,
         coro: Coroutine[Any, Any, Any],
         session_key: str,
@@ -1997,9 +2042,9 @@ class AgentRuntime:
         that previously allowed orphan tasks to escape tracking.
         """
         task = asyncio.create_task(coro)
-        # Tag + register + callback in one synchronous block (no await in between)
+        # Tag + register + callback
         AgentRuntime._tag_task_for_session(task, session_key)
-        self._state_coordinator.register_task(session_key, task)
+        await self._state_coordinator.register_task(session_key, task)
         task.add_done_callback(self._make_task_done_callback(session_key))
         return task
 

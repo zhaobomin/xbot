@@ -438,6 +438,7 @@ def test_tool_adapter_applies_workspace_restriction_to_sdk_tools(tmp_path) -> No
     tools_config = SimpleNamespace(
         web=SimpleNamespace(proxy=None, search=None),
         exec=SimpleNamespace(timeout=60, path_append=""),
+        timeouts=SimpleNamespace(web_search=10.0, web_fetch=20.0, mcp_tool=30.0, shell_exec=60.0),
         restrict_to_workspace=True,
     )
     adapter = ToolAdapter(

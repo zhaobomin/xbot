@@ -163,6 +163,8 @@ class SessionStore:
         This is a simplified synchronous version for coordinator usage.
         Creates entry with empty channel/chat_id if not present.
 
+        Note: Use get_or_create_async if thread-safety across await points is needed.
+
         Args:
             session_key: Unique session identifier
 
@@ -174,6 +176,24 @@ class SessionStore:
             self._entries[session_key] = entry
             logger.debug(f"SessionStore: auto-created {session_key}")
         return self._entries[session_key]
+
+    async def get_or_create_async(self, session_key: str) -> SessionEntry:
+        """Get existing entry or create a new one (async version).
+
+        Thread-safe across multiple concurrent calls for the same key.
+
+        Args:
+            session_key: Unique session identifier
+
+        Returns:
+            SessionEntry (existing or newly created)
+        """
+        async with self._lock:
+            if session_key not in self._entries:
+                entry = SessionEntry(session_key=session_key)
+                self._entries[session_key] = entry
+                logger.debug(f"SessionStore: auto-created {session_key} (async)")
+            return self._entries[session_key]
 
     # === Lifecycle operations ===
 

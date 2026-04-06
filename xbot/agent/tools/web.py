@@ -235,11 +235,17 @@ class WebSearchTool(Tool):
         "required": ["query"],
     }
 
-    def __init__(self, config: WebSearchConfig | None = None, proxy: str | None = None):
-        from xbot.config.schema import WebSearchConfig
+    def __init__(
+        self,
+        config: WebSearchConfig | None = None,
+        proxy: str | None = None,
+        timeout: float | None = None,
+    ):
+        from xbot.config.schema import WebSearchConfig, TimeoutsConfig
 
         self.config = config if config is not None else WebSearchConfig()
         self.proxy = proxy
+        self.timeout = timeout or TimeoutsConfig().web_search
 
     def _get_api_key(self) -> str:
         """Get API key from config, handling SecretStr type."""
@@ -284,7 +290,7 @@ class WebSearchTool(Tool):
                     "https://api.search.brave.com/res/v1/web/search",
                     params={"q": query, "count": n},
                     headers={"Accept": "application/json", "X-Subscription-Token": api_key},
-                    timeout=10.0,
+                    timeout=self.timeout,
                 )
                 r.raise_for_status()
             items = [
@@ -306,7 +312,7 @@ class WebSearchTool(Tool):
                     "https://api.tavily.com/search",
                     headers={"Authorization": f"Bearer {api_key}"},
                     json={"query": query, "max_results": n},
-                    timeout=15.0,
+                    timeout=self.timeout,
                 )
                 r.raise_for_status()
             return _format_results(query, r.json().get("results", []), n)
@@ -328,7 +334,7 @@ class WebSearchTool(Tool):
                     endpoint,
                     params={"q": query, "format": "json"},
                     headers={"User-Agent": USER_AGENT},
-                    timeout=10.0,
+                    timeout=self.timeout,
                 )
                 r.raise_for_status()
             return _format_results(query, r.json().get("results", []), n)
@@ -347,7 +353,7 @@ class WebSearchTool(Tool):
                     f"https://s.jina.ai/",
                     params={"q": query},
                     headers=headers,
-                    timeout=15.0,
+                    timeout=self.timeout,
                 )
                 r.raise_for_status()
             data = r.json().get("data", [])[:n]
@@ -364,7 +370,7 @@ class WebSearchTool(Tool):
             from ddgs import DDGS
 
             # Pass proxy to DDGS if configured
-            ddgs = DDGS(timeout=10, proxy=self.proxy) if self.proxy else DDGS(timeout=10)
+            ddgs = DDGS(timeout=self.timeout, proxy=self.proxy) if self.proxy else DDGS(timeout=self.timeout)
             raw = await asyncio.to_thread(ddgs.text, query, max_results=n)
             if not raw:
                 return f"No results for: {query}"
@@ -393,10 +399,19 @@ class WebFetchTool(Tool):
         "required": ["url"],
     }
 
-    def __init__(self, max_chars: int = 50000, proxy: str | None = None, web_config: Any | None = None):
+    def __init__(
+        self,
+        max_chars: int = 50000,
+        proxy: str | None = None,
+        web_config: Any | None = None,
+        timeout: float | None = None,
+    ):
+        from xbot.config.schema import TimeoutsConfig
+
         self.max_chars = max_chars
         self.proxy = proxy
         self.web_config = web_config
+        self.timeout = timeout or TimeoutsConfig().web_fetch
         self.disable_security_checks = bool(getattr(web_config, "disable_security_checks", False))
         if self.disable_security_checks:
             logger.warning("WebFetchTool: SSRF security checks are DISABLED via config. This is unsafe in production.")
@@ -426,7 +441,7 @@ class WebFetchTool(Tool):
             jina_key = os.environ.get("JINA_API_KEY", "")
             if jina_key:
                 headers["Authorization"] = f"Bearer {jina_key}"
-            async with httpx.AsyncClient(proxy=self.proxy, timeout=20.0) as client:
+            async with httpx.AsyncClient(proxy=self.proxy, timeout=self.timeout) as client:
                 r = await client.get(f"https://r.jina.ai/{url}", headers=headers)
                 if r.status_code == 429:
                     logger.debug("Jina Reader rate limited, falling back to readability")
@@ -477,7 +492,7 @@ class WebFetchTool(Tool):
 
                 async with httpx.AsyncClient(
                     follow_redirects=False,
-                    timeout=30.0,
+                    timeout=self.timeout,
                     proxy=None if transport is not None else self.proxy,
                     transport=transport,
                 ) as client:

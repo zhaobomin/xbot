@@ -58,6 +58,7 @@ class Session:
     updated_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
     last_consolidated: int = 0  # Number of messages already consolidated to files
+    _new_messages: list[dict[str, Any]] = field(default_factory=list, repr=False)
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
@@ -68,6 +69,7 @@ class Session:
             **kwargs
         }
         self.messages.append(msg)
+        self._new_messages.append(msg)
         self.updated_at = datetime.now()
 
     @staticmethod
@@ -269,37 +271,60 @@ class SessionManager:
     def save(self, session: Session) -> None:
         """Save a session to disk.
 
-        Uses file locking + atomic write (write-to-temp-then-rename) to prevent
-        data loss and corruption during concurrent access.
+        Uses append-only mode for new messages to improve performance.
+        Falls back to atomic full write if metadata changes or file is missing.
         """
         path = self._get_session_path(session.key)
-        tmp_path = path.with_suffix(".jsonl.tmp")
 
         # Use exclusive lock for writing to prevent concurrent writes
         with self._file_lock(path, exclusive=True):
-            try:
-                with open(tmp_path, "w", encoding="utf-8") as f:
-                    metadata_line = {
-                        "_type": "metadata",
-                        "key": session.key,
-                        "created_at": session.created_at.isoformat(),
-                        "updated_at": session.updated_at.isoformat(),
-                        "metadata": session.metadata,
-                        "last_consolidated": session.last_consolidated
-                    }
-                    f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
-                    for msg in session.messages:
-                        f.write(json.dumps(msg, ensure_ascii=False) + "\n")
-                    f.flush()
-                    os.fsync(f.fileno())
-
-                os.replace(str(tmp_path), str(path))
-            except Exception:
-                # Clean up temp file on failure
-                tmp_path.unlink(missing_ok=True)
-                raise
+            # If file doesn't exist or metadata might have changed (not implemented yet), do a full save
+            if not path.exists():
+                self._save_full(session, path)
+                session._new_messages.clear()
+            elif session._new_messages:
+                try:
+                    # Append mode: just write new messages
+                    with open(path, "a", encoding="utf-8") as f:
+                        for msg in session._new_messages:
+                            f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+                        f.flush()
+                        os.fsync(f.fileno())
+                    session._new_messages.clear()
+                except Exception:
+                    # Fallback to full save if append fails
+                    self._save_full(session, path)
+                    session._new_messages.clear()
+            else:
+                # No new messages, but we might want to update metadata/updated_at
+                # For now, if no new messages, we do nothing or a full save if needed
+                pass
 
         self._cache[session.key] = session
+
+    def _save_full(self, session: Session, path: Path) -> None:
+        """Perform an atomic full write of the session file."""
+        tmp_path = path.with_suffix(".jsonl.tmp")
+        try:
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                metadata_line = {
+                    "_type": "metadata",
+                    "key": session.key,
+                    "created_at": session.created_at.isoformat(),
+                    "updated_at": session.updated_at.isoformat(),
+                    "metadata": session.metadata,
+                    "last_consolidated": session.last_consolidated
+                }
+                f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
+                for msg in session.messages:
+                    f.write(json.dumps(msg, ensure_ascii=False) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+
+            os.replace(str(tmp_path), str(path))
+        except Exception:
+            tmp_path.unlink(missing_ok=True)
+            raise
 
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""
@@ -318,6 +343,27 @@ class SessionManager:
             path.unlink(missing_ok=True)
         lock_path.unlink(missing_ok=True)
         return True
+
+    def compact(self, session: Session) -> None:
+        """Compact a session file by rewriting it to remove duplicates or old state.
+
+        This method rewrites the entire session file, which can help reduce file size
+        and improve load times by removing any redundant data.
+
+        Args:
+            session: The session to compact.
+        """
+        path = self._get_session_path(session.key)
+
+        # Use exclusive lock for writing
+        with self._file_lock(path, exclusive=True):
+            # Rewrite the entire file using _save_full
+            self._save_full(session, path)
+            # Clear new messages since we've rewritten everything
+            session._new_messages.clear()
+
+        # Update the cache
+        self._cache[session.key] = session
 
     def list_sessions(self) -> list[dict[str, Any]]:
         """

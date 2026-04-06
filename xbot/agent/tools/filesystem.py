@@ -99,19 +99,33 @@ class ReadFileTool(_FsTool):
             if not fp.is_file():
                 return f"Error: Not a file: {path}"
 
-            all_lines = fp.read_text(encoding="utf-8").splitlines()
-            total = len(all_lines)
-
-            if offset < 1:
-                offset = 1
-            if total == 0:
+            limit = limit or self._DEFAULT_LIMIT
+            start = max(offset - 1, 0)
+            end = start + limit
+            
+            numbered = []
+            total_lines = 0
+            
+            # Use streaming approach to avoid loading whole file into memory
+            with open(fp, "r", encoding="utf-8", errors="replace") as f:
+                for i, line in enumerate(f):
+                    total_lines = i + 1
+                    if start <= i < end:
+                        line_text = line.rstrip("\r\n")
+                        numbered.append(f"{i + 1}| {line_text}")
+                    
+                    # Optimization: If we've passed the range we need, we can't stop yet
+                    # because we need to know the total line count for the footer.
+                    # But for very large files, we might want to avoid full scan.
+                    # However, the current tool's design returns "total lines total".
+                    pass
+            
+            if not numbered and total_lines == 0:
                 return f"(Empty file: {path})"
-            if offset > total:
-                return f"Error: offset {offset} is beyond end of file ({total} lines)"
+                
+            if start >= total_lines and total_lines > 0:
+                return f"Error: offset {offset} is beyond end of file ({total_lines} lines)"
 
-            start = offset - 1
-            end = min(start + (limit or self._DEFAULT_LIMIT), total)
-            numbered = [f"{start + i + 1}| {line}" for i, line in enumerate(all_lines[start:end])]
             result = "\n".join(numbered)
 
             if len(result) > self._MAX_CHARS:
@@ -121,13 +135,14 @@ class ReadFileTool(_FsTool):
                     if chars > self._MAX_CHARS:
                         break
                     trimmed.append(line)
-                end = start + len(trimmed)
                 result = "\n".join(trimmed)
+                end = start + len(trimmed)
 
-            if end < total:
-                result += f"\n\n(Showing lines {offset}-{end} of {total}. Use offset={end + 1} to continue.)"
+            actual_end = min(end, total_lines)
+            if actual_end < total_lines:
+                result += f"\n\n(Showing lines {offset}-{actual_end} of {total_lines}. Use offset={actual_end + 1} to continue.)"
             else:
-                result += f"\n\n(End of file — {total} lines total)"
+                result += f"\n\n(End of file — {total_lines} lines total)"
             return result
         except PermissionError as e:
             return f"Error: {e}"

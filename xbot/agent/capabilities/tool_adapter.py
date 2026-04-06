@@ -135,11 +135,14 @@ class ToolAdapter:
 
         # Web tools
         web_config = self.tools_config.web if self.tools_config else None
+        timeouts_config = self.tools_config.timeouts if self.tools_config else None
         proxy = web_config.proxy if web_config else None
         search_config = web_config.search if web_config else None
+        web_search_timeout = timeouts_config.web_search if timeouts_config else None
+        web_fetch_timeout = timeouts_config.web_fetch if timeouts_config else None
 
-        self._tools["web_search"] = WebSearchTool(config=search_config, proxy=proxy)
-        self._tools["web_fetch"] = WebFetchTool(proxy=proxy, web_config=self.tools_config.web if self.tools_config else None)
+        self._tools["web_search"] = WebSearchTool(config=search_config, proxy=proxy, timeout=web_search_timeout)
+        self._tools["web_fetch"] = WebFetchTool(proxy=proxy, web_config=self.tools_config.web if self.tools_config else None, timeout=web_fetch_timeout)
 
         # File tools (with workspace restriction)
         self._tools["read_file"] = ReadFileTool(

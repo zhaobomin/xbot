@@ -180,7 +180,7 @@ class SessionStateCoordinator:
 
     # === 任务管理 ===
 
-    def register_task(self, session_key: str, task: asyncio.Task) -> None:
+    async def register_task(self, session_key: str, task: asyncio.Task) -> None:
         """注册活跃任务。
 
         Args:
@@ -188,7 +188,7 @@ class SessionStateCoordinator:
             task: 异步任务
         """
         # Auto-create entry if not exists, then register task
-        self._session_store.get_or_create(session_key)
+        await self._session_store.get_or_create_async(session_key)
         success = self._session_store.register_task(session_key, task)
         if success:
             self._stats.tasks_created += 1

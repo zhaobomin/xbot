@@ -1260,29 +1260,29 @@ class ClaudeSDKBackend(AgentBackend):
         assert creation_future is not None
         try:
             client_start = time.perf_counter()
-            logger.info(f"[Client] Creating new client for session={session_key}")
+            logger.debug(f"[Client] Creating new client for session={session_key}")
 
             client = _ClaudeSDKClient(options=self._build_options(session_key))
 
             connect_start = time.perf_counter()
             await client.connect()
             connect_time = time.perf_counter() - connect_start
-            logger.info(f"[Client] connect() took {connect_time:.2f}s for session={session_key}")
+            logger.debug(f"[Client] connect() took {connect_time:.2f}s for session={session_key}")
 
             refresh_start = time.perf_counter()
             await self._refresh_session_commands(session_key, client)
             refresh_time = time.perf_counter() - refresh_start
-            logger.info(f"[Client] get_server_info() took {refresh_time:.2f}s for session={session_key}")
+            logger.debug(f"[Client] get_server_info() took {refresh_time:.2f}s for session={session_key}")
 
             total_time = time.perf_counter() - client_start
-            logger.info(f"[Client] Total client creation took {total_time:.2f}s for session={session_key}")
+            logger.debug(f"[Client] Total client creation took {total_time:.2f}s for session={session_key}")
 
             async with self._clients_lock:
                 self._set_client_in_entry(session_key, client)
                 self._touch_entry(session_key)
                 self._set_model_in_entry(session_key, current_model)
                 self._set_skills_version_in_entry(session_key, current_skills_version)
-                logger.info(f"[Client] Client created for session={session_key}, model={current_model}")
+                logger.debug(f"[Client] Client created for session={session_key}, model={current_model}")
                 await self._register_managed_client(session_key, client)
                 # Set result BEFORE popping to avoid race condition
                 pending = self._client_creation_futures.get(session_key)
@@ -1339,7 +1339,7 @@ class ClaudeSDKBackend(AgentBackend):
 
         # Log state cleanup for debugging
         if had_client or had_task_id:
-            logger.info(
+            logger.debug(
                 f"[State Cleanup] session={session_key}, removed_client={had_client}, "
                 f"removed_task={had_task_id}, had_sdk_sid={had_sdk_sid}"
             )
@@ -2347,7 +2347,7 @@ class ClaudeSDKBackend(AgentBackend):
             # Always remove client to force fresh connection on next request
             # This prevents state inconsistency after interrupt
             await self.release_client(session_key, reason="interrupt")
-            logger.info(f"[State Cleanup] session={session_key} cleaned up after interrupt")
+            logger.debug(f"[State Cleanup] session={session_key} cleaned up after interrupt")
 
         return {"interrupted": True, "usage": usage_info}
 

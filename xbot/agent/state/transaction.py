@@ -355,7 +355,7 @@ class StateTransaction:
                     )
 
             for task in self._pending_tasks:
-                self._coordinator.register_task(self._session_key, task)
+                await self._coordinator.register_task(self._session_key, task)
 
             for task in self._pending_unregister_tasks:
                 self._coordinator.unregister_task(self._session_key, task)
@@ -453,7 +453,7 @@ class StateTransaction:
                         logger.warning("Rollback register_task: missing args")
                         continue
                     task = op.rollback_args[0]
-                    self._coordinator.register_task(self._session_key, task)
+                    await self._coordinator.register_task(self._session_key, task)
                 elif op.rollback_op == "release_lock":
                     self._coordinator.release_lock(self._session_key)
                 elif op.rollback_op == "acquire_lock":

@@ -37,13 +37,14 @@ class MCPServerConnection:
 class MCPToolWrapper(Tool):
     """Wraps a single MCP server tool as an xbot Tool."""
 
-    def __init__(self, session, server_name: str, tool_def, tool_timeout: int = 30):
+    def __init__(self, session, server_name: str, tool_def, tool_timeout: int | None = None):
+        from xbot.config.schema import TimeoutsConfig
         self._session = session
         self._original_name = tool_def.name
         self._name = f"mcp_{server_name}_{tool_def.name}"
         self._description = tool_def.description or tool_def.name
         self._parameters = tool_def.inputSchema or {"type": "object", "properties": {}}
-        self._tool_timeout = tool_timeout
+        self._tool_timeout = tool_timeout or int(TimeoutsConfig().mcp_tool)
 
     @property
     def name(self) -> str:

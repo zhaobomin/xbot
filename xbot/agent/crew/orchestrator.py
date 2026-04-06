@@ -277,8 +277,50 @@ class CrewOrchestrator:
         Returns:
             Callable that takes a prompt and returns LLM response, or None.
         """
-        # For now, return None - repair will gracefully fail.
-        # This can be enhanced later to use a dedicated repair LLM client.
-        # The orchestrator context doesn't have a simple sync LLM call method,
-        # and the agent backends are async-based.
-        return None
+        try:
+            from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+            from xbot.agent.protocol import AgentContext
+            import asyncio
+
+            # Create a lightweight backend for repair
+            backend = ClaudeSDKBackend()
+            agents_config = self.xbot_config.agents.model_copy(deep=True)
+            
+            shared_resources = {
+                "workspace": self.crew_config.workspace,
+                "config": self.xbot_config,
+                "tools_config": self.xbot_config.tools,
+                "permission_handler": self.permission_handler,
+                "bus": None,
+                "session_manager": None,
+            }
+
+            # Initialize the backend
+            asyncio.run(backend.initialize(agents_config, shared_resources))
+
+            def repair_callable(prompt: str) -> str:
+                """Sync wrapper for async backend call."""
+                session_key = f"repair_{hash(prompt) % 10000}"
+                context = AgentContext(
+                    session_key=session_key,
+                    prompt=prompt,
+                    channel="repair",
+                    chat_id="repair",
+                    media=None,
+                )
+
+                async def get_response():
+                    content = ""
+                    async for response in backend.process(context):
+                        if response.content:
+                            content = response.content
+                        elif response.delta_content:
+                            content += response.delta_content
+                    return content
+
+                return asyncio.run(get_response())
+
+            return repair_callable
+        except Exception as e:
+            logger.warning(f"Failed to create LLM repair callable: {e}")
+            return None

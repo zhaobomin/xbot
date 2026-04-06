@@ -15,15 +15,16 @@ class ExecTool(Tool):
 
     def __init__(
         self,
-        timeout: int = 60,
-        working_dir: str | None = None,
+        timeout: int | None = None,
+        working_dir: str | Path | None = None,
         deny_patterns: list[str] | None = None,
         allow_patterns: list[str] | None = None,
         restrict_to_workspace: bool = False,
         path_append: str = "",
     ):
-        self.timeout = timeout
-        self.working_dir = working_dir
+        from xbot.config.schema import TimeoutsConfig
+        self.timeout = timeout or int(TimeoutsConfig().shell_exec)
+        self.working_dir = Path(working_dir) if working_dir else None
         self.deny_patterns = deny_patterns or [
             r"\brm\s+-[a-z]*r[a-z]*\b",      # rm -r, rm -rf, rm -rfv, rm -rfi
             r"\brm\b[^\n;&|]*--(?:recursive|force)\b",  # GNU long options
@@ -78,10 +79,10 @@ class ExecTool(Tool):
         }
 
     async def execute(
-        self, command: str, working_dir: str | None = None,
+        self, command: str, working_dir: str | Path | None = None,
         timeout: int | None = None, **kwargs: Any,
     ) -> str:
-        cwd = working_dir or self.working_dir or os.getcwd()
+        cwd = Path(working_dir) if working_dir else self.working_dir or Path.cwd()
         guard_error = self._guard_command(command, cwd)
         if guard_error:
             return guard_error
@@ -143,7 +144,7 @@ class ExecTool(Tool):
         except Exception as e:
             return f"Error executing command: {str(e)}"
 
-    def _guard_command(self, command: str, cwd: str) -> str | None:
+    def _guard_command(self, command: str, cwd: str | Path) -> str | None:
         """Best-effort safety guard for potentially destructive commands."""
         cmd = command.strip()
         lower = cmd.lower()
