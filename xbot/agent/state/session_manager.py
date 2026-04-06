@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import time
 from contextlib import asynccontextmanager
-from typing import TYPE_CHECKING, Any, Any
+from typing import TYPE_CHECKING, Any
 
 from xbot.agent.state.machine import SessionPhase, SessionState, VALID_TRANSITIONS
 from xbot.logging import get_logger
