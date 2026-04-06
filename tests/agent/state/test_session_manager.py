@@ -1,6 +1,7 @@
 """Tests for SessionManager."""
 
 import asyncio
+import time
 from unittest.mock import MagicMock
 
 import pytest
@@ -305,3 +306,51 @@ async def test_cancel_all_tasks():
     assert task2.cancelled() or task2.done()
     state = manager.get("slack:C12345")
     assert len(state.tasks) == 0
+
+
+@pytest.mark.asyncio
+async def test_cleanup_session():
+    """Test cleanup_session removes session and mappings."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+    manager.set_sdk_session_id("slack:C12345", "sdk-uuid-abc")
+
+    await manager.cleanup_session("slack:C12345")
+
+    assert manager.get("slack:C12345") is None
+    assert manager.get_by_sdk_id("sdk-uuid-abc") is None
+
+
+@pytest.mark.asyncio
+async def test_cleanup_session_cancels_tasks():
+    """Test cleanup_session cancels active tasks."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+
+    async def dummy_task():
+        await asyncio.sleep(10)
+
+    task = asyncio.create_task(dummy_task())
+    manager.register_task("slack:C12345", task)
+
+    await manager.cleanup_session("slack:C12345")
+
+    assert task.cancelled() or task.done()
+    assert manager.get("slack:C12345") is None
+
+
+@pytest.mark.asyncio
+async def test_list_stale_sessions():
+    """Test list_stale_sessions returns sessions past TTL."""
+    manager = SessionManager()
+
+    state1 = manager.get_or_create("slack:C1")
+    state2 = manager.get_or_create("slack:C2")
+    state3 = manager.get_or_create("slack:C3")
+
+    state1.last_active = time.time() - 3600  # 1 hour ago (stale)
+    state2.last_active = time.time() - 60    # 1 min ago (fresh)
+    state3.last_active = time.time()         # now (fresh)
+
+    stale = manager.list_stale_sessions(ttl_seconds=300)  # 5 min TTL
+    assert stale == ["slack:C1"]

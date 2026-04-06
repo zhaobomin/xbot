@@ -211,3 +211,32 @@ class SessionManager:
 
         state.tasks = []
         return count
+
+    # === Cleanup ===
+
+    async def cleanup_session(self, session_key: str) -> None:
+        """Clean up session: cancel tasks, remove from indices, delete state."""
+        state = self.get(session_key)
+        if state is None:
+            return
+
+        # Cancel active tasks
+        await self.cancel_all_tasks(session_key)
+
+        # Remove SDK index mapping
+        if state.sdk_session_id and state.sdk_session_id in self._sdk_index:
+            del self._sdk_index[state.sdk_session_id]
+
+        # Delete session state
+        del self._sessions[session_key]
+
+        logger.info(f"cleanup_session: removed {session_key}")
+
+    def list_stale_sessions(self, ttl_seconds: float) -> list[str]:
+        """List sessions that have been inactive longer than TTL."""
+        now = time.time()
+        stale = []
+        for key, state in self._sessions.items():
+            if state.last_active < now - ttl_seconds:
+                stale.append(key)
+        return stale
