@@ -42,6 +42,7 @@ from xbot.config.provider_registry import get_provider_spec
 from xbot.config.sdk_resolver import detect_provider_from_model, resolve_sdk_provider_and_model
 from xbot.config.schema import AgentsConfig, ProviderConfig
 from xbot.session.manager import SessionManager
+from xbot.agent.state.session_manager import SessionManager as StateSessionManager
 from xbot.utils.helpers import detect_audio_mime, detect_image_mime
 from xbot.utils.file_reader import FileType, classify_file, format_file_reference
 from xbot.utils.retry import RetryPolicy, run_with_retry
@@ -182,6 +183,10 @@ class ClaudeSDKBackend(AgentBackend):
         }
         self._state_adapter: SessionStateAdapter | None = None
         self._service_tasks = ServiceTaskRegistry(error_reporter=self._report_service_task_error)
+
+        # New unified state management (feature flag)
+        self._state_manager: StateSessionManager | None = None
+        self._use_new_state: bool = False  # Feature flag for new SessionManager
 
     @property
     def max_clients(self) -> int:
@@ -909,6 +914,13 @@ class ClaudeSDKBackend(AgentBackend):
         self.sessions = shared_resources.get("session_manager") or SessionManager(
             Path(shared_resources.get("workspace", config.defaults.workspace))
         )
+
+        # Initialize new unified state manager with feature flag
+        self._use_new_state = config.use_new_session_manager
+        if self._use_new_state:
+            self._state_manager = StateSessionManager()
+            logger.info("Using new SessionManager for state management")
+
         workspace_path = Path(shared_resources.get("workspace", config.defaults.workspace))
         runtime_config = shared_resources.get("config")
         memory_config = getattr(getattr(runtime_config, "tools", None), "memory", None)
