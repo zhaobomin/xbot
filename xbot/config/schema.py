@@ -114,7 +114,7 @@ class AgentsConfig(Base):
     """Agent configuration."""
 
     type: Literal["claude_sdk"] = "claude_sdk"  # Only Claude SDK is supported now
-    use_new_session_manager: bool = False  # Use simplified SessionManager
+    use_new_session_manager: bool = True  # Use simplified SessionManager (enabled by default)
     defaults: AgentDefaults = Field(default_factory=AgentDefaults)
     claude_sdk: ClaudeSDKAgentConfig = Field(default_factory=ClaudeSDKAgentConfig)
 
