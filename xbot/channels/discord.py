@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from pathlib import Path
 from typing import Any, Literal
 
@@ -22,6 +23,7 @@ from xbot.utils.helpers import split_message
 DISCORD_API_BASE = "https://discord.com/api/v10"
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024  # 20MB
 MAX_MESSAGE_LEN = 2000  # Discord message character limit
+DEDUP_TTL_SECONDS = 300  # 5 minutes TTL for message deduplication
 
 
 class DiscordConfig(Base):
@@ -56,6 +58,10 @@ class DiscordChannel(BaseChannel):
         self._typing_tasks: dict[str, asyncio.Task] = {}
         self._http: httpx.AsyncClient | None = None
         self._bot_user_id: str | None = None
+        # Message deduplication
+        self._processed_message_ids: dict[str, float] = {}
+        self._dedup_lock = asyncio.Lock()
+        self._heartbeat_failed = asyncio.Event()  # Signal heartbeat failure
 
     async def start(self) -> None:
         """Start the Discord gateway connection."""
@@ -215,6 +221,12 @@ class DiscordChannel(BaseChannel):
             return
 
         async for raw in self._ws:
+            # Check for heartbeat failure
+            if self._heartbeat_failed.is_set():
+                logger.warning("Discord heartbeat failed, triggering reconnect")
+                self._heartbeat_failed.clear()
+                break
+
             try:
                 data = json.loads(raw)
             except json.JSONDecodeError:
@@ -282,10 +294,27 @@ class DiscordChannel(BaseChannel):
                     await self._ws.send(json.dumps(payload))
                 except Exception as e:
                     logger.warning("Discord heartbeat failed: %s", e)
+                    self._heartbeat_failed.set()  # Signal main loop
                     break
                 await asyncio.sleep(interval_s)
 
         self._heartbeat_task = asyncio.create_task(heartbeat_loop())
+
+    async def _is_duplicate_message(self, message_id: str) -> bool:
+        """Check if message was already processed, with TTL cleanup."""
+        async with self._dedup_lock:
+            now = time.time()
+            # Cleanup expired entries
+            expired = [k for k, v in self._processed_message_ids.items()
+                       if now - v > DEDUP_TTL_SECONDS]
+            for k in expired:
+                del self._processed_message_ids[k]
+
+            # Check if duplicate
+            if message_id in self._processed_message_ids:
+                return True
+            self._processed_message_ids[message_id] = now
+            return False
 
     async def _handle_message_create(self, payload: dict[str, Any]) -> None:
         """Handle incoming Discord messages."""
@@ -297,8 +326,14 @@ class DiscordChannel(BaseChannel):
         channel_id = str(payload.get("channel_id", ""))
         content = payload.get("content") or ""
         guild_id = payload.get("guild_id")
+        message_id = str(payload.get("id", ""))
 
         if not sender_id or not channel_id:
+            return
+
+        # Check for duplicate message
+        if message_id and await self._is_duplicate_message(message_id):
+            logger.debug("Discord: skipping duplicate message %s", message_id)
             return
 
         if not self.is_allowed(sender_id):

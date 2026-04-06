@@ -398,7 +398,8 @@ class TelegramChannel(BaseChannel):
                     continue
 
                 with open(media_path, "rb") as f:
-                    await sender(
+                    await self._call_with_retry(
+                        sender,
                         chat_id=chat_id,
                         **{param: f},
                         reply_parameters=reply_params,

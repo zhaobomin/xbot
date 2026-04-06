@@ -187,6 +187,9 @@ class FeishuChannel(BaseChannel):
     def _start_ws_worker(self) -> None:
         from xbot.channels.feishu_ws_worker import run_feishu_ws_worker
 
+        # Clean up old resources before starting new worker
+        self._cleanup_ws_resources()
+
         ctx = mp.get_context("spawn")
         self._ws_event_queue = ctx.Queue()
         self._ws_stop_event = ctx.Event()
@@ -203,6 +206,34 @@ class FeishuChannel(BaseChannel):
             name="feishu-ws-worker",
         )
         self._ws_process.start()
+
+    def _cleanup_ws_resources(self) -> None:
+        """Clean up old WebSocket resources before restart."""
+        # Signal old worker to stop
+        if self._ws_stop_event:
+            self._ws_stop_event.set()
+
+        # Drain old queue (process remaining messages)
+        if self._ws_event_queue:
+            drained_count = 0
+            while True:
+                try:
+                    event = self._ws_event_queue.get_nowait()
+                    # Dispatch synchronously in a thread
+                    import asyncio
+                    try:
+                        loop = asyncio.get_running_loop()
+                        asyncio.run_coroutine_threadsafe(
+                            self._dispatch_worker_event(event),
+                            loop
+                        )
+                    except RuntimeError:
+                        pass  # No running loop, skip
+                    drained_count += 1
+                except queue.Empty:
+                    break
+            if drained_count > 0:
+                logger.info("Feishu: drained %d pending events from old queue", drained_count)
 
     @staticmethod
     def _namespace_from_dict(value: Any) -> Any:

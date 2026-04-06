@@ -20,6 +20,10 @@ from pydantic import Field
 from xbot.channels.base import BaseChannel
 from xbot.config.schema import Base
 
+# Slack-specific retry configuration
+SLACK_MAX_RETRIES = 3
+SLACK_RETRY_DELAYS = [1, 2, 4]  # Exponential backoff in seconds
+
 
 class SlackDMConfig(Base):
     """Slack DM policy configuration."""
@@ -117,43 +121,80 @@ class SlackChannel(BaseChannel):
             self._socket_client = None
 
     async def send(self, msg: OutboundMessage) -> None:
-        """Send a message through Slack."""
+        """Send a message through Slack with retry on transient failures."""
         if not self._web_client:
             logger.warning("Slack client not running")
             return
-        try:
-            slack_meta = msg.metadata.get("slack", {}) if msg.metadata else {}
-            thread_ts = slack_meta.get("thread_ts")
-            channel_type = slack_meta.get("channel_type")
-            # Slack DMs don't use threads; channel/group replies may keep thread_ts.
-            thread_ts_param = thread_ts if thread_ts and channel_type != "im" else None
 
-            # Slack rejects empty text payloads. Keep media-only messages media-only,
-            # but send a single blank message when the bot has no text or files to send.
-            if msg.content or not (msg.media or []):
-                await self._web_client.chat_postMessage(
+        slack_meta = msg.metadata.get("slack", {}) if msg.metadata else {}
+        thread_ts = slack_meta.get("thread_ts")
+        channel_type = slack_meta.get("channel_type")
+        # Slack DMs don't use threads; channel/group replies may keep thread_ts.
+        thread_ts_param = thread_ts if thread_ts and channel_type != "im" else None
+
+        # Slack rejects empty text payloads. Keep media-only messages media-only,
+        # but send a single blank message when the bot has no text or files to send.
+        if msg.content or not (msg.media or []):
+            await self._send_with_retry(
+                self._web_client.chat_postMessage,
+                channel=msg.chat_id,
+                text=self._to_mrkdwn(msg.content) if msg.content else " ",
+                thread_ts=thread_ts_param,
+            )
+
+        for media_path in msg.media or []:
+            try:
+                await self._send_with_retry(
+                    self._web_client.files_upload_v2,
                     channel=msg.chat_id,
-                    text=self._to_mrkdwn(msg.content) if msg.content else " ",
+                    file=media_path,
                     thread_ts=thread_ts_param,
                 )
+            except Exception as e:
+                logger.error("Failed to upload file %s after retries: %s", media_path, e)
 
-            for media_path in msg.media or []:
-                try:
-                    await self._web_client.files_upload_v2(
-                        channel=msg.chat_id,
-                        file=media_path,
-                        thread_ts=thread_ts_param,
+        # Update reaction emoji when the final (non-progress) response is sent
+        if not (msg.metadata or {}).get("_progress"):
+            event = slack_meta.get("event", {})
+            await self._update_react_emoji(msg.chat_id, event.get("ts"))
+
+    async def _send_with_retry(self, api_call, **kwargs) -> Any:
+        """Send API call with retry logic, handling rate limits."""
+        last_error = None
+        for attempt in range(SLACK_MAX_RETRIES):
+            try:
+                return await api_call(**kwargs)
+            except Exception as e:
+                last_error = e
+                error_str = str(e).lower()
+
+                # Don't retry on auth errors (401/403)
+                if "401" in error_str or "403" in error_str or "invalid_auth" in error_str:
+                    logger.error("Slack auth error, not retrying: %s", e)
+                    raise
+
+                # Handle rate limit (429) - use Retry-After header if available
+                if "429" in error_str or "rate" in error_str:
+                    retry_after = getattr(e, "response", {}).get("headers", {}).get("Retry-After")
+                    if retry_after:
+                        delay = int(retry_after)
+                    else:
+                        delay = SLACK_RETRY_DELAYS[min(attempt, len(SLACK_RETRY_DELAYS) - 1)]
+                    logger.warning("Slack rate limited, waiting %ds before retry", delay)
+                    await asyncio.sleep(delay)
+                    continue
+
+                # Retry on transient errors
+                if attempt < SLACK_MAX_RETRIES - 1:
+                    delay = SLACK_RETRY_DELAYS[attempt]
+                    logger.warning(
+                        "Slack API call failed (attempt %d/%d), retrying in %ds: %s",
+                        attempt + 1, SLACK_MAX_RETRIES, delay, e
                     )
-                except Exception as e:
-                    logger.error("Failed to upload file %s: %s", media_path, e)
+                    await asyncio.sleep(delay)
 
-            # Update reaction emoji when the final (non-progress) response is sent
-            if not (msg.metadata or {}).get("_progress"):
-                event = slack_meta.get("event", {})
-                await self._update_react_emoji(msg.chat_id, event.get("ts"))
-
-        except Exception as e:
-            logger.exception("Error sending Slack message")
+        logger.error("Slack API call failed after %d attempts: %s", SLACK_MAX_RETRIES, last_error)
+        raise last_error
 
     async def _on_socket_request(
         self,
