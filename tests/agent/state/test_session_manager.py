@@ -120,3 +120,72 @@ async def test_resolve_routing_returns_none_for_unknown():
     manager = SessionManager()
     result = manager.resolve_routing("unknown-id")
     assert result is None
+
+
+@pytest.mark.asyncio
+async def test_can_start_request_returns_true_for_idle():
+    """Test can_start_request returns True for IDLE phase."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+
+    assert manager.can_start_request("slack:C12345") is True
+
+
+@pytest.mark.asyncio
+async def test_can_start_request_returns_false_for_running():
+    """Test can_start_request returns False for RUNNING phase."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+    manager.start_request("slack:C12345")
+
+    assert manager.can_start_request("slack:C12345") is False
+
+
+@pytest.mark.asyncio
+async def test_start_request_transitions_to_running():
+    """Test start_request transitions phase to RUNNING."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+
+    result = manager.start_request("slack:C12345")
+    assert result is True
+
+    state = manager.get("slack:C12345")
+    assert state.phase == SessionPhase.RUNNING
+
+
+@pytest.mark.asyncio
+async def test_start_request_returns_false_when_not_idle():
+    """Test start_request returns False when phase is not IDLE."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+    manager.start_request("slack:C12345")  # Phase = RUNNING
+
+    result = manager.start_request("slack:C12345")
+    assert result is False
+
+
+@pytest.mark.asyncio
+async def test_end_request_transitions_to_idle():
+    """Test end_request transitions phase back to IDLE."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+    manager.start_request("slack:C12345")
+
+    manager.end_request("slack:C12345")
+
+    state = manager.get("slack:C12345")
+    assert state.phase == SessionPhase.IDLE
+
+
+@pytest.mark.asyncio
+async def test_end_request_can_set_custom_phase():
+    """Test end_request can set custom phase (e.g., ERROR)."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+    manager.start_request("slack:C12345")
+
+    manager.end_request("slack:C12345", SessionPhase.ERROR)
+
+    state = manager.get("slack:C12345")
+    assert state.phase == SessionPhase.ERROR

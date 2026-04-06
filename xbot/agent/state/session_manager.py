@@ -105,3 +105,33 @@ class SessionManager:
             return (state.session_key, state.channel, state.chat_id)
 
         return None
+
+    # === Concurrency ===
+
+    def can_start_request(self, session_key: str) -> bool:
+        """Check if a new request can be started (phase must be IDLE)."""
+        state = self.get(session_key)
+        if state is None:
+            return True  # New session can start
+        return state.phase == SessionPhase.IDLE
+
+    def start_request(self, session_key: str) -> bool:
+        """Transition to RUNNING phase. Returns False if not IDLE."""
+        state = self.get_or_create(session_key)
+        if state.phase != SessionPhase.IDLE:
+            logger.warning(
+                f"start_request: session {session_key} not IDLE (phase={state.phase})"
+            )
+            return False
+        state.phase = SessionPhase.RUNNING
+        state.last_active = time.time()
+        return True
+
+    def end_request(self, session_key: str, phase: SessionPhase = SessionPhase.IDLE) -> None:
+        """Transition to specified phase after request completes."""
+        state = self.get(session_key)
+        if state is None:
+            logger.warning(f"end_request: session {session_key} not found")
+            return
+        state.phase = phase
+        state.last_active = time.time()
