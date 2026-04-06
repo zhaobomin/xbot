@@ -25,7 +25,8 @@ After testing `claude-agent-sdk` v0.1.56:
 | Capability | SDK Support | xbot Needs |
 |------------|-------------|------------|
 | Concurrent request protection | ❌ No | Yes - Phase state machine |
-| Task state messages | ❌ No | Yes - Track asyncio.Tasks |
+| Task cancellation | ✅ `interrupt()` | No - Use SDK API |
+| `stop_task(task_id)` | ✅ Available | No - `interrupt()` sufficient |
 | Session CRUD | ✅ Full | No - Use SDK APIs |
 | Context usage query | ✅ Yes | No - Use `get_context_usage()` |
 | Model/skills tracking | ✅ In options | No - SDK handles |
@@ -56,13 +57,27 @@ class SessionState:
     client: ClaudeSDKClient | None = None
     last_active: float = field(default_factory=time.time)
     
+    # Process tracking (required - for force kill orphan processes)
+    client_pid: int | None = None       # PID of SDK subprocess
+    process_handle: Any | None = None   # Process handle for force kill
+    
     # Concurrency (required - SDK doesn't prevent concurrent queries)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     phase: SessionPhase = SessionPhase.IDLE
     
-    # Tasks (required - SDK doesn't send TaskStarted messages)
+    # Tasks (required - for asyncio task cancellation on session terminate)
     tasks: list[asyncio.Task] = field(default_factory=list)
 ```
+
+### Key Design Decisions (from discussion)
+
+1. **process_handle retained**: Force kill is a safety net for orphan processes when disconnect fails. Low frequency but high impact if not handled.
+
+2. **current_task_id removed**: Use `client.interrupt()` instead of `stop_task(task_id)`. The `interrupt()` method stops the entire request without needing a task_id.
+
+3. **model/skills_version removed**: Not worth the complexity. Client recreation is acceptable.
+
+4. **commands removed**: SDK manages command state internally.
 
 ### New Architecture
 
@@ -149,6 +164,24 @@ class SessionPhase(str, Enum):
 ```
 
 Transition rules remain in `SessionManager.start_request()` and `end_request()`.
+
+### interrupt() vs stop_task()
+
+SDK provides two cancellation APIs:
+
+```python
+# interrupt() - stops entire request, no task_id needed
+await client.interrupt()
+
+# stop_task() - stops specific subtask, requires task_id
+await client.stop_task(task_id)
+```
+
+**Decision**: Use `interrupt()` exclusively. It stops the entire request without needing to track `task_id`.
+
+**Migration**:
+- `interrupt_session()` → unchanged (uses `interrupt()`)
+- `reset_session()` → change from `stop_task(task_id)` to `interrupt()`
 
 ### File Changes
 
@@ -303,10 +336,20 @@ Transition rules remain in `SessionManager.start_request()` and `end_request()`.
 
 | Field | Reason for Removal |
 |-------|-------------------|
-| `model` | SDK options already track model; can query via `get_server_info()` |
+| `model` | SDK options already track model; client recreation is acceptable |
 | `skills_version` | SDK options track skills; no need for separate tracking |
 | `commands` | SDK manages command state internally |
 | `persistent_session` | SDK handles persistence via JSONL files |
-| `request_id` | SDK manages request/response correlation |
+| `current_task_id` | Use `client.interrupt()` instead of `stop_task(task_id)` |
+| `current_request_id` | SDK manages request/response correlation |
 | `previous_phase` | Simplified state machine doesn't need rollback |
 | `transition_count` | Debug-only, not needed for core functionality |
+
+## Appendix: Retained Fields Justification
+
+| Field | Reason for Retention |
+|-------|---------------------|
+| `process_handle` / `client_pid` | Safety net for force kill when disconnect fails; prevents orphan processes |
+| `tasks` (asyncio.Tasks) | Needed for session termination (cancel active asyncio tasks) |
+| `lock` (per-session) | Concurrent request protection per session |
+| `phase` | State machine for application-level flow control |
