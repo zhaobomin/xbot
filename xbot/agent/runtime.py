@@ -353,6 +353,20 @@ class AgentRuntime:
             f'prompt="{prompt_preview}..."'
         )
 
+        # Check concurrent request protection (new state management)
+        use_new_state = getattr(self.config.agents, 'use_new_session_manager', False)
+        if use_new_state and self.sessions is not None:
+            if not self.sessions.can_start_request(msg.session_key):
+                await self.bus.publish_outbound(OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="⏳ 正在处理上一个请求，请稍候再试。",
+                ))
+                return
+
+            # Mark request as started
+            self.sessions.start_request(msg.session_key)
+
         try:
             # Start atomic dispatch session
             async with self._state_coordinator.transaction(
@@ -433,6 +447,10 @@ class AgentRuntime:
                         reason="dispatch_end",
                     )
                 self._log_state_snapshot(msg.session_key, "dispatch_end")
+
+            # Mark request as complete
+            if use_new_state and self.sessions is not None:
+                self.sessions.end_request(msg.session_key)
 
     async def _handle_interaction_response(self, msg: InboundMessage) -> bool:
         """Delegate interaction-response handling."""
