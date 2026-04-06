@@ -170,6 +170,13 @@ class SessionState:
     # Tasks (required - for asyncio task cancellation on session terminate)
     tasks: list[asyncio.Task] = field(default_factory=list, compare=False)
 
+    # Backend metadata (required - for session metadata storage)
+    model: str | None = None  # Model name for this session
+    skills_version: str | None = None  # Skills version for this session
+    commands: list[str] = field(default_factory=list, compare=False)  # Commands for this session
+    task_id: str | None = None  # Active task ID
+    request_id: str | None = None  # Current request ID
+
     # Legacy fields (for SessionStateMachine compatibility)
     reason: str = ""
     previous_phase: SessionPhase | None = None

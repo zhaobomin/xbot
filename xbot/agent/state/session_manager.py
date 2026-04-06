@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import time
-from typing import TYPE_CHECKING, Any
+from contextlib import asynccontextmanager
+from typing import TYPE_CHECKING, Any, Any
 
-from xbot.agent.state.machine import SessionPhase, SessionState
+from xbot.agent.state.machine import SessionPhase, SessionState, VALID_TRANSITIONS
 from xbot.logging import get_logger
 
 if TYPE_CHECKING:
@@ -240,3 +241,343 @@ class SessionManager:
             if state.last_active < now - ttl_seconds:
                 stale.append(key)
         return stale
+
+    # === Store Compatibility ===
+
+    def list_keys(self) -> list[str]:
+        """List all session keys."""
+        return list(self._sessions.keys())
+
+    # Alias for compatibility
+    list_sessions = list_keys
+
+    async def delete(self, session_key: str, delete_sdk_file: bool = False) -> bool:
+        """Delete a session."""
+        await self.cleanup_session(session_key)
+        return True
+
+    # === State Checker Compatibility ===
+
+    def check_session(self, session_key: str) -> dict[str, Any]:
+        """Check session consistency (for debugging)."""
+        state = self.get(session_key)
+        if state is None:
+            return {"exists": False}
+        return {
+            "exists": True,
+            "phase": state.phase.value,
+            "sdk_session_id": state.sdk_session_id,
+            "channel": state.channel,
+            "chat_id": state.chat_id,
+            "has_client": state.client is not None,
+            "active_tasks": len(state.tasks),
+            "last_active": state.last_active,
+        }
+
+    # === State Machine Compatibility (delegates to SessionState) ===
+
+    def get_phase(self, session_key: str) -> SessionPhase:
+        """Get session current phase."""
+        state = self.get(session_key)
+        if state is None:
+            return SessionPhase.IDLE
+        return state.phase
+
+    def get_state(self, session_key: str) -> SessionState | None:
+        """Get session state."""
+        return self.get(session_key)
+
+    def has_session(self, session_key: str) -> bool:
+        """Check if session exists."""
+        return session_key in self._sessions
+
+    def force_transition(
+        self,
+        session_key: str,
+        to_phase: SessionPhase,
+        reason: str = "",
+    ) -> bool:
+        """Force state transition."""
+        state = self.get_or_create(session_key)
+        old_phase = state.phase
+        state.phase = to_phase
+        state.reason = reason
+        state.previous_phase = old_phase
+        state.transition_count += 1
+        logger.debug(f"force_transition: {session_key} {old_phase} -> {to_phase} ({reason})")
+        return True
+
+    def transition(
+        self,
+        session_key: str,
+        to_phase: SessionPhase,
+        *,
+        reason: str = "",
+        force: bool = False,
+    ) -> bool:
+        """State transition with validation."""
+        state = self.get(session_key)
+        if state is None:
+            # Create new session if doesn't exist
+            state = self.get_or_create(session_key)
+
+        old_phase = state.phase
+
+        # Check valid transition unless forced
+        if not force:
+            valid_transitions = VALID_TRANSITIONS.get(old_phase, set())
+            if to_phase not in valid_transitions and to_phase != old_phase:
+                logger.warning(f"transition: invalid {session_key} {old_phase} -> {to_phase}")
+                return False
+
+        state.phase = to_phase
+        state.reason = reason
+        state.previous_phase = old_phase
+        state.transition_count += 1
+        logger.debug(f"transition: {session_key} {old_phase} -> {to_phase} ({reason})")
+        return True
+
+    # === Task Management ===
+
+    def unregister_task(self, session_key: str, task: asyncio.Task) -> None:
+        """Unregister an active task."""
+        state = self.get(session_key)
+        if state and task in state.tasks:
+            state.tasks.remove(task)
+
+    def has_active_tasks(self, session_key: str) -> bool:
+        """Check if session has active tasks."""
+        return len(self.get_active_tasks(session_key)) > 0
+
+    def pop_active_tasks(self, session_key: str) -> list[asyncio.Task]:
+        """Pop and clear active tasks list."""
+        state = self.get(session_key)
+        if state:
+            tasks = list(state.tasks)
+            state.tasks.clear()
+            return tasks
+        return []
+
+    def clear_task_list(self, session_key: str) -> list[asyncio.Task]:
+        """Clear task list (unconditional)."""
+        return self.pop_active_tasks(session_key)
+
+    def cleanup_empty_task_list(self, session_key: str) -> bool:
+        """Clean up empty task list."""
+        state = self.get(session_key)
+        if state and not state.tasks:
+            state.tasks.clear()
+            return True
+        return False
+
+    def register_task_sync(self, session_key: str, task: asyncio.Task) -> None:
+        """Register task synchronously."""
+        state = self.get_or_create(session_key)
+        state.tasks.append(task)
+
+    # === Lock Management ===
+
+    def get_lock(self, session_key: str) -> asyncio.Lock:
+        """Get or create session lock."""
+        state = self.get_or_create(session_key)
+        return state.lock
+
+    # Alias for compatibility
+    get_lock_object = get_lock
+
+    def release_lock(self, session_key: str) -> bool:
+        """Release session lock."""
+        # Lock release is not straightforward - just return True
+        # The lock will be released when the context exits
+        return True
+
+    # === Transaction (async context manager) ===
+
+    @asynccontextmanager
+    async def transaction(self, session_key: str):
+        """Async context manager for locking."""
+        lock = self.get_lock(session_key)
+        async with lock:
+            yield
+
+    # === Session Reset ===
+
+    def reset_session(self, session_key: str) -> None:
+        """Reset session to initial state."""
+        state = self.get(session_key)
+        if state:
+            state.phase = SessionPhase.IDLE
+            state.reason = ""
+            state.previous_phase = None
+            state.tasks.clear()
+
+    # === Busy Check ===
+
+    def is_busy(self, session_key: str) -> bool:
+        """Check if session is busy (has active tasks or not IDLE)."""
+        phase = self.get_phase(session_key)
+        has_tasks = self.has_active_tasks(session_key)
+        is_idle = phase == SessionPhase.IDLE
+        return has_tasks or not is_idle
+
+    # === Backend Metadata (model, skills, commands, etc.) ===
+
+    def get_model(self, session_key: str) -> str | None:
+        """Get model for session."""
+        state = self.get(session_key)
+        return state.model if state else None
+
+    def set_model(self, session_key: str, model: str | None) -> None:
+        """Set model for session."""
+        state = self.get_or_create(session_key)
+        state.model = model
+
+    def get_skills_version(self, session_key: str) -> str | None:
+        """Get skills version for session."""
+        state = self.get(session_key)
+        return state.skills_version if state else None
+
+    def set_skills_version(self, session_key: str, version: str | None) -> None:
+        """Set skills version for session."""
+        state = self.get_or_create(session_key)
+        state.skills_version = version
+
+    def get_commands(self, session_key: str) -> list[str]:
+        """Get commands for session."""
+        state = self.get(session_key)
+        return list(state.commands) if state else []
+
+    def set_commands(self, session_key: str, commands: list[str]) -> None:
+        """Set commands for session."""
+        state = self.get_or_create(session_key)
+        state.commands = list(commands)
+
+    def get_last_used(self, session_key: str) -> float | None:
+        """Get last used timestamp for session."""
+        state = self.get(session_key)
+        return state.last_active if state else None
+
+    def touch(self, session_key: str) -> None:
+        """Update last used timestamp."""
+        state = self.get(session_key)
+        if state:
+            state.last_active = time.time()
+
+    def get_task_id(self, session_key: str) -> str | None:
+        """Get task ID for session."""
+        state = self.get(session_key)
+        return state.task_id if state else None
+
+    def set_task_id(self, session_key: str, task_id: str | None) -> None:
+        """Set task ID for session."""
+        state = self.get_or_create(session_key)
+        state.task_id = task_id
+
+    def get_request_id(self, session_key: str) -> str | None:
+        """Get request ID for session."""
+        state = self.get(session_key)
+        return state.request_id if state else None
+
+    def set_request_id(self, session_key: str, request_id: str | None) -> None:
+        """Set request ID for session."""
+        state = self.get_or_create(session_key)
+        state.request_id = request_id
+
+    # === Context Mapping (SDK session ID <-> session key) ===
+
+    def resolve_sdk_session_id(self, session_key: str) -> str | None:
+        """Resolve SDK session ID from session key."""
+        state = self.get(session_key)
+        return state.sdk_session_id if state else None
+
+    async def set_sdk_session_id(self, session_key: str, sdk_session_id: str | None) -> None:
+        """Set SDK session ID (async version for compatibility)."""
+        self.set_sdk_session_id(session_key, sdk_session_id)
+
+    def get_context_by_session_key(self, session_key: str) -> tuple[str, str] | None:
+        """Get channel and chat_id by session key."""
+        return self.get_routing(session_key)
+
+    def get_context_by_sdk_id(self, sdk_session_id: str) -> tuple[str, str] | None:
+        """Get channel and chat_id by SDK session ID."""
+        state = self.get_by_sdk_id(sdk_session_id)
+        if state:
+            return (state.channel, state.chat_id)
+        return None
+
+    def resolve_compact_notification_target(self, session_ref: str) -> tuple[str, str, str] | None:
+        """Resolve target for compact notification."""
+        result = self.resolve_routing(session_ref)
+        if result:
+            session_key, channel, chat_id = result
+            return (session_key, channel, chat_id)
+        return None
+
+    def set_context(self, session_key: str, channel: str, chat_id: str) -> None:
+        """Set channel and chat_id for session."""
+        self.set_routing(session_key, channel, chat_id)
+
+    def set_sdk_context_mapping(self, sdk_session_id: str, channel: str, chat_id: str) -> None:
+        """Set context mapping by SDK session ID."""
+        state = self.get_by_sdk_id(sdk_session_id)
+        if state:
+            state.channel = channel
+            state.chat_id = chat_id
+
+    def list_context_keys(self) -> list[str]:
+        """List all session keys with context."""
+        return [k for k, v in self._sessions.items() if v.channel or v.chat_id]
+
+    def get_client_last_used_map(self) -> dict[str, float]:
+        """Get map of session key to last used time for sessions with clients."""
+        return {
+            k: v.last_active
+            for k, v in self._sessions.items()
+            if v.client is not None
+        }
+
+    def list_client_session_keys(self) -> list[str]:
+        """List all session keys with clients."""
+        return self.list_client_sessions()
+
+    def clear_tracking_state(
+        self,
+        session_key: str,
+        sdk_session_id: str | None = None,
+        clear_sdk_session_id: bool = True,
+        clear_context: bool = False,
+    ) -> None:
+        """Clear tracking state for session."""
+        state = self.get(session_key)
+        if state:
+            state.client = None
+            if clear_sdk_session_id:
+                state.sdk_session_id = None
+            if clear_context:
+                state.channel = ""
+                state.chat_id = ""
+            state.tasks.clear()
+
+    def detach_runtime_state(self, session_key: str) -> dict[str, Any]:
+        """Detach runtime state from session."""
+        state = self.get(session_key)
+        if not state:
+            return {}
+        return {
+            "client": state.client,
+            "sdk_session_id": state.sdk_session_id,
+            "channel": state.channel,
+            "chat_id": state.chat_id,
+            "model": state.model,
+        }
+
+    def clear_context(self, session_key: str) -> None:
+        """Clear context for session."""
+        state = self.get(session_key)
+        if state:
+            state.channel = ""
+            state.chat_id = ""
+
+    def get_stale_client_session_keys(self, ttl_seconds: float) -> list[str]:
+        """Get stale session keys (clients that haven't been used recently)."""
+        return self.list_stale_sessions(ttl_seconds)

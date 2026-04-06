@@ -29,16 +29,13 @@ from xbot.agent.context.model_manager import ModelManager
 from xbot.agent.protocol import AgentContext
 from xbot.agent.interaction.response_handlers import RuntimeResponseHandlers
 from xbot.agent.router import AgentRouter, register_default_backends
-from xbot.agent.state.store import SessionStore
-from xbot.agent.state.checker import StateConsistencyChecker
-from xbot.agent.state.coordinator import SessionStateCoordinator
+from xbot.agent.state.session_manager import SessionManager
 from xbot.agent.state.machine import (
     SessionPhase,
     SessionState,
     SessionStateMachine,
     VALID_TRANSITIONS,
 )
-from xbot.agent.state.session_manager import SessionManager
 from xbot.agent.monitoring.trace import append_session_trace
 from xbot.bus.events import InboundMessage, OutboundMessage
 from xbot.config.paths import get_data_dir
@@ -170,22 +167,19 @@ class AgentRuntime:
             on_transition=self._on_state_transition
         )
 
-        # Session store for unified task and lock management
-        self._session_store = SessionStore()
-        self.shared_resources["session_store"] = self._session_store  # 让 backend 可以访问
-
-        # State consistency checker (for debugging and monitoring)
-        self._state_checker = StateConsistencyChecker(self)
-        self._state_check_enabled = True  # Feature flag for state checking
-
-        # Session state coordinator (unified state management)
-        self._state_coordinator = SessionStateCoordinator(self, self._session_store)
         self._response_handlers = RuntimeResponseHandlers(self)
 
-        # New unified session manager (with feature flag)
-        self.session_manager: SessionManager | None = None  # New unified manager
-        self._use_new_state: bool = False  # Feature flag
-        self._initialize_session_manager()
+        # Unified session manager
+        self.session_manager = SessionManager()
+        self.shared_resources["session_manager"] = self.session_manager
+        logger.info("Using SessionManager for session state management")
+
+        # Pass to backend if exists
+        if self.router and self.router._backend:
+            backend = self.router._backend
+            if hasattr(backend, "_state_manager"):
+                backend._state_manager = self.session_manager
+                logger.debug("Shared SessionManager with backend")
 
         self._direct_progress_callbacks: dict[
             str, Callable[..., Coroutine[None, None, None]]
@@ -197,23 +191,6 @@ class AgentRuntime:
         # Register backend state sync callbacks
         self.shared_resources["on_backend_client_cleanup"] = self._on_backend_client_cleanup
         self._shutdown_lock = asyncio.Lock()
-
-    def _initialize_session_manager(self) -> None:
-        """Initialize SessionManager with feature flag support.
-
-        When use_new_session_manager is True, creates a SessionManager instance
-        and shares it with the backend for unified state management.
-        """
-        self._use_new_state = self.config.agents.use_new_session_manager
-        if self._use_new_state:
-            self.session_manager = SessionManager()
-            logger.info("Using new SessionManager for session state management")
-            # Pass to backend if exists
-            if self.router and self.router._backend:
-                backend = self.router._backend
-                if hasattr(backend, "_state_manager"):
-                    backend._state_manager = self.session_manager
-                    logger.debug("Shared SessionManager with backend")
 
     @property
     def backend(self) -> "ClaudeSDKBackend":
@@ -252,7 +229,7 @@ class AgentRuntime:
         and releases the message bus.
         """
         async with self._shutdown_lock:
-            if not self._running and not self._session_store.list_keys():
+            if not self._running and not self.session_manager.list_keys():
                 return
 
             logger.info("Agent runtime shutting down...")
@@ -265,13 +242,13 @@ class AgentRuntime:
                 logger.warning("Error during router shutdown: %s", e)
 
             # 2. Cancel and await all active session tasks
-            all_keys = self._session_store.list_keys()
+            all_keys = self.session_manager.list_keys()
             if all_keys:
                 logger.info("Cancelling %d active session(s)...", len(all_keys))
                 for key in all_keys:
                     try:
                         # This cancels all tasks for this session key
-                        cancelled_count = await self._session_store.delete(key, delete_sdk_file=False)
+                        cancelled_count = await self.session_manager.delete(key, delete_sdk_file=False)
                         logger.debug("Cancelled %s tasks for session %s", cancelled_count.get("cancelled", 0), key)
                     except Exception as e:
                         logger.warning("Error cleaning up session %s: %s", key, e)
@@ -314,7 +291,7 @@ class AgentRuntime:
             # Dispatch message with atomic state management
             # IMPORTANT: Set phase to RUNNING BEFORE creating task to avoid race condition.
             # This ensures state is consistent when task is registered (fixes "IDLE but has active tasks" warning).
-            self._state_coordinator.force_transition(
+            self.session_manager.force_transition(
                 msg.session_key, SessionPhase.RUNNING, reason="dispatch_start"
             )
             self._spawn_session_task(self._dispatch(msg), msg.session_key)
@@ -336,7 +313,7 @@ class AgentRuntime:
         # When _dispatch is called directly (tests), there's no task registration.
 
         # === 诊断日志: 请求入口 ===
-        current_phase = self._state_coordinator.get_phase(msg.session_key)
+        current_phase = self.session_manager.get_phase(msg.session_key)
         has_pending_permission = False
         has_pending_interaction = False
         if self.bus is not None:
@@ -369,7 +346,7 @@ class AgentRuntime:
 
         try:
             # Start atomic dispatch session
-            async with self._state_coordinator.transaction(
+            async with self.session_manager.transaction(
                 msg.session_key, validate_on_commit=False
             ) as tx:
                 tx.set_phase(SessionPhase.RUNNING, reason="dispatch_start")
@@ -379,7 +356,7 @@ class AgentRuntime:
             self._log_state_snapshot(msg.session_key, "dispatch_start")
 
             # Get the lock via coordinator
-            lock = self._state_coordinator.get_lock_object(msg.session_key)
+            lock = self.session_manager.get_lock_object(msg.session_key)
 
             # Execute message handling
             async with lock:
@@ -394,7 +371,7 @@ class AgentRuntime:
             raise
         except Exception:
             # Atomic error handling with transaction
-            async with self._state_coordinator.transaction(
+            async with self.session_manager.transaction(
                 msg.session_key, validate_on_commit=False
             ) as tx:
                 tx.set_phase(SessionPhase.ERROR, reason="dispatch_error")
@@ -429,19 +406,19 @@ class AgentRuntime:
                         self.bus.get_pending_interaction_for_session(msg.session_key)
                     )
                 if has_pending_permission:
-                    self._state_coordinator.force_transition(
+                    self.session_manager.force_transition(
                         msg.session_key,
                         SessionPhase.WAITING_PERMISSION,
                         reason="pending_permission",
                     )
                 elif has_pending_interaction:
-                    self._state_coordinator.force_transition(
+                    self.session_manager.force_transition(
                         msg.session_key,
                         SessionPhase.WAITING_INTERACTION,
                         reason="pending_interaction",
                     )
-                elif not self._state_coordinator.get_active_tasks(msg.session_key):
-                    self._state_coordinator.force_transition(
+                elif not self.session_manager.get_active_tasks(msg.session_key):
+                    self.session_manager.force_transition(
                         msg.session_key,
                         SessionPhase.IDLE,
                         reason="dispatch_end",
@@ -764,7 +741,7 @@ class AgentRuntime:
         Uses coordinator transactions for atomic state changes.
         """
         # Start atomic terminate session
-        async with self._state_coordinator.transaction(
+        async with self.session_manager.transaction(
             session_key, validate_on_commit=False
         ) as tx:
             tx.set_phase(
@@ -782,7 +759,7 @@ class AgentRuntime:
 
         try:
             # Cancel and wait for tasks (outside transaction as it's async I/O)
-            tasks = self._state_coordinator.pop_active_tasks(session_key)
+            tasks = self.session_manager.pop_active_tasks(session_key)
             cancelled = sum(1 for t in tasks if not t.done() and t.cancel())
             if tasks:
                 # gather with return_exceptions=True collects child errors without
@@ -809,7 +786,7 @@ class AgentRuntime:
             # Continue to final cleanup even if backend operations fail
 
         # Atomic cleanup transaction - always run, even if cleanup failed
-        async with self._state_coordinator.transaction(
+        async with self.session_manager.transaction(
             session_key, validate_on_commit=False
         ) as tx:
             # Release lock (coordinator handles lock cleanup)
@@ -820,7 +797,7 @@ class AgentRuntime:
 
         # For hard_reset, reset state to fresh IDLE (instead of clear which deletes)
         if hard_reset:
-            self._state_coordinator.reset_session(session_key)
+            self.session_manager.reset_session(session_key)
 
         if parent_cancel is not None:
             raise parent_cancel
@@ -861,8 +838,8 @@ class AgentRuntime:
             if callable(finalizer):
                 finalizer(session_key, task)
                 return
-            self._state_coordinator.unregister_task(session_key, task)
-            self._state_coordinator.cleanup_empty_task_list(session_key)
+            self.session_manager.unregister_task(session_key, task)
+            self.session_manager.cleanup_empty_task_list(session_key)
             sync_phase = getattr(self, "_sync_session_phase", None)
             if callable(sync_phase):
                 sync_phase(session_key)
@@ -871,8 +848,8 @@ class AgentRuntime:
 
     def _finalize_task_completion(self, session_key: str, task: asyncio.Task) -> None:
         """Unregister a finished task and resync phase."""
-        self._state_coordinator.unregister_task(session_key, task)
-        self._state_coordinator.cleanup_empty_task_list(session_key)
+        self.session_manager.unregister_task(session_key, task)
+        self.session_manager.cleanup_empty_task_list(session_key)
         # This is critical: _sync_session_phase in the task's finally runs
         # before the task is marked done, so we need to sync again here.
         self._sync_session_phase(session_key)
@@ -889,14 +866,14 @@ class AgentRuntime:
 
     def _set_session_phase(self, session_key: str, phase: SessionPhase, *, reason: str = "") -> None:
         """Set session phase using coordinator."""
-        self._state_coordinator.transition(session_key, phase, reason=reason, force=True)
+        self.session_manager.transition(session_key, phase, reason=reason, force=True)
 
     def _sync_session_phase(self, session_key: str) -> None:
         """Synchronize session phase based on current state using coordinator."""
         # Don't override ERROR, STOPPING, or RESETTING states
         # - ERROR should be explicitly cleared
         # - STOPPING/RESETTING are in progress and will be finalized by _terminate_session
-        current_phase = self._state_coordinator.get_phase(session_key)
+        current_phase = self.session_manager.get_phase(session_key)
         protected_phases = {
             SessionPhase.ERROR,
             SessionPhase.STOPPING,
@@ -907,24 +884,24 @@ class AgentRuntime:
 
         if self.bus is not None:
             if self.bus.get_pending_request_for_session(session_key):
-                self._state_coordinator.force_transition(
+                self.session_manager.force_transition(
                     session_key, SessionPhase.WAITING_PERMISSION, reason="sync_pending_permission"
                 )
                 return
             if self.bus.get_pending_interaction_for_session(session_key):
-                self._state_coordinator.force_transition(
+                self.session_manager.force_transition(
                     session_key, SessionPhase.WAITING_INTERACTION, reason="sync_pending_interaction"
                 )
                 return
-        active = self._state_coordinator.get_active_tasks(session_key)
+        active = self.session_manager.get_active_tasks(session_key)
         if active:
-            self._state_coordinator.force_transition(session_key, SessionPhase.RUNNING, reason="sync_active_tasks")
+            self.session_manager.force_transition(session_key, SessionPhase.RUNNING, reason="sync_active_tasks")
         else:
-            self._state_coordinator.force_transition(session_key, SessionPhase.IDLE, reason="sync_idle")
+            self.session_manager.force_transition(session_key, SessionPhase.IDLE, reason="sync_idle")
 
     async def _settle_session_after_turn(self, session_key: str) -> None:
         """Reconcile session phase after a turn finishes."""
-        current_phase = self._state_coordinator.get_phase(session_key)
+        current_phase = self.session_manager.get_phase(session_key)
         protected_phases = {
             SessionPhase.ERROR,
             SessionPhase.STOPPING,
@@ -945,24 +922,24 @@ class AgentRuntime:
             )
 
         if has_pending_permission:
-            async with self._state_coordinator.transaction(
+            async with self.session_manager.transaction(
                 session_key, validate_on_commit=False
             ) as tx:
                 tx.set_phase(SessionPhase.WAITING_PERMISSION, reason="pending_permission")
         elif has_pending_interaction:
-            async with self._state_coordinator.transaction(
+            async with self.session_manager.transaction(
                 session_key, validate_on_commit=False
             ) as tx:
                 tx.set_phase(SessionPhase.WAITING_INTERACTION, reason="pending_interaction")
         else:
             current_task = asyncio.current_task()
-            registered_tasks = self._state_coordinator.get_active_tasks(session_key)
+            registered_tasks = self.session_manager.get_active_tasks(session_key)
             is_registered_task = (
                 current_task is not None and current_task in registered_tasks
             )
 
             if not is_registered_task:
-                async with self._state_coordinator.transaction(
+                async with self.session_manager.transaction(
                     session_key, validate_on_commit=False
                 ) as tx:
                     tx.set_phase(SessionPhase.IDLE, reason="dispatch_end")
@@ -977,7 +954,7 @@ class AgentRuntime:
         """Delete ephemeral cron session state after a managed direct run."""
         if not self._is_ephemeral_direct_session(session_key):
             return
-        if self._state_coordinator.get_active_tasks(session_key):
+        if self.session_manager.get_active_tasks(session_key):
             return
         if self.bus is not None:
             if self.bus.get_pending_request_for_session(session_key):
@@ -985,10 +962,10 @@ class AgentRuntime:
             if self.bus.get_pending_interaction_for_session(session_key):
                 return
 
-        if self._session_store.get(session_key) is not None:
-            await self._session_store.delete(session_key)
-        if self._state_coordinator.has_session(session_key):
-            await self._state_coordinator.cleanup_session(session_key)
+        if self.session_manager.get(session_key) is not None:
+            await self.session_manager.delete(session_key)
+        if self.session_manager.has_session(session_key):
+            await self.session_manager.cleanup_session(session_key)
         if self.sessions is not None:
             with suppress(Exception):
                 self.sessions.delete(session_key)
@@ -1013,7 +990,7 @@ class AgentRuntime:
             return
 
         try:
-            snapshot = self._state_checker.check_session(session_key)
+            snapshot = self.session_manager.check_session(session_key)
 
             # Record to session trace
             append_session_trace(
@@ -1041,7 +1018,7 @@ class AgentRuntime:
         Args:
             session_key: The session whose client was cleaned up
         """
-        current_phase = self._state_coordinator.get_phase(session_key)
+        current_phase = self.session_manager.get_phase(session_key)
 
         # Only update if session is active, waiting, or in error state
         # Note: STOPPING/RESETTING are handled by _terminate_session
@@ -1072,20 +1049,20 @@ class AgentRuntime:
                     await self.bus.aclear_session_requests(session_key)
 
             # Transition to IDLE
-            self._state_coordinator.force_transition(
+            self.session_manager.force_transition(
                 session_key, SessionPhase.IDLE, reason="backend_client_cleanup"
             )
 
             # Clean up related runtime state via coordinator
-            self._state_coordinator.clear_task_list(session_key)
-            self._state_coordinator.release_lock(session_key)
+            self.session_manager.clear_task_list(session_key)
+            self.session_manager.release_lock(session_key)
 
     def get_session_state(self, session_key: str) -> str:
         """Return current runtime session phase for diagnostics.
 
         Uses coordinator for unified state access.
         """
-        return self._state_coordinator.get_phase(session_key).value
+        return self.session_manager.get_phase(session_key).value
 
     def get_session_phase(self, session_key: str) -> SessionPhase:
         """Return current session phase as enum.
@@ -1098,11 +1075,11 @@ class AgentRuntime:
         Returns:
             Current SessionPhase enum value
         """
-        return self._state_coordinator.get_phase(session_key)
+        return self.session_manager.get_phase(session_key)
 
     def _session_diagnostics_text(self, session_key: str) -> str:
         phase = self.get_session_state(session_key)
-        active_tasks = len(self._state_coordinator.get_active_tasks(session_key))
+        active_tasks = len(self.session_manager.get_active_tasks(session_key))
         pending_permission = None
         pending_interaction = None
         if self.bus is not None:
@@ -1136,17 +1113,14 @@ class AgentRuntime:
     def _coord_status_text(self) -> str:
         """Generate coordinator status text with statistics."""
         lines = [
-            "🔧 State Coordinator",
+            "🔧 State (SessionManager)",
             "",
+            f"Sessions: {len(self.session_manager._sessions)}",
         ]
 
-        # Add stats if coordinator has any
-        if hasattr(self._state_coordinator, '_stats'):
-            stats = self._state_coordinator._stats
-            lines.append("Stats:")
-            lines.append(f"  phase_transitions: {stats.phase_transitions}")
-            lines.append(f"  locks_created: {stats.locks_created}")
-            lines.append(f"  tasks_created: {stats.tasks_created}")
+        # Add active sessions info
+        active_count = sum(1 for s in self.session_manager._sessions.values() if s.phase == SessionPhase.RUNNING)
+        lines.append(f"Active: {active_count}")
 
         return "\n".join(lines)
 
@@ -1198,14 +1172,14 @@ class AgentRuntime:
     ) -> str:
         """Execute one direct turn with the same state/lock lifecycle as dispatch."""
         try:
-            async with self._state_coordinator.transaction(
+            async with self.session_manager.transaction(
                 msg.session_key, validate_on_commit=False
             ) as tx:
                 tx.set_phase(SessionPhase.RUNNING, reason="managed_direct_start")
                 tx.acquire_lock()
 
             self._log_state_snapshot(msg.session_key, "dispatch_start")
-            lock = self._state_coordinator.get_lock_object(msg.session_key)
+            lock = self.session_manager.get_lock_object(msg.session_key)
 
             async with lock:
                 response = await self._handle_message(msg, on_progress=on_progress)
@@ -1214,7 +1188,7 @@ class AgentRuntime:
         except asyncio.CancelledError:
             raise
         except Exception:
-            async with self._state_coordinator.transaction(
+            async with self.session_manager.transaction(
                 msg.session_key, validate_on_commit=False
             ) as tx:
                 tx.set_phase(SessionPhase.ERROR, reason="managed_direct_error")
@@ -1254,7 +1228,7 @@ class AgentRuntime:
         if not self._is_local_runtime_command(content):
             await self.initialize()
 
-        self._state_coordinator.force_transition(
+        self.session_manager.force_transition(
             msg.session_key, SessionPhase.RUNNING, reason="managed_direct_start"
         )
         task = self._spawn_session_task(
@@ -1645,8 +1619,8 @@ class AgentRuntime:
             target = parts[2] if len(parts) > 2 else msg.session_key
 
             # Check if session is busy before deleting
-            phase = self._state_coordinator.get_phase(target)
-            if self._state_coordinator.is_busy(target):
+            phase = self.session_manager.get_phase(target)
+            if self.session_manager.is_busy(target):
                 return OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
@@ -1654,7 +1628,7 @@ class AgentRuntime:
                 )
 
             # Transition to DELETING state before operation
-            if not self._state_coordinator.transition(target, SessionPhase.DELETING, reason="delete_sdk_session"):
+            if not self.session_manager.transition(target, SessionPhase.DELETING, reason="delete_sdk_session"):
                 return OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
@@ -1667,7 +1641,7 @@ class AgentRuntime:
 
                 if result["deleted"]:
                     sdk_id = result.get("sdk_session_id", "unknown")
-                    self._state_coordinator.transition(
+                    self.session_manager.transition(
                         target,
                         SessionPhase.IDLE,
                         reason="delete_complete",
@@ -1681,8 +1655,8 @@ class AgentRuntime:
                 else:
                     error = result.get("error", "Unknown error")
                     # Return to IDLE on failure
-                    self._state_coordinator.transition(target, SessionPhase.ERROR, reason=f"delete_failed: {error}", force=True)
-                    self._state_coordinator.transition(target, SessionPhase.IDLE, reason="delete_failed_recovery", force=True)
+                    self.session_manager.transition(target, SessionPhase.ERROR, reason=f"delete_failed: {error}", force=True)
+                    self.session_manager.transition(target, SessionPhase.IDLE, reason="delete_failed_recovery", force=True)
                     return OutboundMessage(
                         channel=msg.channel,
                         chat_id=msg.chat_id,
@@ -1690,8 +1664,8 @@ class AgentRuntime:
                     )
             except Exception as e:
                 # Return to ERROR then IDLE on exception
-                self._state_coordinator.transition(target, SessionPhase.ERROR, reason=f"delete_exception: {e}", force=True)
-                self._state_coordinator.transition(target, SessionPhase.IDLE, reason="delete_exception_recovery", force=True)
+                self.session_manager.transition(target, SessionPhase.ERROR, reason=f"delete_exception: {e}", force=True)
+                self.session_manager.transition(target, SessionPhase.IDLE, reason="delete_exception_recovery", force=True)
                 raise
 
         elif subcmd == "info":
@@ -1714,7 +1688,7 @@ class AgentRuntime:
                 lines.append("  SDK Session ID: (none)")
 
             # Show current phase
-            phase = self._state_coordinator.get_phase(target)
+            phase = self.session_manager.get_phase(target)
             lines.append(f"  Phase: {phase.value}")
 
             return OutboundMessage(
@@ -1732,8 +1706,8 @@ class AgentRuntime:
                 )
             # !session fork [msg_id] [title]
             # Check if session is busy before forking
-            phase = self._state_coordinator.get_phase(msg.session_key)
-            if self._state_coordinator.is_busy(msg.session_key):
+            phase = self.session_manager.get_phase(msg.session_key)
+            if self.session_manager.is_busy(msg.session_key):
                 return OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
@@ -1741,7 +1715,7 @@ class AgentRuntime:
                 )
 
             # Transition to FORKING state before operation
-            if not self._state_coordinator.transition(msg.session_key, SessionPhase.FORKING, reason="fork_sdk_session"):
+            if not self.session_manager.transition(msg.session_key, SessionPhase.FORKING, reason="fork_sdk_session"):
                 return OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
@@ -1771,7 +1745,7 @@ class AgentRuntime:
                     new_key = result.get("new_session_key", "unknown")
                     new_sdk = result.get("new_sdk_session_id", "unknown")
                     # Return to IDLE after successful fork
-                    self._state_coordinator.transition(msg.session_key, SessionPhase.IDLE, reason="fork_complete")
+                    self.session_manager.transition(msg.session_key, SessionPhase.IDLE, reason="fork_complete")
                     return OutboundMessage(
                         channel=msg.channel,
                         chat_id=msg.chat_id,
@@ -1783,8 +1757,8 @@ class AgentRuntime:
                 else:
                     error = result.get("error", "Unknown error")
                     # Return to IDLE on failure
-                    self._state_coordinator.transition(msg.session_key, SessionPhase.ERROR, reason=f"fork_failed: {error}", force=True)
-                    self._state_coordinator.transition(msg.session_key, SessionPhase.IDLE, reason="fork_failed_recovery", force=True)
+                    self.session_manager.transition(msg.session_key, SessionPhase.ERROR, reason=f"fork_failed: {error}", force=True)
+                    self.session_manager.transition(msg.session_key, SessionPhase.IDLE, reason="fork_failed_recovery", force=True)
                     return OutboundMessage(
                         channel=msg.channel,
                         chat_id=msg.chat_id,
@@ -1792,8 +1766,8 @@ class AgentRuntime:
                     )
             except Exception as e:
                 # Return to ERROR then IDLE on exception
-                self._state_coordinator.transition(msg.session_key, SessionPhase.ERROR, reason=f"fork_exception: {e}", force=True)
-                self._state_coordinator.transition(msg.session_key, SessionPhase.IDLE, reason="fork_exception_recovery", force=True)
+                self.session_manager.transition(msg.session_key, SessionPhase.ERROR, reason=f"fork_exception: {e}", force=True)
+                self.session_manager.transition(msg.session_key, SessionPhase.IDLE, reason="fork_exception_recovery", force=True)
                 raise
 
         else:
@@ -2101,7 +2075,7 @@ class AgentRuntime:
         # Register synchronously via coordinator so tasks_created stats are updated
         # immediately and get_active_tasks() reflects the task without any async delay.
         # register_task_sync uses the sync get_or_create so no await is needed.
-        self._state_coordinator.register_task_sync(session_key, task)
+        self.session_manager.register_task_sync(session_key, task)
         
         return task
 

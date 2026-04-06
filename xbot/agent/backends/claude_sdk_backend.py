@@ -34,7 +34,6 @@ from xbot.agent.interaction.event_formatter import (
     format_task_notification,
 )
 from xbot.agent.protocol import AgentBackend, AgentContext, AgentResponse
-from xbot.agent.state.session_state_adapter import SessionStateAdapter
 from xbot.agent.task_supervisor import ServiceTaskRegistry
 from xbot.agent.monitoring.trace import append_session_trace
 from xbot.agent.tools.base import Tool
@@ -60,7 +59,6 @@ if TYPE_CHECKING:
         TaskStartedMessage,
         UserMessage,
     )
-    from xbot.agent.state.store import SessionEntry, SessionStore
     from xbot.providers.base import LLMResponse
 
 # Try to import Claude SDK
@@ -162,11 +160,7 @@ class ClaudeSDKBackend(AgentBackend):
         self._permission_handler: Any = None
         self._skill_manager: Any = None
         self._sdk_session_ids: dict[str, str] = {}  # SDK session ID to session key mapping
-        self._adapter_epoch: int = 0  # Bumped on initialize() to detect stale adapters
 
-        # SessionStore reference for unified state management
-        self._session_store: "SessionStore | None" = None
-        self._use_session_store: bool = False  # Feature flag for gradual migration
         self._client_lifecycle = ClientLifecycleManager()
         self._client_scavenger_task: asyncio.Task | None = None
         self._background_release_tasks: set[asyncio.Task] = set()  # Track fire-and-forget release tasks
@@ -176,12 +170,10 @@ class ClaudeSDKBackend(AgentBackend):
             "counts": {"disconnected": 0, "killed": 0, "leaked": 0},
             "last_failure": None,
         }
-        self._state_adapter: SessionStateAdapter | None = None
         self._service_tasks = ServiceTaskRegistry(error_reporter=self._report_service_task_error)
 
-        # New unified state management (feature flag)
-        self._state_manager: StateSessionManager | None = None
-        self._use_new_state: bool = False  # Feature flag for new SessionManager
+        # Unified state management - always initialized
+        self._state_manager = StateSessionManager()
 
     @property
     def max_clients(self) -> int:
@@ -250,183 +242,123 @@ class ClaudeSDKBackend(AgentBackend):
             return bool(self.sdk_config.strict_process_tracking_required)
         return False
 
-    # === SessionStore helper methods ===
+    # === State manager helper methods ===
 
-    def _uses_session_store(self) -> bool:
-        """Return whether SessionStore-backed state is active."""
-        return bool(getattr(self, "_use_session_store", False) and getattr(self, "_session_store", None))
+    def _get_entry(self, session_key: str) -> Any:
+        """Get session state (compatibility method)."""
+        return self.state_manager.get(session_key)
 
-    def _get_state_adapter(self) -> SessionStateAdapter:
-        # Fast path: already initialised (no lock needed once set, assignment is atomic in CPython)
-        adapter = getattr(self, "_state_adapter", None)
-        if adapter is not None:
-            return adapter
-        # Slow path: first call — capture epoch before building so we can detect
-        # if initialize() was called concurrently (which resets _state_adapter).
-        epoch_before = self._adapter_epoch
-        new_adapter = SessionStateAdapter(
-            session_store=getattr(self, "_session_store", None),
-            use_session_store=self._uses_session_store(),
-            shared_resources=getattr(self, "_shared_resources", None),
-            sessions=getattr(self, "sessions", None),
-            legacy_last_used=getattr(self, "_client_last_used", None),
-            legacy_clients=getattr(self, "_clients", None),
-            legacy_sdk_session_ids=getattr(self, "_sdk_session_ids", None),
-        )
-        # Discard if initialize() raced and bumped epoch while we were building
-        if getattr(self, "_adapter_epoch", 0) != epoch_before:
-            existing = getattr(self, "_state_adapter", None)
-            if existing is not None:
-                return existing
-        # Only store if nobody else beat us to it (compare-and-set pattern)
-        if getattr(self, "_state_adapter", None) is None:
-            self._state_adapter = new_adapter
-        return self._state_adapter
-
-    def _get_entry(self, session_key: str) -> "SessionEntry | None":
-        """Get SessionEntry from SessionStore or return None."""
-        return self._get_state_adapter()._get_entry(session_key)
-
-    def _get_or_create_entry(self, session_key: str) -> "SessionEntry":
-        """Get or create SessionEntry from SessionStore."""
-        entry = self._get_state_adapter().get_or_create_session(session_key)
-        if entry is None:
-            raise RuntimeError("SessionStore not available")
-        return entry
+    def _get_or_create_entry(self, session_key: str) -> Any:
+        """Get or create session state."""
+        return self.state_manager.get_or_create(session_key)
 
     def _get_model_from_entry(self, session_key: str) -> str | None:
-        """Get model name from SessionEntry or legacy dict."""
-        return self._get_state_adapter().get_model(session_key)
+        """Get model name from session state."""
+        return self.state_manager.get_model(session_key)
 
     def _set_model_in_entry(self, session_key: str, model: str | None) -> None:
-        """Set model name in SessionEntry or legacy dict."""
-        self._get_state_adapter().set_model(session_key, model)
+        """Set model name in session state."""
+        self.state_manager.set_model(session_key, model)
 
     def _get_skills_version_from_entry(self, session_key: str) -> str | None:
-        """Get skills version from SessionEntry or legacy dict."""
-        return self._get_state_adapter().get_skills_version(session_key)
+        """Get skills version from session state."""
+        return self.state_manager.get_skills_version(session_key)
 
     def _set_skills_version_in_entry(self, session_key: str, version: str | None) -> None:
-        """Set skills version in SessionEntry or legacy dict."""
-        self._get_state_adapter().set_skills_version(session_key, version)
+        """Set skills version in session state."""
+        self.state_manager.set_skills_version(session_key, version)
 
     def _get_commands_from_entry(self, session_key: str) -> list[str]:
-        """Get commands list from SessionEntry or legacy dict."""
-        return self._get_state_adapter().get_commands(session_key)
+        """Get commands list from session state."""
+        return self.state_manager.get_commands(session_key)
 
     def _set_commands_in_entry(self, session_key: str, commands: list[str]) -> None:
-        """Set commands list in SessionEntry or legacy dict."""
-        self._get_state_adapter().set_commands(session_key, commands)
+        """Set commands list in session state."""
+        self.state_manager.set_commands(session_key, commands)
 
     def _get_last_used_from_entry(self, session_key: str) -> float | None:
-        """Get last used timestamp from SessionEntry or legacy dict."""
-        return self._get_state_adapter().get_last_used(session_key)
+        """Get last used timestamp from session state."""
+        return self.state_manager.get_last_used(session_key)
 
     def _touch_entry(self, session_key: str) -> None:
-        """Update last_used timestamp in SessionEntry or legacy dict."""
-        self._get_state_adapter().touch(session_key)
+        """Update last_used timestamp in session state."""
+        self.state_manager.touch(session_key)
 
     def _get_task_id_from_entry(self, session_key: str) -> str | None:
-        """Get active task ID from SessionEntry or legacy dict."""
-        return self._get_state_adapter().get_task_id(session_key)
+        """Get active task ID from session state."""
+        return self.state_manager.get_task_id(session_key)
 
     def _set_task_id_in_entry(self, session_key: str, task_id: str | None) -> None:
-        """Set active task ID in SessionEntry or legacy dict."""
-        self._get_state_adapter().set_task_id(session_key, task_id)
+        """Set active task ID in session state."""
+        self.state_manager.set_task_id(session_key, task_id)
 
     def _get_request_id_from_entry(self, session_key: str) -> str | None:
-        """Get request ID from SessionEntry or legacy dict."""
-        return self._get_state_adapter().get_request_id(session_key)
+        """Get request ID from session state."""
+        return self.state_manager.get_request_id(session_key)
 
     def _set_request_id_in_entry(self, session_key: str, request_id: str | None) -> None:
-        """Set request ID in SessionEntry or legacy dict."""
-        self._get_state_adapter().set_request_id(session_key, request_id)
+        """Set request ID in session state."""
+        self.state_manager.set_request_id(session_key, request_id)
 
     def _get_client_from_entry(self, session_key: str) -> "ClaudeSDKClient | None":
-        """Get SDK client from SessionEntry or legacy dict."""
-        return self._get_state_adapter().get_client(session_key)
+        """Get SDK client from session state."""
+        return self.state_manager.get_client(session_key)
 
     def _set_client_in_entry(self, session_key: str, client: "ClaudeSDKClient") -> None:
-        """Set SDK client in SessionEntry or legacy dict."""
-        self._get_state_adapter().set_client(session_key, client)
+        """Set SDK client in session state."""
+        self.state_manager.set_client(session_key, client)
 
     def _has_client_in_entry(self, session_key: str) -> bool:
-        """Check if session has client in SessionEntry or legacy dict."""
-        return self._get_state_adapter().has_client(session_key)
+        """Check if session has client in session state."""
+        return self.state_manager.has_client(session_key)
 
     def _get_client(self, session_key: str) -> "ClaudeSDKClient | None":
-        """Get client - dual mode for migration."""
-        if self._use_new_state and self._state_manager:
-            return self._state_manager.get_client(session_key)
-        return self._clients.get(session_key)
+        """Get client from state manager."""
+        return self.state_manager.get_client(session_key)
 
     def _set_client(self, session_key: str, client: "ClaudeSDKClient") -> None:
-        """Set client - dual mode for migration."""
-        if self._use_new_state and self._state_manager:
-            self._state_manager.set_client(session_key, client)
-        else:
-            self._clients[session_key] = client
+        """Set client in state manager."""
+        self.state_manager.set_client(session_key, client)
 
     def _has_client(self, session_key: str) -> bool:
-        """Check if session has client - dual mode."""
-        if self._use_new_state and self._state_manager:
-            return self._state_manager.has_client(session_key)
-        return session_key in self._clients
+        """Check if session has client."""
+        return self.state_manager.has_client(session_key)
 
     def _list_client_sessions(self) -> list[str]:
-        """List sessions with clients - dual mode."""
-        if self._use_new_state and self._state_manager:
-            return self._state_manager.list_client_sessions()
-        return list(self._clients.keys())
+        """List sessions with clients."""
+        return self.state_manager.list_client_sessions()
 
     def _del_client(self, session_key: str) -> None:
-        """Delete client - dual mode."""
-        if self._use_new_state and self._state_manager:
-            state = self._state_manager.get(session_key)
-            if state:
-                state.client = None
-        elif session_key in self._clients:
-            del self._clients[session_key]
-
+        """Delete client from state manager."""
+        state = self.state_manager.get(session_key)
+        if state:
+            state.client = None
 
     def _get_sdk_session_id(self, session_key: str) -> str | None:
-        """Get SDK session ID - dual mode."""
-        if self._use_new_state and self._state_manager:
-            state = self._state_manager.get(session_key)
-            return state.sdk_session_id if state else None
-        return self._sdk_session_ids.get(session_key)
+        """Get SDK session ID from state manager."""
+        state = self.state_manager.get(session_key)
+        return state.sdk_session_id if state else None
 
     def _set_sdk_session_id(self, session_key: str, sdk_id: str | None) -> None:
-        """Set SDK session ID - dual mode."""
-        if self._use_new_state and self._state_manager:
-            self._state_manager.set_sdk_session_id(session_key, sdk_id)
-        else:
-            if sdk_id:
-                self._sdk_session_ids[session_key] = sdk_id
-            elif session_key in self._sdk_session_ids:
-                del self._sdk_session_ids[session_key]
+        """Set SDK session ID in state manager."""
+        self.state_manager.set_sdk_session_id(session_key, sdk_id)
 
     def _get_last_active(self, session_key: str) -> float:
-        """Get last active time - dual mode."""
-        if self._use_new_state and self._state_manager:
-            state = self._state_manager.get(session_key)
-            return state.last_active if state else 0.0
-        return self._client_last_used.get(session_key, 0.0)
+        """Get last active time from state manager."""
+        state = self.state_manager.get(session_key)
+        return state.last_active if state else 0.0
 
     def _update_last_active(self, session_key: str) -> None:
-        """Update last active time - dual mode."""
-        if self._use_new_state and self._state_manager:
-            state = self._state_manager.get(session_key)
-            if state:
-                state.last_active = time.time()
-        else:
-            self._client_last_used[session_key] = time.time()
+        """Update last active time in state manager."""
+        state = self.state_manager.get(session_key)
+        if state:
+            state.last_active = time.time()
 
     # === SDK session ID and context helpers ===
 
     def _get_sdk_session_id_from_entry(self, session_key: str) -> str | None:
         """Get SDK session ID from SessionEntry or legacy mappings."""
-        return self._get_state_adapter().resolve_sdk_session_id(session_key)
+        return self.state_manager.resolve_sdk_session_id(session_key)
 
     async def _set_sdk_session_id_in_entry(
         self, session_key: str, sdk_session_id: str | None
@@ -435,7 +367,7 @@ class ClaudeSDKBackend(AgentBackend):
 
         Also syncs to session.metadata for persistence.
         """
-        await self._get_state_adapter().set_sdk_session_id(session_key, sdk_session_id)
+        await self.state_manager.set_sdk_session_id(session_key, sdk_session_id)
         await self._sync_client_lifecycle_sdk_session_id(session_key, sdk_session_id)
 
     def _get_context_by_session_key(self, session_key: str) -> tuple[str, str] | None:
@@ -443,27 +375,27 @@ class ClaudeSDKBackend(AgentBackend):
 
         Uses SessionStore if available, falls back to _session_contexts.
         """
-        return self._get_state_adapter().get_context_by_session_key(session_key)
+        return self.state_manager.get_context_by_session_key(session_key)
 
     def _get_context_by_sdk_id(self, sdk_session_id: str) -> tuple[str, str] | None:
         """Get (channel, chat_id) context by SDK session ID.
 
         Uses SessionStore's _sdk_id_index if available, falls back to _session_contexts.
         """
-        return self._get_state_adapter().get_context_by_sdk_id(sdk_session_id)
+        return self.state_manager.get_context_by_sdk_id(sdk_session_id)
 
     def _resolve_compact_notification_target(
         self, session_ref: str
     ) -> tuple[str, str, str] | None:
         """Resolve compact-hook target from either session_key or SDK session_id."""
-        return self._get_state_adapter().resolve_compact_notification_target(session_ref)
+        return self.state_manager.resolve_compact_notification_target(session_ref)
 
     def _set_context_in_entry(self, session_key: str, channel: str, chat_id: str) -> None:
         """Set channel and chat_id in SessionEntry.
 
         Also updates _session_contexts for backward compatibility during migration.
         """
-        self._get_state_adapter().set_context(session_key, channel, chat_id)
+        self.state_manager.set_context(session_key, channel, chat_id)
 
     def _set_sdk_context_mapping(self, sdk_session_id: str, channel: str, chat_id: str) -> None:
         """Set SDK session ID to context mapping.
@@ -471,11 +403,11 @@ class ClaudeSDKBackend(AgentBackend):
         In SessionStore mode, updates the entry's sdk_session_id.
         Also updates _session_contexts for backward compatibility.
         """
-        self._get_state_adapter().set_sdk_context_mapping(sdk_session_id, channel, chat_id)
+        self.state_manager.set_sdk_context_mapping(sdk_session_id, channel, chat_id)
 
     def _list_context_keys(self) -> list[str]:
         """List compatibility context keys for logging/debugging only."""
-        return self._get_state_adapter().list_context_keys()
+        return self.state_manager.list_context_keys()
 
     def _resolve_sdk_session_id(self, session_key: str) -> str | None:
         """Resolve SDK session ID from entry, metadata, or legacy mappings."""
@@ -484,7 +416,7 @@ class ClaudeSDKBackend(AgentBackend):
         if sdk_session_id:
             return sdk_session_id
         # Then try the state adapter
-        return self._get_state_adapter().resolve_sdk_session_id(session_key)
+        return self.state_manager.resolve_sdk_session_id(session_key)
 
     def _is_ephemeral_session(self, session_key: str) -> bool:
         return session_key.startswith("cron:") or session_key == "heartbeat"
@@ -558,7 +490,7 @@ class ClaudeSDKBackend(AgentBackend):
             )
         )
         now = time.time()
-        for session_key, last_used in self._get_state_adapter().get_client_last_used_map().items():
+        for session_key, last_used in self.state_manager.get_client_last_used_map().items():
             if (
                 now - last_used > self.client_ttl_seconds
                 and self._can_cleanup_session(session_key)
@@ -919,9 +851,16 @@ class ClaudeSDKBackend(AgentBackend):
             return
         await lifecycle.update_sdk_session_id(session_key, sdk_session_id)
 
+    @property
+    def state_manager(self) -> StateSessionManager:
+        """Get state manager, creating if necessary."""
+        if not hasattr(self, "_state_manager") or self._state_manager is None:
+            self._state_manager = StateSessionManager()
+        return self._state_manager
+
     def _clear_legacy_tracking_state(self, session_key: str, sdk_session_id: str | None, *, clear_context: bool = False) -> None:
         """Clear legacy tracking dictionaries for a session."""
-        self._get_state_adapter().clear_tracking_state(
+        self.state_manager.clear_tracking_state(
             session_key,
             sdk_session_id=sdk_session_id,
             clear_sdk_session_id=bool(sdk_session_id),
@@ -945,11 +884,6 @@ class ClaudeSDKBackend(AgentBackend):
                 if session:
                     session.metadata.pop("sdk_session_id", None)
                     self.sessions.save(session)
-        else:
-            if self._uses_session_store():
-                entry = self._get_entry(session_key)
-                if entry:
-                    self._session_store.clear_sdk_session_id(session_key)
 
     async def initialize(self, config: AgentsConfig, shared_resources: dict[str, Any]) -> None:
         """Initialize the backend.
@@ -962,22 +896,17 @@ class ClaudeSDKBackend(AgentBackend):
             ValueError: If provider is not compatible with Claude SDK
         """
         self._shared_resources = shared_resources
-        # Bump epoch before invalidating adapter so concurrent _get_state_adapter()
-        # calls can detect that initialize() is in progress and discard stale builds.
-        self._adapter_epoch += 1
-        # Invalidate the cached state adapter so the next call to _get_state_adapter()
-        # rebuilds it with the fresh shared_resources / sessions references.
-        self._state_adapter = None
         self.sdk_config = config.claude_sdk
         self.sessions = shared_resources.get("session_manager") or SessionManager(
             Path(shared_resources.get("workspace", config.defaults.workspace))
         )
 
-        # Initialize new unified state manager with feature flag
-        self._use_new_state = config.use_new_session_manager
-        if self._use_new_state:
-            self._state_manager = StateSessionManager()
-            logger.info("Using new SessionManager for state management")
+        # Get state manager from shared resources or use existing
+        state_manager = shared_resources.get("session_manager")
+        if state_manager:
+            self._state_manager = state_manager
+
+        logger.info("Using SessionManager for state management")
 
         workspace_path = Path(shared_resources.get("workspace", config.defaults.workspace))
         runtime_config = shared_resources.get("config")
@@ -1124,11 +1053,10 @@ class ClaudeSDKBackend(AgentBackend):
             config=self._shared_resources.get("config"),
         )
 
-        # Get SessionStore reference for unified state management
-        self._session_store = shared_resources.get("session_store")
-        if self._session_store:
-            self._use_session_store = True
-            logger.info("Backend using SessionStore for session state management")
+        # Get state manager from shared resources
+        state_manager = shared_resources.get("session_manager")
+        if state_manager:
+            self._state_manager = state_manager
 
         self._ensure_client_scavenger_started()
 
@@ -1327,7 +1255,7 @@ class ClaudeSDKBackend(AgentBackend):
                         )
 
             # Check if we need to evict clients before creating new one
-            client_count = len(self._get_state_adapter().list_client_session_keys())
+            client_count = len(self.state_manager.list_client_session_keys())
             if client_count >= self.max_clients:
                 evicted_client, evicted_key = await self._evict_lru_client_unlocked()
                 if evicted_client is not None:
@@ -1386,14 +1314,14 @@ class ClaudeSDKBackend(AgentBackend):
                 had_sdk_sid = True
 
         # Get client and clear all state
-        client = self._get_state_adapter().detach_runtime_state(
+        client = self.state_manager.detach_runtime_state(
             session_key,
             preserve_sdk_context=preserve_sdk_context,
         )
 
         # Clear session context for compact notifications
         if not preserve_sdk_context:
-            self._get_state_adapter().clear_context(session_key)
+            self.state_manager.clear_context(session_key)
 
         # Clean up per-session tool contexts to prevent unbounded memory growth
         if not preserve_sdk_context and self._tool_adapter:
@@ -1594,7 +1522,7 @@ class ClaudeSDKBackend(AgentBackend):
             Caller is responsible for disconnecting these clients outside the lock.
         """
         now = time.time()
-        stale_keys = self._get_state_adapter().get_stale_client_session_keys(
+        stale_keys = self.state_manager.get_stale_client_session_keys(
             self.client_ttl_seconds,
             now=now,
         )
@@ -1620,7 +1548,7 @@ class ClaudeSDKBackend(AgentBackend):
             Caller is responsible for disconnecting the client outside the lock.
         """
         # Find sessions with clients
-        client_sessions = self._get_state_adapter().get_client_last_used_map()
+        client_sessions = self.state_manager.get_client_last_used_map()
 
         if not client_sessions:
             return None, None
@@ -1804,8 +1732,8 @@ class ClaudeSDKBackend(AgentBackend):
         # Store session context for compact notifications and keep the
         # deprecated compatibility mirror bounded during SessionStore cutover.
         async with self._session_contexts_lock:
-            self._get_state_adapter().set_context(context.session_key, context.channel, context.chat_id)
-            self._get_state_adapter().enforce_legacy_context_limit(500)
+            self.state_manager.set_context(context.session_key, context.channel, context.chat_id)
+            self.state_manager.enforce_legacy_context_limit(500)
         logger.info(
             "[Session Context] Set mapping: session_key='%s' -> (channel='%s', chat_id='%s'). "
             "Current keys in session_contexts: %s",
@@ -1883,7 +1811,7 @@ class ClaudeSDKBackend(AgentBackend):
             existing_sdk_id = session.metadata.get("sdk_session_id")
             if existing_sdk_id:
                 async with self._session_contexts_lock:
-                    self._get_state_adapter().set_sdk_context_mapping(
+                    self.state_manager.set_sdk_context_mapping(
                         existing_sdk_id,
                         context.channel,
                         context.chat_id,
@@ -2292,7 +2220,7 @@ class ClaudeSDKBackend(AgentBackend):
     async def shutdown(self) -> None:
         """Shutdown the backend."""
         await self._stop_client_scavenger()
-        session_keys = set(self._get_state_adapter().list_client_session_keys())
+        session_keys = set(self.state_manager.list_client_session_keys())
         for session_key in session_keys:
             await self.release_client(session_key, reason="shutdown")
         # Wait for any fire-and-forget background release tasks
@@ -2303,7 +2231,7 @@ class ClaudeSDKBackend(AgentBackend):
         await self._service_tasks.cancel_owner("memory-consolidation")
         # Clear session contexts for compact notifications
         async with self._session_contexts_lock:
-            self._get_state_adapter().clear_all_contexts()
+            self.state_manager.clear_all_contexts()
         logger.info("Claude SDK backend shutdown complete")
 
     async def reset_session(self, session_key: str) -> None:
@@ -2535,7 +2463,7 @@ class ClaudeSDKBackend(AgentBackend):
             agent_names = sorted(self.sdk_config.agents.keys())
         handoff = f"handoff_agents={','.join(agent_names)}" if agent_names else "handoff_agents=0"
         # Count sessions with clients
-        client_count = len(self._get_state_adapter().list_client_session_keys())
+        client_count = len(self.state_manager.list_client_session_keys())
         lifecycle = self._client_lifecycle.snapshot_sync()
         runtime = (
             f"connected_sessions={client_count} | "
@@ -2948,7 +2876,7 @@ class ClaudeSDKBackend(AgentBackend):
 
         async with self._clients_lock:
             async with self._session_contexts_lock:
-                self._get_state_adapter().register_forked_session(
+                self.state_manager.register_forked_session(
                     new_session_key,
                     new_sdk_session_id,
                     original_context,
@@ -2965,7 +2893,7 @@ class ClaudeSDKBackend(AgentBackend):
                     self.sessions.save(session)
                 except Exception as e:
                     async with self._session_contexts_lock:
-                        self._get_state_adapter().rollback_forked_session(
+                        self.state_manager.rollback_forked_session(
                             new_session_key,
                             new_sdk_session_id,
                         )
