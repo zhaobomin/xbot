@@ -15,6 +15,14 @@ from xbot.agent.tools.base import Tool
 from xbot.agent.tools.registry import ToolRegistry
 
 
+class MCPToolTimeoutError(Exception):
+    """Raised when an MCP tool call times out."""
+    def __init__(self, tool_name: str, timeout: float):
+        self.tool_name = tool_name
+        self.timeout = timeout
+        super().__init__(f"MCP tool '{tool_name}' timed out after {timeout}s")
+
+
 @dataclass
 class MCPServerConnection:
     """Represents a connection to an MCP server with its own lifecycle."""
@@ -59,7 +67,7 @@ class MCPToolWrapper(Tool):
             )
         except asyncio.TimeoutError:
             logger.warning("MCP tool '%s' timed out after %ss", self._name, self._tool_timeout)
-            return f"(MCP tool call timed out after {self._tool_timeout}s)"
+            raise MCPToolTimeoutError(self._name, self._tool_timeout)
         except asyncio.CancelledError:
             # MCP SDK's anyio cancel scopes can leak CancelledError on timeout/failure.
             # Re-raise only if our task was externally cancelled (e.g. /stop).
@@ -283,17 +291,27 @@ async def connect_mcp_servers(
     ]
 
     results = await asyncio.gather(*tasks, return_exceptions=True)
-    for result in results:
-        if isinstance(result, MCPServerConnection) and result.connected:
-            stack.push_async_callback(_safe_close_stack, result.stack, result.name)
+    connected_count = 0
+    failed_count = 0
+    failed_servers = []
 
-    # Log summary
-    connected_count = sum(1 for r in results if isinstance(r, MCPServerConnection) and r.connected)
-    failed_count = len(results) - connected_count
+    for i, result in enumerate(results):
+        server_name = list(mcp_servers.keys())[i]
+
+        if isinstance(result, MCPServerConnection) and result.connected:
+            connected_count += 1
+            stack.push_async_callback(_safe_close_stack, result.stack, result.name)
+        elif isinstance(result, Exception):
+            failed_count += 1
+            failed_servers.append((server_name, str(result)))
+            logger.error("MCP server '%s' connection failed: %s", server_name, result)
+        else:
+            failed_count += 1
+            failed_servers.append((server_name, "Unknown result type"))
+            logger.warning("MCP server '%s' returned unexpected result: %s", server_name, type(result))
 
     if failed_count > 0:
         logger.warning(
-            "MCP: %s servers connected, %s servers failed",
-            connected_count,
-            failed_count,
+            "MCP: %d servers connected, %d servers failed: %s",
+            connected_count, failed_count, [s[0] for s in failed_servers]
         )
