@@ -1,0 +1,16 @@
+# 飞书配置
+# 从环境变量读取，确保敏感信息不被硬编码
+
+[feishu]
+enabled = true
+app_id = "${FEISHU_APP_ID}"
+app_secret = "${FEISHU_APP_SECRET}"
+encrypt_key = "${FEISHU_ENCRYPT_KEY}"
+verification_token = "${FEISHU_VERIFICATION_TOKEN}"
+bot_open_id = "${FEISHU_BOT_OPEN_ID}"
+
+# 群聊触发策略: "mention" | "all" | "none"
+# mention: 只响应 @机器人 的消息
+# all: 响应所有消息
+# none: 不响应群聊消息
+group_policy = "mention"

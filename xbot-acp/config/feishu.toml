@@ -1,0 +1,11 @@
+# 飞书配置
+[feishu]
+enabled = true
+app_id = "cli_a9488bffb5f99cef"
+app_secret = "m5Mvwd2NQhqHmYJ9Ob3fQer1V0NVSZMn"
+encrypt_key = ""
+verification_token = ""
+bot_open_id = ""
+
+# 群聊触发策略
+group_policy = "mention"
