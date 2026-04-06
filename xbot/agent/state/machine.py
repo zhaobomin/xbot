@@ -6,9 +6,14 @@ session state transitions in the agent runtime.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import asyncio
+import time
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from claude_agent_sdk import ClaudeSDKClient
 
 from xbot.logging import get_logger
 
@@ -119,16 +124,53 @@ VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
 
 @dataclass
 class SessionState:
-    """State data for a single session.
+    """Minimal session state - only what SDK doesn't manage.
+
+    This dataclass holds session-specific state that the Claude SDK doesn't
+    manage, including routing information, client connections, and concurrency
+    control.
 
     Attributes:
+        session_key: xbot's session ID (e.g., "slack:C12345")
+        sdk_session_id: SDK's session UUID
+        channel: Channel type (slack, feishu, telegram, etc.)
+        chat_id: Chat ID within channel
+        client: ClaudeSDKClient instance for this session
+        last_active: Timestamp of last activity
+        client_pid: PID of SDK subprocess
+        process_handle: Process handle for force kill
+        lock: Async lock for preventing concurrent queries
         phase: Current session phase
-        reason: Reason for the current phase
-        previous_phase: The phase before the current one (for rollback)
-        transition_count: Number of transitions this session has made
+        tasks: List of asyncio tasks for this session
+        reason: Reason for the current phase (legacy)
+        previous_phase: The phase before the current one (legacy, for rollback)
+        transition_count: Number of transitions this session has made (legacy)
     """
 
+    # Identity
+    session_key: str = ""  # xbot's session ID (e.g., "slack:C12345")
+    sdk_session_id: str | None = None  # SDK's session UUID
+
+    # Routing (required - SDK doesn't know channel/chat_id)
+    channel: str = ""  # Channel type (slack, feishu, telegram, etc.)
+    chat_id: str = ""  # Chat ID within channel
+
+    # Connection (required - SDK doesn't pool clients)
+    client: ClaudeSDKClient | None = field(default=None, compare=False)
+    last_active: float = field(default_factory=time.time, compare=False)
+
+    # Process tracking (required - for force kill orphan processes)
+    client_pid: int | None = field(default=None, compare=False)
+    process_handle: Any | None = field(default=None, compare=False)
+
+    # Concurrency (required - SDK doesn't prevent concurrent queries)
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock, compare=False)
     phase: SessionPhase = SessionPhase.IDLE
+
+    # Tasks (required - for asyncio task cancellation on session terminate)
+    tasks: list[asyncio.Task] = field(default_factory=list, compare=False)
+
+    # Legacy fields (for SessionStateMachine compatibility)
     reason: str = ""
     previous_phase: SessionPhase | None = None
     transition_count: int = 0
