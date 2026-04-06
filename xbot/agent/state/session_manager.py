@@ -73,3 +73,35 @@ class SessionManager:
         state.sdk_session_id = sdk_id
         if sdk_id:
             self._sdk_index[sdk_id] = session_key
+
+    # === Routing ===
+
+    def set_routing(self, session_key: str, channel: str, chat_id: str) -> None:
+        """Set channel and chat_id for routing."""
+        state = self.get_or_create(session_key)
+        state.channel = channel
+        state.chat_id = chat_id
+
+    def get_routing(self, session_key: str) -> tuple[str, str] | None:
+        """Get channel and chat_id, or None if session not found."""
+        state = self.get(session_key)
+        if state is None:
+            return None
+        return (state.channel, state.chat_id)
+
+    def resolve_routing(self, identifier: str) -> tuple[str, str, str] | None:
+        """Resolve routing from either session_key or sdk_session_id.
+
+        Returns: (session_key, channel, chat_id) or None
+        """
+        # Try as session_key first
+        state = self.get(identifier)
+        if state:
+            return (state.session_key, state.channel, state.chat_id)
+
+        # Try as sdk_session_id
+        state = self.get_by_sdk_id(identifier)
+        if state:
+            return (state.session_key, state.channel, state.chat_id)
+
+        return None

@@ -57,3 +57,66 @@ async def test_set_sdk_session_id_updates_mapping():
     assert state.sdk_session_id == "sdk-uuid-new"
     assert manager.get_by_sdk_id("sdk-uuid-old") is None  # Old mapping removed
     assert manager.get_by_sdk_id("sdk-uuid-new") is state
+
+
+@pytest.mark.asyncio
+async def test_set_routing():
+    """Test that set_routing updates channel and chat_id."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+
+    manager.set_routing("slack:C12345", "slack", "C12345")
+
+    state = manager.get("slack:C12345")
+    assert state.channel == "slack"
+    assert state.chat_id == "C12345"
+
+
+@pytest.mark.asyncio
+async def test_get_routing():
+    """Test that get_routing returns channel and chat_id."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+    manager.set_routing("slack:C12345", "slack", "C12345")
+
+    routing = manager.get_routing("slack:C12345")
+    assert routing == ("slack", "C12345")
+
+
+@pytest.mark.asyncio
+async def test_get_routing_returns_none_for_unknown():
+    """Test that get_routing returns None for unknown session."""
+    manager = SessionManager()
+    routing = manager.get_routing("unknown:session")
+    assert routing is None
+
+
+@pytest.mark.asyncio
+async def test_resolve_routing_by_session_key():
+    """Test resolve_routing accepts session_key."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+    manager.set_routing("slack:C12345", "slack", "C12345")
+
+    result = manager.resolve_routing("slack:C12345")
+    assert result == ("slack:C12345", "slack", "C12345")
+
+
+@pytest.mark.asyncio
+async def test_resolve_routing_by_sdk_session_id():
+    """Test resolve_routing accepts sdk_session_id."""
+    manager = SessionManager()
+    manager.get_or_create("slack:C12345")
+    manager.set_routing("slack:C12345", "slack", "C12345")
+    manager.set_sdk_session_id("slack:C12345", "sdk-uuid-abc")
+
+    result = manager.resolve_routing("sdk-uuid-abc")
+    assert result == ("slack:C12345", "slack", "C12345")
+
+
+@pytest.mark.asyncio
+async def test_resolve_routing_returns_none_for_unknown():
+    """Test resolve_routing returns None for unknown identifier."""
+    manager = SessionManager()
+    result = manager.resolve_routing("unknown-id")
+    assert result is None
