@@ -182,7 +182,9 @@ class UserStore:
     def load(self) -> dict[str, Any]:
         self.ensure_default_admin()
         user_data = json.loads(self.path.read_text(encoding="utf-8"))
-        # Always use the current password hash from the dedicated file
+        # Always resolve the password hash from the dedicated password file so
+        # that the value stored in users.json is never used for authentication
+        # (it may be stale after a password reset).
         user_data["password_hash"] = self._get_password_hash()
         return user_data
 
@@ -196,11 +198,10 @@ class UserStore:
         user = self.load()
         if not verify_password(current_password, user["password_hash"]):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
-        # Update the dedicated password file
+        # Write new hash to the dedicated password file (single source of truth).
+        # We intentionally do NOT update users.json because load() always reads
+        # the hash from PASSWORD_FILE, making the field in users.json unused.
         set_password(new_password)
-        # Also update the user store file for consistency
-        user["password_hash"] = hash_password(new_password)
-        self.path.write_text(json.dumps(user, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 class AuthManager:

@@ -28,7 +28,7 @@ async def test_agent_runtime_task_cleanup():
             
     # Spawn a session task
     session_key = "test_cleanup_session"
-    task = await runtime._spawn_session_task(long_running(), session_key)
+    task = runtime._spawn_session_task(long_running(), session_key)
     
     # Verify task is registered
     active_tasks = runtime._state_coordinator.get_active_tasks(session_key)

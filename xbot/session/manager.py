@@ -59,6 +59,7 @@ class Session:
     metadata: dict[str, Any] = field(default_factory=dict)
     last_consolidated: int = 0  # Number of messages already consolidated to files
     _new_messages: list[dict[str, Any]] = field(default_factory=list, repr=False)
+    _metadata_dirty: bool = field(default=False, repr=False)  # True when metadata changed but not yet flushed
 
     def add_message(self, role: str, content: str, **kwargs: Any) -> None:
         """Add a message to the session."""
@@ -71,6 +72,10 @@ class Session:
         self.messages.append(msg)
         self._new_messages.append(msg)
         self.updated_at = datetime.now()
+
+    def mark_metadata_dirty(self) -> None:
+        """Mark metadata as changed so the next save() triggers a full write."""
+        self._metadata_dirty = True
 
     @staticmethod
     def _find_legal_start(messages: list[dict[str, Any]]) -> int:
@@ -120,8 +125,12 @@ class Session:
     def clear(self) -> None:
         """Clear all messages and reset session to initial state."""
         self.messages = []
+        self._new_messages = []
         self.last_consolidated = 0
         self.updated_at = datetime.now()
+        # Mark dirty so the next save() triggers a full rewrite, overwriting
+        # the on-disk content with the now-empty message list.
+        self._metadata_dirty = True
 
 
 class SessionManager:
@@ -272,16 +281,21 @@ class SessionManager:
         """Save a session to disk.
 
         Uses append-only mode for new messages to improve performance.
-        Falls back to atomic full write if metadata changes or file is missing.
+        Falls back to atomic full write if:
+        - the file doesn't exist yet (first save), or
+        - metadata was changed (``session.mark_metadata_dirty()`` was called).
         """
         path = self._get_session_path(session.key)
 
         # Use exclusive lock for writing to prevent concurrent writes
         with self._file_lock(path, exclusive=True):
-            # If file doesn't exist or metadata might have changed (not implemented yet), do a full save
-            if not path.exists():
+            needs_full_save = not path.exists() or session._metadata_dirty
+
+            if needs_full_save:
+                # Full atomic rewrite: covers initial creation and metadata updates
                 self._save_full(session, path)
                 session._new_messages.clear()
+                session._metadata_dirty = False
             elif session._new_messages:
                 try:
                     # Append mode: just write new messages
@@ -295,10 +309,7 @@ class SessionManager:
                     # Fallback to full save if append fails
                     self._save_full(session, path)
                     session._new_messages.clear()
-            else:
-                # No new messages, but we might want to update metadata/updated_at
-                # For now, if no new messages, we do nothing or a full save if needed
-                pass
+            # else: no new messages and no metadata change — nothing to persist
 
         self._cache[session.key] = session
 

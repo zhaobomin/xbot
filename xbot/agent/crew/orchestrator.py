@@ -274,18 +274,29 @@ class CrewOrchestrator:
         Returns None if no simple LLM call mechanism is available,
         in which case repair will gracefully fail.
 
+        Note: Uses a dedicated thread executor to run the async backend so that
+        calling code can remain synchronous without nesting asyncio.run() inside
+        an already-running event loop (which raises RuntimeError on Python 3.10+).
+
         Returns:
             Callable that takes a prompt and returns LLM response, or None.
         """
+        import concurrent.futures
+        import threading
+
+        # Guard: only proceed if we have a real Config instance.
+        # MagicMock / test stubs will fail this check and return None gracefully.
+        if not isinstance(self.xbot_config, Config):
+            return None
+
         try:
             from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
             from xbot.agent.protocol import AgentContext
-            import asyncio
 
             # Create a lightweight backend for repair
             backend = ClaudeSDKBackend()
             agents_config = self.xbot_config.agents.model_copy(deep=True)
-            
+
             shared_resources = {
                 "workspace": self.crew_config.workspace,
                 "config": self.xbot_config,
@@ -295,11 +306,9 @@ class CrewOrchestrator:
                 "session_manager": None,
             }
 
-            # Initialize the backend
-            asyncio.run(backend.initialize(agents_config, shared_resources))
-
-            def repair_callable(prompt: str) -> str:
-                """Sync wrapper for async backend call."""
+            async def _init_and_call(prompt: str) -> str:
+                """Initialize backend and run a single repair call."""
+                await backend.initialize(agents_config, shared_resources)
                 session_key = f"repair_{hash(prompt) % 10000}"
                 context = AgentContext(
                     session_key=session_key,
@@ -308,17 +317,41 @@ class CrewOrchestrator:
                     chat_id="repair",
                     media=None,
                 )
+                content = ""
+                async for response in backend.process(context):
+                    if response.content:
+                        content = response.content
+                    elif response.delta_content:
+                        content += response.delta_content
+                return content
 
-                async def get_response():
-                    content = ""
-                    async for response in backend.process(context):
-                        if response.content:
-                            content = response.content
-                        elif response.delta_content:
-                            content += response.delta_content
-                    return content
+            def repair_callable(prompt: str) -> str:
+                """Run the async repair call in a dedicated thread with its own event loop.
 
-                return asyncio.run(get_response())
+                This avoids the 'asyncio.run() cannot be called when another event
+                loop is running' error that occurs when called from within an async
+                context on Python 3.10+.
+                """
+                result: list[str] = []
+                exception: list[BaseException] = []
+
+                def _thread_target() -> None:
+                    import asyncio as _asyncio
+                    loop = _asyncio.new_event_loop()
+                    _asyncio.set_event_loop(loop)
+                    try:
+                        result.append(loop.run_until_complete(_init_and_call(prompt)))
+                    except Exception as exc:
+                        exception.append(exc)
+                    finally:
+                        loop.close()
+
+                t = threading.Thread(target=_thread_target, daemon=True)
+                t.start()
+                t.join(timeout=120)  # 2-minute hard timeout for repair
+                if exception:
+                    raise exception[0]
+                return result[0] if result else ""
 
             return repair_callable
         except Exception as e:

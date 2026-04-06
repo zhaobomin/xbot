@@ -293,7 +293,7 @@ class AgentRuntime:
             self._state_coordinator.force_transition(
                 msg.session_key, SessionPhase.RUNNING, reason="dispatch_start"
             )
-            task = await self._spawn_session_task(self._dispatch(msg), msg.session_key)
+            self._spawn_session_task(self._dispatch(msg), msg.session_key)
 
     async def _handle_permission_response(self, msg: InboundMessage) -> bool:
         """Delegate permission-response handling."""
@@ -1215,7 +1215,7 @@ class AgentRuntime:
         self._state_coordinator.force_transition(
             msg.session_key, SessionPhase.RUNNING, reason="managed_direct_start"
         )
-        task = await self._spawn_session_task(
+        task = self._spawn_session_task(
             self._run_managed_direct_turn(msg, on_progress=on_progress),
             msg.session_key,
         )
@@ -2031,7 +2031,7 @@ class AgentRuntime:
         """Record background task failure without leaking unhandled-task warnings."""
         logger.warning("Background task '%s' failed: %s", task_name, exc)
 
-    async def _spawn_session_task(
+    def _spawn_session_task(
         self,
         coro: Coroutine[Any, Any, Any],
         session_key: str,
@@ -2041,11 +2041,25 @@ class AgentRuntime:
         This eliminates the race window between create_task() and register_task()
         that previously allowed orphan tasks to escape tracking.
         """
-        task = asyncio.create_task(coro)
-        # Tag + register + callback
+        async def execute_with_register():
+            try:
+                # Execute the original coroutine
+                return await coro
+            finally:
+                # Unregister task on completion
+                self._state_coordinator.unregister_task(session_key, task)
+
+        # Create task
+        task = asyncio.create_task(execute_with_register())
+        # Tag + callback
         AgentRuntime._tag_task_for_session(task, session_key)
-        await self._state_coordinator.register_task(session_key, task)
         task.add_done_callback(self._make_task_done_callback(session_key))
+        
+        # Register synchronously via coordinator so tasks_created stats are updated
+        # immediately and get_active_tasks() reflects the task without any async delay.
+        # register_task_sync uses the sync get_or_create so no await is needed.
+        self._state_coordinator.register_task_sync(session_key, task)
+        
         return task
 
     def _spawn_background_task(self, coro: Coroutine[Any, Any, Any], task_name: str) -> asyncio.Task:

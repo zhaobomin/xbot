@@ -167,6 +167,8 @@ class SessionStateAdapter:
                     session.metadata["sdk_session_id"] = sdk_session_id
                 else:
                     session.metadata.pop("sdk_session_id", None)
+                # Mark dirty so save() performs a full rewrite even with no new messages
+                session.mark_metadata_dirty()
                 self._sessions.save(session)
 
     def set_sdk_context_mapping(self, sdk_session_id: str, channel: str, chat_id: str) -> None:

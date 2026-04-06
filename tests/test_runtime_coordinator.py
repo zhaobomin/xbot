@@ -142,7 +142,7 @@ class TestStateConsistencyDuringDispatch:
 
         # Now register task (simulating what happens in run())
         task = asyncio.create_task(asyncio.sleep(0.1))
-        mock_runtime_with_coordinator._state_coordinator.register_task(session_key, task)
+        mock_runtime_with_coordinator._state_coordinator.register_task_sync(session_key, task)
 
         # At this point, phase should be RUNNING (not IDLE)
         phase = mock_runtime_with_coordinator.get_session_phase(session_key)
@@ -178,7 +178,7 @@ class TestStateConsistencyDuringDispatch:
 
         # Create and register task
         task = asyncio.create_task(asyncio.sleep(0.1))
-        mock_runtime_with_coordinator._state_coordinator.register_task(session_key, task)
+        mock_runtime_with_coordinator._state_coordinator.register_task_sync(session_key, task)
 
         try:
             # Check state consistency
@@ -208,7 +208,7 @@ class TestStateConsistencyDuringDispatch:
             session_key, SessionPhase.RUNNING, reason="dispatch_start"
         )
         task = asyncio.create_task(asyncio.sleep(0.01))
-        mock_runtime_with_coordinator._state_coordinator.register_task(session_key, task)
+        mock_runtime_with_coordinator._state_coordinator.register_task_sync(session_key, task)
 
         # Wait for task to complete
         await task

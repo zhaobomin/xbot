@@ -123,9 +123,10 @@ class TestNoUserMessageTrigger:
         assistant message handling.
         """
         import re
+        from pathlib import Path
 
-        # Read the source file directly
-        source_path = "/home/xbot/projects/xbot/xbot/agent/backends/claude_sdk_backend.py"
+        # Resolve path relative to this test file (works on any machine)
+        source_path = Path(__file__).parent.parent / "xbot" / "agent" / "backends" / "claude_sdk_backend.py"
         with open(source_path, 'r') as f:
             content = f.read()
             lines = content.split('\n')
@@ -163,7 +164,9 @@ class TestNoUserMessageTrigger:
 
     def test_consolidation_exists_after_assistant_in_source(self) -> None:
         """Verify consolidation IS triggered after assistant message."""
-        source_path = "/home/xbot/projects/xbot/xbot/agent/backends/claude_sdk_backend.py"
+        from pathlib import Path
+
+        source_path = Path(__file__).parent.parent / "xbot" / "agent" / "backends" / "claude_sdk_backend.py"
         with open(source_path, 'r') as f:
             content = f.read()
             lines = content.split('\n')

@@ -180,6 +180,22 @@ class SessionStateCoordinator:
 
     # === 任务管理 ===
 
+    def register_task_sync(self, session_key: str, task: asyncio.Task) -> None:
+        """Register an active task synchronously (no await required).
+
+        Uses the synchronous get_or_create so this can be called from non-async
+        contexts (e.g. immediately after asyncio.create_task) while still
+        updating tasks_created stats through the coordinator.
+
+        Args:
+            session_key: 会话标识
+            task: 异步任务
+        """
+        self._session_store.get_or_create(session_key)
+        success = self._session_store.register_task(session_key, task)
+        if success:
+            self._stats.tasks_created += 1
+
     async def register_task(self, session_key: str, task: asyncio.Task) -> None:
         """注册活跃任务。
 

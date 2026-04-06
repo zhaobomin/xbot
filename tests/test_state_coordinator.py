@@ -146,14 +146,15 @@ class TestSessionStateCoordinatorTransition:
 class TestSessionStateCoordinatorTasks:
     """测试任务管理"""
 
-    def test_register_task(self, mock_runtime):
+    @pytest.mark.asyncio
+    async def test_register_task(self, mock_runtime):
         """测试注册任务"""
         coordinator = SessionStateCoordinator(mock_runtime, mock_runtime._session_store)
 
         task = MagicMock(spec=asyncio.Task)
         task.get_name.return_value = "test-task"
 
-        coordinator.register_task("test:1", task)
+        await coordinator.register_task("test:1", task)
 
         entry = mock_runtime._session_store.get("test:1")
         assert entry is not None

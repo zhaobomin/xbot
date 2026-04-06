@@ -164,6 +164,7 @@ class ClaudeSDKBackend(AgentBackend):
         self._permission_handler: Any = None
         self._skill_manager: Any = None
         self._client_skills_versions: dict[str, str | None] = {}  # Track skills version per client
+        self._sdk_session_ids: dict[str, str] = {}  # SDK session ID to session key mapping
 
         # SessionStore reference for unified state management
         self._session_store: "SessionStore | None" = None
@@ -254,24 +255,35 @@ class ClaudeSDKBackend(AgentBackend):
         return bool(getattr(self, "_use_session_store", False) and getattr(self, "_session_store", None))
 
     def _get_state_adapter(self) -> SessionStateAdapter:
+        # Fast path: already initialised (no lock needed once set, assignment is atomic in CPython)
         adapter = getattr(self, "_state_adapter", None)
-        if adapter is None:
-            adapter = SessionStateAdapter(
-                session_store=getattr(self, "_session_store", None),
-                use_session_store=self._uses_session_store(),
-                shared_resources=getattr(self, "_shared_resources", None),
-                sessions=getattr(self, "sessions", None),
-                legacy_models=getattr(self, "_client_models", None),
-                legacy_skills_versions=getattr(self, "_client_skills_versions", None),
-                legacy_commands=getattr(self, "_session_commands", None),
-                legacy_last_used=getattr(self, "_client_last_used", None),
-                legacy_task_ids=getattr(self, "_active_task_ids", None),
-                legacy_request_ids=getattr(self, "_active_request_ids", None),
-                legacy_clients=getattr(self, "_clients", None),
-                legacy_sdk_session_ids=getattr(self, "_sdk_session_ids", None),
-            )
-            self._state_adapter = adapter
-        return adapter
+        if adapter is not None:
+            return adapter
+        # Slow path: first call — build under lock to avoid racing with concurrent callers
+        # that could each capture a different snapshot of the legacy dicts.
+        # We use _session_contexts_lock which is already owned by this backend.
+        # Note: this is a sync method so we cannot use `async with`; instead we
+        # rely on CPython's GIL ensuring that dict-reference reads/writes are
+        # atomic, and we double-check after assignment to handle the unlikely
+        # case of two threads racing (non-async callers in tests etc.).
+        new_adapter = SessionStateAdapter(
+            session_store=getattr(self, "_session_store", None),
+            use_session_store=self._uses_session_store(),
+            shared_resources=getattr(self, "_shared_resources", None),
+            sessions=getattr(self, "sessions", None),
+            legacy_models=getattr(self, "_client_models", None),
+            legacy_skills_versions=getattr(self, "_client_skills_versions", None),
+            legacy_commands=getattr(self, "_session_commands", None),
+            legacy_last_used=getattr(self, "_client_last_used", None),
+            legacy_task_ids=getattr(self, "_active_task_ids", None),
+            legacy_request_ids=getattr(self, "_active_request_ids", None),
+            legacy_clients=getattr(self, "_clients", None),
+            legacy_sdk_session_ids=getattr(self, "_sdk_session_ids", None),
+        )
+        # Only store if nobody else beat us to it (compare-and-set pattern)
+        if getattr(self, "_state_adapter", None) is None:
+            self._state_adapter = new_adapter
+        return self._state_adapter
 
     def _get_entry(self, session_key: str) -> "SessionEntry | None":
         """Get SessionEntry from SessionStore or return None."""
@@ -401,6 +413,11 @@ class ClaudeSDKBackend(AgentBackend):
 
     def _resolve_sdk_session_id(self, session_key: str) -> str | None:
         """Resolve SDK session ID from entry, metadata, or legacy mappings."""
+        # First try the legacy method (for backward compatibility with tests)
+        sdk_session_id = self._get_sdk_session_id_from_entry(session_key)
+        if sdk_session_id:
+            return sdk_session_id
+        # Then try the state adapter
         return self._get_state_adapter().resolve_sdk_session_id(session_key)
 
     def _is_ephemeral_session(self, session_key: str) -> bool:
@@ -879,6 +896,9 @@ class ClaudeSDKBackend(AgentBackend):
             ValueError: If provider is not compatible with Claude SDK
         """
         self._shared_resources = shared_resources
+        # Invalidate the cached state adapter so the next call to _get_state_adapter()
+        # rebuilds it with the fresh shared_resources / sessions references.
+        self._state_adapter = None
         self.sdk_config = config.claude_sdk
         self.sessions = shared_resources.get("session_manager") or SessionManager(
             Path(shared_resources.get("workspace", config.defaults.workspace))
@@ -2171,6 +2191,7 @@ class ClaudeSDKBackend(AgentBackend):
                 is_recoverable = True
                 if session is not None:
                     session.metadata["_needs_compact"] = True
+                    session.mark_metadata_dirty()
                 logger.info(f"[Payload] Request too large via exception path, marking for compact on next turn")
 
             logger.info(
@@ -2187,6 +2208,7 @@ class ClaudeSDKBackend(AgentBackend):
                 # For non-recoverable errors, mark for fresh start instead of recovery
                 if not is_recoverable:
                     session.metadata["_fresh_start_required"] = True
+                session.mark_metadata_dirty()
                 self.sessions.save(session)
 
             logger.exception("Error in Claude SDK backend")
@@ -2899,6 +2921,7 @@ class ClaudeSDKBackend(AgentBackend):
                     session.metadata["forked_from"] = session_key
                     session.metadata["forked_up_to"] = up_to_message_id
                     session.metadata["forked_at"] = datetime.now().isoformat()
+                    session.mark_metadata_dirty()
                     self.sessions.save(session)
                 except Exception as e:
                     async with self._session_contexts_lock:

@@ -114,6 +114,12 @@ def _bind(runtime: _RuntimeHarness) -> None:
     runtime._spawn_session_task = AgentRuntime._spawn_session_task.__get__(
         runtime, _RuntimeHarness
     )
+    runtime._spawn_background_task = AgentRuntime._spawn_background_task.__get__(
+        runtime, _RuntimeHarness
+    )
+    runtime._record_background_task_error = AgentRuntime._record_background_task_error.__get__(
+        runtime, _RuntimeHarness
+    )
     runtime._set_session_phase = AgentRuntime._set_session_phase.__get__(runtime, _RuntimeHarness)
     runtime._sync_session_phase = AgentRuntime._sync_session_phase.__get__(runtime, _RuntimeHarness)
     runtime._log_state_snapshot = AgentRuntime._log_state_snapshot.__get__(runtime, _RuntimeHarness)
@@ -197,7 +203,7 @@ async def test_terminate_race_with_running_dispatch_recovers_idle() -> None:
     runtime._handle_message = _handle_message
 
     task = asyncio.create_task(runtime._dispatch(msg))
-    runtime._state_coordinator.register_task(msg.session_key, task)
+    await runtime._state_coordinator.register_task(msg.session_key, task)
     runtime._set_session_phase(msg.session_key, SessionPhase.RUNNING, reason="dispatch_started")
     task.add_done_callback(runtime._make_task_done_callback(msg.session_key))
 
