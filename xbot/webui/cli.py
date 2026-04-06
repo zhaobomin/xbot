@@ -6,6 +6,11 @@ import typer
 
 from xbot.logging import configure_logging
 from xbot.webui.app import create_app
+from xbot.webui.auth import (
+    print_reset_password_banner,
+    reset_password,
+    set_password,
+)
 from xbot.webui.bootstrap import build_services
 
 webui_app = typer.Typer(help="Run the standalone WebUI adapter")
@@ -29,3 +34,31 @@ def serve(
     services = build_services(loaded, make_runtime=_make_agent_runtime)
     app = create_app(services)
     uvicorn.run(app, host=host, port=port)
+
+
+@webui_app.command("set-password")
+def set_password_cmd(
+    password: str = typer.Argument(..., help="New password for WebUI admin user"),
+) -> None:
+    """Set a new password for the WebUI admin user.
+
+    Example:
+        xbot webui set-password my-new-secure-password
+    """
+    set_password(password)
+    print("Password updated successfully.")
+    print("Use the new password when logging into the WebUI.")
+
+
+@webui_app.command("reset-password")
+def reset_password_cmd() -> None:
+    """Generate a new random password for the WebUI admin user.
+
+    This will invalidate the old password. The new password will be
+    printed to the console.
+
+    Example:
+        xbot webui reset-password
+    """
+    password = reset_password()
+    print_reset_password_banner(password)

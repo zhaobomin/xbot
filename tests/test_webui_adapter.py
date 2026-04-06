@@ -12,6 +12,7 @@ from xbot.cli.commands import app
 from xbot.config.schema import Config, MCPServerConfig
 from xbot.cron.types import CronJob, CronJobState, CronPayload, CronSchedule
 from xbot.session.manager import SessionManager
+from xbot.webui.auth import set_password, get_password_file_path
 
 
 class _FakeRuntime:
@@ -172,6 +173,14 @@ def _build_client(tmp_path: Path) -> tuple[TestClient, _Services]:
     from xbot.webui.app import create_app
     from xbot.webui.services import ServiceContainer
 
+    # Set a known test password for all tests (isolated per test via temp path)
+    test_password_file = tmp_path / "webui-data" / "password"
+    test_password_file.parent.mkdir(parents=True, exist_ok=True)
+    # Monkeypatch the password file location for this test
+    import xbot.webui.auth as auth_module
+    auth_module.PASSWORD_FILE = test_password_file
+    set_password("test-webui-password")
+
     config = Config()
     config.agents.defaults.workspace = str(tmp_path / "workspace")
     config.gateway.port = 18790
@@ -329,7 +338,7 @@ def test_frontend_uses_text_brand_mark_instead_of_logo_images() -> None:
 def test_admin_login_and_change_password(tmp_path: Path) -> None:
     client, _services = _build_client(tmp_path)
 
-    login = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"})
+    login = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"})
 
     assert login.status_code == 200
     token = login.json()["access_token"]
@@ -337,11 +346,11 @@ def test_admin_login_and_change_password(tmp_path: Path) -> None:
     change = client.post(
         "/api/auth/change-password",
         headers={"Authorization": f"Bearer {token}"},
-        json={"current_password": "nanobot", "new_password": "better-secret"},
+        json={"current_password": "test-webui-password", "new_password": "better-secret"},
     )
     assert change.status_code == 200
 
-    denied = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"})
+    denied = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"})
     assert denied.status_code == 401
 
     accepted = client.post(
@@ -353,12 +362,12 @@ def test_admin_login_and_change_password(tmp_path: Path) -> None:
 
 def test_change_password_compatibility_endpoint_accepts_put(tmp_path: Path) -> None:
     client, _services = _build_client(tmp_path)
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
 
     change = client.put(
         "/api/auth/password",
         headers={"Authorization": f"Bearer {token}"},
-        json={"current_password": "nanobot", "new_password": "compat-secret"},
+        json={"current_password": "test-webui-password", "new_password": "compat-secret"},
     )
 
     assert change.status_code == 200
@@ -371,7 +380,7 @@ def test_change_password_compatibility_endpoint_accepts_put(tmp_path: Path) -> N
 
 def test_read_only_management_endpoints(tmp_path: Path) -> None:
     client, _services = _build_client(tmp_path)
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
     dashboard = client.get("/api/dashboard", headers=headers)
@@ -397,7 +406,7 @@ def test_read_only_management_endpoints(tmp_path: Path) -> None:
 
 def test_patch_agent_config_persists_and_reloads(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
     response = client.patch(
@@ -421,7 +430,7 @@ def test_patch_agent_config_persists_and_reloads(tmp_path: Path) -> None:
 
 def test_cron_and_skills_management_endpoints(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
     created = client.post(
@@ -528,7 +537,7 @@ def test_cron_management_crud_endpoints_with_real_service_shape(tmp_path: Path) 
         heartbeat=_FakeHeartbeatService(),
     )
     client = TestClient(create_app(services, data_dir=tmp_path / "webui-data"))
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
     create = client.post(
@@ -576,7 +585,7 @@ def test_cron_management_crud_endpoints_with_real_service_shape(tmp_path: Path) 
 
 def test_write_management_endpoints(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
     gateway = client.patch(
@@ -641,7 +650,7 @@ def test_write_management_endpoints(tmp_path: Path) -> None:
 
 def test_websocket_chat_uses_internal_cli_session_mapping(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
 
     with client.websocket_connect(f"/ws/chat?token={token}&session=web:admin:abc123") as ws:
         session_info = ws.receive_json()
@@ -661,7 +670,7 @@ def test_websocket_chat_uses_internal_cli_session_mapping(tmp_path: Path) -> Non
 
 def test_websocket_disconnect_during_progress_does_not_crash(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
 
     async def delayed_process_managed_direct(
         content: str,
@@ -718,7 +727,7 @@ def test_webui_cli_command_is_registered() -> None:
 
 def test_frontend_compatibility_endpoints(tmp_path: Path) -> None:
     client, _services = _build_client(tmp_path)
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
     channels = client.get("/api/channels", headers=headers)
@@ -751,7 +760,7 @@ def test_frontend_compatibility_endpoints(tmp_path: Path) -> None:
 
 def test_channel_runtime_prefers_live_manager_status(tmp_path: Path) -> None:
     client, _services = _build_client(tmp_path)
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
     response = client.get("/api/channels", headers=headers)
@@ -764,7 +773,7 @@ def test_channel_runtime_prefers_live_manager_status(tmp_path: Path) -> None:
 
 def test_frontend_compatibility_mutations(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
     revoke = client.delete("/api/sessions/cli:web-admin-1/messages/0", headers=headers)
@@ -810,7 +819,7 @@ def test_frontend_compatibility_mutations(tmp_path: Path) -> None:
 
 def test_system_config_compatibility_endpoints(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
     logs_dir = services.data_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
@@ -838,7 +847,7 @@ def test_system_config_s3_and_workspace_transfer_endpoints(tmp_path: Path) -> No
     import zipfile
 
     client, _services = _build_client(tmp_path)
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
     s3_get = client.get("/api/config/s3", headers=headers)
@@ -877,7 +886,7 @@ def test_system_config_s3_and_workspace_transfer_endpoints(tmp_path: Path) -> No
 
 def test_channel_reload_returns_structured_error(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
     services.metadata["channel_manager"].failures["telegram"] = "reload boom"
 
@@ -893,7 +902,7 @@ def test_workspace_import_keeps_existing_files_when_extract_fails(tmp_path: Path
     import zipfile
 
     client, services = _build_client(tmp_path)
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
     existing = services.config.workspace_path / "keep.txt"
@@ -918,7 +927,7 @@ def test_workspace_import_keeps_existing_files_when_extract_fails(tmp_path: Path
 
 def test_mcp_runtime_reports_disconnected_server_details(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "nanobot"}).json()["access_token"]
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
     services.config.tools.mcp_servers["idle"] = MCPServerConfig(url="https://example.com/sse", enabled_tools=["alpha"])
 

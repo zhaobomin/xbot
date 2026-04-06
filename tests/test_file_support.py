@@ -507,15 +507,15 @@ class TestParseMediaEdgeCases:
     """Additional edge case tests for _parse_media_from_input."""
 
     @staticmethod
-    def _parse(text: str) -> tuple[str, list[str]]:
+    def _parse(text: str, workspace: Path | None = None) -> tuple[str, list[str]]:
         from xbot.cli.commands import _parse_media_from_input
-        return _parse_media_from_input(text)
+        return _parse_media_from_input(text, workspace=workspace)
 
     def test_double_quoted_path_with_spaces(self, tmp_path: Path):
         """Double-quoted paths containing spaces should be matched."""
         f = tmp_path / "my report.docx"
         f.write_bytes(b"PK\x03\x04" + b"\x00" * 50)
-        clean, paths = self._parse(f'@"{f}" summarize')
+        clean, paths = self._parse(f'@"{f}" summarize', workspace=tmp_path)
         assert len(paths) == 1
         assert paths[0] == str(f.resolve())
         assert "summarize" in clean
@@ -524,7 +524,7 @@ class TestParseMediaEdgeCases:
         """Single-quoted paths containing spaces should be matched."""
         f = tmp_path / "data file.csv"
         f.write_text("a,b\n1,2")
-        clean, paths = self._parse(f"@'{f}' analyze")
+        clean, paths = self._parse(f"@'{f}' analyze", workspace=tmp_path)
         assert len(paths) == 1
         assert "analyze" in clean
 
@@ -548,7 +548,7 @@ class TestParseMediaEdgeCases:
         a.write_text("x = 1")
         b.write_text("y = 2")
         c.write_text("z = 3")
-        clean, paths = self._parse(f"@{a} @{b} @{c} review all")
+        clean, paths = self._parse(f"@{a} @{b} @{c} review all", workspace=tmp_path)
         assert len(paths) == 3
         assert "review all" in clean
 
@@ -556,7 +556,7 @@ class TestParseMediaEdgeCases:
         """File path at the very end of input."""
         f = tmp_path / "test.py"
         f.write_text("pass")
-        clean, paths = self._parse(f"explain @{f}")
+        clean, paths = self._parse(f"explain @{f}", workspace=tmp_path)
         assert len(paths) == 1
         assert "explain" in clean
 
@@ -567,7 +567,7 @@ class TestParseMediaEdgeCases:
         f = home / "test.txt"
         f.write_text("hello")
         monkeypatch.setenv("HOME", str(home))
-        clean, paths = self._parse("@~/test.txt read")
+        clean, paths = self._parse("@~/test.txt read", workspace=home)
         assert len(paths) == 1
         assert str(f) in paths[0] or "test.txt" in paths[0]
 
@@ -581,8 +581,48 @@ class TestParseMediaEdgeCases:
         """Two @paths without space between them: only first matched."""
         a = tmp_path / "a.txt"
         a.write_text("aaa")
-        clean, paths = self._parse(f"@{a}@{a}")
+        clean, paths = self._parse(f"@{a}@{a}", workspace=tmp_path)
         assert len(paths) == 1
+
+    def test_path_outside_workspace_rejected(self, tmp_path: Path):
+        """Paths outside workspace should be rejected for security."""
+        import os
+        # Create a file outside the workspace
+        outside_dir = tmp_path.parent / "outside_workspace"
+        outside_dir.mkdir(exist_ok=True)
+        f = outside_dir / "secret.txt"
+        f.write_text("secret data")
+
+        # Try to access it with workspace = tmp_path
+        clean, paths = self._parse(f"@{f} read this", workspace=tmp_path)
+
+        # Should be rejected (empty paths)
+        assert len(paths) == 0
+        # Original text should remain to show the error
+        assert f.name in clean
+
+    def test_symlink_escape_rejected(self, tmp_path: Path):
+        """Symlink pointing outside workspace should be rejected."""
+        import os
+        # Create a file outside the workspace
+        outside_dir = tmp_path.parent / "outside_symlink_test"
+        outside_dir.mkdir(exist_ok=True)
+        outside_file = outside_dir / "secret.txt"
+        outside_file.write_text("secret")
+
+        # Create symlink inside workspace pointing outside
+        symlink = tmp_path / "link_to_secret.txt"
+        try:
+            symlink.symlink_to(outside_file)
+        except OSError:
+            # Symlinks may not be supported on this platform
+            pytest.skip("Symlinks not supported")
+
+        # Try to access the symlink
+        clean, paths = self._parse(f"@{symlink} read", workspace=tmp_path)
+
+        # Should be rejected because resolved path is outside workspace
+        assert len(paths) == 0
 
 
 # ---------------------------------------------------------------------------

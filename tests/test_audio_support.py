@@ -21,9 +21,9 @@ class TestParseAudioFromInput:
     """Tests for audio file parsing in _parse_media_from_input."""
 
     @staticmethod
-    def _parse(text: str) -> tuple[str, list[str]]:
+    def _parse(text: str, workspace: Path | None = None) -> tuple[str, list[str]]:
         from xbot.cli.commands import _parse_media_from_input
-        return _parse_media_from_input(text)
+        return _parse_media_from_input(text, workspace=workspace)
 
     def _make_mp3(self, path: Path) -> bytes:
         """Create minimal MP3 header."""
@@ -54,7 +54,7 @@ class TestParseAudioFromInput:
         """MP3 files should be recognized as media."""
         audio = tmp_path / "voice.mp3"
         audio.write_bytes(self._make_mp3(audio))
-        clean, paths = self._parse(f"@{audio} transcribe")
+        clean, paths = self._parse(f"@{audio} transcribe", workspace=tmp_path)
         assert "transcribe" in clean
         assert len(paths) == 1
         assert paths[0] == str(audio)
@@ -63,7 +63,7 @@ class TestParseAudioFromInput:
         """WAV files should be recognized as media."""
         audio = tmp_path / "recording.wav"
         audio.write_bytes(self._make_wav(audio))
-        clean, paths = self._parse(f"@{audio} analyze")
+        clean, paths = self._parse(f"@{audio} analyze", workspace=tmp_path)
         assert "analyze" in clean
         assert len(paths) == 1
 
@@ -71,21 +71,21 @@ class TestParseAudioFromInput:
         """OGG files should be recognized as media."""
         audio = tmp_path / "audio.ogg"
         audio.write_bytes(self._make_ogg(audio))
-        clean, paths = self._parse(f"@{audio}")
+        clean, paths = self._parse(f"@{audio}", workspace=tmp_path)
         assert len(paths) == 1
 
     def test_m4a_file(self, tmp_path: Path):
         """M4A files should be recognized as media."""
         audio = tmp_path / "song.m4a"
         audio.write_bytes(self._make_m4a(audio))
-        clean, paths = self._parse(f"@{audio} what song is this")
+        clean, paths = self._parse(f"@{audio} what song is this", workspace=tmp_path)
         assert len(paths) == 1
 
     def test_flac_file(self, tmp_path: Path):
         """FLAC files should be recognized as media."""
         audio = tmp_path / "music.flac"
         audio.write_bytes(self._make_flac(audio))
-        clean, paths = self._parse(f"@{audio}")
+        clean, paths = self._parse(f"@{audio}", workspace=tmp_path)
         assert len(paths) == 1
 
     def test_multiple_audio_files(self, tmp_path: Path):
@@ -94,7 +94,7 @@ class TestParseAudioFromInput:
         b = tmp_path / "b.wav"
         a.write_bytes(self._make_mp3(a))
         b.write_bytes(self._make_wav(b))
-        clean, paths = self._parse(f"@{a} @{b} compare audio")
+        clean, paths = self._parse(f"@{a} @{b} compare audio", workspace=tmp_path)
         assert len(paths) == 2
 
     def test_mixed_image_and_audio(self, tmp_path: Path):
@@ -103,14 +103,14 @@ class TestParseAudioFromInput:
         audio = tmp_path / "voice.mp3"
         img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
         audio.write_bytes(self._make_mp3(audio))
-        clean, paths = self._parse(f"@{img} @{audio} describe both")
+        clean, paths = self._parse(f"@{img} @{audio} describe both", workspace=tmp_path)
         assert len(paths) == 2
 
     def test_case_insensitive_audio_extension(self, tmp_path: Path):
         """Audio extensions should be case insensitive."""
         audio = tmp_path / "VOICE.MP3"
         audio.write_bytes(self._make_mp3(audio))
-        clean, paths = self._parse(f"@{audio}")
+        clean, paths = self._parse(f"@{audio}", workspace=tmp_path)
         assert len(paths) == 1
 
 

@@ -22,9 +22,9 @@ class TestParseMediaFromInput:
     """Tests for xbot.cli.commands._parse_media_from_input."""
 
     @staticmethod
-    def _parse(text: str) -> tuple[str, list[str]]:
+    def _parse(text: str, workspace: Path | None = None) -> tuple[str, list[str]]:
         from xbot.cli.commands import _parse_media_from_input
-        return _parse_media_from_input(text)
+        return _parse_media_from_input(text, workspace=workspace)
 
     def test_no_media_reference(self):
         clean, paths = self._parse("hello world")
@@ -34,7 +34,7 @@ class TestParseMediaFromInput:
     def test_single_image_existing_file(self, tmp_path: Path):
         img = tmp_path / "photo.png"
         img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
-        clean, paths = self._parse(f"@{img} describe this")
+        clean, paths = self._parse(f"@{img} describe this", workspace=tmp_path)
         assert "describe this" in clean
         assert len(paths) == 1
         assert paths[0] == str(img)
@@ -44,7 +44,7 @@ class TestParseMediaFromInput:
         b = tmp_path / "b.jpg"
         a.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
         b.write_bytes(b"\xff\xd8\xff" + b"\x00" * 16)
-        clean, paths = self._parse(f"@{a} @{b} compare")
+        clean, paths = self._parse(f"@{a} @{b} compare", workspace=tmp_path)
         assert "compare" in clean
         assert len(paths) == 2
 
@@ -56,14 +56,14 @@ class TestParseMediaFromInput:
     def test_image_only_default_prompt(self, tmp_path: Path):
         img = tmp_path / "x.jpg"
         img.write_bytes(b"\xff\xd8\xff" + b"\x00" * 16)
-        clean, paths = self._parse(f"@{img}")
+        clean, paths = self._parse(f"@{img}", workspace=tmp_path)
         assert clean  # Should have default text
         assert len(paths) == 1
 
     def test_quoted_path(self, tmp_path: Path):
         img = tmp_path / "photo.png"
         img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
-        clean, paths = self._parse(f"@'{img}' describe")
+        clean, paths = self._parse(f"@'{img}' describe", workspace=tmp_path)
         assert len(paths) == 1
         assert paths[0] == str(img)
 
@@ -71,7 +71,7 @@ class TestParseMediaFromInput:
         """With universal @path, text files are now matched too."""
         txt = tmp_path / "notes.txt"
         txt.write_text("hello")
-        clean, paths = self._parse(f"@{txt} read this")
+        clean, paths = self._parse(f"@{txt} read this", workspace=tmp_path)
         assert len(paths) == 1
         assert paths[0] == str(txt)
 
@@ -84,26 +84,26 @@ class TestParseMediaFromInput:
     def test_python_file_matched(self, tmp_path: Path):
         f = tmp_path / "script.py"
         f.write_text("x = 1")
-        clean, paths = self._parse(f"@{f} explain")
+        clean, paths = self._parse(f"@{f} explain", workspace=tmp_path)
         assert len(paths) == 1
         assert paths[0] == str(f)
 
     def test_case_insensitive_extension(self, tmp_path: Path):
         img = tmp_path / "PHOTO.PNG"
         img.write_bytes(b"\x89PNG\r\n\x1a\n" + b"\x00" * 16)
-        clean, paths = self._parse(f"@{img} look")
+        clean, paths = self._parse(f"@{img} look", workspace=tmp_path)
         assert len(paths) == 1
 
     def test_webp_extension(self, tmp_path: Path):
         img = tmp_path / "pic.webp"
         img.write_bytes(b"RIFF" + b"\x00\x00\x00\x00" + b"WEBP" + b"\x00" * 16)
-        clean, paths = self._parse(f"@{img} what is this")
+        clean, paths = self._parse(f"@{img} what is this", workspace=tmp_path)
         assert len(paths) == 1
 
     def test_gif_extension(self, tmp_path: Path):
         img = tmp_path / "anim.gif"
         img.write_bytes(b"GIF89a" + b"\x00" * 16)
-        clean, paths = self._parse(f"@{img} explain")
+        clean, paths = self._parse(f"@{img} explain", workspace=tmp_path)
         assert len(paths) == 1
 
 

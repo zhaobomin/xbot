@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import json
+import re
 import secrets
 import shutil
+import unicodedata
 import zipfile
 from datetime import datetime
 from io import BytesIO
@@ -27,7 +29,65 @@ from pydantic import BaseModel, Field, SecretStr
 
 from xbot.config.schema import MCPServerConfig
 from xbot.cron.types import CronPayload, CronSchedule
-from xbot.webui.auth import AuthManager, UserStore
+
+# ---------------------------------------------------------------------------
+# Security: Name validation for skills and MCP servers
+# ---------------------------------------------------------------------------
+
+# Valid name pattern: alphanumeric, dashes, underscores. Must start with letter/number.
+# Max 64 characters.
+_VALID_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
+
+
+def validate_safe_name(name: str, field_name: str = "name") -> str:
+    """Validate that a name is safe for filesystem use.
+
+    Security: Prevents path traversal attacks via:
+    - Unicode normalization (handles ..%2f, fullwidth slashes, etc.)
+    - Rejecting path separators (/ \\)
+    - Rejecting path traversal sequences (..)
+    - Enforcing alphanumeric + dash/underscore only
+
+    Args:
+        name: The name to validate
+        field_name: Field name for error messages
+
+    Returns:
+        The validated, normalized name
+
+    Raises:
+        HTTPException: If the name is invalid
+    """
+    # Unicode normalization (NFKC) to prevent encoding attacks
+    normalized = unicodedata.normalize("NFKC", name)
+
+    # Check for path separators
+    if "/" in normalized or "\\" in normalized:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {field_name}: cannot contain path separators",
+        )
+
+    # Check for path traversal
+    if ".." in normalized:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Invalid {field_name}: cannot contain '..' sequences",
+        )
+
+    # Check against pattern
+    if not _VALID_NAME_PATTERN.match(normalized):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"Invalid {field_name}: use only letters, numbers, dashes, and underscores. "
+                f"Must start with a letter or number. Max 64 characters. "
+                f"Example: my-skill-name"
+            ),
+        )
+
+    return normalized
+from xbot.webui.auth import AuthManager, UserStore, ensure_password_file, print_password_banner
 from xbot.webui.services import ServiceContainer
 from xbot.webui.session_keys import to_internal_session_key
 
@@ -242,6 +302,12 @@ def create_app(
     container.data_dir = resolved_data_dir
     app.state.services = container
     app.state.user_store = UserStore(resolved_data_dir / "users.json")
+
+    # Ensure password is initialized (generates on first run)
+    generated_password = ensure_password_file()
+    if generated_password:
+        print_password_banner(generated_password)
+
     app.state.auth = AuthManager(secrets.token_hex(32))
     app.state.frontend_dir = frontend_dir or (Path(__file__).parent / "frontend" / "dist")
     app.state.s3_config_path = resolved_data_dir / "s3.json"
@@ -556,11 +622,13 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
+        # Security: Validate server name to prevent injection attacks
+        safe_name = validate_safe_name(server_name, "server name")
         data = dict(body)
         data.pop("name", None)
-        container.config.tools.mcp_servers[server_name] = MCPServerConfig.model_validate(data)
+        container.config.tools.mcp_servers[safe_name] = MCPServerConfig.model_validate(data)
         container.persist_config()
-        return {"name": server_name}
+        return {"name": safe_name}
 
     @app.put("/api/mcp/servers/{server_name}")
     async def update_mcp_server(
@@ -569,12 +637,14 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
-        existing = _mcp_config_dict(container.config.tools.mcp_servers.get(server_name, {}))
+        # Security: Validate server name
+        safe_name = validate_safe_name(server_name, "server name")
+        existing = _mcp_config_dict(container.config.tools.mcp_servers.get(safe_name, {}))
         existing.update(body)
         existing.pop("name", None)
-        container.config.tools.mcp_servers[server_name] = MCPServerConfig.model_validate(existing)
+        container.config.tools.mcp_servers[safe_name] = MCPServerConfig.model_validate(existing)
         container.persist_config()
-        return {"name": server_name}
+        return {"name": safe_name}
 
     @app.delete("/api/mcp/servers/{server_name}")
     async def delete_mcp_server(
@@ -582,7 +652,9 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, bool]:
         _get_user_from_auth_header(authorization)
-        container.config.tools.mcp_servers.pop(server_name, None)
+        # Security: Validate server name
+        safe_name = validate_safe_name(server_name, "server name")
+        container.config.tools.mcp_servers.pop(safe_name, None)
         container.persist_config()
         return {"ok": True}
 
@@ -968,10 +1040,12 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
-        skill_file = container.config.workspace_path / "skills" / body.name / "SKILL.md"
+        # Security: Validate skill name to prevent path traversal
+        safe_name = validate_safe_name(body.name, "skill name")
+        skill_file = container.config.workspace_path / "skills" / safe_name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(body.content, encoding="utf-8")
-        return {"name": body.name, "content": body.content}
+        return {"name": safe_name, "content": body.content}
 
     @app.get("/api/skills/{skill_name}")
     async def get_skill(skill_name: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:

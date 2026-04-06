@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -13,7 +14,15 @@ import jwt
 from fastapi import HTTPException, status
 
 DEFAULT_USERNAME = "admin"
-DEFAULT_PASSWORD = "nanobot"
+# REMOVED: DEFAULT_PASSWORD = "nanobot" - security vulnerability
+
+# Password file location in user's home directory (not in workspace)
+PASSWORD_FILE = Path("~/.xbot/webui/password").expanduser()
+
+
+def generate_secure_password() -> str:
+    """Generate a secure random password (~32 chars, URL-safe)."""
+    return secrets.token_urlsafe(24)
 
 
 def hash_password(password: str) -> str:
@@ -24,21 +33,115 @@ def verify_password(password: str, password_hash: str) -> bool:
     return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
 
 
+def get_password_file_path() -> Path:
+    """Get the path to the password file."""
+    return PASSWORD_FILE
+
+
+def ensure_password_file() -> str | None:
+    """Ensure password file exists. Returns generated password if created, None if exists.
+
+    This should be called during WebUI startup to generate a password on first run.
+    """
+    if PASSWORD_FILE.exists():
+        return None
+
+    # Generate new password
+    password = generate_secure_password()
+
+    # Create directory with secure permissions
+    PASSWORD_FILE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    # Write password hash with secure file permissions
+    PASSWORD_FILE.write_text(hash_password(password), encoding="utf-8")
+    PASSWORD_FILE.chmod(0o600)
+
+    return password
+
+
+def reset_password() -> str:
+    """Generate a new password and save it. Returns the new password."""
+    password = generate_secure_password()
+
+    # Create directory with secure permissions
+    PASSWORD_FILE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    # Write password hash with secure file permissions
+    PASSWORD_FILE.write_text(hash_password(password), encoding="utf-8")
+    PASSWORD_FILE.chmod(0o600)
+
+    return password
+
+
+def set_password(new_password: str) -> None:
+    """Set a new password."""
+    # Create directory with secure permissions
+    PASSWORD_FILE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+
+    # Write password hash with secure file permissions
+    PASSWORD_FILE.write_text(hash_password(new_password), encoding="utf-8")
+    PASSWORD_FILE.chmod(0o600)
+
+
+def print_password_banner(password: str) -> None:
+    """Print a prominent banner showing the generated password."""
+    print(f"\n{'='*60}")
+    print("WebUI generated a secure password for first-time setup:")
+    print(f"  Username: {DEFAULT_USERNAME}")
+    print(f"  Password: {password}")
+    print(f"\nPassword hash saved to: {PASSWORD_FILE}")
+    print("Please save this password securely. It will not be shown again.")
+    print(f"{'='*60}\n")
+
+
+def print_reset_password_banner(password: str) -> None:
+    """Print a banner showing the reset password."""
+    print(f"\n{'='*60}")
+    print("New WebUI password generated:")
+    print(f"  Username: {DEFAULT_USERNAME}")
+    print(f"  Password: {password}")
+    print(f"\nPassword hash saved to: {PASSWORD_FILE}")
+    print("Please save this password securely. It will not be shown again.")
+    print(f"{'='*60}\n")
+
+
 @dataclass
 class UserStore:
     """Simple single-admin auth store backed by a JSON file."""
 
     path: Path
 
+    def _get_password_hash(self) -> str:
+        """Get password hash from the dedicated password file."""
+        if not PASSWORD_FILE.exists():
+            raise RuntimeError(
+                f"WebUI password file missing or corrupted.\n"
+                f"Run `xbot webui --reset-password` to generate a new password."
+            )
+        return PASSWORD_FILE.read_text(encoding="utf-8").strip()
+
     def ensure_default_admin(self) -> None:
+        """Ensure the user store file exists with admin user."""
         if self.path.exists():
             return
+
+        # Get password hash from dedicated file
+        try:
+            password_hash = self._get_password_hash()
+        except RuntimeError:
+            # Password file doesn't exist - this should have been handled during startup
+            raise RuntimeError(
+                "WebUI password not initialized. "
+                "This should have been done during startup. "
+                "Run `xbot webui --reset-password` to generate a password."
+            )
+
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.path.write_text(
             json.dumps(
                 {
                     "username": DEFAULT_USERNAME,
-                    "password_hash": hash_password(DEFAULT_PASSWORD),
+                    "password_hash": password_hash,
                     "created_at": datetime.now(UTC).isoformat(),
                 },
                 ensure_ascii=False,
@@ -49,7 +152,10 @@ class UserStore:
 
     def load(self) -> dict[str, Any]:
         self.ensure_default_admin()
-        return json.loads(self.path.read_text(encoding="utf-8"))
+        user_data = json.loads(self.path.read_text(encoding="utf-8"))
+        # Always use the current password hash from the dedicated file
+        user_data["password_hash"] = self._get_password_hash()
+        return user_data
 
     def authenticate(self, username: str, password: str) -> dict[str, Any]:
         user = self.load()
@@ -61,6 +167,9 @@ class UserStore:
         user = self.load()
         if not verify_password(current_password, user["password_hash"]):
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid credentials")
+        # Update the dedicated password file
+        set_password(new_password)
+        # Also update the user store file for consistency
         user["password_hash"] = hash_password(new_password)
         self.path.write_text(json.dumps(user, ensure_ascii=False, indent=2), encoding="utf-8")
 

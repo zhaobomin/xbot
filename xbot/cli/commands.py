@@ -121,25 +121,65 @@ _FILE_REF_RE = _re.compile(
 )
 
 
-def _parse_media_from_input(user_input: str) -> tuple[str, list[str]]:
+def _validate_path_in_workspace(path: Path, workspace: Path) -> bool:
+    """Allowlist: only paths within workspace are permitted.
+
+    Security: This prevents path traversal attacks where users could read
+    arbitrary files on the system using @path syntax.
+    """
+    try:
+        resolved = path.resolve()  # Follows symlinks
+        workspace_resolved = workspace.resolve()
+        return resolved.is_relative_to(workspace_resolved)
+    except (OSError, ValueError):
+        return False
+
+
+def _parse_media_from_input(
+    user_input: str, workspace: Path | None = None
+) -> tuple[str, list[str]]:
     """Extract ``@path`` file references from user input.
 
     Returns ``(clean_text, media_paths)`` where *clean_text* has matched
     references removed and *media_paths* contains resolved absolute paths
-    for files that exist on disk.
+    for files that exist on disk AND are within the workspace directory.
+
+    Security: Paths outside the workspace are rejected with an error message.
     """
+    from xbot.config.paths import get_workspace_path
+
+    # Use provided workspace or fall back to configured workspace
+    effective_workspace = workspace or get_workspace_path()
+
     media_paths: list[str] = []
+    errors: list[str] = []
 
     def _replace(m: _re.Match) -> str:
         raw_path = m.group(1) or m.group(2) or m.group(3)
         p = Path(raw_path).expanduser().resolve()
-        if p.is_file():
-            media_paths.append(str(p))
-            return ""
-        # File does not exist – keep original text so user sees it
-        return m.group(0)
+
+        if not p.is_file():
+            # File does not exist – keep original text so user sees it
+            return m.group(0)
+
+        # Security check: path must be within workspace
+        if not _validate_path_in_workspace(p, effective_workspace):
+            errors.append(
+                f"Error: '@path' can only reference files within the workspace directory.\n"
+                f"  Workspace: {effective_workspace}\n"
+                f"  Attempted: {p}"
+            )
+            return m.group(0)  # Keep original so user sees the error
+
+        media_paths.append(str(p))
+        return ""
 
     clean = _FILE_REF_RE.sub(_replace, user_input).strip()
+
+    # Print any security errors
+    for error in errors:
+        print(f"\n[red]{error}[/red]\n")
+
     return clean or "请处理这些文件", media_paths
 
 # ---------------------------------------------------------------------------
@@ -1063,7 +1103,7 @@ def agent(
                         turn_done.clear()
                         turn_response.clear()
 
-                        clean_text, media_paths = _parse_media_from_input(user_input)
+                        clean_text, media_paths = _parse_media_from_input(user_input, workspace=config.workspace_path)
                         if media_paths:
                             console.print(f"[dim]Attached {len(media_paths)} file(s)[/dim]")
 
