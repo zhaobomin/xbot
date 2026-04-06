@@ -77,7 +77,7 @@ class SessionStateAdapter:
                 entry.channel = channel
                 entry.chat_id = chat_id
 
-        # Deprecated compatibility mirror for code paths still reading legacy mappings.
+        # TODO(v0.4.0): Remove legacy dual-write once all readers use SessionStore.
         self._get_contexts()[session_key] = (channel, chat_id)
 
     def get_context_by_session_key(self, session_key: str) -> tuple[str, str] | None:
@@ -147,6 +147,7 @@ class SessionStateAdapter:
             self.get_or_create_session(session_key)
             self._session_store.set_sdk_session_id(session_key, sdk_session_id)
 
+        # TODO(v0.4.0): Remove legacy dual-write once all readers use SessionStore.
         old_sdk_id = self.resolve_sdk_session_id(session_key)
         if old_sdk_id and old_sdk_id != sdk_session_id:
             self._legacy_sdk_session_ids.pop(old_sdk_id, None)
@@ -179,7 +180,7 @@ class SessionStateAdapter:
                     self._session_store.set_sdk_session_id(session_key, sdk_session_id)
                     break
 
-        # Deprecated compatibility mirror for legacy context lookups by sdk_session_id.
+        # TODO(v0.4.0): Remove legacy dual-write once all readers use SessionStore.
         self._get_contexts()[sdk_session_id] = (channel, chat_id)
 
     def clear_context(self, session_key: str) -> None:
@@ -217,6 +218,7 @@ class SessionStateAdapter:
                 entry.channel = ""
                 entry.chat_id = ""
 
+        # TODO(v0.4.0): Remove legacy dual-write once all readers use SessionStore.
         self._legacy_clients.pop(session_key, None)
         self._legacy_last_used.pop(session_key, None)
         self._legacy_models.pop(session_key, None)
@@ -271,14 +273,14 @@ class SessionStateAdapter:
         elif self._use_session_store and self._session_store is not None:
             self.get_or_create_session(new_session_key)
         else:
-            # Deprecated compatibility mirror during SessionStore cutover.
+            # TODO(v0.4.0): Remove legacy dual-write once all readers use SessionStore.
             self._get_contexts()[new_session_key] = new_sdk_session_id
 
         if self._use_session_store and self._session_store is not None:
             self.get_or_create_session(new_session_key)
             self._session_store.set_sdk_session_id(new_session_key, new_sdk_session_id)
         else:
-            # Deprecated compatibility mirror during SessionStore cutover.
+            # TODO(v0.4.0): Remove legacy dual-write once all readers use SessionStore.
             self._legacy_sdk_session_ids[new_sdk_session_id] = new_session_key
 
     def rollback_forked_session(
@@ -357,7 +359,7 @@ class SessionStateAdapter:
         entry = self.get_or_create_session(session_key)
         if entry is not None:
             entry.model = model or ""
-        self._legacy_models[session_key] = model
+        self._legacy_models[session_key] = model  # TODO(v0.4.0): Remove legacy dual-write
 
     def get_skills_version(self, session_key: str) -> str | None:
         entry = self._get_entry(session_key)
@@ -367,7 +369,7 @@ class SessionStateAdapter:
         entry = self.get_or_create_session(session_key)
         if entry is not None:
             entry.skills_version = version
-        self._legacy_skills_versions[session_key] = version
+        self._legacy_skills_versions[session_key] = version  # TODO(v0.4.0): Remove legacy dual-write
 
     def get_commands(self, session_key: str) -> list[str]:
         entry = self._get_entry(session_key)
@@ -379,7 +381,7 @@ class SessionStateAdapter:
         entry = self.get_or_create_session(session_key)
         if entry is not None:
             entry.commands = commands
-        self._legacy_commands[session_key] = commands
+        self._legacy_commands[session_key] = commands  # TODO(v0.4.0): Remove legacy dual-write
 
     def get_last_used(self, session_key: str) -> float | None:
         entry = self._get_entry(session_key)
@@ -389,7 +391,7 @@ class SessionStateAdapter:
         entry = self._get_entry(session_key)
         if entry is not None:
             entry.touch()
-            self._legacy_last_used[session_key] = entry.last_used
+            self._legacy_last_used[session_key] = entry.last_used  # TODO(v0.4.0): Remove legacy dual-write
             return
         self._legacy_last_used[session_key] = time.time()
 
@@ -401,6 +403,7 @@ class SessionStateAdapter:
         entry = self.get_or_create_session(session_key)
         if entry is not None:
             entry.task_id = task_id
+        # TODO(v0.4.0): Remove legacy dual-write once all readers use SessionStore.
         if task_id is not None:
             self._legacy_task_ids[session_key] = task_id
         else:
@@ -414,6 +417,7 @@ class SessionStateAdapter:
         entry = self.get_or_create_session(session_key)
         if entry is not None:
             entry.request_id = request_id
+        # TODO(v0.4.0): Remove legacy dual-write once all readers use SessionStore.
         if request_id is not None:
             self._legacy_request_ids[session_key] = request_id
         else:
@@ -427,7 +431,7 @@ class SessionStateAdapter:
         entry = self.get_or_create_session(session_key)
         if entry is not None:
             entry.client = client
-        self._legacy_clients[session_key] = client
+        self._legacy_clients[session_key] = client  # TODO(v0.4.0): Remove legacy dual-write
 
     def has_client(self, session_key: str) -> bool:
         return self.get_client(session_key) is not None

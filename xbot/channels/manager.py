@@ -15,9 +15,10 @@ from xbot.agent.task_supervisor import ServiceTaskRegistry
 from xbot.channels.base import BaseChannel
 from xbot.config.schema import Config
 
-# Retry configuration for message delivery
+# Deprecated: retry is now handled by each channel's send() implementation.
+# Kept for backward compatibility with external code that may reference them.
 MAX_RETRIES = 3
-RETRY_DELAYS = [1, 2, 4]  # Exponential backoff in seconds
+RETRY_DELAYS = [1, 2, 4]
 
 
 class ChannelManager:
@@ -192,7 +193,11 @@ class ChannelManager:
                 continue  # 继续运行，不退出
 
     async def _send_with_channel(self, msg: OutboundMessage, content: str | None = None) -> None:
-        """Send message with retry on transient failures."""
+        """Send message to the appropriate channel.
+
+        Retry logic is delegated to each channel's send() implementation,
+        which understands its API-specific failure modes and rate limits.
+        """
         channel = self.channels.get(msg.channel)
         if channel is None:
             logger.warning("Unknown channel: %s", msg.channel)
@@ -205,27 +210,10 @@ class ChannelManager:
             media=list(msg.media),
             metadata=dict(msg.metadata),
         )
-
-        last_error = None
-        for attempt in range(MAX_RETRIES):
-            try:
-                await channel.send(payload)
-                return
-            except Exception as e:
-                last_error = e
-                if attempt < MAX_RETRIES - 1:
-                    delay = RETRY_DELAYS[attempt]
-                    logger.warning(
-                        "Channel %s send failed (attempt %d/%d), retrying in %ds: %s",
-                        msg.channel, attempt + 1, MAX_RETRIES, delay, e
-                    )
-                    await asyncio.sleep(delay)
-
-        # All retries exhausted
-        logger.error(
-            "Channel %s send failed after %d attempts, message lost: %s",
-            msg.channel, MAX_RETRIES, last_error
-        )
+        try:
+            await channel.send(payload)
+        except Exception as e:
+            logger.error("Channel %s send failed: %s", msg.channel, e)
 
     def get_channel(self, name: str) -> BaseChannel | None:
         """Get a channel by name."""

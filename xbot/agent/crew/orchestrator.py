@@ -309,21 +309,26 @@ class CrewOrchestrator:
             async def _init_and_call(prompt: str) -> str:
                 """Initialize backend and run a single repair call."""
                 await backend.initialize(agents_config, shared_resources)
-                session_key = f"repair_{hash(prompt) % 10000}"
-                context = AgentContext(
-                    session_key=session_key,
-                    prompt=prompt,
-                    channel="repair",
-                    chat_id="repair",
-                    media=None,
-                )
-                content = ""
-                async for response in backend.process(context):
-                    if response.content:
-                        content = response.content
-                    elif response.delta_content:
-                        content += response.delta_content
-                return content
+                try:
+                    session_key = f"repair_{hash(prompt) % 10000}"
+                    context = AgentContext(
+                        session_key=session_key,
+                        prompt=prompt,
+                        channel="repair",
+                        chat_id="repair",
+                        media=None,
+                    )
+                    content = ""
+                    async for response in backend.process(context):
+                        if response.content:
+                            content = response.content
+                        elif response.delta_content:
+                            content += response.delta_content
+                    return content
+                finally:
+                    shutdown = getattr(backend, "shutdown", None)
+                    if callable(shutdown):
+                        await shutdown()
 
             def repair_callable(prompt: str) -> str:
                 """Run the async repair call in a dedicated thread with its own event loop.

@@ -13,7 +13,7 @@ import uuid
 from collections import OrderedDict
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from xbot.logging import get_logger
 
@@ -218,27 +218,21 @@ class FeishuChannel(BaseChannel):
         if self._ws_stop_event:
             self._ws_stop_event.set()
 
-        # Drain old queue (process remaining messages)
+        # Drain old queue to prevent stale events from being processed after restart.
+        # Feishu WebSocket will re-deliver unacknowledged messages on reconnection.
         if self._ws_event_queue:
             drained_count = 0
             while True:
                 try:
-                    event = self._ws_event_queue.get_nowait()
-                    # Dispatch synchronously in a thread
-                    import asyncio
-                    try:
-                        loop = asyncio.get_running_loop()
-                        asyncio.run_coroutine_threadsafe(
-                            self._dispatch_worker_event(event),
-                            loop
-                        )
-                    except RuntimeError:
-                        pass  # No running loop, skip
+                    self._ws_event_queue.get_nowait()
                     drained_count += 1
                 except queue.Empty:
                     break
             if drained_count > 0:
-                logger.info("Feishu: drained %d pending events from old queue", drained_count)
+                logger.warning(
+                    "Feishu: drained and discarded %d pending events from old queue",
+                    drained_count,
+                )
 
     @staticmethod
     def _namespace_from_dict(value: Any) -> Any:

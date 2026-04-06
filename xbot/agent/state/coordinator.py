@@ -34,6 +34,7 @@ from xbot.agent.state.machine import SessionPhase
 if TYPE_CHECKING:
     from xbot.agent.runtime import AgentRuntime
     from xbot.agent.state.store import SessionStore
+    from xbot.agent.state.transaction import StateTransaction
 
 
 @dataclass

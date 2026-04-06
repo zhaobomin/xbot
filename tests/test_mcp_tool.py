@@ -98,19 +98,17 @@ async def test_execute_returns_text_blocks() -> None:
 
 
 @pytest.mark.asyncio
-async def test_execute_raises_timeout_exception() -> None:
+async def test_execute_returns_timeout_string() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
         await asyncio.sleep(1)
         return SimpleNamespace(content=[])
 
     wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool), timeout=0.01)
 
-    from xbot.agent.tools.mcp import MCPToolTimeoutError
-    with pytest.raises(MCPToolTimeoutError) as exc_info:
-        await wrapper.execute()
+    result = await wrapper.execute()
 
-    assert exc_info.value.tool_name == "mcp_test_demo"
-    assert exc_info.value.timeout == 0.01
+    assert "timed out" in result
+    assert "mcp_test_demo" in result
 
 
 @pytest.mark.asyncio

@@ -8,7 +8,7 @@ import secrets
 import shutil
 import unicodedata
 import zipfile
-from collections import defaultdict
+from collections import OrderedDict
 from datetime import datetime, timedelta, UTC
 from io import BytesIO
 from pathlib import Path
@@ -94,20 +94,22 @@ def validate_safe_name(name: str, field_name: str = "name") -> str:
 # Security: Login rate limiting
 # ---------------------------------------------------------------------------
 
-_LOGIN_ATTEMPTS: dict[str, list[datetime]] = defaultdict(list)
+_LOGIN_ATTEMPTS: OrderedDict[str, list[datetime]] = OrderedDict()
 _MAX_ATTEMPTS_PER_IP = 5
 _ATTEMPT_WINDOW_SECONDS = 60
+_MAX_TRACKED_IPS = 10_000
 
 
 def _check_login_rate_limit(client_ip: str) -> None:
     """Check if IP has exceeded login rate limit."""
     now = datetime.now(UTC)
-    attempts = _LOGIN_ATTEMPTS[client_ip]
+    attempts = _LOGIN_ATTEMPTS.get(client_ip, [])
 
     # Remove expired attempts
-    attempts[:] = [a for a in attempts if now - a < timedelta(seconds=_ATTEMPT_WINDOW_SECONDS)]
+    attempts = [a for a in attempts if now - a < timedelta(seconds=_ATTEMPT_WINDOW_SECONDS)]
 
     if len(attempts) >= _MAX_ATTEMPTS_PER_IP:
+        _LOGIN_ATTEMPTS[client_ip] = attempts
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail=f"Too many login attempts. Try again in {_ATTEMPT_WINDOW_SECONDS} seconds.",
@@ -115,6 +117,12 @@ def _check_login_rate_limit(client_ip: str) -> None:
 
     # Record this attempt
     attempts.append(now)
+    _LOGIN_ATTEMPTS[client_ip] = attempts
+    _LOGIN_ATTEMPTS.move_to_end(client_ip)
+
+    # Evict oldest IPs when capacity exceeded
+    while len(_LOGIN_ATTEMPTS) > _MAX_TRACKED_IPS:
+        _LOGIN_ATTEMPTS.popitem(last=False)
 
 
 def _clear_login_rate_limit() -> None:

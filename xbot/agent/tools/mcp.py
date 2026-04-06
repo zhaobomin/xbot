@@ -68,7 +68,7 @@ class MCPToolWrapper(Tool):
             )
         except asyncio.TimeoutError:
             logger.warning("MCP tool '%s' timed out after %ss", self._name, self._tool_timeout)
-            raise MCPToolTimeoutError(self._name, self._tool_timeout)
+            return f"(MCP tool '{self._name}' timed out after {self._tool_timeout}s. Try again or increase timeout.)"
         except asyncio.CancelledError:
             # MCP SDK's anyio cancel scopes can leak CancelledError on timeout/failure.
             # Re-raise only if our task was externally cancelled (e.g. /stop).

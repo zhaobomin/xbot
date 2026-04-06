@@ -12,13 +12,16 @@ from __future__ import annotations
 import json
 import re
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import TYPE_CHECKING, Any, TypeVar
 
 from xbot.agent.crew.planner.models import (
     Capability,
     RoleDefinition,
     RoleTier,
 )
+
+if TYPE_CHECKING:
+    from xbot.agent.crew.models import AgentRole
 
 
 T = TypeVar('T')

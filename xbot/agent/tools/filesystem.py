@@ -105,6 +105,8 @@ class ReadFileTool(_FsTool):
             
             numbered = []
             total_lines = 0
+            _MAX_LINE_SCAN = 100_000  # Stop counting after this threshold for large files
+            truncated_count = False
             
             # Use streaming approach to avoid loading whole file into memory
             with open(fp, "r", encoding="utf-8", errors="replace") as f:
@@ -114,11 +116,10 @@ class ReadFileTool(_FsTool):
                         line_text = line.rstrip("\r\n")
                         numbered.append(f"{i + 1}| {line_text}")
                     
-                    # Optimization: If we've passed the range we need, we can't stop yet
-                    # because we need to know the total line count for the footer.
-                    # But for very large files, we might want to avoid full scan.
-                    # However, the current tool's design returns "total lines total".
-                    pass
+                    # For very large files, stop scanning once past the requested range
+                    if i >= end and total_lines >= _MAX_LINE_SCAN:
+                        truncated_count = True
+                        break
             
             if not numbered and total_lines == 0:
                 return f"(Empty file: {path})"
@@ -139,10 +140,11 @@ class ReadFileTool(_FsTool):
                 end = start + len(trimmed)
 
             actual_end = min(end, total_lines)
+            total_label = f"{total_lines}+" if truncated_count else str(total_lines)
             if actual_end < total_lines:
-                result += f"\n\n(Showing lines {offset}-{actual_end} of {total_lines}. Use offset={actual_end + 1} to continue.)"
+                result += f"\n\n(Showing lines {offset}-{actual_end} of {total_label}. Use offset={actual_end + 1} to continue.)"
             else:
-                result += f"\n\n(End of file — {total_lines} lines total)"
+                result += f"\n\n(End of file — {total_label} lines total)"
             return result
         except PermissionError as e:
             return f"Error: {e}"

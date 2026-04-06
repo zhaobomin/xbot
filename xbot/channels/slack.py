@@ -175,11 +175,18 @@ class SlackChannel(BaseChannel):
 
                 # Handle rate limit (429) - use Retry-After header if available
                 if "429" in error_str or "rate" in error_str:
-                    retry_after = getattr(e, "response", {}).get("headers", {}).get("Retry-After")
-                    if retry_after:
-                        delay = int(retry_after)
-                    else:
-                        delay = SLACK_RETRY_DELAYS[min(attempt, len(SLACK_RETRY_DELAYS) - 1)]
+                    delay = SLACK_RETRY_DELAYS[min(attempt, len(SLACK_RETRY_DELAYS) - 1)]
+                    try:
+                        resp = getattr(e, "response", None)
+                        retry_after_val = None
+                        if resp is not None and hasattr(resp, "get"):
+                            retry_after_val = resp.get("headers", {}).get("Retry-After")
+                        elif resp is not None and hasattr(resp, "headers"):
+                            retry_after_val = getattr(resp.headers, "get", lambda _k: None)("Retry-After")
+                        if retry_after_val is not None:
+                            delay = int(retry_after_val)
+                    except (ValueError, TypeError, AttributeError):
+                        logger.debug("Could not parse Retry-After header, using default delay %ds", delay)
                     logger.warning("Slack rate limited, waiting %ds before retry", delay)
                     await asyncio.sleep(delay)
                     continue

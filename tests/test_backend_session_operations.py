@@ -52,6 +52,10 @@ class TestDeleteSdkSessionLockProtection:
         backend._session_commands = {}
         backend._active_task_ids = {}
         backend._active_request_ids = {}
+        backend._adapter_epoch = 0
+        backend._state_adapter = None
+        backend._session_store = None
+        backend._use_session_store = False
         backend.sessions = None
 
         with patch("claude_agent_sdk.delete_session") as mock_delete:
@@ -333,6 +337,10 @@ class TestSessionStoreSdkIndexHelpers:
         store.get_or_create("session_a")
         store.set_sdk_session_id("session_a", "sdk_1")
 
+        store.clear_sdk_session_id("session_a")
+
+        assert store.get("session_a").sdk_session_id is None
+        assert store.get_by_sdk_id("sdk_1") is None
         store.clear_sdk_session_id("session_a")
 
         assert store.get("session_a").sdk_session_id is None

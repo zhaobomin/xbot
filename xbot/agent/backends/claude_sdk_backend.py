@@ -60,6 +60,7 @@ if TYPE_CHECKING:
         UserMessage,
     )
     from xbot.agent.state.store import SessionEntry, SessionStore
+    from xbot.providers.base import LLMResponse
 
 # Try to import Claude SDK
 try:
@@ -165,6 +166,7 @@ class ClaudeSDKBackend(AgentBackend):
         self._skill_manager: Any = None
         self._client_skills_versions: dict[str, str | None] = {}  # Track skills version per client
         self._sdk_session_ids: dict[str, str] = {}  # SDK session ID to session key mapping
+        self._adapter_epoch: int = 0  # Bumped on initialize() to detect stale adapters
 
         # SessionStore reference for unified state management
         self._session_store: "SessionStore | None" = None
@@ -259,13 +261,9 @@ class ClaudeSDKBackend(AgentBackend):
         adapter = getattr(self, "_state_adapter", None)
         if adapter is not None:
             return adapter
-        # Slow path: first call — build under lock to avoid racing with concurrent callers
-        # that could each capture a different snapshot of the legacy dicts.
-        # We use _session_contexts_lock which is already owned by this backend.
-        # Note: this is a sync method so we cannot use `async with`; instead we
-        # rely on CPython's GIL ensuring that dict-reference reads/writes are
-        # atomic, and we double-check after assignment to handle the unlikely
-        # case of two threads racing (non-async callers in tests etc.).
+        # Slow path: first call — capture epoch before building so we can detect
+        # if initialize() was called concurrently (which resets _state_adapter).
+        epoch_before = self._adapter_epoch
         new_adapter = SessionStateAdapter(
             session_store=getattr(self, "_session_store", None),
             use_session_store=self._uses_session_store(),
@@ -280,6 +278,11 @@ class ClaudeSDKBackend(AgentBackend):
             legacy_clients=getattr(self, "_clients", None),
             legacy_sdk_session_ids=getattr(self, "_sdk_session_ids", None),
         )
+        # Discard if initialize() raced and bumped epoch while we were building
+        if getattr(self, "_adapter_epoch", 0) != epoch_before:
+            existing = getattr(self, "_state_adapter", None)
+            if existing is not None:
+                return existing
         # Only store if nobody else beat us to it (compare-and-set pattern)
         if getattr(self, "_state_adapter", None) is None:
             self._state_adapter = new_adapter
@@ -853,13 +856,13 @@ class ClaudeSDKBackend(AgentBackend):
             return
         await lifecycle.update_sdk_session_id(session_key, sdk_session_id)
 
-    def _clear_legacy_tracking_state(self, session_key: str, sdk_session_id: str | None) -> None:
+    def _clear_legacy_tracking_state(self, session_key: str, sdk_session_id: str | None, *, clear_context: bool = False) -> None:
         """Clear legacy tracking dictionaries for a session."""
         self._get_state_adapter().clear_tracking_state(
             session_key,
             sdk_session_id=sdk_session_id,
             clear_sdk_session_id=bool(sdk_session_id),
-            clear_context=True,
+            clear_context=clear_context,
         )
 
     async def _clear_sdk_session_state(
@@ -870,7 +873,7 @@ class ClaudeSDKBackend(AgentBackend):
         persist_metadata: bool = True,
     ) -> None:
         """Clear SDK session state from SessionStore or legacy dicts."""
-        self._clear_legacy_tracking_state(session_key, sdk_session_id)
+        self._clear_legacy_tracking_state(session_key, sdk_session_id, clear_context=True)
 
         if persist_metadata:
             await self._set_sdk_session_id_in_entry(session_key, None)
@@ -896,6 +899,9 @@ class ClaudeSDKBackend(AgentBackend):
             ValueError: If provider is not compatible with Claude SDK
         """
         self._shared_resources = shared_resources
+        # Bump epoch before invalidating adapter so concurrent _get_state_adapter()
+        # calls can detect that initialize() is in progress and discard stale builds.
+        self._adapter_epoch += 1
         # Invalidate the cached state adapter so the next call to _get_state_adapter()
         # rebuilds it with the fresh shared_resources / sessions references.
         self._state_adapter = None
@@ -3010,6 +3016,12 @@ class ClaudeSDKBackend(AgentBackend):
             return {
                 "sessions": [],
                 "limit": limit,
+                "offset": offset,
+                "has_more": False,
+                "error": str(e),
+            }
+                "error": str(e),
+            }
                 "offset": offset,
                 "has_more": False,
                 "error": str(e),

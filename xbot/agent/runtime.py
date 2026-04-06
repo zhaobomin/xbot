@@ -2046,8 +2046,9 @@ class AgentRuntime:
                 # Execute the original coroutine
                 return await coro
             finally:
-                # Unregister task on completion
-                self._state_coordinator.unregister_task(session_key, task)
+                # Phase sync is handled by the done callback
+                # (_make_task_done_callback -> _finalize_task_completion)
+                pass
 
         # Create task
         task = asyncio.create_task(execute_with_register())

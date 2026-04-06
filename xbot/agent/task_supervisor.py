@@ -18,11 +18,19 @@ class ServiceTaskRegistry:
         self,
         *,
         error_reporter: Callable[[str, str, BaseException], None] | None = None,
+        max_tasks_per_owner: int | None = None,
     ) -> None:
         self._tasks: dict[str, set[asyncio.Task]] = defaultdict(set)
         self._error_reporter = error_reporter
+        self._max_tasks_per_owner = max_tasks_per_owner
 
     def spawn(self, owner: str, coro: Awaitable[object], *, name: str | None = None) -> asyncio.Task:
+        if self._max_tasks_per_owner is not None and len(self._tasks[owner]) >= self._max_tasks_per_owner:
+            logger.warning(
+                "Task limit reached for owner=%s (%d/%d), rejecting task=%s",
+                owner, len(self._tasks[owner]), self._max_tasks_per_owner, name or "unnamed",
+            )
+            raise RuntimeError(f"Task limit exceeded for owner '{owner}'")
         task = asyncio.create_task(coro, name=name)
         self._tasks[owner].add(task)
 
