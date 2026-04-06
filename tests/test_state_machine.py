@@ -170,7 +170,7 @@ class TestSessionState:
 
     def test_default_values(self):
         """Test default values for SessionState."""
-        state = SessionState()
+        state = SessionState(session_key="test_session")
         assert state.phase == SessionPhase.IDLE
         assert state.reason == ""
         assert state.previous_phase is None
@@ -179,6 +179,7 @@ class TestSessionState:
     def test_custom_values(self):
         """Test custom values for SessionState."""
         state = SessionState(
+            session_key="test_session",
             phase=SessionPhase.RUNNING,
             reason="Processing request",
             previous_phase=SessionPhase.IDLE,
@@ -1793,16 +1794,16 @@ class TestSessionStateDataclass:
 
     def test_equality(self):
         """Test SessionState equality."""
-        state1 = SessionState(phase=SessionPhase.RUNNING, reason="test")
-        state2 = SessionState(phase=SessionPhase.RUNNING, reason="test")
-        state3 = SessionState(phase=SessionPhase.IDLE, reason="test")
+        state1 = SessionState(session_key="test_session", phase=SessionPhase.RUNNING, reason="test")
+        state2 = SessionState(session_key="test_session", phase=SessionPhase.RUNNING, reason="test")
+        state3 = SessionState(session_key="test_session", phase=SessionPhase.IDLE, reason="test")
 
         assert state1 == state2
         assert state1 != state3
 
     def test_repr(self):
         """Test SessionState repr."""
-        state = SessionState(phase=SessionPhase.RUNNING, reason="test")
+        state = SessionState(session_key="test_session", phase=SessionPhase.RUNNING, reason="test")
         repr_str = repr(state)
 
         assert "SessionState" in repr_str
@@ -1811,7 +1812,7 @@ class TestSessionStateDataclass:
 
     def test_default_values_are_correct(self):
         """Test that default values match expectations."""
-        state = SessionState()
+        state = SessionState(session_key="test_session")
 
         assert state.phase == SessionPhase.IDLE
         assert state.reason == ""

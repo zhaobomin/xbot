@@ -148,7 +148,7 @@ class SessionState:
     """
 
     # Identity
-    session_key: str = ""  # xbot's session ID (e.g., "slack:C12345")
+    session_key: str  # xbot's session ID (e.g., "slack:C12345")
     sdk_session_id: str | None = None  # SDK's session UUID
 
     # Routing (required - SDK doesn't know channel/chat_id)
@@ -213,14 +213,14 @@ class SessionStateMachine:
         """
         state = self._states.get(session_key)
         if state is None:
-            return SessionState()
+            return SessionState(session_key=session_key)
         return state
 
     def get_or_create_state(self, session_key: str) -> SessionState:
         """Get or create state for a session."""
         if session_key not in self._states:
             logger.debug(f"Creating new session state: {session_key}")
-            self._states[session_key] = SessionState()
+            self._states[session_key] = SessionState(session_key=session_key)
         return self._states[session_key]
 
     def get_phase(self, session_key: str) -> SessionPhase:
@@ -333,7 +333,7 @@ class SessionStateMachine:
                 f"Resetting session state: {session_key} "
                 f"(was: {old_state.phase.value}, transitions: {old_state.transition_count})"
             )
-            self._states[session_key] = SessionState()
+            self._states[session_key] = SessionState(session_key=session_key)
         else:
             logger.debug(f"Reset skipped for non-existent session: {session_key}")
 
