@@ -362,6 +362,40 @@ class ClaudeSDKBackend(AgentBackend):
         """Check if session has client in SessionEntry or legacy dict."""
         return self._get_state_adapter().has_client(session_key)
 
+    def _get_client(self, session_key: str) -> "ClaudeSDKClient | None":
+        """Get client - dual mode for migration."""
+        if self._use_new_state and self._state_manager:
+            return self._state_manager.get_client(session_key)
+        return self._clients.get(session_key)
+
+    def _set_client(self, session_key: str, client: "ClaudeSDKClient") -> None:
+        """Set client - dual mode for migration."""
+        if self._use_new_state and self._state_manager:
+            self._state_manager.set_client(session_key, client)
+        else:
+            self._clients[session_key] = client
+
+    def _has_client(self, session_key: str) -> bool:
+        """Check if session has client - dual mode."""
+        if self._use_new_state and self._state_manager:
+            return self._state_manager.has_client(session_key)
+        return session_key in self._clients
+
+    def _list_client_sessions(self) -> list[str]:
+        """List sessions with clients - dual mode."""
+        if self._use_new_state and self._state_manager:
+            return self._state_manager.list_client_sessions()
+        return list(self._clients.keys())
+
+    def _del_client(self, session_key: str) -> None:
+        """Delete client - dual mode."""
+        if self._use_new_state and self._state_manager:
+            state = self._state_manager.get(session_key)
+            if state:
+                state.client = None
+        elif session_key in self._clients:
+            del self._clients[session_key]
+
     # === SDK session ID and context helpers ===
 
     def _get_sdk_session_id_from_entry(self, session_key: str) -> str | None:
