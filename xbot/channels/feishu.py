@@ -89,6 +89,8 @@ class FeishuChannel(BaseChannel):
         self._processed_message_ids: OrderedDict[str, float] = OrderedDict()  # message_id -> timestamp
         self._message_dedup_ttl = 300  # 5 minutes TTL for dedup cache
         self._dedup_lock = threading.Lock()  # Protects _processed_message_ids from concurrent WebSocket callbacks
+        self._dedup_cleanup_interval = 100  # Run cleanup every N messages
+        self._dedup_message_counter = 0  # Counter for periodic cleanup
         self._ws_reconnect_delay = 5  # seconds between reconnect attempts
         self._ws_max_reconnect_delay = 60  # max delay with exponential backoff
         self._pending_messages: asyncio.Queue[tuple[Any, asyncio.Future]] | None = None
@@ -1092,28 +1094,29 @@ class FeishuChannel(BaseChannel):
             message_id = message.message_id
             now = time.time()
 
-            # Dedup check+mark is done in _on_message_sync (thread-safe).
-            # Here we only do TTL cleanup and trim under lock.
-            def _cleanup_dedup_state() -> None:
-                expired_keys = [
-                    key for key, ts in list(self._processed_message_ids.items())
-                    if now - ts > self._message_dedup_ttl
-                ]
-                for key in expired_keys:
-                    del self._processed_message_ids[key]
+            # Periodic cleanup: run every N messages instead of every message
+            self._dedup_message_counter += 1
+            if self._dedup_message_counter % self._dedup_cleanup_interval == 0:
+                def _cleanup_dedup_state() -> None:
+                    expired_keys = [
+                        key for key, ts in list(self._processed_message_ids.items())
+                        if now - ts > self._message_dedup_ttl
+                    ]
+                    for key in expired_keys:
+                        del self._processed_message_ids[key]
 
-                # Double-check in case _on_message_sync couldn't extract message_id
+                    # Trim cache if still over limit after TTL cleanup
+                    max_cache_size = 1000
+                    while len(self._processed_message_ids) > max_cache_size:
+                        self._processed_message_ids.popitem(last=False)
+                await self._run_with_dedup_lock(_cleanup_dedup_state)
+
+            # Mark message as seen
+            def _mark_seen() -> None:
                 if message_id in self._processed_message_ids:
-                    # Already marked by _on_message_sync, just ensure it's there
-                    pass
-                else:
-                    self._processed_message_ids[message_id] = now
-
-                # Trim cache if still over limit after TTL cleanup
-                max_cache_size = 1000
-                while len(self._processed_message_ids) > max_cache_size:
-                    self._processed_message_ids.popitem(last=False)
-            await self._run_with_dedup_lock(_cleanup_dedup_state)
+                    return
+                self._processed_message_ids[message_id] = now
+            await self._run_with_dedup_lock(_mark_seen)
 
             # Skip bot messages
             if sender.sender_type == "bot":

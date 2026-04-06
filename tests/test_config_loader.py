@@ -80,19 +80,19 @@ class TestLoadConfig:
         assert config.agents.defaults.model == "test-model"
         assert config.agents.defaults.provider == "anthropic"
 
-    def test_load_config_invalid_json_returns_default(self, tmp_path, capsys):
+    def test_load_config_invalid_json_returns_default(self, tmp_path, caplog):
         """Test that invalid JSON returns default config."""
         config_path = tmp_path / "config.json"
         config_path.write_text("not valid json {", encoding="utf-8")
-        
-        config = load_config(config_path)
-        
-        assert isinstance(config, Config)
-        # Should print warning
-        captured = capsys.readouterr()
-        assert "Warning" in captured.out or "Failed" in captured.out
 
-    def test_load_config_invalid_schema_returns_default(self, tmp_path, capsys):
+        with caplog.at_level("WARNING"):
+            config = load_config(config_path)
+
+        assert isinstance(config, Config)
+        # Should log warning
+        assert any("Failed" in record.message for record in caplog.records)
+
+    def test_load_config_invalid_schema_returns_default(self, tmp_path, caplog):
         """Test that invalid schema returns default config."""
         config_path = tmp_path / "config.json"
         # Invalid type for a field
@@ -104,8 +104,9 @@ class TestLoadConfig:
             }
         }
         config_path.write_text(json.dumps(config_data), encoding="utf-8")
-        
-        config = load_config(config_path)
+
+        with caplog.at_level("WARNING"):
+            config = load_config(config_path)
         
         assert isinstance(config, Config)
 

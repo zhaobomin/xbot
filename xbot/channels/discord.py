@@ -62,6 +62,7 @@ class DiscordChannel(BaseChannel):
         self._processed_message_ids: dict[str, float] = {}
         self._dedup_lock = asyncio.Lock()
         self._heartbeat_failed = asyncio.Event()  # Signal heartbeat failure
+        self._reconnect_attempts = 0
 
     async def start(self) -> None:
         """Start the Discord gateway connection."""
@@ -72,19 +73,26 @@ class DiscordChannel(BaseChannel):
         self._running = True
         self._http = httpx.AsyncClient(timeout=30.0)
 
+        MAX_RECONNECT_DELAY = 60  # seconds
+        INITIAL_RECONNECT_DELAY = 1
+
         while self._running:
             try:
                 logger.info("Connecting to Discord gateway...")
                 async with websockets.connect(self.config.gateway_url) as ws:
                     self._ws = ws
+                    self._reconnect_attempts = 0  # Reset on successful connection
                     await self._gateway_loop()
             except asyncio.CancelledError:
                 break
             except Exception as e:
                 logger.warning("Discord gateway error: %s", e)
                 if self._running:
-                    logger.info("Reconnecting to Discord gateway in 5 seconds...")
-                    await asyncio.sleep(5)
+                    # Exponential backoff: 1, 2, 4, 8, 16, 32, 60, 60, ...
+                    delay = min(INITIAL_RECONNECT_DELAY * (2 ** self._reconnect_attempts), MAX_RECONNECT_DELAY)
+                    self._reconnect_attempts += 1
+                    logger.info("Reconnecting to Discord gateway in %ds (attempt %d)...", delay, self._reconnect_attempts)
+                    await asyncio.sleep(delay)
 
     async def stop(self) -> None:
         """Stop the Discord channel."""

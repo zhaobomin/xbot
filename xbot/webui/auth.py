@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -18,6 +19,9 @@ DEFAULT_USERNAME = "admin"
 
 # Password file location in user's home directory (not in workspace)
 PASSWORD_FILE = Path("~/.xbot/webui/password").expanduser()
+
+# JWT secret file location
+JWT_SECRET_FILE = Path("~/.xbot/webui/jwt_secret").expanduser()
 
 
 def generate_secure_password() -> str:
@@ -103,6 +107,31 @@ def print_reset_password_banner(password: str) -> None:
     print(f"\nPassword hash saved to: {PASSWORD_FILE}")
     print("Please save this password securely. It will not be shown again.")
     print(f"{'='*60}\n")
+
+
+def get_or_create_jwt_secret() -> str:
+    """Get JWT secret from env, file, or generate new one.
+
+    Priority:
+    1. XBOT_JWT_SECRET environment variable (for production)
+    2. JWT secret file (persists across restarts)
+    3. Generate new secret and persist to file
+    """
+    # Check environment variable (production)
+    env_secret = os.environ.get("XBOT_JWT_SECRET")
+    if env_secret:
+        return env_secret
+
+    # Check file (persists across restarts)
+    if JWT_SECRET_FILE.exists():
+        return JWT_SECRET_FILE.read_text(encoding="utf-8").strip()
+
+    # Generate and persist
+    secret = secrets.token_hex(32)
+    JWT_SECRET_FILE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    JWT_SECRET_FILE.write_text(secret, encoding="utf-8")
+    JWT_SECRET_FILE.chmod(0o600)
+    return secret
 
 
 @dataclass

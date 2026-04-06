@@ -8,7 +8,8 @@ import secrets
 import shutil
 import unicodedata
 import zipfile
-from datetime import datetime
+from collections import defaultdict
+from datetime import datetime, timedelta, UTC
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -18,6 +19,7 @@ from fastapi import (
     File,
     Header,
     HTTPException,
+    Request,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
@@ -87,7 +89,40 @@ def validate_safe_name(name: str, field_name: str = "name") -> str:
         )
 
     return normalized
-from xbot.webui.auth import AuthManager, UserStore, ensure_password_file, print_password_banner
+
+# ---------------------------------------------------------------------------
+# Security: Login rate limiting
+# ---------------------------------------------------------------------------
+
+_LOGIN_ATTEMPTS: dict[str, list[datetime]] = defaultdict(list)
+_MAX_ATTEMPTS_PER_IP = 5
+_ATTEMPT_WINDOW_SECONDS = 60
+
+
+def _check_login_rate_limit(client_ip: str) -> None:
+    """Check if IP has exceeded login rate limit."""
+    now = datetime.now(UTC)
+    attempts = _LOGIN_ATTEMPTS[client_ip]
+
+    # Remove expired attempts
+    attempts[:] = [a for a in attempts if now - a < timedelta(seconds=_ATTEMPT_WINDOW_SECONDS)]
+
+    if len(attempts) >= _MAX_ATTEMPTS_PER_IP:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=f"Too many login attempts. Try again in {_ATTEMPT_WINDOW_SECONDS} seconds.",
+        )
+
+    # Record this attempt
+    attempts.append(now)
+
+
+def _clear_login_rate_limit() -> None:
+    """Clear all rate limit state. For testing only."""
+    _LOGIN_ATTEMPTS.clear()
+
+
+from xbot.webui.auth import AuthManager, UserStore, ensure_password_file, get_or_create_jwt_secret, print_password_banner
 from xbot.webui.services import ServiceContainer
 from xbot.webui.session_keys import to_internal_session_key
 
@@ -308,7 +343,7 @@ def create_app(
     if generated_password:
         print_password_banner(generated_password)
 
-    app.state.auth = AuthManager(secrets.token_hex(32))
+    app.state.auth = AuthManager(get_or_create_jwt_secret())
     app.state.frontend_dir = frontend_dir or (Path(__file__).parent / "frontend" / "dist")
     app.state.s3_config_path = resolved_data_dir / "s3.json"
     default_s3_config = {
@@ -381,7 +416,11 @@ def create_app(
         """
 
     @app.post("/api/auth/login")
-    async def login(body: LoginRequest) -> dict[str, Any]:
+    async def login(body: LoginRequest, request: Request) -> dict[str, Any]:
+        # Check rate limit
+        client_ip = request.client.host if request.client else "unknown"
+        _check_login_rate_limit(client_ip)
+
         user = app.state.user_store.authenticate(body.username, body.password)
         return {
             "access_token": app.state.auth.issue_token(user),

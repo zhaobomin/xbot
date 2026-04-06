@@ -294,14 +294,26 @@ class SlackChannel(BaseChannel):
         """Remove the in-progress reaction and optionally add a done reaction."""
         if not self._web_client or not ts:
             return
-        try:
-            await self._web_client.reactions_remove(
-                channel=chat_id,
-                name=self.config.react_emoji,
-                timestamp=ts,
-            )
-        except Exception as e:
-            logger.debug("Slack reactions_remove failed: %s", e)
+
+        # Remove in-progress emoji (with retry for race conditions)
+        for attempt in range(3):
+            try:
+                await self._web_client.reactions_remove(
+                    channel=chat_id,
+                    name=self.config.react_emoji,
+                    timestamp=ts,
+                )
+                break
+            except Exception as e:
+                error_str = str(e).lower()
+                if "no_reaction" in error_str:
+                    break  # Already removed, that's fine
+                if attempt < 2:
+                    await asyncio.sleep(0.1)  # Small delay before retry
+                else:
+                    logger.debug("Slack reactions_remove failed after retries: %s", e)
+
+        # Add done emoji if configured
         if self.config.done_emoji:
             try:
                 await self._web_client.reactions_add(

@@ -21,6 +21,9 @@ from typing import Any
 from pydantic import ValidationError
 
 from xbot.config.schema import Config
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 # Global variable to store current config path (for multi-instance support)
 _current_config_path: Path | None = None
@@ -70,8 +73,8 @@ def load_config(config_path: Path | None = None) -> Config:
                 data = json.load(f)
             data = _migrate_config(data)
         except (json.JSONDecodeError, ValueError) as e:
-            print(f"Warning: Failed to load config from {path}: {e}")
-            print("Using default configuration.")
+            logger.warning("Failed to load config from %s: %s", path, e)
+            logger.warning("Using default configuration.")
 
     # 2. Load split config files and merge
     data = _load_split_config(config_dir, data)
@@ -85,8 +88,8 @@ def load_config(config_path: Path | None = None) -> Config:
     try:
         return Config.model_validate(data)
     except ValidationError as e:
-        print(f"Warning: Invalid configuration: {e}")
-        print("Using default configuration.")
+        logger.warning("Invalid configuration: %s", e)
+        logger.warning("Using default configuration.")
         return Config()
 
 
@@ -120,7 +123,7 @@ def _load_split_config(config_dir: Path, data: dict[str, Any]) -> dict[str, Any]
             if "provider" not in data["agents"].get("defaults", {}):
                 data["agents"]["defaults"]["provider"] = provider_name
         except (json.JSONDecodeError, ValueError) as e:
-            print(f"Warning: Failed to load provider config: {e}")
+            logger.warning("Failed to load provider config: %s", e)
 
     # Load channels/*.json
     channels_dir = config_dir / "channels"
@@ -136,7 +139,7 @@ def _load_split_config(config_dir: Path, data: dict[str, Any]) -> dict[str, Any]
                         channel_data = json.load(f)
                     data["channels"][channel_name] = channel_data
                 except (json.JSONDecodeError, ValueError) as e:
-                    print(f"Warning: Failed to load channel config {channel_file}: {e}")
+                    logger.warning("Failed to load channel config %s: %s", channel_file, e)
 
     # Load tools.json
     tools_file = config_dir / "tools.json"
@@ -153,7 +156,7 @@ def _load_split_config(config_dir: Path, data: dict[str, Any]) -> dict[str, Any]
                 else:
                     data["tools"][key] = value
         except (json.JSONDecodeError, ValueError) as e:
-            print(f"Warning: Failed to load tools config: {e}")
+            logger.warning("Failed to load tools config: %s", e)
 
     # Load gateway.json
     gateway_file = config_dir / "gateway.json"
@@ -165,7 +168,7 @@ def _load_split_config(config_dir: Path, data: dict[str, Any]) -> dict[str, Any]
                 data["gateway"] = {}
             data["gateway"] = {**data["gateway"], **gateway_data}
         except (json.JSONDecodeError, ValueError) as e:
-            print(f"Warning: Failed to load gateway config: {e}")
+            logger.warning("Failed to load gateway config: %s", e)
 
     return data
 

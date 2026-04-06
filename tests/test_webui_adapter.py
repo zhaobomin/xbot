@@ -170,8 +170,11 @@ class _Services:
 
 
 def _build_client(tmp_path: Path) -> tuple[TestClient, _Services]:
-    from xbot.webui.app import create_app
+    from xbot.webui.app import create_app, _clear_login_rate_limit
     from xbot.webui.services import ServiceContainer
+
+    # Clear login rate limit between tests
+    _clear_login_rate_limit()
 
     # Set a known test password for all tests (isolated per test via temp path)
     test_password_file = tmp_path / "webui-data" / "password"

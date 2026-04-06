@@ -490,8 +490,8 @@ class TelegramChannel(BaseChannel):
                 chat_id=chat_id, draft_id=draft_id, text=text,
             )
             await asyncio.sleep(0.15)
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Telegram draft simulation failed (non-critical): %s", e)
         await self._send_text(chat_id, text, reply_params, thread_kwargs)
 
     async def _on_start(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
