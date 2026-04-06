@@ -51,3 +51,25 @@ class SessionManager:
         if session_key is None:
             return None
         return self._sessions.get(session_key)
+
+    # === SDK Session ID ===
+
+    def set_sdk_session_id(self, session_key: str, sdk_id: str | None) -> None:
+        """Set SDK session UUID and update bidirectional mapping.
+
+        - If sdk_id is None, clears the mapping
+        - If session already has sdk_id, removes old mapping before adding new
+        """
+        state = self.get(session_key)
+        if state is None:
+            logger.warning(f"set_sdk_session_id: session {session_key} not found")
+            return
+
+        # Remove old mapping if exists
+        if state.sdk_session_id and state.sdk_session_id in self._sdk_index:
+            del self._sdk_index[state.sdk_session_id]
+
+        # Set new mapping
+        state.sdk_session_id = sdk_id
+        if sdk_id:
+            self._sdk_index[sdk_id] = session_key
