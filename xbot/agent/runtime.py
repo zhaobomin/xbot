@@ -38,6 +38,7 @@ from xbot.agent.state.machine import (
     SessionStateMachine,
     VALID_TRANSITIONS,
 )
+from xbot.agent.state.session_manager import SessionManager
 from xbot.agent.monitoring.trace import append_session_trace
 from xbot.bus.events import InboundMessage, OutboundMessage
 from xbot.config.paths import get_data_dir
@@ -180,6 +181,12 @@ class AgentRuntime:
         # Session state coordinator (unified state management)
         self._state_coordinator = SessionStateCoordinator(self, self._session_store)
         self._response_handlers = RuntimeResponseHandlers(self)
+
+        # New unified session manager (with feature flag)
+        self.session_manager: SessionManager | None = None  # New unified manager
+        self._use_new_state: bool = False  # Feature flag
+        self._initialize_session_manager()
+
         self._direct_progress_callbacks: dict[
             str, Callable[..., Coroutine[None, None, None]]
         ] = {}
