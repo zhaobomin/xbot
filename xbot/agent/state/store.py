@@ -70,7 +70,7 @@ class SessionEntry:
 
     # === Runtime state ===
     tasks: list[asyncio.Task] = field(default_factory=list)
-    lock: asyncio.Lock | None = field(default_factory=asyncio.Lock)
+    lock: asyncio.Lock = field(default_factory=lambda: asyncio.Lock())
 
     # === State machine ===
     phase: SessionPhase = SessionPhase.IDLE
@@ -107,6 +107,7 @@ class SessionStore:
         self._entries: dict[str, SessionEntry] = {}
         self._sdk_id_index: dict[str, str] = {}  # sdk_session_id -> session_key
         self._lock = asyncio.Lock()
+        self._failed_disconnects: dict[str, dict[str, Any]] = {}  # Track failed disconnects for debugging
 
     # === Query operations (no lock needed for reads) ===
 
@@ -554,8 +555,16 @@ class SessionStore:
                     if entry.client:
                         try:
                             await entry.client.disconnect()
-                        except Exception:
-                            pass
+                        except Exception as e:
+                            logger.warning(
+                                "SessionStore: client disconnect failed for session %s: %s",
+                                key, e
+                            )
+                            # Track for debugging
+                            self._failed_disconnects[key] = {
+                                "error": str(e),
+                                "timestamp": time.time()
+                            }
                     await self._cancel_tasks_internal(entry)
 
             if expired_keys:

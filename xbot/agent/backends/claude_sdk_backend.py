@@ -169,6 +169,7 @@ class ClaudeSDKBackend(AgentBackend):
         self._client_scavenger_task: asyncio.Task | None = None
         self._background_release_tasks: set[asyncio.Task] = set()  # Track fire-and-forget release tasks
         self._client_creation_futures: dict[str, asyncio.Future] = {}
+        self._session_contexts_lock = asyncio.Lock()  # Protect _session_contexts dict access
         self._fallback_release_diagnostics: dict[str, Any] = {
             "counts": {"disconnected": 0, "killed": 0, "leaked": 0},
             "last_failure": None,
@@ -431,20 +432,21 @@ class ClaudeSDKBackend(AgentBackend):
             await self._sync_client_lifecycle_sdk_session_id(session_key, sdk_session_id)
             return
 
-        session_contexts = self._get_session_contexts()
-        sdk_session_ids = self._get_sdk_session_index()
+        async with self._session_contexts_lock:
+            session_contexts = self._get_session_contexts()
+            sdk_session_ids = self._get_sdk_session_index()
 
-        old_sdk_id = self._get_sdk_session_id_from_entry(session_key)
-        if old_sdk_id and old_sdk_id != sdk_session_id:
-            sdk_session_ids.pop(old_sdk_id, None)
-            if isinstance(session_contexts.get(old_sdk_id), tuple):
-                session_contexts.pop(old_sdk_id, None)
-
-        if sdk_session_id:
-            sdk_session_ids[sdk_session_id] = session_key
-        else:
-            if old_sdk_id:
+            old_sdk_id = self._get_sdk_session_id_from_entry(session_key)
+            if old_sdk_id and old_sdk_id != sdk_session_id:
                 sdk_session_ids.pop(old_sdk_id, None)
+                if isinstance(session_contexts.get(old_sdk_id), tuple):
+                    session_contexts.pop(old_sdk_id, None)
+
+            if sdk_session_id:
+                sdk_session_ids[sdk_session_id] = session_key
+            else:
+                if old_sdk_id:
+                    sdk_session_ids.pop(old_sdk_id, None)
 
         if self.sessions:
             session = self.sessions.get(session_key)
@@ -1471,15 +1473,19 @@ class ClaudeSDKBackend(AgentBackend):
                 self._set_skills_version_in_entry(session_key, current_skills_version)
                 logger.info(f"[Client] Client created for session={session_key}, model={current_model}")
                 await self._register_managed_client(session_key, client)
-                pending = self._client_creation_futures.pop(session_key, None)
+                # Set result BEFORE popping to avoid race condition
+                pending = self._client_creation_futures.get(session_key)
                 if pending is not None and not pending.done():
                     pending.set_result(client)
+                self._client_creation_futures.pop(session_key, None)
             return client
         except BaseException as e:
             async with self._clients_lock:
-                pending = self._client_creation_futures.pop(session_key, None)
+                # Set exception BEFORE popping to avoid race condition
+                pending = self._client_creation_futures.get(session_key)
                 if pending is not None and not pending.done():
                     pending.set_exception(e)
+                self._client_creation_futures.pop(session_key, None)
             raise
 
     def _remove_client_state(
@@ -1972,21 +1978,24 @@ class ClaudeSDKBackend(AgentBackend):
         # Use helper method that handles both SessionStore and legacy dict
         self._set_context_in_entry(context.session_key, context.channel, context.chat_id)
 
-        # Size limiting for backward compatibility dict
-        session_contexts = self._shared_resources.setdefault("_session_contexts", {})
-        _MAX_SESSION_CONTEXTS = 500
-        if len(session_contexts) > _MAX_SESSION_CONTEXTS:
-            # Remove oldest entries (dict preserves insertion order in Python 3.7+)
-            excess = len(session_contexts) - _MAX_SESSION_CONTEXTS
-            for _ in range(excess):
-                session_contexts.pop(next(iter(session_contexts)))
+        # Size limiting for backward compatibility dict (with lock protection)
+        async with self._session_contexts_lock:
+            session_contexts = self._shared_resources.setdefault("_session_contexts", {})
+            _MAX_SESSION_CONTEXTS = 500
+            if len(session_contexts) > _MAX_SESSION_CONTEXTS:
+                # Remove oldest entries (dict preserves insertion order in Python 3.7+)
+                excess = len(session_contexts) - _MAX_SESSION_CONTEXTS
+                for _ in range(excess):
+                    session_contexts.pop(next(iter(session_contexts)))
+            # Store mapping for current session
+            session_contexts[context.session_key] = (context.channel, context.chat_id)
         logger.info(
             "[Session Context] Set mapping: session_key='%s' -> (channel='%s', chat_id='%s'). "
             "Current keys in session_contexts: %s",
             context.session_key,
             context.channel,
             context.chat_id,
-            list(session_contexts.keys()),
+            list(self._shared_resources.get("_session_contexts", {}).keys()),
         )
 
         if self._tool_adapter:
@@ -2056,7 +2065,9 @@ class ClaudeSDKBackend(AgentBackend):
         if session is not None:
             existing_sdk_id = session.metadata.get("sdk_session_id")
             if existing_sdk_id:
-                session_contexts[existing_sdk_id] = (context.channel, context.chat_id)
+                async with self._session_contexts_lock:
+                    session_contexts = self._shared_resources.setdefault("_session_contexts", {})
+                    session_contexts[existing_sdk_id] = (context.channel, context.chat_id)
 
         # Check for reconnect pending state from previous error
         reconnect_hint = None
@@ -2466,7 +2477,8 @@ class ClaudeSDKBackend(AgentBackend):
             await asyncio.gather(*self._background_release_tasks, return_exceptions=True)
             self._background_release_tasks.clear()
         # Clear session contexts for compact notifications
-        self._shared_resources.pop("_session_contexts", None)
+        async with self._session_contexts_lock:
+            self._shared_resources.pop("_session_contexts", None)
         logger.info("Claude SDK backend shutdown complete")
 
     async def reset_session(self, session_key: str) -> None:
@@ -3100,11 +3112,12 @@ class ClaudeSDKBackend(AgentBackend):
                     new_entry.channel, new_entry.chat_id = original_context
                 self._session_store.set_sdk_session_id(new_session_key, new_sdk_session_id)
             else:
-                if original_context:
-                    self._get_session_contexts()[new_session_key] = original_context
-                else:
-                    self._get_session_contexts()[new_session_key] = new_sdk_session_id
-                self._get_sdk_session_index()[new_sdk_session_id] = new_session_key
+                async with self._session_contexts_lock:
+                    if original_context:
+                        self._get_session_contexts()[new_session_key] = original_context
+                    else:
+                        self._get_session_contexts()[new_session_key] = new_sdk_session_id
+                    self._get_sdk_session_index()[new_sdk_session_id] = new_session_key
 
             if self.sessions:
                 try:
@@ -3120,8 +3133,9 @@ class ClaudeSDKBackend(AgentBackend):
                         if entry:
                             self._session_store.clear_sdk_session_id(new_session_key)
                     else:
-                        self._get_session_contexts().pop(new_session_key, None)
-                        self._get_sdk_session_index().pop(new_sdk_session_id, None)
+                        async with self._session_contexts_lock:
+                            self._get_session_contexts().pop(new_session_key, None)
+                            self._get_sdk_session_index().pop(new_sdk_session_id, None)
                     logger.error(f"[SDK Session] Failed to persist fork metadata: {e}")
                     return {
                         "forked": False,

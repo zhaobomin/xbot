@@ -15,6 +15,7 @@ class TestDeleteSdkSessionLockProtection:
 
         backend = ClaudeSDKBackend.__new__(ClaudeSDKBackend)
         backend._clients_lock = asyncio.Lock()
+        backend._session_contexts_lock = asyncio.Lock()
         backend._shared_resources = {"_session_contexts": {"test_session": "sdk_123"}}
         backend._sdk_session_ids = {"sdk_123": "test_session"}
         backend._clients = {}
@@ -42,6 +43,7 @@ class TestDeleteSdkSessionLockProtection:
 
         backend = ClaudeSDKBackend.__new__(ClaudeSDKBackend)
         backend._clients_lock = asyncio.Lock()
+        backend._session_contexts_lock = asyncio.Lock()
         backend._shared_resources = {"_session_contexts": {"test_session": "sdk_123"}}
         backend._sdk_session_ids = {"sdk_123": "test_session"}
         backend._clients = {}
@@ -68,6 +70,7 @@ class TestDeleteSdkSessionLockProtection:
 
         backend = ClaudeSDKBackend.__new__(ClaudeSDKBackend)
         backend._clients_lock = asyncio.Lock()
+        backend._session_contexts_lock = asyncio.Lock()
         backend._shared_resources = {"_session_contexts": {}}
         backend._sdk_session_ids = {}
         backend.sessions = None
@@ -112,6 +115,7 @@ class TestForkSdkSessionLockProtection:
 
         backend = ClaudeSDKBackend.__new__(ClaudeSDKBackend)
         backend._clients_lock = asyncio.Lock()
+        backend._session_contexts_lock = asyncio.Lock()
         backend._shared_resources = {"_session_contexts": {"test_session": "sdk_123"}}
         backend._sdk_session_ids = {"sdk_123": "test_session"}
         backend.sessions = None
@@ -140,6 +144,7 @@ class TestForkSdkSessionLockProtection:
 
         backend = ClaudeSDKBackend.__new__(ClaudeSDKBackend)
         backend._clients_lock = asyncio.Lock()
+        backend._session_contexts_lock = asyncio.Lock()
         backend._shared_resources = {"_session_contexts": {"test_session": "sdk_123"}}
         backend._sdk_session_ids = {"sdk_123": "test_session"}
 
@@ -178,6 +183,7 @@ class TestForkSdkSessionLockProtection:
 
         backend = ClaudeSDKBackend.__new__(ClaudeSDKBackend)
         backend._clients_lock = asyncio.Lock()
+        backend._session_contexts_lock = asyncio.Lock()
         backend._shared_resources = {"_session_contexts": {}}
         backend._sdk_session_ids = {}
         backend.sessions = None
@@ -194,6 +200,7 @@ class TestForkSdkSessionLockProtection:
 
         backend = ClaudeSDKBackend.__new__(ClaudeSDKBackend)
         backend._clients_lock = asyncio.Lock()
+        backend._session_contexts_lock = asyncio.Lock()
         backend._shared_resources = {"_session_contexts": {"test_session": "sdk_123"}}
         backend._sdk_session_ids = {"sdk_123": "test_session"}
         backend.sessions = None
@@ -236,6 +243,7 @@ class TestBidirectionalMappingConsistency:
 
         backend = ClaudeSDKBackend.__new__(ClaudeSDKBackend)
         backend._clients_lock = asyncio.Lock()
+        backend._session_contexts_lock = asyncio.Lock()
         backend._shared_resources = {"_session_contexts": {"session_a": "sdk_1", "session_b": "sdk_2"}}
         backend._sdk_session_ids = {"sdk_1": "session_a", "sdk_2": "session_b"}
         backend._clients = {}
@@ -266,6 +274,7 @@ class TestBidirectionalMappingConsistency:
 
         backend = ClaudeSDKBackend.__new__(ClaudeSDKBackend)
         backend._clients_lock = asyncio.Lock()
+        backend._session_contexts_lock = asyncio.Lock()
         backend._shared_resources = {"_session_contexts": {"session_a": "sdk_1"}}
         backend._sdk_session_ids = {"sdk_1": "session_a"}
         backend.sessions = None

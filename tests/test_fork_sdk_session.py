@@ -15,6 +15,7 @@ def _create_backend():
 
     backend = ClaudeSDKBackend.__new__(ClaudeSDKBackend)
     backend._clients_lock = asyncio.Lock()
+    backend._session_contexts_lock = asyncio.Lock()
     backend._shared_resources = {"_session_contexts": {}}
     backend._sdk_session_ids = {}
     backend._clients = {}
