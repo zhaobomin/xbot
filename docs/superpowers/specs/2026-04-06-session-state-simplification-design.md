@@ -25,12 +25,46 @@ After testing `claude-agent-sdk` v0.1.56:
 | Capability | SDK Support | xbot Needs |
 |------------|-------------|------------|
 | Concurrent request protection | ❌ No | Yes - Phase state machine |
-| Task cancellation | ✅ `interrupt()` | No - Use SDK API |
-| `stop_task(task_id)` | ✅ Available | No - `interrupt()` sufficient |
+| `interrupt()` | ✅ Stops request immediately | Use for user cancel |
+| `stop_task(task_id)` | ❌ Unusable | No - SDK doesn't emit TaskStartedMessage |
+| Task state messages | ❌ Not emitted | Yes - Track asyncio.Tasks |
 | Session CRUD | ✅ Full | No - Use SDK APIs |
 | Context usage query | ✅ Yes | No - Use `get_context_usage()` |
 | Model/skills tracking | ✅ In options | No - SDK handles |
 | Conversation history | ✅ Managed | No - SDK persists |
+
+#### interrupt() vs stop_task() Test Results
+
+```
+TEST 1: Basic Interrupt
+  - After interrupt() sent, request stops immediately
+  - Returns ResultMessage with cost=$0.0000
+
+TEST 2: Interrupt During Tool Use
+  - Can interrupt during tool execution
+  - In-flight tool calls may continue (SDK behavior)
+
+TEST 3-4: TaskStartedMessage Detection
+  - SDK does NOT emit TaskStartedMessage (at least in regular queries)
+  - Therefore stop_task() cannot be used (no task_id available)
+
+Conclusion:
+- interrupt() can stop current request
+- stop_task() is not needed (SDK doesn't provide required task_id)
+```
+
+#### Why asyncio.Task Tracking Is Still Needed
+
+Although `interrupt()` can stop SDK requests, asyncio.Task tracking is still required:
+
+| Scenario | Reason |
+|----------|--------|
+| **Concurrent protection** | When user sends new message, need to cancel previous asyncio.Task |
+| **Graceful shutdown** | When server shuts down, need to cancel all active asyncio.Tasks |
+| **Timeout enforcement** | When request times out, need to cancel asyncio.Task and call interrupt() |
+| **Unexpected disconnect** | When client disconnects, need to clean up asyncio.Tasks |
+
+**Note**: asyncio.Task tracks xbot's own message processing tasks, not SDK's internal tasks.
 
 ## Proposed Solution
 

@@ -25,11 +25,46 @@
 | 能力 | SDK 支持 | xbot 需要 |
 |------|----------|-----------|
 | 并发请求保护 | ❌ 不支持 | 需要 - Phase 状态机 |
+| `interrupt()` | ✅ 支持停止请求 | 用于用户取消 |
+| `stop_task(task_id)` | ❌ 无法使用 | 不需要 - SDK 不发送 TaskStartedMessage |
 | Task 状态消息 | ❌ 不发送 | 需要 - 跟踪 asyncio.Tasks |
 | Session CRUD | ✅ 完整支持 | 不需要 - 使用 SDK API |
 | Context 使用查询 | ✅ 支持 | 不需要 - 使用 `get_context_usage()` |
 | Model/Skills 跟踪 | ✅ 在 options 中 | 不需要 - SDK 处理 |
 | 会话历史 | ✅ 已管理 | 不需要 - SDK 持久化 |
+
+#### interrupt() vs stop_task() 测试结果
+
+```
+TEST 1: Basic Interrupt
+  - interrupt() 发送后，请求立即停止
+  - 返回 ResultMessage，cost=$0.0000
+
+TEST 2: Interrupt During Tool Use  
+  - 工具使用过程中可以中断
+  - 已发出的工具调用可能继续执行（SDK 行为）
+
+TEST 3-4: TaskStartedMessage Detection
+  - SDK 不发送 TaskStartedMessage（至少在常规查询中）
+  - 因此 stop_task() 无法使用（没有 task_id）
+
+结论：
+- interrupt() 可以停止当前请求
+- stop_task() 不需要实现（SDK 不提供必要的 task_id）
+```
+
+#### asyncio.Task 跟踪仍然需要的原因
+
+虽然 `interrupt()` 可以停止 SDK 请求，但 asyncio.Task 跟踪仍然需要：
+
+| 场景 | 说明 |
+|------|------|
+| **并发保护** | 用户发新消息时，需要取消前一个 asyncio.Task |
+| **优雅关闭** | 服务器关闭时，需要取消所有活跃的 asyncio.Tasks |
+| **超时强制** | 请求超时时，需要取消 asyncio.Task 并调用 interrupt() |
+| **异常断开** | 客户端断开时，需要清理 asyncio.Tasks |
+
+**注意**：asyncio.Task 跟踪的是 xbot 自己的消息处理任务，不是 SDK 的内部任务。
 
 ## 解决方案
 
