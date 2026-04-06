@@ -167,8 +167,21 @@ class TestMochatChannelStartStop:
         channel._socket = None
         
         await channel.stop()
-        
+
         assert channel._running is False
+
+    @pytest.mark.asyncio
+    async def test_stop_cancels_refresh_and_cursor_tasks(self):
+        channel = MochatChannel(MochatConfig(), MessageBus())
+        channel._running = True
+        channel._socket = None
+        channel._refresh_task = asyncio.create_task(asyncio.sleep(10))
+        channel._cursor_save_task = asyncio.create_task(asyncio.sleep(10))
+
+        await channel.stop()
+
+        assert channel._refresh_task is None
+        assert channel._cursor_save_task is None
 
     @pytest.mark.asyncio
     async def test_start_without_socketio_logs_error(self, caplog):

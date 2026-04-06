@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from xbot.logging import get_logger
+from xbot.utils.retry import RetryPolicy, run_with_retry
 
 logger = get_logger(__name__)
 
@@ -254,27 +255,38 @@ class LLMProvider(ABC):
             reasoning_effort=reasoning_effort, tool_choice=tool_choice,
         )
 
-        for attempt, delay in enumerate(self._CHAT_RETRY_DELAYS, start=1):
-            response = await self._safe_chat(**kw)
+        class _RetryableLLMError(Exception):
+            def __init__(self, response: LLMResponse):
+                self.response = response
+                super().__init__(response.content)
 
+        async def _call() -> LLMResponse:
+            response = await self._safe_chat(**kw)
             if response.finish_reason != "error":
                 return response
-
             if not self._is_transient_error(response.content):
                 stripped = self._strip_image_content(messages)
                 if stripped is not None:
                     logger.warning("Non-transient LLM error with image content, retrying without images")
                     return await self._safe_chat(**{**kw, "messages": stripped})
                 return response
+            raise _RetryableLLMError(response)
 
-            logger.warning(
-                "LLM transient error (attempt %s/%s), retrying in %ss: %s",
-                attempt, len(self._CHAT_RETRY_DELAYS), delay,
-                (response.content or "")[:120].lower(),
+        try:
+            return await run_with_retry(
+                RetryPolicy(
+                    max_attempts=len(self._CHAT_RETRY_DELAYS) + 1,
+                    base_delay=float(self._CHAT_RETRY_DELAYS[0]),
+                    max_delay=float(self._CHAT_RETRY_DELAYS[-1]),
+                    retryable_exceptions=(_RetryableLLMError,),
+                    jitter=False,
+                ),
+                "provider-chat",
+                _call,
+                sleep_func=asyncio.sleep,
             )
-            await asyncio.sleep(delay)
-
-        return await self._safe_chat(**kw)
+        except _RetryableLLMError as exc:
+            return exc.response
 
     @abstractmethod
     def get_default_model(self) -> str:

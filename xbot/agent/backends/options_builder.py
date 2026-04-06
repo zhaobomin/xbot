@@ -84,6 +84,38 @@ class OptionsBuilder:
         self._capability_policy = capability_policy
         self._permission_handler = permission_handler
 
+    @staticmethod
+    def _is_valid_compact_target(resolved_target: Any) -> bool:
+        return (
+            isinstance(resolved_target, tuple)
+            and len(resolved_target) == 3
+            and all(isinstance(part, str) and part for part in resolved_target)
+        )
+
+    def _resolve_compact_target_from_session_store(
+        self, session_ref: str
+    ) -> tuple[str, str, str] | None:
+        """Resolve compact notification target from SessionStore when available."""
+        session_store = self._shared_resources.get("session_store")
+        if session_store is None:
+            return None
+        get_entry = getattr(session_store, "get", None)
+        get_by_sdk_id = getattr(session_store, "get_by_sdk_id", None)
+        if not callable(get_entry) or not callable(get_by_sdk_id):
+            return None
+
+        entry = get_entry(session_ref)
+        session_key = session_ref
+        if entry is None:
+            entry = get_by_sdk_id(session_ref)
+            if entry is None:
+                return None
+            session_key = entry.session_key
+
+        if not entry.channel or not entry.chat_id:
+            return None
+        return (session_key, entry.channel, entry.chat_id)
+
     def build(
         self,
         session_key: str | None = None,
@@ -203,16 +235,15 @@ class OptionsBuilder:
                             )
 
                 session_contexts = self._shared_resources.get("_session_contexts", {})
-                if resolved_target is None:
+                if not self._is_valid_compact_target(resolved_target):
+                    resolved_target = self._resolve_compact_target_from_session_store(session_ref)
+
+                if not self._is_valid_compact_target(resolved_target):
                     context_info = session_contexts.get(session_ref)
                     if isinstance(context_info, tuple):
                         resolved_target = (session_ref, context_info[0], context_info[1])
 
-                if not (
-                    isinstance(resolved_target, tuple)
-                    and len(resolved_target) == 3
-                    and all(isinstance(part, str) and part for part in resolved_target)
-                ):
+                if not self._is_valid_compact_target(resolved_target):
                     resolved_target = None
 
                 # DEBUG: Log all available session keys for troubleshooting

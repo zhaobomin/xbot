@@ -179,10 +179,26 @@ class BaseChannel(ABC):
         """Override this method to clean up channel-specific resources."""
         pass
 
+    def _consume_tracked_task_exception(self, task: asyncio.Task) -> None:
+        """Drain task exceptions so channel-owned fire-and-forget tasks stay observable."""
+        if task.cancelled():
+            return
+        try:
+            task.result()
+        except asyncio.CancelledError:
+            return
+        except Exception as exc:
+            logger.warning("%s: background task failed: %s", self.name, exc)
+
     def _track_task(self, task: asyncio.Task) -> None:
         """Track a background task for cleanup on stop."""
         self._background_tasks.add(task)
-        task.add_done_callback(self._background_tasks.discard)
+
+        def _done(done_task: asyncio.Task) -> None:
+            self._background_tasks.discard(done_task)
+            self._consume_tracked_task_exception(done_task)
+
+        task.add_done_callback(_done)
 
     def _create_tracked_task(self, coro, name: str | None = None) -> asyncio.Task:
         """Create and track a background task."""

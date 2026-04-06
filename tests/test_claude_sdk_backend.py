@@ -158,6 +158,91 @@ class TestClaudeSDKBackendLogging:
             assert f"Test log: {test_msg}" in caplog.text
 
 
+class TestClaudeSDKBackendSkillProgress:
+    @pytest.mark.asyncio
+    async def test_skill_progress_callback_prefers_current_session_from_session_store(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.state.store import SessionStore
+
+        published = []
+
+        class _Bus:
+            async def publish_outbound(self, message):
+                published.append(message)
+
+        class _PermissionHandler:
+            def get_current_session_key(self):
+                return "session:active"
+
+        backend = ClaudeSDKBackend()
+        backend._permission_handler = _PermissionHandler()
+
+        session_store = SessionStore()
+        older = session_store.get_or_create("session:older")
+        older.channel = "feishu"
+        older.chat_id = "chat-older"
+        older.last_used = 10
+
+        active = session_store.get_or_create("session:active")
+        active.channel = "telegram"
+        active.chat_id = "chat-active"
+        active.last_used = 20
+
+        callback = backend._create_skill_progress_callback(
+            {
+                "bus": _Bus(),
+                "session_store": session_store,
+                "_session_contexts": {"legacy": ("discord", "chat-legacy")},
+            }
+        )
+
+        await callback("memory", "loading")
+
+        assert len(published) == 1
+        assert published[0].channel == "telegram"
+        assert published[0].chat_id == "chat-active"
+        assert "Loading skill: memory" in published[0].content
+
+    @pytest.mark.asyncio
+    async def test_skill_progress_callback_falls_back_to_recent_session_store_entry(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.state.store import SessionStore
+
+        published = []
+
+        class _Bus:
+            async def publish_outbound(self, message):
+                published.append(message)
+
+        backend = ClaudeSDKBackend()
+
+        session_store = SessionStore()
+        older = session_store.get_or_create("session:older")
+        older.channel = "feishu"
+        older.chat_id = "chat-older"
+        older.last_used = 10
+
+        newer = session_store.get_or_create("session:newer")
+        newer.channel = "telegram"
+        newer.chat_id = "chat-newer"
+        newer.last_used = 30
+
+        callback = backend._create_skill_progress_callback(
+            {
+                "bus": _Bus(),
+                "session_store": session_store,
+                "_session_contexts": {"legacy": ("discord", "chat-legacy")},
+            }
+        )
+
+        await callback("memory", "loaded")
+
+        assert len(published) == 1
+        assert published[0].channel == "telegram"
+        assert published[0].chat_id == "chat-newer"
+        assert "Skill loaded: memory" in published[0].content
+
+
 class TestClaudeSDKBackendMessageBoundary:
     """Tests for stale-message boundary detection."""
 
@@ -406,14 +491,15 @@ class TestClaudeSDKBackendShutdown:
                 mock_client.disconnect = AsyncMock()
                 mock_clients[f"session_{i}"] = mock_client
 
-            backend._clients = mock_clients
+            for session_key, client in mock_clients.items():
+                backend._set_client_in_entry(session_key, client)
 
             await backend.shutdown()
 
             for client in mock_clients.values():
                 client.disconnect.assert_called_once()
 
-            assert len(backend._clients) == 0
+            assert backend._get_state_adapter().list_client_session_keys() == []
 
     @pytest.mark.asyncio
     async def test_shutdown_clears_session_store_clients(self):
@@ -899,7 +985,7 @@ class TestClaudeSDKBackendResetSession:
 
             mock_client = MagicMock()
             mock_client.disconnect = AsyncMock()
-            backend._clients["test_session"] = mock_client
+            backend._set_client_in_entry("test_session", mock_client)
 
             backend.sessions = MagicMock()
             mock_session = MagicMock()
@@ -913,7 +999,7 @@ class TestClaudeSDKBackendResetSession:
             await backend.reset_session("test_session")
 
             mock_client.disconnect.assert_called_once()
-            assert "test_session" not in backend._clients
+            assert backend._get_client_from_entry("test_session") is None
             mock_session.clear.assert_called_once()
             assert "sdk_session_id" not in mock_session.metadata
 
@@ -1428,6 +1514,58 @@ class TestOptionsBuilder:
         assert outbound_calls[0].content == "compacted"
 
     @pytest.mark.asyncio
+    async def test_build_hooks_compact_notification_uses_session_store_before_legacy_dict(self):
+        from claude_agent_sdk.types import HookMatcher
+        from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
+        from xbot.agent.state.store import SessionStore
+
+        outbound_calls = []
+        session_store = SessionStore()
+        entry = session_store.get_or_create("session:store")
+        entry.channel = "telegram"
+        entry.chat_id = "chat-store"
+        session_store.set_sdk_session_id("session:store", "sdk-store")
+
+        class _Bus:
+            async def publish_outbound(self, message):
+                outbound_calls.append(message)
+
+        class _Runtime:
+            backend = None
+
+        sdk_config = MagicMock()
+        sdk_config.hooks = {}
+        sdk_config.compact_notify = True
+
+        builder = OptionsBuilder(
+            shared_resources={
+                "bus": _Bus(),
+                "runtime": _Runtime(),
+                "session_store": session_store,
+                "_session_contexts": {},
+            },
+            sdk_config=sdk_config,
+            skill_converter=None,
+            tool_adapter=None,
+            sessions=None,
+            context_builder=None,
+            handoff_policy=None,
+            capability_policy=None,
+        )
+
+        hooks = builder._build_hooks()
+        assert isinstance(hooks["PreCompact"][0], HookMatcher)
+        compact_handler = hooks["PreCompact"][0].hooks[0]
+
+        compact_handler.message_callback("sdk-store", "compacted")
+        await asyncio.sleep(0)
+
+        assert len(outbound_calls) == 1
+        assert outbound_calls[0].channel == "telegram"
+        assert outbound_calls[0].chat_id == "chat-store"
+        assert outbound_calls[0].content == "compacted"
+
+    @pytest.mark.asyncio
     async def test_build_hooks_compact_notification_ignores_string_session_context_entries(self):
         from claude_agent_sdk.types import HookMatcher
         from xbot.agent.backends.claude_sdk_backend import OptionsBuilder
@@ -1913,7 +2051,6 @@ class TestInterruptSession:
             from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 
             backend = ClaudeSDKBackend()
-            backend._clients = {}
 
             result = await backend.interrupt_session("nonexistent_session")
             assert result["interrupted"] is False
@@ -1941,13 +2078,13 @@ class TestInterruptSession:
                 return
                 yield  # Makes it an async generator that yields nothing
             mock_client.receive_messages = mock_receive_messages
-            backend._clients["test_session"] = mock_client
+            backend._set_client_in_entry("test_session", mock_client)
 
             result = await backend.interrupt_session("test_session")
             assert result["interrupted"] is True
             mock_client.interrupt.assert_awaited_once()
             # Client should be removed after interrupt
-            assert "test_session" not in backend._clients
+            assert backend._get_client_from_entry("test_session") is None
             mock_client.disconnect.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -2014,8 +2151,6 @@ class TestStopActiveTask:
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 
         backend = ClaudeSDKBackend()
-        backend._active_task_ids = {}
-        backend._clients = {}
 
         result = await backend.stop_active_task("test_session")
         assert result is False
@@ -2025,28 +2160,28 @@ class TestStopActiveTask:
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 
         backend = ClaudeSDKBackend()
-        backend._active_task_ids["test_session"] = "task-1"
+        backend._set_task_id_in_entry("test_session", "task-1")
 
         mock_client = MagicMock()
         mock_client.stop_task = AsyncMock()
-        backend._clients["test_session"] = mock_client
+        backend._set_client_in_entry("test_session", mock_client)
 
         result = await backend.stop_active_task("test_session")
 
         assert result is True
         mock_client.stop_task.assert_awaited_once_with("task-1")
-        assert "test_session" not in backend._active_task_ids
+        assert backend._get_task_id_from_entry("test_session") is None
 
     @pytest.mark.asyncio
     async def test_stop_active_task_exception(self):
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 
         backend = ClaudeSDKBackend()
-        backend._active_task_ids["test_session"] = "task-1"
+        backend._set_task_id_in_entry("test_session", "task-1")
 
         mock_client = MagicMock()
         mock_client.stop_task = AsyncMock(side_effect=Exception("stop failed"))
-        backend._clients["test_session"] = mock_client
+        backend._set_client_in_entry("test_session", mock_client)
 
         result = await backend.stop_active_task("test_session")
         assert result is False
@@ -2106,7 +2241,7 @@ class TestStopActiveTask:
         context = AgentContext(session_key="test_session", prompt="hello")
         _ = [msg async for msg in backend.process(context)]
 
-        assert "test_session" not in backend._active_task_ids
+        assert backend._get_task_id_from_entry("test_session") is None
 
     @pytest.mark.asyncio
     async def test_result_message_clears_active_task_without_session_store(self):
@@ -2147,7 +2282,7 @@ class TestStopActiveTask:
         context = AgentContext(session_key="test_session", prompt="hello")
         _ = [msg async for msg in backend.process(context)]
 
-        assert "test_session" not in backend._active_task_ids
+        assert backend._get_task_id_from_entry("test_session") is None
 
     @pytest.mark.asyncio
     async def test_process_stops_stream_after_result_message(self):
@@ -2327,10 +2462,9 @@ class TestSessionCommands:
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 
         backend = ClaudeSDKBackend()
-        backend._session_commands = {}
 
         async def _fake_get_or_create_client(session_key: str):
-            backend._session_commands[session_key] = ["/compact", "/clear"]
+            backend._set_commands_in_entry(session_key, ["/compact", "/clear"])
             return MagicMock()
 
         backend._get_or_create_client = AsyncMock(side_effect=_fake_get_or_create_client)  # type: ignore[method-assign]
@@ -2344,7 +2478,7 @@ class TestSessionCommands:
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 
         backend = ClaudeSDKBackend()
-        backend._session_commands = {"s1": []}
+        backend._set_commands_in_entry("s1", [])
 
         mock_client = MagicMock()
         backend._get_or_create_client = AsyncMock(return_value=mock_client)  # type: ignore[method-assign]
@@ -2352,7 +2486,7 @@ class TestSessionCommands:
         async def _fake_refresh(session_key: str, client):
             assert session_key == "s1"
             assert client is mock_client
-            backend._session_commands[session_key] = ["/debug", "/compact"]
+            backend._set_commands_in_entry(session_key, ["/debug", "/compact"])
 
         backend._refresh_session_commands = AsyncMock(side_effect=_fake_refresh)  # type: ignore[method-assign]
 
@@ -2526,15 +2660,15 @@ class TestSessionStateReset:
         mock_client.stop_task = AsyncMock(return_value=None)
         mock_client.disconnect = AsyncMock(return_value=None)
 
-        backend._clients = {"s1": mock_client}
-        backend._active_task_ids = {"s1": "task-1"}
+        backend._set_client_in_entry("s1", mock_client)
+        backend._set_task_id_in_entry("s1", "task-1")
 
         await backend._reset_session_client_state("s1")
 
         mock_client.stop_task.assert_awaited_once_with("task-1")
         mock_client.disconnect.assert_awaited_once()
-        assert "s1" not in backend._clients
-        assert "s1" not in backend._active_task_ids
+        assert backend._get_client_from_entry("s1") is None
+        assert backend._get_task_id_from_entry("s1") is None
 
 
 class TestClaudeSDKBackendNativeHandoff:

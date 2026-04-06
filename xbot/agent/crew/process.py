@@ -782,6 +782,7 @@ class SequentialProcess(BaseProcess):
                 self.context.add_result(result)
                 results.append(result)
                 self._persist_task_output(result)
+                self._save_checkpoint(tasks)
                 continue
 
             # Transition: PENDING -> QUEUED -> RUNNING

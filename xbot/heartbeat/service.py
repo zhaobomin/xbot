@@ -9,6 +9,7 @@ from typing import Any, Awaitable, Callable, Coroutine
 from xbot.logging import get_logger
 
 logger = get_logger(__name__)
+from xbot.agent.task_supervisor import ServiceTaskRegistry
 
 _HEARTBEAT_TOOL = [
     {
@@ -84,6 +85,11 @@ class HeartbeatService:
         self._running = False
         self._task: asyncio.Task | None = None
         self._running_tick: asyncio.Task | None = None  # Track current tick task
+        self._task_registry = ServiceTaskRegistry(error_reporter=self._report_task_error)
+
+    @staticmethod
+    def _report_task_error(owner: str, task_name: str, exc: BaseException) -> None:
+        logger.error("Heartbeat task failed for owner=%s task=%s: %s", owner, task_name, exc)
 
     @property
     def heartbeat_file(self) -> Path:
@@ -142,7 +148,7 @@ class HeartbeatService:
             return
 
         self._running = True
-        self._task = asyncio.create_task(self._run_loop())
+        self._task = self._task_registry.spawn("heartbeat-service", self._run_loop(), name="heartbeat-loop")
         logger.info("Heartbeat started (every %ss)", self.interval_s)
 
     def stop(self) -> None:
@@ -151,6 +157,11 @@ class HeartbeatService:
         if self._task:
             self._task.cancel()
             self._task = None
+
+    async def shutdown(self) -> None:
+        """Stop the heartbeat service and wait for owned tasks to finish."""
+        self.stop()
+        await self._task_registry.cancel_all()
 
     async def _run_loop(self) -> None:
         """Main heartbeat loop with task skip mechanism."""
@@ -166,7 +177,11 @@ class HeartbeatService:
                     continue
 
                 # 创建新的 tick 任务
-                self._running_tick = asyncio.create_task(self._tick())
+                self._running_tick = self._task_registry.spawn(
+                    "heartbeat-service:tick",
+                    self._tick(),
+                    name="heartbeat-tick",
+                )
             except asyncio.CancelledError:
                 break
             except Exception as e:

@@ -220,6 +220,24 @@ async def test_start_respects_custom_pool_config(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_stop_cancels_typing_and_media_group_tasks() -> None:
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    channel._running = True
+    channel._app = _FakeApp(lambda: None)
+    channel._typing_tasks["1"] = asyncio.create_task(asyncio.sleep(10))
+    channel._media_group_tasks["1:g"] = asyncio.create_task(asyncio.sleep(10))
+
+    await channel.stop()
+
+    assert channel._typing_tasks == {}
+    assert channel._media_group_tasks == {}
+    assert channel._media_group_buffers == {}
+
+
+@pytest.mark.asyncio
 async def test_send_text_retries_on_timeout() -> None:
     """_send_text retries on TimedOut before succeeding."""
     from telegram.error import TimedOut

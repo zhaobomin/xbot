@@ -32,8 +32,7 @@ class TestDeleteSdkSessionLockProtection:
             mock_delete.return_value = None
             result = await backend.delete_sdk_session("test_session")
 
-            # If lock was properly used, mappings should be cleared
-            assert "sdk_123" not in backend._sdk_session_ids
+            assert backend._get_sdk_session_id_from_entry("test_session") is None
             assert result["deleted"] is True
 
     @pytest.mark.asyncio
@@ -59,8 +58,7 @@ class TestDeleteSdkSessionLockProtection:
             mock_delete.return_value = None
             result = await backend.delete_sdk_session("test_session")
 
-            # _sdk_session_ids should be cleared
-            assert "sdk_123" not in backend._sdk_session_ids
+            assert backend._get_sdk_session_id_from_entry("test_session") is None
             assert result["deleted"] is True
 
     @pytest.mark.asyncio
@@ -131,11 +129,8 @@ class TestForkSdkSessionLockProtection:
             # If lock was properly used, mappings should be set
             assert result["forked"] is True
             assert "test_session_fork_" in result["new_session_key"]
-            # Verify bidirectional mappings exist
             new_key = result["new_session_key"]
-            session_contexts = backend._shared_resources.get("_session_contexts", {})
-            assert session_contexts.get(new_key) == "sdk_new_456"
-            assert backend._sdk_session_ids.get("sdk_new_456") == new_key
+            assert backend._get_sdk_session_id_from_entry(new_key) == "sdk_new_456"
 
     @pytest.mark.asyncio
     async def test_fork_rollback_on_metadata_failure(self):
@@ -152,6 +147,7 @@ class TestForkSdkSessionLockProtection:
         mock_sessions = MagicMock()
         mock_session = MagicMock()
         mock_session.metadata = {}
+        mock_sessions.get = MagicMock(return_value=None)
         mock_sessions.get_or_create = MagicMock(return_value=mock_session)
         mock_sessions.save = MagicMock(side_effect=PermissionError("Cannot write"))
         backend.sessions = mock_sessions
@@ -165,13 +161,11 @@ class TestForkSdkSessionLockProtection:
             result = await backend.fork_sdk_session("test_session")
 
             # Should have rolled back - mappings cleared
-            session_contexts = backend._shared_resources.get("_session_contexts", {})
-            # Original mapping should still exist
-            assert session_contexts.get("test_session") == "sdk_123"
+            assert backend._get_sdk_session_id_from_entry("test_session") == "sdk_123"
             # New mapping should NOT exist (rolled back)
             new_key = result.get("new_session_key")
             if new_key:
-                assert new_key not in session_contexts
+                assert backend._get_sdk_session_id_from_entry(new_key) is None
 
             assert result["forked"] is False
             assert "metadata" in result["error"].lower()
@@ -210,10 +204,44 @@ class TestForkSdkSessionLockProtection:
             result = await backend.fork_sdk_session("test_session")
 
             assert result["forked"] is False
-            # Should NOT have added new mappings
-            session_contexts = backend._shared_resources.get("_session_contexts", {})
-            assert "test_session" in session_contexts  # Original still there
-            assert len(session_contexts) == 1  # No new mapping added
+            assert backend._get_sdk_session_id_from_entry("test_session") == "sdk_123"
+
+    @pytest.mark.asyncio
+    async def test_fork_rollback_clears_session_store_sdk_mapping(self):
+        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.state.store import SessionStore
+
+        backend = ClaudeSDKBackend()
+        backend._clients_lock = asyncio.Lock()
+        backend._session_contexts_lock = asyncio.Lock()
+        backend._shared_resources = {"_session_contexts": {}}
+        backend._session_store = SessionStore()
+        backend._use_session_store = True
+        backend._set_context_in_entry("test_session", "telegram", "chat-1")
+        await backend._set_sdk_session_id_in_entry("test_session", "sdk_123")
+
+        mock_sessions = MagicMock()
+        mock_session = MagicMock()
+        mock_session.metadata = {}
+        mock_sessions.get_or_create = MagicMock(return_value=mock_session)
+        mock_sessions.save = MagicMock(side_effect=PermissionError("Cannot write"))
+        backend.sessions = mock_sessions
+
+        mock_fork_result = MagicMock()
+        mock_fork_result.session_id = "sdk_new_456"
+
+        with patch("claude_agent_sdk.fork_session") as mock_fork:
+            mock_fork.return_value = mock_fork_result
+            result = await backend.fork_sdk_session("test_session")
+
+        assert result["forked"] is False
+        new_key = result["new_session_key"]
+        assert new_key is not None
+        entry = backend._session_store.get(new_key)
+        assert entry is not None
+        assert entry.sdk_session_id is None
+        assert entry.channel == ""
+        assert entry.chat_id == ""
 
 
 class TestBidirectionalMappingConsistency:
@@ -259,13 +287,9 @@ class TestBidirectionalMappingConsistency:
             mock_delete.return_value = None
             result = await backend.delete_sdk_session("session_a")
 
-            # Check both mappings were cleared for session_a
-            session_contexts = backend._shared_resources.get("_session_contexts", {})
-            assert "session_a" not in session_contexts
-            assert "sdk_1" not in backend._sdk_session_ids
-            # session_b should remain untouched
-            assert session_contexts.get("session_b") == "sdk_2"
-            assert backend._sdk_session_ids.get("sdk_2") == "session_b"
+            assert backend._get_sdk_session_id_from_entry("session_a") is None
+            assert backend._get_sdk_session_id_from_entry("session_b") == "sdk_2"
+            assert result["deleted"] is True
 
     @pytest.mark.asyncio
     async def test_fork_adds_both_mappings(self):
@@ -287,11 +311,7 @@ class TestBidirectionalMappingConsistency:
             result = await backend.fork_sdk_session("session_a")
 
             new_key = result["new_session_key"]
-            session_contexts = backend._shared_resources.get("_session_contexts", {})
-
-            # Both mappings should exist
-            assert session_contexts.get(new_key) == "sdk_new"
-            assert backend._sdk_session_ids.get("sdk_new") == new_key
+            assert backend._get_sdk_session_id_from_entry(new_key) == "sdk_new"
 
 
 class TestSessionStoreSdkIndexHelpers:

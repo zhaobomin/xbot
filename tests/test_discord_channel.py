@@ -100,8 +100,21 @@ class TestDiscordChannelStartStop:
         await channel._start_typing("123456")
         await asyncio.sleep(0.05)
 
-        task = channel._typing_tasks["123456"]
-        assert task.done() is True
+        assert "123456" not in channel._typing_tasks
+
+    @pytest.mark.asyncio
+    async def test_start_heartbeat_tracks_task_for_cleanup(self):
+        channel = DiscordChannel(DiscordConfig(token="test"), MessageBus())
+        channel._running = True
+        channel._ws = MagicMock()
+        channel._ws.send = AsyncMock(return_value=None)
+        channel._ws.close = AsyncMock(return_value=None)
+
+        await channel._start_heartbeat(0.01)
+
+        assert channel._heartbeat_task in channel._background_tasks
+
+        await channel.stop()
 
 
 class TestDiscordChannelSend:

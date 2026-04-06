@@ -315,6 +315,13 @@ class TelegramChannel(BaseChannel):
 
         for task in self._media_group_tasks.values():
             task.cancel()
+        if self._typing_tasks or self._media_group_tasks:
+            await asyncio.gather(
+                *self._typing_tasks.values(),
+                *self._media_group_tasks.values(),
+                return_exceptions=True,
+            )
+        self._typing_tasks.clear()
         self._media_group_tasks.clear()
         self._media_group_buffers.clear()
 
@@ -760,7 +767,10 @@ class TelegramChannel(BaseChannel):
                 buf["contents"].append(content)
             buf["media"].extend(media_paths)
             if key not in self._media_group_tasks:
-                self._media_group_tasks[key] = asyncio.create_task(self._flush_media_group(key))
+                self._media_group_tasks[key] = self._create_tracked_task(
+                    self._flush_media_group(key),
+                    name=f"telegram-media-group:{key}",
+                )
             return
 
         # Start typing indicator before processing
@@ -796,7 +806,10 @@ class TelegramChannel(BaseChannel):
         """Start sending 'typing...' indicator for a chat."""
         # Cancel any existing typing task for this chat
         self._stop_typing(chat_id)
-        self._typing_tasks[chat_id] = asyncio.create_task(self._typing_loop(chat_id))
+        self._typing_tasks[chat_id] = self._create_tracked_task(
+            self._typing_loop(chat_id),
+            name=f"telegram-typing:{chat_id}",
+        )
 
     def _stop_typing(self, chat_id: str) -> None:
         """Stop the typing indicator for a chat."""

@@ -1,6 +1,7 @@
 """Discord channel implementation using Discord Gateway websocket."""
 
 import asyncio
+import contextlib
 import json
 import time
 from pathlib import Path
@@ -99,9 +100,14 @@ class DiscordChannel(BaseChannel):
         self._running = False
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._heartbeat_task
             self._heartbeat_task = None
-        for task in self._typing_tasks.values():
+        typing_tasks = list(self._typing_tasks.values())
+        for task in typing_tasks:
             task.cancel()
+        if typing_tasks:
+            await asyncio.gather(*typing_tasks, return_exceptions=True)
         self._typing_tasks.clear()
         if self._ws:
             await self._ws.close()
@@ -294,6 +300,8 @@ class DiscordChannel(BaseChannel):
         """Start or restart the heartbeat loop."""
         if self._heartbeat_task:
             self._heartbeat_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await self._heartbeat_task
 
         async def heartbeat_loop() -> None:
             while self._running and self._ws:
@@ -306,7 +314,7 @@ class DiscordChannel(BaseChannel):
                     break
                 await asyncio.sleep(interval_s)
 
-        self._heartbeat_task = asyncio.create_task(heartbeat_loop())
+        self._heartbeat_task = self._create_tracked_task(heartbeat_loop(), name="discord-heartbeat")
 
     async def _is_duplicate_message(self, message_id: str) -> bool:
         """Check if message was already processed, with TTL cleanup."""
@@ -433,7 +441,14 @@ class DiscordChannel(BaseChannel):
                     return
                 await asyncio.sleep(8)
 
-        self._typing_tasks[channel_id] = asyncio.create_task(typing_loop())
+        task = self._create_tracked_task(typing_loop(), name=f"discord-typing:{channel_id}")
+
+        def _cleanup(done_task: asyncio.Task) -> None:
+            if self._typing_tasks.get(channel_id) is done_task:
+                self._typing_tasks.pop(channel_id, None)
+
+        task.add_done_callback(_cleanup)
+        self._typing_tasks[channel_id] = task
 
     async def _stop_typing(self, channel_id: str) -> None:
         """Stop typing indicator for a channel."""

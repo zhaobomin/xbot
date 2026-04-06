@@ -59,3 +59,18 @@ async def test_running_service_honors_external_disable(tmp_path) -> None:
         assert called == []
     finally:
         service.stop()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_cancels_timer_task(tmp_path) -> None:
+    service = CronService(tmp_path / "cron" / "jobs.json")
+    service._running = True
+    service._timer_task = service._task_registry.spawn(
+        "cron-service",
+        asyncio.sleep(10),
+        name="cron-timer",
+    )
+
+    await service.shutdown()
+
+    assert service._task_registry.get_tasks("cron-service") == set()

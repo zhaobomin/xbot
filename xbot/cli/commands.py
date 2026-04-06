@@ -39,6 +39,7 @@ from rich.text import Text
 from xbot import __logo__, __version__
 from xbot.agent.runtime import AgentRuntime
 from xbot.agent.interaction.progress_coalescer import ProgressCoalescer
+from xbot.agent.task_supervisor import ServiceTaskRegistry
 from xbot.webui.cli import webui_app
 from xbot.config.paths import get_workspace_path
 from xbot.config.paths import get_data_dir
@@ -868,8 +869,16 @@ def gateway(
             await alert.alert_critical(e, "Gateway crashed unexpectedly")
         finally:
             await agent.close_mcp()
-            heartbeat.stop()
-            cron.stop()
+            heartbeat_shutdown = getattr(heartbeat, "shutdown", None)
+            if callable(heartbeat_shutdown):
+                await heartbeat_shutdown()
+            else:
+                heartbeat.stop()
+            cron_shutdown = getattr(cron, "shutdown", None)
+            if callable(cron_shutdown):
+                await cron_shutdown()
+            else:
+                cron.stop()
             agent.stop()
             await channels.stop_all()
             await health.stop()
@@ -1037,12 +1046,13 @@ def agent(
             signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
         async def run_interactive():
+            task_registry = ServiceTaskRegistry()
             # Set spinner reference on permission handler for this session
             if isinstance(_permission_handler, InteractivePermissionHandler):
                 _thinking_ref = _ThinkingSpinner(enabled=not logs)
                 _permission_handler.set_thinking_spinner(_thinking_ref)
 
-            bus_task = asyncio.create_task(agent_loop.run())
+            bus_task = task_registry.spawn("interactive-cli", agent_loop.run(), name="agent-loop")
             turn_done = asyncio.Event()
             turn_done.set()
             turn_response: list[str] = []
@@ -1084,7 +1094,11 @@ def agent(
                     except asyncio.CancelledError:
                         break
 
-            outbound_task = asyncio.create_task(_consume_outbound())
+            outbound_task = task_registry.spawn(
+                "interactive-cli",
+                _consume_outbound(),
+                name="outbound-consumer",
+            )
 
             try:
                 while True:
@@ -1136,8 +1150,7 @@ def agent(
                         break
             finally:
                 agent_loop.stop()
-                outbound_task.cancel()
-                await asyncio.gather(bus_task, outbound_task, return_exceptions=True)
+                await task_registry.cancel_owner("interactive-cli")
                 await agent_loop.close_mcp()
 
         asyncio.run(run_interactive())

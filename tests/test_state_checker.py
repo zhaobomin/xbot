@@ -76,7 +76,7 @@ class TestStateConsistencyCheckerCapture:
     def test_capture_snapshot_with_client(self, mock_runtime):
         """测试捕获有 client 的状态"""
         # 模拟有 client
-        mock_runtime.router._backend._clients["test:session"] = "mock_client"
+        mock_runtime.router._backend._set_client_in_entry("test:session", "mock_client")
 
         checker = StateConsistencyChecker(mock_runtime)
         snapshot = checker._capture_snapshot("test:session")
@@ -142,7 +142,7 @@ class TestStateConsistencyCheckerDetection:
             "test:session", SessionPhase.RUNNING
         )
         # 设置有 task_id 但没有 client
-        mock_runtime.router._backend._active_task_ids["test:session"] = "task-123"
+        mock_runtime.router._backend._set_task_id_in_entry("test:session", "task-123")
 
         checker = StateConsistencyChecker(mock_runtime)
         snapshot = checker.check_session("test:session")
@@ -194,8 +194,8 @@ class TestStateConsistencyCheckerDetection:
 
     def test_detect_client_without_lock(self, mock_runtime):
         """测试检测有 client 但没有锁"""
-        mock_runtime.router._backend._clients["test:session"] = "mock_client"
-        # 不设置 lock
+        mock_runtime.router._backend._set_client_in_entry("test:session", "mock_client")
+        mock_runtime._session_store.get_or_create("test:session").lock = None
 
         checker = StateConsistencyChecker(mock_runtime)
         snapshot = checker.check_session("test:session")
@@ -241,7 +241,7 @@ class TestStateConsistencyCheckerAllSessions:
         mock_runtime._state_machine.get_or_create_state("state:1")
         mock_runtime._session_store.get_or_create("task:1").tasks = []
         mock_runtime._session_store.get_or_create("lock:1").lock = asyncio.Lock()
-        mock_runtime.router._backend._clients["client:1"] = "mock"
+        mock_runtime.router._backend._set_client_in_entry("client:1", "mock")
 
         checker = StateConsistencyChecker(mock_runtime)
         keys = checker._get_all_session_keys()
@@ -250,6 +250,16 @@ class TestStateConsistencyCheckerAllSessions:
         assert "task:1" in keys
         assert "lock:1" in keys
         assert "client:1" in keys
+
+    def test_get_all_session_keys_prefers_session_store_when_enabled(self, mock_runtime):
+        mock_runtime.router._backend._use_session_store = True
+        mock_runtime.router._backend._session_store = mock_runtime._session_store
+        mock_runtime._session_store.get_or_create("store:1")
+
+        checker = StateConsistencyChecker(mock_runtime)
+        keys = checker._get_all_session_keys()
+
+        assert "store:1" in keys
 
 
 # === Fixtures ===
@@ -274,13 +284,13 @@ def mock_runtime():
     # Router 和 Backend
     router = MagicMock()
     backend = MagicMock()
-    backend._clients = {}
-    backend._active_task_ids = {}
-    backend._client_last_used = {}
-    backend._use_session_store = False
-    backend._has_client_in_entry = lambda session_key: session_key in backend._clients
-    backend._get_task_id_from_entry = lambda session_key: backend._active_task_ids.get(session_key)
-    backend._get_last_used_from_entry = lambda session_key: backend._client_last_used.get(session_key)
+    backend._session_store = runtime._session_store
+    backend._use_session_store = True
+    backend._has_client_in_entry = lambda session_key: backend._session_store.get(session_key) is not None and backend._session_store.get(session_key).client is not None
+    backend._get_task_id_from_entry = lambda session_key: backend._session_store.get(session_key).task_id if backend._session_store.get(session_key) is not None else None
+    backend._get_last_used_from_entry = lambda session_key: backend._session_store.get(session_key).last_used if backend._session_store.get(session_key) is not None else None
+    backend._set_client_in_entry = lambda session_key, client: setattr(backend._session_store.get_or_create(session_key), "client", client)
+    backend._set_task_id_in_entry = lambda session_key, task_id: setattr(backend._session_store.get_or_create(session_key), "task_id", task_id)
     router._backend = backend
     runtime.router = router
 

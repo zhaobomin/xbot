@@ -64,7 +64,8 @@ class ToolAdapter:
         self._tools: dict[str, Any] = {}
         self._tool_context: dict[str, Any] = {}
         self._python_skill_tool_names: set[str] = set()
-        # Thread safety locks for concurrent access
+        # These locks protect synchronous registry/context mutations triggered by
+        # MCP and skill plumbing. They must never be held across an await.
         self._tools_lock = threading.Lock()
         self._context_lock = threading.Lock()
         # Flag to track if core tools are registered (for idempotency)

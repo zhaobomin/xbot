@@ -11,7 +11,8 @@ class ToolRegistry:
     Registry for agent tools.
 
     Allows dynamic registration and execution of tools.
-    Uses a threading.Lock to protect dict mutations for safety.
+    Uses a threading.Lock only for synchronous dict mutations; callers must not
+    hold this lock across any await boundary.
     """
 
     def __init__(self):

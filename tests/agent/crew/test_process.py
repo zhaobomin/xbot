@@ -352,6 +352,49 @@ class TestSequentialProcess:
         assert results[1].status == "skipped"
         assert "upstream dependency" in results[1].output.lower()
 
+    @pytest.mark.asyncio
+    async def test_skipped_dependency_task_saves_checkpoint(self, basic_crew_config):
+        """A skipped downstream task should be checkpointed immediately."""
+        basic_crew_config.tasks[1].context_from = ["find_bugs"]
+
+        pool = MockAgentPool(outputs=["Found bugs"])
+        context = CrewExecutionContext()
+        permission = MockPermissionHandler()
+        state_manager = CrewStateManager(
+            task_names=[t.name for t in basic_crew_config.tasks],
+            task_definitions=basic_crew_config.tasks,
+        )
+
+        process = SequentialProcess(
+            pool=pool,
+            context=context,
+            permission_handler=permission,
+            crew_config=basic_crew_config,
+            state_manager=state_manager,
+            started_at=datetime.now(),
+        )
+        process._save_checkpoint = MagicMock()
+
+        state_manager.transition_crew(CrewPhase.INITIALIZING)
+        state_manager.transition_crew(CrewPhase.RUNNING)
+
+        state_manager.force_task_phase("find_bugs", TaskPhase.SKIPPED)
+        context.add_result(
+            TaskResult(
+                task_name="find_bugs",
+                agent_name="scout",
+                output="Skipped for testing",
+                status="skipped",
+                started_at=datetime.now(),
+                finished_at=datetime.now(),
+            )
+        )
+
+        results = await process.execute(basic_crew_config.tasks)
+
+        assert results[1].status == "skipped"
+        process._save_checkpoint.assert_called_once_with(basic_crew_config.tasks)
+
 
 class TestHierarchicalProcess:
     """Tests for HierarchicalProcess."""

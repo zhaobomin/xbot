@@ -317,7 +317,7 @@ class MochatChannel(BaseChannel):
         if not await self._start_socket_client():
             await self._ensure_fallback_workers()
 
-        self._refresh_task = asyncio.create_task(self._refresh_loop())
+        self._refresh_task = self._create_tracked_task(self._refresh_loop(), name="mochat-refresh")
         while self._running:
             await asyncio.sleep(1)
 
@@ -326,6 +326,7 @@ class MochatChannel(BaseChannel):
         self._running = False
         if self._refresh_task:
             self._refresh_task.cancel()
+            await asyncio.gather(self._refresh_task, return_exceptions=True)
             self._refresh_task = None
 
         await self._stop_fallback_workers()
@@ -340,6 +341,7 @@ class MochatChannel(BaseChannel):
 
         if self._cursor_save_task:
             self._cursor_save_task.cancel()
+            await asyncio.gather(self._cursor_save_task, return_exceptions=True)
             self._cursor_save_task = None
         await self._save_session_cursors()
 
@@ -628,11 +630,17 @@ class MochatChannel(BaseChannel):
         for sid in sorted(self._session_set):
             t = self._session_fallback_tasks.get(sid)
             if not t or t.done():
-                self._session_fallback_tasks[sid] = asyncio.create_task(self._session_watch_worker(sid))
+                self._session_fallback_tasks[sid] = self._create_tracked_task(
+                    self._session_watch_worker(sid),
+                    name=f"mochat-session-watch:{sid}",
+                )
         for pid in sorted(self._panel_set):
             t = self._panel_fallback_tasks.get(pid)
             if not t or t.done():
-                self._panel_fallback_tasks[pid] = asyncio.create_task(self._panel_poll_worker(pid))
+                self._panel_fallback_tasks[pid] = self._create_tracked_task(
+                    self._panel_poll_worker(pid),
+                    name=f"mochat-panel-poll:{pid}",
+                )
 
     async def _stop_fallback_workers(self) -> None:
         self._fallback_mode = False
@@ -787,7 +795,10 @@ class MochatChannel(BaseChannel):
             state.entries.append(entry)
             if state.timer:
                 state.timer.cancel()
-            state.timer = asyncio.create_task(self._delay_flush_after(key, target_id, target_kind))
+            state.timer = self._create_tracked_task(
+                self._delay_flush_after(key, target_id, target_kind),
+                name=f"mochat-delay-flush:{key}",
+            )
 
     async def _delay_flush_after(self, key: str, target_id: str, target_kind: str) -> None:
         await asyncio.sleep(max(0, self.config.reply_delay_ms) / 1000.0)
@@ -825,9 +836,13 @@ class MochatChannel(BaseChannel):
         )
 
     async def _cancel_delay_timers(self) -> None:
+        timers: list[asyncio.Task] = []
         for state in self._delay_states.values():
             if state.timer:
                 state.timer.cancel()
+                timers.append(state.timer)
+        if timers:
+            await asyncio.gather(*timers, return_exceptions=True)
         self._delay_states.clear()
 
     # ---- notify handlers ---------------------------------------------------
@@ -886,7 +901,10 @@ class MochatChannel(BaseChannel):
             return
         self._session_cursor[session_id] = cursor
         if not self._cursor_save_task or self._cursor_save_task.done():
-            self._cursor_save_task = asyncio.create_task(self._save_cursor_debounced())
+            self._cursor_save_task = self._create_tracked_task(
+                self._save_cursor_debounced(),
+                name="mochat-cursor-save",
+            )
 
     async def _save_cursor_debounced(self) -> None:
         await asyncio.sleep(CURSOR_SAVE_DEBOUNCE_S)

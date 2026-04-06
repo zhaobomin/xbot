@@ -210,7 +210,7 @@ class MatrixChannel(BaseChannel):
         else:
             logger.warning("Matrix device_id empty; restart may replay recent messages.")
 
-        self._sync_task = asyncio.create_task(self._sync_loop())
+        self._sync_task = self._create_tracked_task(self._sync_loop(), name="matrix-sync")
 
     async def stop(self) -> None:
         """Stop the Matrix channel with graceful sync shutdown."""
@@ -453,7 +453,14 @@ class MatrixChannel(BaseChannel):
             except asyncio.CancelledError:
                 pass
 
-        self._typing_tasks[room_id] = asyncio.create_task(loop())
+        task = self._create_tracked_task(loop(), name=f"matrix-typing:{room_id}")
+
+        def _cleanup(done_task: asyncio.Task) -> None:
+            if self._typing_tasks.get(room_id) is done_task:
+                self._typing_tasks.pop(room_id, None)
+
+        task.add_done_callback(_cleanup)
+        self._typing_tasks[room_id] = task
 
     async def _stop_typing_keepalive(self, room_id: str, *, clear_typing: bool) -> None:
         if task := self._typing_tasks.pop(room_id, None):

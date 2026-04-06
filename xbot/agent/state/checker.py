@@ -220,11 +220,18 @@ class StateConsistencyChecker:
         """
         keys: set[str] = set(self._runtime._state_coordinator.list_tracked_session_keys())
 
-        # 从 backend 获取 legacy dict keys（仅在 _use_session_store=False 时需要）
         backend = self._runtime.router._backend
-        if backend and not getattr(backend, '_use_session_store', False):
-            keys.update(backend._clients.keys())
-            keys.update(backend._active_task_ids.keys())
+        if backend:
+            session_store = getattr(backend, "_session_store", None)
+            if getattr(backend, "_use_session_store", False) and session_store is not None:
+                keys.update(session_store.list_keys())
+            else:
+                # Legacy fallback while SessionStore cutover is incomplete.
+                keys.update(backend._clients.keys())
+                if hasattr(backend, "_get_state_adapter"):
+                    keys.update(backend._get_state_adapter().list_active_task_session_keys())
+                else:
+                    keys.update(backend._active_task_ids.keys())
 
         return keys
 

@@ -40,6 +40,30 @@ async def test_start_is_idempotent(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_shutdown_cancels_owned_tasks(tmp_path) -> None:
+    llm_call = DummyCaller([])
+
+    service = HeartbeatService(
+        workspace=tmp_path,
+        llm_call=llm_call,
+        interval_s=9999,
+        enabled=True,
+    )
+
+    await service.start()
+    service._running_tick = service._task_registry.spawn(
+        "heartbeat-service:tick",
+        asyncio.sleep(10),
+        name="heartbeat-tick",
+    )
+
+    await service.shutdown()
+
+    assert service._task_registry.get_tasks("heartbeat-service") == set()
+    assert service._task_registry.get_tasks("heartbeat-service:tick") == set()
+
+
+@pytest.mark.asyncio
 async def test_decide_returns_skip_when_no_tool_call(tmp_path) -> None:
     llm_call = DummyCaller([LLMResponse(content="no tool call", tool_calls=[])])
     service = HeartbeatService(

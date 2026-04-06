@@ -14,6 +14,7 @@ from xbot.logging import get_logger
 logger = get_logger(__name__)
 
 from xbot.cron.types import CronJob, CronJobState, CronPayload, CronSchedule, CronStore
+from xbot.agent.task_supervisor import ServiceTaskRegistry
 
 
 def _now_ms() -> int:
@@ -107,6 +108,11 @@ class CronService:
         self._timer_task: asyncio.Task | None = None
         self._running = False
         self._load_failed = False  # Track if last load attempt failed
+        self._task_registry = ServiceTaskRegistry(error_reporter=self._report_task_error)
+
+    @staticmethod
+    def _report_task_error(owner: str, task_name: str, exc: BaseException) -> None:
+        logger.error("Cron task failed for owner=%s task=%s: %s", owner, task_name, exc)
 
     def _load_store(self) -> CronStore:
         """Load jobs from disk. Reloads automatically if file was modified externally."""
@@ -248,6 +254,11 @@ class CronService:
             self._timer_task.cancel()
             self._timer_task = None
 
+    async def shutdown(self) -> None:
+        """Stop the cron service and wait for owned tasks to finish."""
+        self.stop()
+        await self._task_registry.cancel_owner("cron-service")
+
     def _recompute_next_runs(self) -> None:
         """Recompute next run times for all enabled jobs."""
         if not self._store:
@@ -282,7 +293,7 @@ class CronService:
             if self._running:
                 await self._on_timer()
 
-        self._timer_task = asyncio.create_task(tick())
+        self._timer_task = self._task_registry.spawn("cron-service", tick(), name="cron-timer")
 
     async def _on_timer(self) -> None:
         """Handle timer tick - run due jobs."""

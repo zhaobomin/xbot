@@ -125,7 +125,10 @@ class FeishuChannel(BaseChannel):
             .log_level(lark.LogLevel.INFO) \
             .build()
         self._start_ws_worker()
-        self._ws_reader_task = asyncio.create_task(self._run_ws_event_reader())
+        self._ws_reader_task = self._create_tracked_task(
+            self._run_ws_event_reader(),
+            name="feishu-ws-reader",
+        )
 
         logger.info("Feishu bot started with WebSocket long connection")
         logger.info("No public IP required - using WebSocket to receive events")

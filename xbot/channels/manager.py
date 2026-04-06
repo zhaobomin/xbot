@@ -11,6 +11,7 @@ logger = get_logger(__name__)
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
+from xbot.agent.task_supervisor import ServiceTaskRegistry
 from xbot.channels.base import BaseChannel
 from xbot.config.schema import Config
 
@@ -34,8 +35,13 @@ class ChannelManager:
         self.bus = bus
         self.channels: dict[str, BaseChannel] = {}
         self._dispatch_task: asyncio.Task | None = None
+        self._task_registry = ServiceTaskRegistry(error_reporter=self._report_task_error)
 
         self._init_channels()
+
+    @staticmethod
+    def _report_task_error(owner: str, task_name: str, exc: BaseException) -> None:
+        logger.error("Background task failed for owner=%s task=%s: %s", owner, task_name, exc)
 
     def _init_channels(self) -> None:
         """Initialize channels discovered via pkgutil scan + entry_points plugins."""
@@ -91,13 +97,23 @@ class ChannelManager:
             return
 
         # Start outbound dispatcher
-        self._dispatch_task = asyncio.create_task(self._dispatch_outbound())
+        self._dispatch_task = self._task_registry.spawn(
+            "channel-manager",
+            self._dispatch_outbound(),
+            name="outbound-dispatch",
+        )
 
         # Start channels
         tasks = []
         for name, channel in self.channels.items():
             logger.info("Starting %s channel...", name)
-            tasks.append(asyncio.create_task(self._start_channel(name, channel)))
+            tasks.append(
+                self._task_registry.spawn(
+                    "channel-manager:start",
+                    self._start_channel(name, channel),
+                    name=f"start-{name}",
+                )
+            )
 
         # Wait for all to complete (they should run forever)
         await asyncio.gather(*tasks, return_exceptions=True)
@@ -108,11 +124,13 @@ class ChannelManager:
 
         # Stop dispatcher
         if self._dispatch_task:
-            self._dispatch_task.cancel()
-            try:
-                await self._dispatch_task
-            except asyncio.CancelledError:
-                pass
+            await self._task_registry.cancel_owner("channel-manager")
+            if not self._dispatch_task.done():
+                self._dispatch_task.cancel()
+                try:
+                    await self._dispatch_task
+                except asyncio.CancelledError:
+                    pass
 
         # Stop all channels
         for name, channel in self.channels.items():
@@ -121,6 +139,7 @@ class ChannelManager:
                 logger.info("Stopped %s channel", name)
             except Exception as e:
                 logger.error("Error stopping %s: %s", name, e)
+        await self._task_registry.cancel_owner("channel-manager:start")
 
     def check_channels_health(self) -> dict[str, tuple[bool, str]]:
         """Check health of all enabled channels. Returns {name: (healthy, detail)}."""

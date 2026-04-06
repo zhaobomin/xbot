@@ -217,7 +217,9 @@ async def test_start_skips_load_store_when_device_id_missing(
     )
     monkeypatch.setattr("xbot.channels.matrix.AsyncClient", _fake_client)
     monkeypatch.setattr(
-        "xbot.channels.matrix.asyncio.create_task", _fake_create_task
+        MatrixChannel,
+        "_create_tracked_task",
+        lambda self, coro, name=None: _fake_create_task(coro),
     )
 
     channel = MatrixChannel(_make_config(device_id=""), MessageBus())
@@ -271,7 +273,9 @@ async def test_start_disables_e2ee_when_configured(
     )
     monkeypatch.setattr("xbot.channels.matrix.AsyncClient", _fake_client)
     monkeypatch.setattr(
-        "xbot.channels.matrix.asyncio.create_task", _fake_create_task
+        MatrixChannel,
+        "_create_tracked_task",
+        lambda self, coro, name=None: _fake_create_task(coro),
     )
 
     channel = MatrixChannel(_make_config(device_id="", e2ee_enabled=False), MessageBus())
