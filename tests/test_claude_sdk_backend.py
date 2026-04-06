@@ -2160,17 +2160,15 @@ class TestStopActiveTask:
         from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
 
         backend = ClaudeSDKBackend()
-        backend._set_task_id_in_entry("test_session", "task-1")
 
         mock_client = MagicMock()
-        mock_client.stop_task = AsyncMock()
+        mock_client.interrupt = AsyncMock()
         backend._set_client_in_entry("test_session", mock_client)
 
         result = await backend.stop_active_task("test_session")
 
         assert result is True
-        mock_client.stop_task.assert_awaited_once_with("task-1")
-        assert backend._get_task_id_from_entry("test_session") is None
+        mock_client.interrupt.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_stop_active_task_exception(self):
@@ -2657,18 +2655,16 @@ class TestSessionStateReset:
 
         backend = ClaudeSDKBackend()
         mock_client = MagicMock()
-        mock_client.stop_task = AsyncMock(return_value=None)
+        mock_client.interrupt = AsyncMock(return_value=None)
         mock_client.disconnect = AsyncMock(return_value=None)
 
         backend._set_client_in_entry("s1", mock_client)
-        backend._set_task_id_in_entry("s1", "task-1")
 
         await backend._reset_session_client_state("s1")
 
-        mock_client.stop_task.assert_awaited_once_with("task-1")
+        mock_client.interrupt.assert_awaited_once()
         mock_client.disconnect.assert_awaited_once()
         assert backend._get_client_from_entry("s1") is None
-        assert backend._get_task_id_from_entry("s1") is None
 
 
 class TestClaudeSDKBackendNativeHandoff:
