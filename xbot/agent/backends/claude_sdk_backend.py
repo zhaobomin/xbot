@@ -3020,9 +3020,3 @@ class ClaudeSDKBackend(AgentBackend):
                 "has_more": False,
                 "error": str(e),
             }
-                "error": str(e),
-            }
-                "offset": offset,
-                "has_more": False,
-                "error": str(e),
-            }
