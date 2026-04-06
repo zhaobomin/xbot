@@ -113,6 +113,23 @@ class SessionState:
 
 4. **commands removed**: SDK manages command state internally.
 
+5. **current_request_id removed**: Testing revealed:
+   - `UserMessage` is NOT sent by default (requires `extra_args={"replay-user-messages": None}`)
+   - The `_active_request_ids` filtering is effectively dead code
+   - **Critical Bug Found**: SDK's `query()` does NOT reset message buffer between calls, causing stale message leak
+
+#### Stale Message Leak Test Results
+
+```
+TEST: Request 1 not consumed → Request 2 sent
+  AssistantMessage content: AAAAAA!...
+  ❌ LEAKED: Got content from Request 1!
+```
+
+**Root Cause**: SDK's message stream is not reset between `query()` calls. Messages from previous request remain in buffer.
+
+**Solution**: Application-level concurrent request protection (reject new requests when one is in progress). The `can_start_request()` check in SessionManager is essential.
+
 ### New Architecture
 
 #### Layer Comparison
@@ -621,7 +638,7 @@ def start_request(self, session_key: str) -> bool:
 | `commands` | SDK manages command state internally |
 | `persistent_session` | SDK handles persistence via JSONL files |
 | `current_task_id` | Use `client.interrupt()` instead of `stop_task(task_id)` |
-| `current_request_id` | SDK manages request/response correlation |
+| `current_request_id` | `UserMessage` not sent by default; filtering is dead code. Real fix is concurrent request protection |
 | `previous_phase` | Simplified state machine doesn't need rollback |
 | `transition_count` | Debug-only, not needed for core functionality |
 
