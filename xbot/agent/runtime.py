@@ -198,6 +198,23 @@ class AgentRuntime:
         self.shared_resources["on_backend_client_cleanup"] = self._on_backend_client_cleanup
         self._shutdown_lock = asyncio.Lock()
 
+    def _initialize_session_manager(self) -> None:
+        """Initialize SessionManager with feature flag support.
+
+        When use_new_session_manager is True, creates a SessionManager instance
+        and shares it with the backend for unified state management.
+        """
+        self._use_new_state = self.config.agents.use_new_session_manager
+        if self._use_new_state:
+            self.session_manager = SessionManager()
+            logger.info("Using new SessionManager for session state management")
+            # Pass to backend if exists
+            if self.router and self.router._backend:
+                backend = self.router._backend
+                if hasattr(backend, "_state_manager"):
+                    backend._state_manager = self.session_manager
+                    logger.debug("Shared SessionManager with backend")
+
     @property
     def backend(self) -> "ClaudeSDKBackend":
         """Return the initialized backend.
