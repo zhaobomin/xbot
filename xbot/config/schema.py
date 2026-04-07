@@ -118,6 +118,30 @@ class AgentsConfig(Base):
     claude_sdk: ClaudeSDKAgentConfig = Field(default_factory=ClaudeSDKAgentConfig)
 
 
+class SkillsConfig(Base):
+    """Skills 配置
+
+    Skills 通过 SDK 的 add_dirs 参数加载。
+    CLI 会自动扫描 .claude/skills/ 子目录。
+    """
+
+    enabled: bool = True
+    dirs: list[str] = Field(default_factory=lambda: ["$workspace/.claude/skills"])
+    additional_dirs: list[str] = Field(default_factory=list)
+
+
+class PluginsConfig(Base):
+    """Plugins 配置
+
+    Plugins 需要显式指定，CLI 不会自动扫描。
+    """
+
+    enabled: bool = True
+    dirs: list[str] = Field(default_factory=lambda: ["$workspace/plugins"])
+    enabled_plugins: list[str] = Field(default_factory=list)
+    disabled_plugins: list[str] = Field(default_factory=list)
+
+
 class ProviderConfig(Base):
     """LLM provider configuration."""
 
@@ -255,6 +279,8 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
+    skills: SkillsConfig = Field(default_factory=SkillsConfig)
+    plugins: PluginsConfig = Field(default_factory=PluginsConfig)
 
     @property
     def workspace_path(self) -> Path:
