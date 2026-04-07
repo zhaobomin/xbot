@@ -108,10 +108,15 @@ class TestBuildPlugins:
 
     def test_is_valid_plugin_checks_plugin_json(self):
         """Test _is_valid_plugin checks for plugin.json."""
-        with patch.object(Path, "exists") as mock_exists:
-            mock_exists.side_effect = lambda p: str(p).endswith("plugin.json")
-            result = self.builder._is_valid_plugin(Path("/test/plugins/superpowers"))
-            assert result is True
+        # Create a mock path that returns True for the plugin.json path
+        mock_path = MagicMock()
+        mock_path.__truediv__ = lambda self, other: MagicMock(
+            __truediv__=lambda self, other2: MagicMock(
+                exists=MagicMock(return_value=str(other) == ".claude-plugin" and str(other2) == "plugin.json")
+            )
+        )
+        result = self.builder._is_valid_plugin(mock_path)
+        assert result is True
 
     def test_should_load_plugin_enabled_list(self):
         """Test plugin filtering by enabled_plugins."""

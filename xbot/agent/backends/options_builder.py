@@ -547,6 +547,66 @@ class OptionsBuilder:
 
         return result
 
+    def _build_plugins(self) -> list[dict]:
+        """构建 plugins 列表
+
+        扫描配置的插件目录，过滤启用的插件。
+        """
+        from pathlib import Path
+
+        plugins = []
+        config = self._shared_resources.get("config")
+
+        if not config or not getattr(config.plugins, "enabled", True):
+            return []
+
+        for plugin_dir in getattr(config.plugins, "dirs", []):
+            expanded = self._expand_path(plugin_dir)
+            plugin_base = Path(expanded)
+
+            if not plugin_base.exists():
+                continue
+
+            # 扫描目录下的每个 plugin
+            for plugin_path in plugin_base.iterdir():
+                if not plugin_path.is_dir():
+                    continue
+
+                if self._is_valid_plugin(plugin_path):
+                    plugin_name = plugin_path.name
+
+                    if self._should_load_plugin(plugin_name, config):
+                        plugins.append({
+                            "type": "local",
+                            "path": str(plugin_path)
+                        })
+
+        return plugins
+
+    def _is_valid_plugin(self, path: Path) -> bool:
+        """检查是否是有效的 plugin 目录"""
+        return (path / ".claude-plugin" / "plugin.json").exists()
+
+    def _should_load_plugin(self, name: str, config) -> bool:
+        """检查 plugin 是否应该加载
+
+        规则：
+        1. 如果有 enabled_plugins 列表，只加载列表中的
+        2. 如果在 disabled_plugins 列表中，跳过
+        """
+        enabled = getattr(config.plugins, "enabled_plugins", [])
+        disabled = getattr(config.plugins, "disabled_plugins", [])
+
+        # 如果有启用列表，只加载列表中的
+        if enabled and name not in enabled:
+            return False
+
+        # 检查是否在禁用列表中
+        if name in disabled:
+            return False
+
+        return True
+
     def _build_system_prompt(self) -> str:
         """Build the system prompt."""
         base_prompt = "你是 xbot，一个智能助手。"
