@@ -158,7 +158,6 @@ class ClaudeSDKBackend(AgentBackend):
         self._options_builder: OptionsBuilder | None = None
         self._message_converter: MessageConverter | None = None
         self._permission_handler: Any = None
-        self._skill_manager: Any = None
         self._sdk_session_ids: dict[str, str] = {}  # SDK session ID to session key mapping
 
         self._client_lifecycle = ClientLifecycleManager()
@@ -259,14 +258,6 @@ class ClaudeSDKBackend(AgentBackend):
     def _set_model_in_entry(self, session_key: str, model: str | None) -> None:
         """Set model name in session state."""
         self.state_manager.set_model(session_key, model)
-
-    def _get_skills_version_from_entry(self, session_key: str) -> str | None:
-        """Get skills version from session state."""
-        return self.state_manager.get_skills_version(session_key)
-
-    def _set_skills_version_in_entry(self, session_key: str, version: str | None) -> None:
-        """Set skills version in session state."""
-        self.state_manager.set_skills_version(session_key, version)
 
     def _get_commands_from_entry(self, session_key: str) -> list[str]:
         """Get commands list from session state."""
@@ -955,17 +946,6 @@ class ClaudeSDKBackend(AgentBackend):
                     },
                 )
 
-        # Initialize SkillManager for hot-reload and Python skill support
-        try:
-            from xbot.agent.capabilities.skill_manager import SkillManager
-            self._skill_manager = SkillManager(workspace_path)
-            # Replace the ContextBuilder's skills_loader with the one managed by SkillManager
-            if self._context_builder:
-                self._context_builder.skills = self._skill_manager.skills_loader
-            logger.info("[Backend] SkillManager initialized, version=%s", self._skill_manager.version)
-        except Exception as e:
-            logger.warning("SkillManager not available: %s", e)
-
         # Initialize tool adapter
         try:
             from xbot.agent.capabilities.tool_adapter import ToolAdapter
@@ -980,14 +960,12 @@ class ClaudeSDKBackend(AgentBackend):
                 workspace=shared_resources.get("workspace", config.defaults.workspace),
                 tools_config=tools_config,
                 shared_resources={**shared_resources, "model": config.defaults.model, "memory_store": memory_store},
-                skills_loader=self._skill_manager.skills_loader if self._skill_manager else (self._context_builder.skills if self._context_builder else None),
+                skills_loader=self._context_builder.skills if self._context_builder else None,
                 skill_progress_callback=skill_progress_callback,
             )
             self.tools = self._tool_adapter
 
-            # Sync initial Python skill tools
-            if self._skill_manager:
-                self._skill_manager.sync_tools_to_adapter(self._tool_adapter)
+            # Sync initial Python skill tools - removed (SDK handles skills natively)
         except ImportError:
             logger.warning("ToolAdapter not available")
 
@@ -1213,7 +1191,6 @@ class ClaudeSDKBackend(AgentBackend):
             ClaudeSDKClient instance for the session
         """
         current_model = self._options_builder._get_model_name() if self._options_builder else None
-        current_skills_version = self._skill_manager.version if self._skill_manager else None
 
         # Use per-session lock to coordinate concurrent creation for same session
         async with self._clients_lock:
@@ -1226,11 +1203,9 @@ class ClaudeSDKBackend(AgentBackend):
             # Check if client already exists (another task may have created it)
             if self._has_client_in_entry(session_key):
                 cached_model = self._get_model_from_entry(session_key)
-                cached_skills = self._get_skills_version_from_entry(session_key)
                 model_ok = cached_model == current_model
-                skills_ok = cached_skills == current_skills_version
 
-                if model_ok and skills_ok:
+                if model_ok:
                     self._touch_entry(session_key)
                     await self._client_lifecycle.touch(session_key)
                     logger.debug(f"[Client] Reusing existing client for session={session_key}, model={current_model}")
@@ -1238,19 +1213,14 @@ class ClaudeSDKBackend(AgentBackend):
                     if existing_client is not None:
                         return existing_client
                 else:
-                    # Model or skills changed, need to recreate client
-                    reasons = []
-                    if not model_ok:
-                        reasons.append(f"model {cached_model}->{current_model}")
-                    if not skills_ok:
-                        reasons.append(f"skills {cached_skills[:8] if cached_skills else 'None'}->{current_skills_version[:8] if current_skills_version else 'None'}")
-                    logger.info(f"[Client] Recreating client for session={session_key}: {', '.join(reasons)}")
+                    # Model changed, need to recreate client
+                    logger.info(f"[Client] Recreating client for session={session_key}: model {cached_model}->{current_model}")
                     old_client = self._remove_client_state(session_key)
                     if old_client is not None:
                         await self._finalize_detached_client_cleanup(
                             session_key,
                             old_client,
-                            reason="client recreation (model/skills change)",
+                            reason="client recreation (model change)",
                         )
 
             # Check if we need to evict clients before creating new one
@@ -1286,7 +1256,6 @@ class ClaudeSDKBackend(AgentBackend):
             self._set_client_in_entry(session_key, client)
             self._touch_entry(session_key)
             self._set_model_in_entry(session_key, current_model)
-            self._set_skills_version_in_entry(session_key, current_skills_version)
             logger.debug(f"[Client] Client created for session={session_key}, model={current_model}")
             await self._register_managed_client(session_key, client)
             return client
@@ -1767,13 +1736,7 @@ class ClaudeSDKBackend(AgentBackend):
             if hasattr(self._permission_handler, "set_current_session"):
                 self._permission_handler.set_current_session(context.session_key)
 
-        # Check for skill changes on disk (hot-reload)
-        if self._skill_manager:
-            try:
-                if self._skill_manager.check_for_changes() and self._tool_adapter:
-                    self._skill_manager.sync_tools_to_adapter(self._tool_adapter)
-            except Exception as e:
-                logger.warning(f"[Backend Process] Skill change check failed: {e}")
+        # SDK handles skills hot-reload natively, no manual change detection needed
 
         session = self.sessions.get_or_create(context.session_key) if self.sessions else None
 

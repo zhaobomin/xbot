@@ -1,20 +1,3 @@
-<!-- /autoplan restore point: /Users/zhaobomin/.gstack/projects/zhaobomin-xbot/main-autoplan-restore-20260406-113557.md -->
-
-<!-- AUTONOMOUS DECISION LOG -->
-## Decision Audit Trail
-
-| # | Phase | Decision | Principle | Rationale | Rejected |
-|---|-------|----------|-----------|-----------|----------|
-| 1 | CEO | Add user impact validation | P1 (completeness) | Validate assumptions before committing 9-15 days | — |
-| 2 | CEO | Add observability-first alternative | P1 (completeness) | Alternative approach dismissed without analysis | — |
-| 3 | CEO | Add success metrics | P5 (explicit) | No metrics = no way to measure success | — |
-| 4 | CEO | Prioritize P0 security immediately | P6 (action) | Security issues are non-negotiable | — |
-| 5 | Revise | Use allowlist for path traversal | P5 (explicit) | Blocklist is incomplete, allowlist is safer | Blocklist approach |
-| 6 | Revise | Define exact password flow | P5 (explicit) | Ambiguity causes implementation errors | — |
-| 7 | Revise | Add all error messages | P5 (explicit) | Every validation needs concrete message | — |
-
----
-
 # xbot Bug Fix Plan (Revised)
 
 ## Overview
@@ -985,25 +968,3 @@ def test_skill_name_attacks():
 - [ ] New test coverage for all fixed issues
 
 ---
-
-## GSTACK REVIEW REPORT
-
-| Review | Trigger | Why | Runs | Status | Findings |
-|--------|---------|-----|------|--------|----------|
-| CEO Review | `/plan-ceo-review` | Scope & strategy | 1 | resolved | 5 → addressed in revision |
-| Codex Review | `/codex review` | Independent 2nd opinion | 0 | unavailable | auth error |
-| Eng Review | `/plan-eng-review` | Architecture & tests | 1 | resolved | 12 → addressed in revision |
-| Design Review | `/plan-design-review` | UI/UX gaps | 1 | resolved | 8 → addressed in revision |
-| DX Review | `/plan-devex-review` | Developer experience gaps | 0 | — | — |
-
-**VERDICT:** REVISED — Critical issues addressed with explicit specifications. Ready for implementation.
-
----
-
-## Cross-Phase Themes (Resolved)
-
-**Theme: Password/Auth Flow** — ✅ RESOLVED: Full user journey defined with error messages, CLI commands, and edge case handling.
-
-**Theme: Error Messages** — ✅ RESOLVED: Every validation now has a concrete error message specified.
-
-**Theme: Security Approach** — ✅ RESOLVED: Changed from blocklist to allowlist for path traversal protection.

@@ -468,16 +468,6 @@ class SessionManager:
         state = self.get_or_create(session_key)
         state.model = model
 
-    def get_skills_version(self, session_key: str) -> str | None:
-        """Get skills version for session."""
-        state = self.get(session_key)
-        return state.skills_version if state else None
-
-    def set_skills_version(self, session_key: str, version: str | None) -> None:
-        """Set skills version for session."""
-        state = self.get_or_create(session_key)
-        state.skills_version = version
-
     def get_commands(self, session_key: str) -> list[str]:
         """Get commands for session."""
         state = self.get(session_key)

@@ -172,7 +172,6 @@ class SessionState:
 
     # Backend metadata (TODO: Remove in next major version - SDK manages these internally)
     model: str | None = None  # Model name for this session
-    skills_version: str | None = None  # Skills version for this session
     commands: list[str] = field(default_factory=list, compare=False)  # Commands for this session
     task_id: str | None = None  # Active task ID
     request_id: str | None = None  # Current request ID

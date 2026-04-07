@@ -121,14 +121,63 @@ class SessionState:
 #### Stale Message Leak Test Results
 
 ```
-TEST: Request 1 not consumed → Request 2 sent
-  AssistantMessage content: AAAAAA!...
+TEST 1: Request 1 not consumed → Request 2 sent
+  Messages received:
+    [0] AssistantMessage(content='AAAAAA!...')
   ❌ LEAKED: Got content from Request 1!
+  Expected: Content from Request 2
+
+TEST 2: Request 1 completed → Request 2 sent
+  Messages received:
+    [0] SystemMessage(subtype='init', ...)  ← init message exists!
+    [1] AssistantMessage(content='1, 2, 3, 4, 5, ...')  ← Still stale!
+  ❌ LEAKED: Got content from Request 1!
+  Expected: "9" (from Request 2)
 ```
 
-**Root Cause**: SDK's message stream is not reset between `query()` calls. Messages from previous request remain in buffer.
+**Root Cause**: SDK's `query()` does NOT reset message buffer between calls. The message stream is cumulative, not per-request.
 
-**Solution**: Application-level concurrent request protection (reject new requests when one is in progress). The `can_start_request()` check in SessionManager is essential.
+**Boundary Detection Limitation**: The `init` message (SystemMessage with subtype='init') marks a request boundary, but:
+1. **Cannot filter**: SDK returns accumulated messages, not just messages after the init
+2. **Cannot clear buffer**: SDK has no API to reset/clear message buffer
+3. **Unreliable even with init present**: TEST 2 shows stale messages still leak through even when init message is received
+
+**Why Application-Level Protection Is Required**:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│              Why Boundary Detection Cannot Solve This                    │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  SDK Internal Behavior (simplified):                                   │
+│                                                                         │
+│  class ClaudeSDKClient:                                                 │
+│      def __init__(self):                                                │
+│          self._messages = []  # Cumulative buffer                      │
+│                                                                         │
+│      async def query(self, user_message):                              │
+│          self._messages.append(user_message)                           │
+│          async for msg in self._stream():                              │
+│              self._messages.append(msg)                                │
+│              yield msg  # Returns ALL accumulated messages             │
+│                                                                         │
+│  Problem:                                                               │
+│  ─────────                                                              │
+│  Request 1: query("count to 5") → yields [1,2,3,4,5]                   │
+│  Request 2: query("say 9") → yields [1,2,3,4,5, init, 9]               │
+│                    ↑ Still includes Request 1 messages!                │
+│                                                                         │
+│  The "init" message only marks "new request started", but:             │
+│  - It doesn't clear the buffer                                         │
+│  - Application cannot know which messages are "new"                    │
+│  - Filtering by "after init index" is unreliable (buffer grows)        │
+│                                                                         │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+**Solution**: Application-level concurrent request protection. Reject new requests when one is in progress. The `can_start_request()` check in SessionManager is the only reliable fix.
+
+**Implementation Note**: Even in non-concurrent scenarios (Request 1 completed, then Request 2 sent), stale messages can leak if the consumer doesn't fully drain the stream. The safest approach is to **never allow overlapping requests** by enforcing strict phase checks.
 
 ### New Architecture
 
