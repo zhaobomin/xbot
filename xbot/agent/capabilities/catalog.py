@@ -2,16 +2,33 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from xbot.agent.capabilities.skill_parsing import extract_action_tool_names, parse_skill_document, strip_frontmatter
-from xbot.agent.capabilities.skills_loader import SkillsLoader
+from xbot.agent.capabilities.skills_loader import _parse_skill_document, _strip_frontmatter, SkillsLoader
 
 _TOOL_ALIASES = {
     "shell": "exec",
 }
+
+# Action extraction constants
+_ACTION_RE = re.compile(r"###\s+(\w+)\s*\n([^#]+)")
+_NON_ACTION_HEADERS = {"overview", "description", "usage", "example", "note", "notes"}
+
+
+def _extract_action_tool_names(skill_name: str, body: str) -> set[str]:
+    """Extract tool/action names from a skill body."""
+    names: set[str] = set()
+    for action_name, _content in _ACTION_RE.findall(body):
+        normalized = action_name.lower()
+        if normalized in _NON_ACTION_HEADERS:
+            continue
+        names.add(f"{skill_name}_{normalized}")
+    if not names:
+        names.add(f"skill_{skill_name.replace('-', '_')}")
+    return names
 
 _BUILTIN_TOOL_SPECS = (
     ("read_file", ()),
@@ -153,7 +170,7 @@ class CapabilityCatalog:
         for record in records:
             path = Path(record["path"])
             try:
-                parsed = parse_skill_document(path.read_text(encoding="utf-8"))
+                parsed = _parse_skill_document(path.read_text(encoding="utf-8"))
             except FileNotFoundError:
                 continue
             tool_exposable = parsed.frontmatter.get("tool_exposable")
@@ -161,7 +178,7 @@ class CapabilityCatalog:
                 tool_exposable = tool_exposable.strip().lower() in {"true", "1", "yes", "on"}
             if not tool_exposable:
                 continue
-            names.update(extract_action_tool_names(record["name"], parsed.body))
+            names.update(_extract_action_tool_names(record["name"], parsed.body))
 
         self._skill_tool_name_cache = {cache_key: set(names)}
         return names
@@ -175,7 +192,7 @@ class CapabilityCatalog:
 
     @staticmethod
     def _strip_frontmatter(content: str) -> str:
-        return strip_frontmatter(content)
+        return _strip_frontmatter(content)
 
     def build_summary(self, *, mcp_servers: dict[str, Any] | None = None) -> str:
         skills = self.list_skills(include_unavailable=True)

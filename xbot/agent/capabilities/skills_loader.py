@@ -1,5 +1,7 @@
 """Skills loader for agent capabilities."""
 
+from __future__ import annotations
+
 import json
 import os
 import re
@@ -8,13 +10,95 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from xbot.agent.capabilities.skill_parsing import parse_skill_document, strip_frontmatter
 from xbot.logging import get_logger
 
 logger = get_logger(__name__)
 
 # Default builtin skills directory (relative to this file)
 BUILTIN_SKILLS_DIR = Path(__file__).parent.parent.parent / "skills"
+
+# Frontmatter parsing constants
+_FRONTMATTER_RE = re.compile(r"^---\n(.*?)\n---\n?(.*)$", re.DOTALL)
+
+
+@dataclass(frozen=True)
+class ParsedSkillDocument:
+    """Parsed skill document with frontmatter and body."""
+    frontmatter: dict[str, Any]
+    body: str
+    description: str | None = None
+
+
+def _parse_skill_document(content: str) -> ParsedSkillDocument:
+    """Parse YAML frontmatter and body from a SKILL.md document."""
+    if not content.startswith("---"):
+        stripped = content.strip()
+        return ParsedSkillDocument(frontmatter={}, body=stripped, description=None)
+
+    match = _FRONTMATTER_RE.match(content)
+    if not match:
+        stripped = content.strip()
+        return ParsedSkillDocument(frontmatter={}, body=stripped, description=None)
+
+    raw_frontmatter = match.group(1)
+    body = match.group(2).strip()
+    frontmatter = _load_frontmatter(raw_frontmatter)
+    description = frontmatter.get("description")
+    if description is not None and not isinstance(description, str):
+        description = str(description)
+    return ParsedSkillDocument(frontmatter=frontmatter, body=body, description=description)
+
+
+def _strip_frontmatter(content: str) -> str:
+    """Return body content with frontmatter removed."""
+    return _parse_skill_document(content).body
+
+
+def _load_frontmatter(raw_frontmatter: str) -> dict[str, Any]:
+    """Load frontmatter from raw YAML string."""
+    try:
+        import yaml
+        parsed = yaml.safe_load(raw_frontmatter) or {}
+        return parsed if isinstance(parsed, dict) else {}
+    except ImportError:
+        logger.debug("PyYAML unavailable; falling back to simple frontmatter parsing")
+    except Exception as exc:
+        logger.debug("Failed to parse YAML frontmatter: %s", exc)
+
+    return _parse_simple_frontmatter(raw_frontmatter)
+
+
+def _parse_simple_frontmatter(raw_frontmatter: str) -> dict[str, Any]:
+    """Simple frontmatter parser for basic key: value pairs."""
+    parsed: dict[str, Any] = {}
+    for line in raw_frontmatter.splitlines():
+        if ":" not in line:
+            continue
+        key, value = line.split(":", 1)
+        parsed[key.strip()] = _coerce_scalar(value.strip().strip("\"'"))
+    return parsed
+
+
+def _coerce_scalar(value: str) -> Any:
+    """Coerce a string value to appropriate Python type."""
+    lowered = value.lower()
+    if lowered in {"true", "yes", "on"}:
+        return True
+    if lowered in {"false", "no", "off"}:
+        return False
+    if lowered in {"null", "none"}:
+        return None
+    if re.fullmatch(r"-?\d+", value):
+        try:
+            return int(value)
+        except ValueError:
+            return value
+    if re.fullmatch(r"-?\d+\.\d+", value):
+        try:
+            return float(value)
+        except ValueError:
+            return value
+    return value
 
 
 @dataclass
@@ -222,7 +306,7 @@ class SkillsLoader:
 
     def _strip_frontmatter(self, content: str) -> str:
         """Remove YAML frontmatter from markdown content."""
-        return strip_frontmatter(content)
+        return _strip_frontmatter(content)
 
     def _parse_xbot_metadata(self, raw: Any) -> dict:
         """Parse skill metadata JSON from frontmatter (supports xbot and openclaw keys)."""
@@ -273,7 +357,7 @@ class SkillsLoader:
         content = self.load_skill(name)
         if not content:
             return None
-        parsed = parse_skill_document(content)
+        parsed = _parse_skill_document(content)
         return parsed.frontmatter or None
 
     def is_tool_exposable(self, name: str) -> bool:
@@ -418,7 +502,7 @@ class SkillsLoader:
 
         if not content.startswith("---"):
             return {}
-        parsed = parse_skill_document(content)
+        parsed = _parse_skill_document(content)
         if parsed.frontmatter:
             return parsed.frontmatter
         return {}
