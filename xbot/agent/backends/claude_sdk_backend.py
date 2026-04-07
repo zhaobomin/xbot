@@ -1775,23 +1775,6 @@ class ClaudeSDKBackend(AgentBackend):
             except Exception as e:
                 logger.warning(f"[Backend Process] Skill change check failed: {e}")
 
-        # Detect triggered skills based on user message
-        triggered_skills_prefix = ""
-        if self._context_builder:
-            skills_start = time.perf_counter()
-            triggered_skills = self._context_builder.skills.get_triggered_skills(
-                user_message=context.prompt,
-                code_context="",  # Could be enhanced to include file content
-                file_paths=None,
-            )
-            skills_time = time.perf_counter() - skills_start
-            logger.info(f"[Backend Process] get_triggered_skills took {skills_time:.3f}s for session={context.session_key}")
-            if triggered_skills:
-                triggered_content = self._context_builder.skills.load_skills_for_context(triggered_skills)
-                if triggered_content:
-                    triggered_skills_prefix = f"[Triggered Skills]\n\n{triggered_content}\n\n---\n\n"
-                    logger.info(f"Triggered skills for session {context.session_key}: {triggered_skills}")
-
         session = self.sessions.get_or_create(context.session_key) if self.sessions else None
 
         # === 诊断日志: Backend 处理入口 ===
@@ -1874,7 +1857,7 @@ class ClaudeSDKBackend(AgentBackend):
 
         try:
             final_content = ""
-            prompt = f"{triggered_skills_prefix}{context.prompt}" if triggered_skills_prefix else context.prompt
+            prompt = context.prompt
 
             # Send reconnect hint if this is a recovery attempt
             if reconnect_hint:

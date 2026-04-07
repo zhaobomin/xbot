@@ -125,7 +125,7 @@ class SkillManager:
         """Compare current disk state with cached fingerprint.
 
         If the fingerprint changed, reloads Python skill plugins and updates
-        :attr:`version`. Also invalidates the triggers cache.
+        :attr:`version`.
 
         Returns:
             ``True`` if skills changed since last check.
@@ -141,8 +141,6 @@ class SkillManager:
         )
         self._version = new_fp
         self._reload_python_skills()
-        # Invalidate triggers cache when skills change
-        self._skills_loader.invalidate_triggers_cache()
         return True
 
     # ------------------------------------------------------------------

@@ -2,33 +2,15 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from xbot.agent.capabilities.skills_loader import _parse_skill_document, SkillsLoader
+from xbot.agent.capabilities.skills_loader import SkillsLoader
 
 _TOOL_ALIASES = {
     "shell": "exec",
 }
-
-# Action extraction constants
-_ACTION_RE = re.compile(r"###\s+(\w+)\s*\n([^#]+)")
-_NON_ACTION_HEADERS = {"overview", "description", "usage", "example", "note", "notes"}
-
-
-def _extract_action_tool_names(skill_name: str, body: str) -> set[str]:
-    """Extract tool/action names from a skill body."""
-    names: set[str] = set()
-    for action_name, _content in _ACTION_RE.findall(body):
-        normalized = action_name.lower()
-        if normalized in _NON_ACTION_HEADERS:
-            continue
-        names.add(f"{skill_name}_{normalized}")
-    if not names:
-        names.add(f"skill_{skill_name.replace('-', '_')}")
-    return names
 
 _BUILTIN_TOOL_SPECS = (
     ("read_file", ()),
@@ -78,7 +60,6 @@ class CapabilityCatalog:
     def __init__(self, workspace: str | Path, builtin_skills_dir: Path | None = None):
         self.workspace = Path(workspace)
         self.skills = SkillsLoader(self.workspace, builtin_skills_dir=builtin_skills_dir)
-        self._skill_tool_name_cache: dict[tuple[bool, tuple[tuple[str, float], ...]], set[str]] = {}
 
     def list_skills(self, *, include_unavailable: bool = False) -> list[SkillCapability]:
         records = self.skills.list_skills(filter_unavailable=not include_unavailable)
@@ -142,8 +123,7 @@ class CapabilityCatalog:
             return "mcp"
         if normalized in self.builtin_tool_names():
             return "tool"
-        if normalized in self.skill_tool_names(include_unavailable=True):
-            return "skill"
+        # SDK 原生不支持从 skill body 提取工具名，使用 skill_ 前缀判断
         if normalized.startswith("skill_"):
             return "skill"
         if assume_unknown_mcp:
@@ -151,44 +131,13 @@ class CapabilityCatalog:
         return "tool"
 
     def skill_tool_names(self, *, include_unavailable: bool = False) -> set[str]:
-        records = self.skills.list_skills(filter_unavailable=not include_unavailable)
-        fingerprint = tuple(
-            sorted(
-                (
-                    record["path"],
-                    self._safe_skill_mtime(Path(record["path"])),
-                )
-                for record in records
-            )
-        )
-        cache_key = (include_unavailable, fingerprint)
-        cached = self._skill_tool_name_cache.get(cache_key)
-        if cached is not None:
-            return set(cached)
+        """Return names of Python skill tools (tool_exposable skills with tool.py).
 
-        names: set[str] = set()
-        for record in records:
-            path = Path(record["path"])
-            try:
-                parsed = _parse_skill_document(path.read_text(encoding="utf-8"))
-            except FileNotFoundError:
-                continue
-            tool_exposable = parsed.frontmatter.get("tool_exposable")
-            if isinstance(tool_exposable, str):
-                tool_exposable = tool_exposable.strip().lower() in {"true", "1", "yes", "on"}
-            if not tool_exposable:
-                continue
-            names.update(_extract_action_tool_names(record["name"], parsed.body))
-
-        self._skill_tool_name_cache = {cache_key: set(names)}
-        return names
-
-    @staticmethod
-    def _safe_skill_mtime(path: Path) -> float:
-        try:
-            return path.stat().st_mtime
-        except FileNotFoundError:
-            return -1.0
+        Note: SDK native skills are loaded via add_dirs and don't expose as tools.
+        This method returns Python skill plugin tools only.
+        """
+        # Python skill tools are managed by SkillManager, not extracted from skill body
+        return set()
 
     def build_summary(self, *, mcp_servers: dict[str, Any] | None = None) -> str:
         skills = self.list_skills(include_unavailable=True)

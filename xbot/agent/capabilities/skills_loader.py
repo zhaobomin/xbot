@@ -187,74 +187,6 @@ class SkillsLoader:
 
         return None
 
-    def load_skills_for_context(self, skill_names: list[str]) -> str:
-        """
-        Load specific skills for inclusion in agent context.
-
-        Args:
-            skill_names: List of skill names to load.
-
-        Returns:
-            Formatted skills content.
-        """
-        parts = []
-        for name in skill_names:
-            content = self.load_skill(name)
-            if content:
-                content = strip_frontmatter_from_content(content)
-                parts.append(f"### Skill: {name}\n\n{content}")
-
-        return "\n\n---\n\n".join(parts) if parts else ""
-
-    def build_skills_summary(self) -> str:
-        """
-        Build a summary of all skills (name, description, path, availability).
-
-        This is used for progressive loading - the agent can read the full
-        skill content using read_file when needed.
-
-        Skills with ``disable-model-invocation: true`` are excluded.
-
-        Returns:
-            XML-formatted skills summary.
-        """
-        all_skills = self.list_skills(filter_unavailable=False)
-        if not all_skills:
-            return ""
-
-        def escape_xml(s: str) -> str:
-            return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-        lines = ["<skills>"]
-        for s in all_skills:
-            skill_name = s["name"]
-
-            # Skip skills that opted out of model invocation
-            if not self.is_model_invocable(skill_name):
-                continue
-
-            name = escape_xml(skill_name)
-            path = s["path"]
-            desc = escape_xml(self._get_skill_description(skill_name))
-            skill_meta = self._get_skill_meta(skill_name)
-            available = self._check_requirements(skill_meta)
-
-            lines.append(f"  <skill available=\"{str(available).lower()}\">")
-            lines.append(f"    <name>{name}</name>")
-            lines.append(f"    <description>{desc}</description>")
-            lines.append(f"    <location>{path}</location>")
-
-            # Show missing requirements for unavailable skills
-            if not available:
-                missing = self._get_missing_requirements(skill_meta)
-                if missing:
-                    lines.append(f"    <requires>{escape_xml(missing)}</requires>")
-
-            lines.append("  </skill>")
-        lines.append("</skills>")
-
-        return "\n".join(lines)
-
     def _get_missing_requirements(self, skill_meta: dict) -> str:
         """Get a description of missing requirements."""
         missing = []
@@ -306,16 +238,6 @@ class SkillsLoader:
         """Get xbot metadata for a skill (cached in frontmatter)."""
         meta = self.get_skill_metadata(name) or {}
         return self._parse_xbot_metadata(meta.get("metadata", ""))
-
-    def get_always_skills(self) -> list[str]:
-        """Get skills marked as always=true that meet requirements."""
-        result = []
-        for s in self.list_skills(filter_unavailable=True):
-            meta = self.get_skill_metadata(s["name"]) or {}
-            skill_meta = self._parse_xbot_metadata(meta.get("metadata", ""))
-            if skill_meta.get("always") or meta.get("always"):
-                result.append(s["name"])
-        return result
 
     def get_skill_metadata(self, name: str) -> dict | None:
         """
