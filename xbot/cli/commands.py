@@ -629,9 +629,9 @@ def _make_agent_service(
 
     agent_config = AgentConfig(
         model=config.agents.defaults.model,
-        system_prompt=config.agents.defaults.system_prompt,
-        mcp_servers=getattr(config.agents.defaults, "mcp_servers", {}),
-        agents=getattr(config.agents.defaults, "agents", []),
+        system_prompt="",  # System prompt is built dynamically by ContextBuilder
+        mcp_servers=getattr(config.tools, "mcp_servers", {}) or {},
+        agents=list(config.agents.claude_sdk.agents.values()) if config.agents.claude_sdk.agents else None,
     )
 
     shared_resources = {
