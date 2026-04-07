@@ -24,7 +24,7 @@ logger = get_logger(__name__)
 from xbot.utils.helpers import ensure_dir
 
 if TYPE_CHECKING:
-    from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+    from xbot.agent.service import AgentService
 
 # Patch sqlite3 for chromadb compatibility (requires sqlite >= 3.35.0)
 # This must be done before any chromadb imports
@@ -360,7 +360,7 @@ class ReMeMemoryStore:
     async def consolidate(
         self,
         messages: list[dict],
-        backend: "ClaudeSDKBackend",
+        backend: "AgentService",
     ) -> bool:
         """Consolidate messages into memory.
 
@@ -391,7 +391,7 @@ class ReMeMemoryStore:
     async def _fallback_consolidate(
         self,
         messages: list[dict],
-        backend: "ClaudeSDKBackend",
+        backend: "AgentService",
     ) -> bool:
         """Fallback consolidation using original logic."""
         # Import here to avoid circular dependency

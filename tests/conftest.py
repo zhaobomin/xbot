@@ -25,17 +25,3 @@ def _remove_beartype_path_hook() -> None:
 
 
 _remove_beartype_path_hook()
-
-
-@pytest.fixture(autouse=True)
-def _reset_agent_router_backend_registry() -> None:
-    """Keep AgentRouter backend registry isolated between tests."""
-    from xbot.agent.router import AgentRouter, register_default_backends
-
-    AgentRouter._backends = {}
-    register_default_backends()
-    try:
-        yield
-    finally:
-        AgentRouter._backends = {}
-        register_default_backends()

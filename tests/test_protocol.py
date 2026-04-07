@@ -2,7 +2,7 @@
 
 import pytest
 
-from xbot.agent.protocol import AgentBackend, AgentContext, AgentResponse
+from xbot.agent.protocol import AgentContext, AgentResponse
 
 
 class TestAgentResponse:
@@ -76,86 +76,3 @@ class TestAgentContext:
         assert len(context.history) == 1
         assert context.channel == "telegram"
         assert context.metadata["source"] == "test"
-
-
-class TestAgentBackend:
-    """Tests for AgentBackend abstract class."""
-
-    def test_is_abstract(self) -> None:
-        """Test that AgentBackend cannot be instantiated directly."""
-        with pytest.raises(TypeError):
-            AgentBackend()
-
-    def test_default_implementations(self) -> None:
-        """Test default method implementations."""
-
-        class MockBackend(AgentBackend):
-            @property
-            def name(self) -> str:
-                return "mock"
-
-            async def initialize(self, config, shared_resources):
-                pass
-
-            async def process(self, context):
-                yield AgentResponse(content="test")
-
-            async def shutdown(self):
-                pass
-
-        backend = MockBackend()
-        assert backend.name == "mock"
-
-        # Test default implementations
-        import asyncio
-        assert asyncio.run(backend.execute_tool("test", {})) is None
-        asyncio.run(backend.reset_session("test"))
-        assert asyncio.run(backend.cancel_session("test")) == 0
-        assert backend.get_tools_summary() == ""
-
-    def test_interrupt_session_default(self) -> None:
-        """Test default interrupt_session returns dict with interrupted=False."""
-        import asyncio
-
-        class MockBackend(AgentBackend):
-            @property
-            def name(self) -> str:
-                return "mock"
-
-            async def initialize(self, config, shared_resources):
-                pass
-
-            async def process(self, context):
-                yield AgentResponse(content="test")
-
-            async def shutdown(self):
-                pass
-
-        backend = MockBackend()
-        result = asyncio.run(backend.interrupt_session("test_session"))
-        assert result["interrupted"] is False
-        assert result["usage"] is None
-
-    def test_compact_session_default(self) -> None:
-        """Test default compact_session returns not supported message."""
-        import asyncio
-
-        class MockBackend(AgentBackend):
-            @property
-            def name(self) -> str:
-                return "mock"
-
-            async def initialize(self, config, shared_resources):
-                pass
-
-            async def process(self, context):
-                yield AgentResponse(content="test")
-
-            async def shutdown(self):
-                pass
-
-        backend = MockBackend()
-        result = asyncio.run(backend.compact_session("test_session"))
-        assert result["messages_consolidated"] == 0
-        assert result["success"] is True
-        assert "not supported" in result["message"].lower()

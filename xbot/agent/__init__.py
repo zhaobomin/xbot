@@ -14,12 +14,11 @@ __all__ = [
     "ContextBuilder",
     "MemoryStore",
     "SkillsLoader",
-    # New exports for dual-agent architecture
-    "AgentBackend",
+    # Core types
     "AgentResponse",
     "AgentContext",
-    "AgentRouter",
-    "AgentRuntime",
+    # Unified service
+    "AgentService",
 ]
 
 
@@ -30,11 +29,9 @@ def __getattr__(name: str) -> Any:
         "CapabilityPolicy": ("xbot.agent.capabilities.policy", "CapabilityPolicy"),
         "MemoryStore": ("xbot.agent.memory.store", "MemoryStore"),
         "SkillsLoader": ("xbot.agent.capabilities.skills_loader", "SkillsLoader"),
-        "AgentBackend": ("xbot.agent.protocol", "AgentBackend"),
         "AgentResponse": ("xbot.agent.protocol", "AgentResponse"),
         "AgentContext": ("xbot.agent.protocol", "AgentContext"),
-        "AgentRouter": ("xbot.agent.router", "AgentRouter"),
-        "AgentRuntime": ("xbot.agent.runtime", "AgentRuntime"),
+        "AgentService": ("xbot.agent.service", "AgentService"),
     }
     module_attr = lazy_exports.get(name)
     if module_attr is None:

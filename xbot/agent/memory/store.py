@@ -15,7 +15,7 @@ logger = get_logger(__name__)
 from xbot.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain
 
 if TYPE_CHECKING:
-    from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+    from xbot.agent.service import AgentService
     from xbot.session.manager import Session, SessionManager
 
 
@@ -177,7 +177,7 @@ class MemoryStore:
     async def consolidate(
         self,
         messages: list[dict],
-        backend: "ClaudeSDKBackend",
+        backend: "AgentService",
     ) -> bool:
         """Consolidate the provided message chunk into MEMORY.md + HISTORY.md."""
         if not messages:
@@ -330,7 +330,7 @@ class MemoryConsolidator:
     def __init__(
         self,
         workspace: Path,
-        backend: "ClaudeSDKBackend",
+        backend: "AgentService",
         sessions: SessionManager,
         context_window_tokens: int,
         build_messages: Callable[..., list[dict[str, Any]]],

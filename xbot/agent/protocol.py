@@ -1,12 +1,12 @@
 """Agent protocol definitions.
 
-This module defines the abstract interface for Agent backends,
-enabling interchangeable implementations (Claude SDK and custom backends).
+This module defines data classes for agent communication.
+The AgentBackend abstract class has been removed since only
+ClaudeSDKBackend exists (now AgentService).
 """
 
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator
+from typing import Any
 
 
 @dataclass
@@ -41,130 +41,7 @@ class AgentContext:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
-class AgentBackend(ABC):
-    """Abstract base class for Agent backends.
-
-    Agent backends are responsible for:
-    - Processing messages using LLM
-    - Managing tools and their execution
-    - Streaming responses
-
-    Implementations:
-    - ClaudeSDKBackend: Uses the Claude Agent SDK
-    - Custom backends implementing this protocol
-    """
-
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Backend name identifier."""
-        pass
-
-    @abstractmethod
-    async def initialize(self, config: Any, shared_resources: dict[str, Any]) -> None:
-        """Initialize the agent backend.
-
-        Args:
-            config: Agent configuration (AgentsConfig)
-            shared_resources: Shared resources (bus, config, workspace, etc.)
-
-        Raises:
-            ConfigurationError: If configuration is invalid
-        """
-        pass
-
-    @abstractmethod
-    async def process(self, context: AgentContext) -> AsyncIterator[AgentResponse]:
-        """Process a message and yield responses.
-
-        Args:
-            context: Processing context with session info and prompt
-
-        Yields:
-            AgentResponse objects (streaming)
-        """
-        pass
-
-    @abstractmethod
-    async def shutdown(self) -> None:
-        """Shutdown the agent backend and release resources."""
-        pass
-
-    async def execute_tool(self, tool_name: str, args: dict[str, Any]) -> str | None:
-        """Execute a tool directly (optional).
-
-        Args:
-            tool_name: Name of the tool
-            args: Tool arguments
-
-        Returns:
-            Tool result string, or None if not supported
-        """
-        return None
-
-    async def reset_session(self, session_key: str) -> None:
-        """Reset backend state for a session (optional)."""
-        return None
-
-    async def cancel_session(self, session_key: str) -> int:
-        """Cancel active backend-managed work for one session (optional)."""
-        return 0
-
-    async def stop_active_task(self, session_key: str) -> bool:
-        """Stop active backend task for one session (optional).
-
-        Returns:
-            True if a task stop was requested, False otherwise
-        """
-        return False
-
-    async def interrupt_session(self, session_key: str) -> dict[str, Any]:
-        """Interrupt any ongoing LLM request for a session (optional).
-
-        Returns:
-            Dict with 'interrupted' bool and optional 'usage' dict
-        """
-        return {"interrupted": False, "usage": None}
-
-    async def compact_session(self, session_key: str) -> dict[str, Any]:
-        """Force context compaction for a session (optional).
-
-        Returns:
-            Dict with compaction stats
-        """
-        return {
-            "messages_consolidated": 0,
-            "tokens_before": 0,
-            "tokens_after": 0,
-            "success": True,
-            "message": "Compaction not supported",
-        }
-
-    async def get_session_commands(self, session_key: str) -> list[str]:
-        """Get available slash commands for a session (optional)."""
-        return []
-
-    async def get_context_usage(self, session_key: str) -> dict[str, Any]:
-        """Get current context window usage for a session (optional).
-
-        Returns detailed breakdown of token usage including:
-        - categories: Token usage by category (system prompt, tools, messages, etc.)
-        - totalTokens: Total tokens in context
-        - maxTokens: Effective maximum tokens
-        - percentage: Percent of context used
-        - mcpTools: Per-tool token breakdown
-        - memoryFiles: Per-file token breakdown
-        - agents: Per-agent token breakdown
-
-        Returns:
-            Dict with context usage info, or empty dict if not supported
-        """
-        return {}
-
-    def get_tools_summary(self) -> str:
-        """Get a summary of available tools (optional).
-
-        Returns:
-            Summary string, or empty string if not implemented
-        """
-        return ""
+__all__ = [
+    "AgentResponse",
+    "AgentContext",
+]

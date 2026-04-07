@@ -19,13 +19,13 @@ from xbot.bus.events import InboundMessage, OutboundMessage
 from xbot.bus.queue import InteractionResponse, PermissionResponse
 
 if TYPE_CHECKING:
-    from xbot.agent.runtime import AgentRuntime
+    from xbot.agent.service import AgentService
 
 
 class RuntimeResponseHandlers:
     """Encapsulates runtime handlers for pending user responses."""
 
-    def __init__(self, runtime: AgentRuntime):
+    def __init__(self, runtime: "AgentService"):
         self._runtime = runtime
 
     @property

@@ -290,13 +290,11 @@ class CrewOrchestrator:
             return None
 
         try:
-            from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+            from xbot.agent.service import AgentService
             from xbot.agent.protocol import AgentContext
+            from xbot.agent.types import AgentConfig
 
-            # Create a lightweight backend for repair
-            backend = ClaudeSDKBackend()
             agents_config = self.xbot_config.agents.model_copy(deep=True)
-
             shared_resources = {
                 "workspace": self.crew_config.workspace,
                 "config": self.xbot_config,
@@ -306,9 +304,18 @@ class CrewOrchestrator:
                 "session_manager": None,
             }
 
+            # Create a lightweight service for repair
+            agent_config = AgentConfig(
+                model=agents_config.defaults.model,
+                system_prompt=agents_config.defaults.system_prompt,
+                mcp_servers=getattr(agents_config.defaults, "mcp_servers", {}),
+                agents=getattr(agents_config.defaults, "agents", []),
+            )
+            service = AgentService(agent_config, shared_resources)
+
             async def _init_and_call(prompt: str) -> str:
-                """Initialize backend and run a single repair call."""
-                await backend.initialize(agents_config, shared_resources)
+                """Initialize service and run a single repair call."""
+                await service.initialize()
                 try:
                     session_key = f"repair_{hash(prompt) % 10000}"
                     context = AgentContext(
@@ -319,14 +326,14 @@ class CrewOrchestrator:
                         media=None,
                     )
                     content = ""
-                    async for response in backend.process(context):
+                    async for response in service.process(context):
                         if response.content:
                             content = response.content
                         elif response.delta_content:
                             content += response.delta_content
                     return content
                 finally:
-                    shutdown = getattr(backend, "shutdown", None)
+                    shutdown = getattr(service, "shutdown", None)
                     if callable(shutdown):
                         await shutdown()
 

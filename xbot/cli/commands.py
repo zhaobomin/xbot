@@ -37,7 +37,7 @@ from rich.table import Table
 from rich.text import Text
 
 from xbot import __logo__, __version__
-from xbot.agent.runtime import AgentRuntime
+from xbot.agent import AgentService
 from xbot.agent.interaction.progress_coalescer import ProgressCoalescer
 from xbot.agent.task_supervisor import ServiceTaskRegistry
 from xbot.webui.cli import webui_app
@@ -615,7 +615,7 @@ def _load_runtime_config(config: str | None = None, workspace: str | None = None
     return loaded
 
 
-def _make_agent_runtime(
+def _make_agent_service(
     *,
     config: Config,
     bus,
@@ -624,7 +624,16 @@ def _make_agent_runtime(
     session_manager,
     permission_handler=None,
 ):
-    """Create the unified router-backed runtime."""
+    """Create the unified agent service."""
+    from xbot.agent.types import AgentConfig
+
+    agent_config = AgentConfig(
+        model=config.agents.defaults.model,
+        system_prompt=config.agents.defaults.system_prompt,
+        mcp_servers=getattr(config.agents.defaults, "mcp_servers", {}),
+        agents=getattr(config.agents.defaults, "agents", []),
+    )
+
     shared_resources = {
         "bus": bus,
         "workspace": workspace,
@@ -635,10 +644,9 @@ def _make_agent_runtime(
     }
     if permission_handler is not None:
         shared_resources["permission_handler"] = permission_handler
-    return AgentRuntime(
-        config=config,
-        shared_resources=shared_resources,
-    )
+
+    service = AgentService(agent_config, shared_resources)
+    return service
 
 
 def _print_deprecated_memory_window_notice(config: Config) -> None:
@@ -704,8 +712,8 @@ def gateway(
         safe_tools=set(perm_config.safe_tools),
     )
 
-    # Create agent runtime
-    agent = _make_agent_runtime(
+    # Create agent service
+    agent = _make_agent_service(
         config=config,
         bus=bus,
         workspace=config.workspace_path,
@@ -940,7 +948,7 @@ def agent(
             safe_tools=set(perm_config.safe_tools),
         )
 
-    agent_loop = _make_agent_runtime(
+    agent_loop = _make_agent_service(
         config=config,
         bus=bus,
         workspace=config.workspace_path,

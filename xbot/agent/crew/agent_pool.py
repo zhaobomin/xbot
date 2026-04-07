@@ -54,7 +54,8 @@ class AgentPool:
         Raises:
             RuntimeError: If no backends could be initialised.
         """
-        from xbot.agent.backends.claude_sdk_backend import ClaudeSDKBackend
+        from xbot.agent.service import AgentService
+        from xbot.agent.types import AgentConfig
 
         roles = self.crew_config.agents
         if only_roles is not None:
@@ -64,8 +65,6 @@ class AgentPool:
 
         for role_name, role in roles.items():
             try:
-                backend = ClaudeSDKBackend()
-
                 agents_config = self._build_role_config(role)
 
                 # 更新 shared_resources 中的 config，确保 model 设置生效
@@ -83,8 +82,17 @@ class AgentPool:
                     "session_manager": None,
                 }
 
-                await backend.initialize(agents_config, shared_resources)
-                self._backends[role_name] = backend
+                # Convert AgentsConfig to AgentConfig for AgentService
+                agent_config = AgentConfig(
+                    model=agents_config.defaults.model,
+                    system_prompt=agents_config.defaults.system_prompt,
+                    mcp_servers=getattr(agents_config.defaults, "mcp_servers", {}),
+                    agents=getattr(agents_config.defaults, "agents", []),
+                )
+
+                service = AgentService(agent_config, shared_resources)
+                await service.initialize()
+                self._backends[role_name] = service
                 logger.info(f"[crew-pool] Initialised backend for role '{role_name}' with model={role.model if role.model != 'inherit' else updated_config.agents.defaults.model}")
             except Exception as e:
                 error_msg = str(e)
