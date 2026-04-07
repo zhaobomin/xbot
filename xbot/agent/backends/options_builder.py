@@ -173,6 +173,10 @@ class OptionsBuilder:
             extra_args=extra_args,
             can_use_tool=can_use_tool,
             disallowed_tools=disallowed_tools,
+            # Skills: 通过 add_dirs 加载（CLI 自动扫描 .claude/skills/）
+            add_dirs=self._build_add_dirs(),
+            # Plugins: 显式加载
+            plugins=self._build_plugins(),
         )
 
     def _build_hooks(self) -> dict[str, list] | None:

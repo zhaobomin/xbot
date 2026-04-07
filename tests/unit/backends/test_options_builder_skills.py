@@ -147,6 +147,14 @@ class TestOptionsBuilderIntegration:
         mock_config.plugins.enabled = False
         mock_config.agents.defaults.workspace = "/test/workspace"
         mock_config.agents.defaults.model = "claude-sonnet-4-5"
+        mock_config.agents.defaults.provider = "anthropic"
+        # Mock providers for _get_provider_config
+        mock_providers = MagicMock()
+        mock_anthropic = MagicMock()
+        mock_anthropic.api_key = MagicMock(get_secret_value=MagicMock(return_value="test-key"))
+        mock_anthropic.api_base = None
+        mock_providers.anthropic = mock_anthropic
+        mock_config.providers = mock_providers
 
         shared_resource = {"config": mock_config}
 
@@ -159,6 +167,7 @@ class TestOptionsBuilderIntegration:
                 disallowed_tools=["WebFetch"],
                 env={},
                 extra_args={},
+                agents=None,
             ),
             skill_converter=None,
             tool_adapter=None,
@@ -166,10 +175,11 @@ class TestOptionsBuilderIntegration:
             context_builder=None,
             handoff_policy=None,
             capability_policy=None,
+            permission_handler=None,
         )
 
         with patch.object(Path, "exists", return_value=True):
-            with patch("xbot.agent.backends.options_builder.ClaudeAgentOptions") as mock_opts:
+            with patch("claude_agent_sdk.ClaudeAgentOptions") as mock_opts:
                 mock_opts.return_value = MagicMock()
                 builder.build()
                 call_kwargs = mock_opts.call_args[1]
@@ -186,6 +196,14 @@ class TestOptionsBuilderIntegration:
         mock_config.plugins.disabled_plugins = []
         mock_config.agents.defaults.workspace = "/test/workspace"
         mock_config.agents.defaults.model = "claude-sonnet-4-5"
+        mock_config.agents.defaults.provider = "anthropic"
+        # Mock providers for _get_provider_config
+        mock_providers = MagicMock()
+        mock_anthropic = MagicMock()
+        mock_anthropic.api_key = MagicMock(get_secret_value=MagicMock(return_value="test-key"))
+        mock_anthropic.api_base = None
+        mock_providers.anthropic = mock_anthropic
+        mock_config.providers = mock_providers
 
         shared_resource = {"config": mock_config}
 
@@ -198,6 +216,7 @@ class TestOptionsBuilderIntegration:
                 disallowed_tools=["WebFetch"],
                 env={},
                 extra_args={},
+                agents=None,
             ),
             skill_converter=None,
             tool_adapter=None,
@@ -205,6 +224,7 @@ class TestOptionsBuilderIntegration:
             context_builder=None,
             handoff_policy=None,
             capability_policy=None,
+            permission_handler=None,
         )
 
         with patch.object(Path, "exists", return_value=True):
@@ -216,7 +236,7 @@ class TestOptionsBuilderIntegration:
                 mock_iterdir.return_value = [mock_plugin]
 
                 with patch.object(builder, "_is_valid_plugin", return_value=True):
-                    with patch("xbot.agent.backends.options_builder.ClaudeAgentOptions") as mock_opts:
+                    with patch("claude_agent_sdk.ClaudeAgentOptions") as mock_opts:
                         mock_opts.return_value = MagicMock()
                         builder.build()
                         call_kwargs = mock_opts.call_args[1]
