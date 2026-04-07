@@ -955,14 +955,6 @@ class ClaudeSDKBackend(AgentBackend):
                     },
                 )
 
-        # Initialize skill converter
-        try:
-            from xbot.agent.capabilities.skill_to_mcp import SkillToMCPConverter
-            workspace = shared_resources.get("workspace", config.defaults.workspace)
-            self._skill_converter = SkillToMCPConverter(workspace)
-        except ImportError:
-            logger.warning("SkillToMCPConverter not available")
-
         # Initialize SkillManager for hot-reload and Python skill support
         try:
             from xbot.agent.capabilities.skill_manager import SkillManager
