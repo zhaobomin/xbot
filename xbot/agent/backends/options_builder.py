@@ -499,6 +499,54 @@ class OptionsBuilder:
         """Detect provider from model name."""
         return detect_provider_from_model(model)
 
+    def _build_add_dirs(self) -> list[str]:
+        """构建 add_dirs 列表
+
+        CLI 会自动扫描这些目录下的 .claude/skills/ 子目录。
+        Skills 支持三级延迟加载和 Hot-Reload。
+        """
+        from pathlib import Path
+
+        dirs = []
+        config = self._shared_resources.get("config")
+
+        if not config or not getattr(config.skills, "enabled", True):
+            return []
+
+        workspace = Path(config.agents.defaults.workspace)
+
+        # 1. workspace 根目录（CLI 自动扫描 .claude/skills/）
+        dirs.append(str(workspace))
+
+        # 2. 额外的 skills 目录（非标准位置，如兼容旧目录）
+        for dir_path in getattr(config.skills, "additional_dirs", []):
+            expanded = self._expand_path(dir_path)
+            if Path(expanded).exists():
+                dirs.append(expanded)
+
+        return dirs
+
+    def _expand_path(self, path: str) -> str:
+        """展开路径变量
+
+        支持 $workspace, $home, $project 变量。
+        """
+        import os
+        from pathlib import Path
+
+        config = self._shared_resources.get("config")
+        if not config:
+            return path
+
+        workspace = config.agents.defaults.workspace
+
+        result = path
+        result = result.replace("$workspace", workspace)
+        result = result.replace("$home", str(Path.home()))
+        result = result.replace("$project", os.getcwd())
+
+        return result
+
     def _build_system_prompt(self) -> str:
         """Build the system prompt."""
         base_prompt = "你是 xbot，一个智能助手。"
