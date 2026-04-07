@@ -83,7 +83,7 @@ class LoadSkillContentTool(Tool):
             return error_msg
 
         # Strip frontmatter for cleaner output
-        content = self._skills_loader._strip_frontmatter(content)
+        content = self._skills_loader.strip_frontmatter(content)
 
         # Send success notification
         if self._progress_callback:

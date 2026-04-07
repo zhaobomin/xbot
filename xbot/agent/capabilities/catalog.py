@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from xbot.agent.capabilities.skills_loader import _parse_skill_document, _strip_frontmatter, SkillsLoader
+from xbot.agent.capabilities.skills_loader import _parse_skill_document, SkillsLoader
 
 _TOOL_ALIASES = {
     "shell": "exec",
@@ -189,10 +189,6 @@ class CapabilityCatalog:
             return path.stat().st_mtime
         except FileNotFoundError:
             return -1.0
-
-    @staticmethod
-    def _strip_frontmatter(content: str) -> str:
-        return _strip_frontmatter(content)
 
     def build_summary(self, *, mcp_servers: dict[str, Any] | None = None) -> str:
         skills = self.list_skills(include_unavailable=True)

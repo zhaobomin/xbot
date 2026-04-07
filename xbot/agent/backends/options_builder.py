@@ -8,7 +8,9 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import os
 from dataclasses import asdict
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from xbot.logging import get_logger
@@ -509,8 +511,6 @@ class OptionsBuilder:
         CLI 会自动扫描这些目录下的 .claude/skills/ 子目录。
         Skills 支持三级延迟加载和 Hot-Reload。
         """
-        from pathlib import Path
-
         dirs = []
         config = self._shared_resources.get("config")
 
@@ -535,9 +535,6 @@ class OptionsBuilder:
 
         支持 $workspace, $home, $project 变量。
         """
-        import os
-        from pathlib import Path
-
         config = self._shared_resources.get("config")
         if not config:
             return path
@@ -556,8 +553,6 @@ class OptionsBuilder:
 
         扫描配置的插件目录，过滤启用的插件。
         """
-        from pathlib import Path
-
         plugins = []
         config = self._shared_resources.get("config")
 

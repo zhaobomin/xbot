@@ -49,7 +49,7 @@ def _parse_skill_document(content: str) -> ParsedSkillDocument:
     return ParsedSkillDocument(frontmatter=frontmatter, body=body, description=description)
 
 
-def _strip_frontmatter(content: str) -> str:
+def strip_frontmatter_from_content(content: str) -> str:
     """Return body content with frontmatter removed."""
     return _parse_skill_document(content).body
 
@@ -201,7 +201,7 @@ class SkillsLoader:
         for name in skill_names:
             content = self.load_skill(name)
             if content:
-                content = self._strip_frontmatter(content)
+                content = strip_frontmatter_from_content(content)
                 parts.append(f"### Skill: {name}\n\n{content}")
 
         return "\n\n---\n\n".join(parts) if parts else ""
@@ -274,9 +274,12 @@ class SkillsLoader:
             return meta["description"]
         return name  # Fallback to skill name
 
-    def _strip_frontmatter(self, content: str) -> str:
-        """Remove YAML frontmatter from markdown content."""
-        return _strip_frontmatter(content)
+    def strip_frontmatter(self, content: str) -> str:
+        """Remove YAML frontmatter from markdown content.
+
+        Public method for external callers.
+        """
+        return strip_frontmatter_from_content(content)
 
     def _parse_xbot_metadata(self, raw: Any) -> dict:
         """Parse skill metadata JSON from frontmatter (supports xbot and openclaw keys)."""
