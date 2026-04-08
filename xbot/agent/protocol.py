@@ -1,74 +1,7 @@
-"""Agent protocol definitions.
+"""Compatibility module alias for agent protocol."""
 
-This module defines data classes for agent communication.
-The AgentBackend abstract class has been removed since only
-ClaudeSDKBackend exists (now AgentService).
-"""
+import sys
 
-from dataclasses import dataclass, field
-from typing import Any
+from xbot.runtime.core import protocol as _impl
 
-
-@dataclass
-class AgentResponse:
-    """Unified Agent response format."""
-
-    content: str
-    progress_texts: list[str] = field(default_factory=list)
-    tool_calls: list[dict[str, Any]] | None = None
-    tool_hint_text: str = ""
-    finish_reason: str = "stop"  # stop | tool_use | error | max_iterations
-    usage: dict[str, Any] | None = None
-    raw_message: Any = None
-    event_type: str = ""
-    event_data: dict[str, Any] | None = None
-
-    # For streaming support
-    is_delta: bool = False
-    delta_content: str = ""
-
-
-@dataclass
-class AgentContext:
-    """Context for agent processing."""
-
-    session_key: str
-    prompt: str
-    history: list[dict[str, Any]] = field(default_factory=list)
-    media: list[Any] | None = None
-    channel: str = ""
-    chat_id: str = ""
-    metadata: dict[str, Any] = field(default_factory=dict)
-
-
-@dataclass
-class ToolCall:
-    """Represents a single tool call from a structured LLM response."""
-
-    name: str
-    arguments: dict[str, Any]
-
-
-@dataclass
-class StructuredLLMResponse:
-    """Response from a structured LLM call (messages + tools).
-
-    Used by heartbeat, evaluator, and memory consolidation for
-    single-turn tool-use calls that bypass the interactive SDK session.
-    """
-
-    content: str = ""
-    finish_reason: str = "stop"
-    tool_calls: list[ToolCall] = field(default_factory=list)
-
-    @property
-    def has_tool_calls(self) -> bool:
-        return bool(self.tool_calls)
-
-
-__all__ = [
-    "AgentResponse",
-    "AgentContext",
-    "ToolCall",
-    "StructuredLLMResponse",
-]
+sys.modules[__name__] = _impl
