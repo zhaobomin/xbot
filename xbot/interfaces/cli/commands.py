@@ -677,7 +677,7 @@ def gateway(
 ):
     """Start the xbot gateway."""
     from xbot.agent.interaction.permission import PermissionRequestHandler
-    from xbot.agent.monitoring.health import HealthCheckService
+    from xbot.runtime.system.monitoring.health import HealthCheckService
     from xbot.agent.state import SessionManager as StateManager
     from xbot.bus.queue import MessageBus
     from xbot.channels.manager import ChannelManager
@@ -844,7 +844,7 @@ def gateway(
     console.print(f"[green]✓[/green] Health check: http://{config.gateway.host}:{health_port}/health")
 
     async def run():
-        from xbot.agent.monitoring.alerting import AlertConfig, init_alert_service
+        from xbot.runtime.system.monitoring.alerting import AlertConfig, init_alert_service
 
         # Initialize alert service
         alert_config = AlertConfig(
