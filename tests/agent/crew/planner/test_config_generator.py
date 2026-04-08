@@ -1,9 +1,11 @@
 """Tests for config generator module."""
 
-import pytest
-from pathlib import Path
 import tempfile
+from pathlib import Path
 
+import pytest
+
+from xbot.agent.crew.planner.config_generator import ConfigGenerator
 from xbot.agent.crew.planner.models import (
     Capability,
     CrewPlan,
@@ -13,7 +15,6 @@ from xbot.agent.crew.planner.models import (
     RoleTier,
     TaskPlan,
 )
-from xbot.agent.crew.planner.config_generator import ConfigGenerator
 
 
 class TestConfigGeneratorInit:

@@ -1,9 +1,8 @@
 """Tests for Crew execution processes."""
 
-import asyncio
 from datetime import datetime
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -299,7 +298,7 @@ class TestSequentialProcess:
         # Don't mark first task as skipped - let the execution handle it
         # Instead, we test that when a task has unmet dependencies, it's skipped
 
-        results = await process.execute(basic_crew_config.tasks)
+        _ = await process.execute(basic_crew_config.tasks)
 
         # First task should succeed, second should be skipped due to unmet dependency
         # Actually - in this test, the first task has no dependencies and will succeed

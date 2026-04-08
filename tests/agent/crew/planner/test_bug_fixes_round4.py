@@ -12,17 +12,18 @@ This test file covers:
 9. Confidence bounds - Bug #9
 """
 
-import pytest
 import tempfile
 from pathlib import Path
 
+import pytest
+
+from xbot.agent.crew.planner.crew_planner import CrewPlanner
 from xbot.agent.crew.planner.goal_analyzer import GoalAnalyzer
 from xbot.agent.crew.planner.models import (
     Capability,
     GoalAnalysis,
     RoleCreationRequest,
     RoleDefinition,
-    RolePool,
     RolePoolConfig,
     RoleSelection,
     RoleTier,
@@ -30,8 +31,6 @@ from xbot.agent.crew.planner.models import (
 )
 from xbot.agent.crew.planner.role_creator import RoleCreator
 from xbot.agent.crew.planner.task_planner import TaskPlanner
-from xbot.agent.crew.planner.crew_planner import CrewPlanner
-
 
 # =============================================================================
 # Bug #1: None handling in dict.get()

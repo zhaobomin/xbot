@@ -3,7 +3,6 @@ import json
 import sys
 from pathlib import Path
 
-
 SCRIPT_PATH = Path("scripts/gateway_integration_smoke.py").resolve()
 SPEC = importlib.util.spec_from_file_location("gateway_integration_smoke", SCRIPT_PATH)
 assert SPEC and SPEC.loader

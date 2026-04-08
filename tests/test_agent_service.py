@@ -9,11 +9,10 @@ import pytest
 
 from xbot.agent.protocol import AgentContext, AgentResponse
 from xbot.agent.service import AgentService
-from xbot.agent.command_handlers import LOCAL_COMMANDS
-from xbot.agent.state.machine import SessionPhase
 from xbot.agent.state import SessionManager as StateManager
+from xbot.agent.state.machine import SessionPhase
 from xbot.agent.types import AgentConfig
-from xbot.bus.events import InboundMessage, OutboundMessage
+from xbot.bus.events import InboundMessage
 
 
 class TestAgentService:
@@ -383,7 +382,7 @@ class TestRunDispatch:
 
         async def failing_process(context):
             raise RuntimeError("SDK connection failed")
-            yield  # Make it a generator  # noqa: unreachable
+            yield  # Make it a generator  # noqa: B018
 
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="Hi")
 

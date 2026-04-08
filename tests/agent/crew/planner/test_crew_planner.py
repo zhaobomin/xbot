@@ -2,6 +2,7 @@
 
 import pytest
 
+from xbot.agent.crew.planner.crew_planner import CrewPlanner
 from xbot.agent.crew.planner.models import (
     Capability,
     CrewPlan,
@@ -9,7 +10,6 @@ from xbot.agent.crew.planner.models import (
     RolePoolConfig,
     RoleTier,
 )
-from xbot.agent.crew.planner.crew_planner import CrewPlanner
 
 
 class TestCrewPlannerInit:

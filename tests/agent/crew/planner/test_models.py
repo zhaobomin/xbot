@@ -1,21 +1,21 @@
 """Tests for planner models."""
 
+
 import pytest
-from datetime import datetime
 
 from xbot.agent.crew.planner.models import (
     Capability,
-    RoleTier,
-    RoleDefinition,
-    RolePool,
-    RolePoolConfig,
-    GoalAnalysis,
-    RoleGap,
-    RoleSelection,
-    TaskPlan,
     CrewPlan,
+    GoalAnalysis,
     RoleCreationRequest,
     RoleCreationResult,
+    RoleDefinition,
+    RoleGap,
+    RolePool,
+    RolePoolConfig,
+    RoleSelection,
+    RoleTier,
+    TaskPlan,
 )
 
 

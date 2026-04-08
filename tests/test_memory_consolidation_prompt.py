@@ -4,7 +4,7 @@ Phase 3: Verify improved prompt with extraction guidelines and context size hint
 """
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 

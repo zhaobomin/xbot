@@ -7,11 +7,14 @@ These tests cover issues related to:
 4. Config accumulation on reload
 """
 
-import pytest
 import tempfile
 from pathlib import Path
+
+import pytest
 import yaml
 
+from xbot.agent.crew.planner.config_generator import ConfigGenerator
+from xbot.agent.crew.planner.crew_planner import CrewPlanner
 from xbot.agent.crew.planner.models import (
     Capability,
     CrewPlan,
@@ -23,10 +26,8 @@ from xbot.agent.crew.planner.models import (
     RoleTier,
     TaskPlan,
 )
-from xbot.agent.crew.planner.task_planner import TaskPlanner
 from xbot.agent.crew.planner.role_pool import RolePoolManager
-from xbot.agent.crew.planner.crew_planner import CrewPlanner
-from xbot.agent.crew.planner.config_generator import ConfigGenerator
+from xbot.agent.crew.planner.task_planner import TaskPlanner
 
 
 class TestComplexTaskDependencies:
@@ -77,7 +78,7 @@ class TestComplexTaskDependencies:
     ):
         """Test complex tasks when coder role is missing."""
         roles = [research_role, reviewer_role]
-        selection = RoleSelection(
+        _ = RoleSelection(
             selected_roles=roles,
             selection_reason={},
             skipped_roles=[],
@@ -115,7 +116,7 @@ class TestComplexTaskDependencies:
     ):
         """Test complex tasks when only researcher and tester exist."""
         roles = [research_role, tester_role]
-        selection = RoleSelection(
+        _ = RoleSelection(
             selected_roles=roles,
             selection_reason={},
             skipped_roles=[],
@@ -416,7 +417,7 @@ capabilities:
                 custom_roles_dir=tmpdir,
             )
 
-            manager = RolePoolManager(config)
+            _ = RolePoolManager(config)
 
             # Manually add to config lists (simulating previous load)
             config.disabled_roles.append("old_disabled")

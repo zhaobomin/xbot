@@ -1,17 +1,11 @@
 """Tests for orchestrator helper methods and context building."""
 
-import asyncio
 from datetime import datetime
-from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
-import pytest
-
-from xbot.agent.crew.context import CrewExecutionContext, load_checkpoint, save_checkpoint
+from xbot.agent.crew.context import CrewExecutionContext
 from xbot.agent.crew.models import (
     AgentRole,
-    CrewConfig,
-    ProcessType,
     TaskDefinition,
     TaskResult,
 )

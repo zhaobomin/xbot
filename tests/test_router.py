@@ -3,12 +3,11 @@
 This test file verifies AgentService can replace AgentRouter.
 """
 
-from typing import Any, AsyncIterator
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Any
+from unittest.mock import MagicMock
 
 import pytest
 
-from xbot.agent.protocol import AgentContext, AgentResponse
 from xbot.agent.service import AgentService
 from xbot.agent.types import AgentConfig
 

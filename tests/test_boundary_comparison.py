@@ -7,10 +7,9 @@
 运行方式：pytest tests/test_boundary_comparison.py -v
 """
 
-import asyncio
-import pytest
 from typing import AsyncIterator
 
+import pytest
 
 # ─── Fake message types ────────────────────────────────────────────────────
 

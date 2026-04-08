@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from xbot.agent.crew.models import AgentRole, CrewConfig, ProcessType, TaskDefinition, TaskResult
+from xbot.agent.crew.models import AgentRole, TaskResult
 from xbot.agent.crew.resource_manager import CrewResourceManager
-from xbot.agent.crew.state import CrewPhase, CrewStateManager, TaskPhase
+from xbot.agent.crew.state import CrewPhase, CrewStateManager
 
 
 class TestCrewResourceManagerBasics:

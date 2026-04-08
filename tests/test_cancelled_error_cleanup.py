@@ -7,12 +7,13 @@ Tests that CancelledError properly cleans up state in:
 """
 
 import asyncio
+
 import pytest
 
 from xbot.bus.queue import (
+    InteractionRequest,
     MessageBus,
     PermissionRequest,
-    InteractionRequest,
 )
 
 

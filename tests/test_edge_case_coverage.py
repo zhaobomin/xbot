@@ -7,17 +7,15 @@ These tests cover scenarios identified by the Code Review Checklist:
 """
 
 import asyncio
-import json
-import time
+
 import pytest
 
 from xbot.bus.queue import (
+    InteractionRequest,
+    InteractionResponse,
     MessageBus,
     PermissionRequest,
     PermissionResponse,
-    InteractionRequest,
-    InteractionResponse,
-    REQUEST_TIMEOUT_SECONDS,
 )
 from xbot.cron.service import CronService, _compute_next_run, _now_ms
 from xbot.cron.types import CronSchedule

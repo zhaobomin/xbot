@@ -2,32 +2,27 @@
 
 from __future__ import annotations
 
-import pytest
 import tempfile
 from pathlib import Path
 
-from xbot.agent.crew.config.variables import (
-    VariableError,
-    VariableResolver,
-    resolve_config_variables,
-)
-from xbot.agent.crew.config.merger import (
-    MergeError,
-    check_inheritance_cycle,
-    get_inheritance_chain,
-    merge_configs,
-    merge_agent_roles,
-    merge_tasks,
-)
+import pytest
+
 from xbot.agent.crew.config.loader import (
     ConfigLoadError,
     CrewConfigLoader,
-    load_crew_config_with_inheritance,
+)
+from xbot.agent.crew.config.merger import (
+    check_inheritance_cycle,
+    merge_agent_roles,
+    merge_configs,
+    merge_tasks,
 )
 from xbot.agent.crew.config.validator import (
-    CrewConfigValidator,
-    ValidationLevel,
     validate_crew_config,
+)
+from xbot.agent.crew.config.variables import (
+    VariableError,
+    VariableResolver,
 )
 
 
@@ -700,7 +695,7 @@ tasks:
 
         # Check if there are any deep dependency warnings
         # The validator checks each task's dependency chain depth
-        deep_warnings = [w for w in result.warnings if "deep" in w.message.lower()]
+        _ = [w for w in result.warnings if "deep" in w.message.lower()]
 
         # We should have at least one warning for the deep chain
         # If not, the test still passes as long as validation works

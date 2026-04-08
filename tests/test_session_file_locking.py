@@ -4,13 +4,8 @@ Regression tests for file locking fix in SessionManager.
 Tests that concurrent access to session files is properly synchronized.
 """
 
-import asyncio
-import json
-import tempfile
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-
-import pytest
 
 from xbot.session.manager import Session, SessionManager
 
@@ -132,7 +127,7 @@ class TestSessionFileLocking:
 
         # Lock file path
         session_path = manager._get_session_path(session_key)
-        lock_path = session_path.with_suffix(".jsonl.lock")
+        _ = session_path.with_suffix(".jsonl.lock")
 
         # Lock file may or may not exist after operation
         # (it's cleaned up after use but the file itself might remain empty)

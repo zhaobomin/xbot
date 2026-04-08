@@ -7,15 +7,16 @@ See: https://docs.python.org/3/library/asyncio-exceptions.html#asyncio.Cancelled
 """
 
 import asyncio
-import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
+
 from xbot.agent.crew.agent_pool import AgentPool
+from xbot.agent.crew.models import CrewConfig, ProcessType, TaskDefinition, TaskResult
 from xbot.agent.crew.orchestrator import CrewOrchestrator
 from xbot.agent.crew.process import SequentialProcess
-from xbot.agent.crew.state import CrewPhase, CrewStateManager, TaskPhase
-from xbot.agent.crew.models import CrewConfig, TaskDefinition, TaskResult, ProcessType
+from xbot.agent.crew.state import CrewStateManager, TaskPhase
 
 
 class MockBackend:
@@ -102,7 +103,7 @@ class TestOrchestratorCancelledError:
             crew_config, xbot_config, permission_handler
         )
 
-        state_manager = CrewStateManager(task_names=[], task_definitions=[])
+        _ = CrewStateManager(task_names=[], task_definitions=[])
 
         with patch.object(orchestrator, "_get_llm_repair_callable", return_value=None):
             with patch("xbot.agent.crew.orchestrator.CrewResourceManager") as mock_mgr_cls:

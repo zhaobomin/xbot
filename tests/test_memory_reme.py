@@ -1,13 +1,12 @@
 """Tests for ReMe-based memory system."""
 
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from xbot.agent.memory.reme import (
-    ReMeMemoryStore,
     _REME_AVAILABLE,
+    ReMeMemoryStore,
     create_memory_store,
 )
 

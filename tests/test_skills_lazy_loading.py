@@ -9,7 +9,7 @@ Tests for:
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -251,7 +251,7 @@ class TestSkillsCatalogFormat:
         # Build catalog manually to test format
         lines = ["<skills>"]
         for skill in skills:
-            lines.append(f'  <skill available="true">')
+            lines.append('  <skill available="true">')
             lines.append(f"    <name>{skill['name']}</name>")
             lines.append(f"    <description>{skill['description']}</description>")
             lines.append("  </skill>")

@@ -13,7 +13,6 @@ from xbot.channels.base import BaseChannel
 from xbot.channels.manager import ChannelManager
 from xbot.config.schema import ChannelsConfig
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------

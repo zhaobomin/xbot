@@ -1,6 +1,7 @@
 """Tests for AskUserQuestion formatting in permission_handler."""
 
 import pytest
+
 from xbot.agent.interaction.permission import BasePermissionHandler
 
 

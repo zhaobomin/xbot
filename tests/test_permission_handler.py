@@ -1,10 +1,10 @@
 """Tests for permission handler functionality."""
 
 import asyncio
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
-from xbot.bus.queue import InteractionResponse, MessageBus, PermissionRequest, PermissionResponse
+import pytest
+
 from xbot.agent.interaction.permission import (
     BasePermissionHandler,
     CLIPermissionHandler,
@@ -12,6 +12,7 @@ from xbot.agent.interaction.permission import (
     PermissionRequestHandler,
     create_permission_handler,
 )
+from xbot.bus.queue import InteractionResponse, MessageBus
 
 
 class TestBasePermissionHandler:
@@ -230,7 +231,7 @@ class TestPermissionRequestHandler:
             return await handler.can_use_tool("exec", {"command": "ls"}, None)
 
         # Create task
-        task = asyncio.create_task(request_permission())
+        asyncio.create_task(request_permission())
 
         # Wait a bit for request to be published
         await asyncio.sleep(0.1)

@@ -11,10 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from xbot.agent.memory.store import MemoryConsolidator, MemoryStore
-from xbot.session.manager import Session, SessionManager
+from xbot.agent.memory.store import MemoryConsolidator
 from xbot.providers.base import LLMResponse, ToolCallRequest
-
+from xbot.session.manager import Session, SessionManager
 
 # === Phase 1.1: 新阈值测试 (TDD - 先写测试) ===
 
@@ -173,8 +172,6 @@ class TestConsolidationThresholdRatio:
     async def test_consolidation_stops_at_30_percent_target(self, tmp_path: Path) -> None:
         """Consolidation should continue until tokens <= context_window * 0.3."""
         context_window = 100_000
-        target = int(context_window * 0.3)  # 30K
-
         backend = _make_mock_backend()
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
@@ -314,8 +311,6 @@ class TestMemoryConsolidationThreshold:
     async def test_consolidation_stops_at_target(self, tmp_path: Path) -> None:
         """Consolidation should continue until tokens <= context_window // 2."""
         context_window = 10000
-        target = context_window // 2  # 5000
-
         backend = _make_mock_backend()
         consolidator = MemoryConsolidator(
             workspace=tmp_path,

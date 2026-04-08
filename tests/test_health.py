@@ -1,13 +1,13 @@
 """Tests for health check service."""
 
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import MagicMock
 
 import pytest
 
 from xbot.agent.monitoring.health import (
-    HealthCheckService,
     HealthCheckResult,
+    HealthCheckService,
     HealthStatus,
 )
 

@@ -1,6 +1,7 @@
-import pytest
 from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 from xbot.agent.tools.base import Tool
 from xbot.agent.tools.registry import ToolRegistry

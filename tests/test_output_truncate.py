@@ -1,6 +1,5 @@
 """Tests for output truncation: strategies, boundaries, format awareness."""
 
-import json
 
 import pytest
 

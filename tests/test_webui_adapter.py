@@ -13,7 +13,7 @@ from xbot.cli.commands import app
 from xbot.config.schema import Config, MCPServerConfig
 from xbot.cron.types import CronJob, CronJobState, CronPayload, CronSchedule
 from xbot.session.manager import SessionManager
-from xbot.webui.auth import set_password, get_password_file_path
+from xbot.webui.auth import set_password
 
 
 class _FakeRuntime:
@@ -171,7 +171,7 @@ class _Services:
 
 
 def _build_client(tmp_path: Path) -> tuple[TestClient, _Services]:
-    from xbot.webui.app import create_app, _clear_login_rate_limit
+    from xbot.webui.app import _clear_login_rate_limit, create_app
     from xbot.webui.services import ServiceContainer
 
     # Clear login rate limit between tests
@@ -947,7 +947,7 @@ def test_mcp_runtime_reports_disconnected_server_details(tmp_path: Path) -> None
 
 def test_login_rate_limit_blocks_after_max_attempts(tmp_path: Path) -> None:
     """Test that login rate limiting blocks after max attempts."""
-    from xbot.webui.app import _clear_login_rate_limit, _MAX_ATTEMPTS_PER_IP
+    from xbot.webui.app import _MAX_ATTEMPTS_PER_IP, _clear_login_rate_limit
 
     _clear_login_rate_limit()
     client, _services = _build_client(tmp_path)
@@ -971,7 +971,7 @@ def test_login_rate_limit_blocks_after_max_attempts(tmp_path: Path) -> None:
 
 def test_login_rate_limit_isolated_per_ip(tmp_path: Path, monkeypatch) -> None:
     """Test that rate limiting is per-IP, not global."""
-    from xbot.webui.app import _clear_login_rate_limit, _MAX_ATTEMPTS_PER_IP
+    from xbot.webui.app import _MAX_ATTEMPTS_PER_IP, _clear_login_rate_limit
 
     _clear_login_rate_limit()
     client, _services = _build_client(tmp_path)

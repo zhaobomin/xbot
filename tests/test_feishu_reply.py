@@ -13,7 +13,6 @@ from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
 from xbot.channels.feishu import FeishuChannel, FeishuConfig
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -244,7 +243,6 @@ async def test_on_message_falls_back_to_unknown_sender_when_open_id_missing() ->
 async def test_send_uses_expected_feishu_msg_type_for_uploaded_files(
     tmp_path: Path, filename: str, expected_msg_type: str
 ) -> None:
-    channel = _make_feishu_channel()
     file_path = tmp_path / filename
     file_path.write_bytes(b"demo")
 

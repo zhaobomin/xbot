@@ -1,6 +1,5 @@
 """Tests for role creator module."""
 
-import asyncio
 import tempfile
 from pathlib import Path
 

@@ -12,31 +12,27 @@ This module tests all bug fixes across the planner module:
 - Empty capabilities warning
 """
 
-import pytest
 from pathlib import Path
-from unittest.mock import Mock, patch
 
+import pytest
+
+from xbot.agent.crew.planner.config_generator import ConfigGenerator
+from xbot.agent.crew.planner.crew_planner import CrewPlanner
 from xbot.agent.crew.planner.goal_analyzer import GoalAnalyzer
 from xbot.agent.crew.planner.models import (
     Capability,
+    CrewPlan,
     GoalAnalysis,
     RoleDefinition,
-    RoleGap,
-    RolePool,
-    RolePoolConfig,
     RoleSelection,
     RoleTier,
     TaskPlan,
-    CrewPlan,
 )
 from xbot.agent.crew.planner.role_creator import RoleCreator
 from xbot.agent.crew.planner.role_pool import RolePoolManager
-from xbot.agent.crew.planner.task_planner import TaskPlanner
-from xbot.agent.crew.planner.config_generator import ConfigGenerator
-from xbot.agent.crew.planner.crew_planner import CrewPlanner
 from xbot.agent.crew.planner.role_selector import RoleSelector
+from xbot.agent.crew.planner.task_planner import TaskPlanner
 from xbot.agent.crew.planner.utils import LLMResponseParser, PlannerValidator
-
 
 # ---------------------------------------------------------------------------
 # GoalAnalyzer Tests
@@ -1092,6 +1088,7 @@ class TestRoleCreatorLoadRoleFromFile:
         """max_iterations=0 should not be replaced."""
         creator = RoleCreator()
         import tempfile
+
         import yaml
 
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
@@ -1115,6 +1112,7 @@ class TestRoleCreatorLoadRoleFromFile:
         """timeout_multiplier=0.0 should not be replaced."""
         creator = RoleCreator()
         import tempfile
+
         import yaml
 
         with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as f:
@@ -1145,8 +1143,10 @@ class TestRolePoolManagerLoadRole:
     def test_load_role_with_zero_iterations_yaml(self):
         """Zero max_iterations in YAML should be handled."""
         import tempfile
+
         import yaml
-        from xbot.agent.crew.planner.role_pool import RolePoolManager, ROLE_POOL_DIR
+
+        from xbot.agent.crew.planner.role_pool import ROLE_POOL_DIR, RolePoolManager
 
         manager = RolePoolManager()
 

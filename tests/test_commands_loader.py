@@ -3,8 +3,6 @@
 import tempfile
 from pathlib import Path
 
-import pytest
-
 from xbot.agent.context.commands import CommandsLoader
 
 

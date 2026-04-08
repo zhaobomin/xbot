@@ -1,10 +1,12 @@
 """Additional tests for bug fixes and edge cases."""
 
-import pytest
 import tempfile
 from pathlib import Path
-import yaml
 
+import pytest
+
+from xbot.agent.crew.planner.config_generator import ConfigGenerator
+from xbot.agent.crew.planner.crew_planner import CrewPlanner
 from xbot.agent.crew.planner.models import (
     Capability,
     CrewPlan,
@@ -16,10 +18,8 @@ from xbot.agent.crew.planner.models import (
     RoleTier,
     TaskPlan,
 )
-from xbot.agent.crew.planner.task_planner import TaskPlanner
-from xbot.agent.crew.planner.config_generator import ConfigGenerator
 from xbot.agent.crew.planner.role_pool import RolePoolManager
-from xbot.agent.crew.planner.crew_planner import CrewPlanner
+from xbot.agent.crew.planner.task_planner import TaskPlanner
 
 
 class TestBugFixes:

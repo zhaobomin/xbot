@@ -4,7 +4,6 @@ This module tests the CrewValidator class for fail-fast behavior
 with clear error messages.
 """
 
-import pytest
 
 from xbot.agent.crew.models import AgentRole, CrewConfig, TaskDefinition
 from xbot.agent.crew.validation import (

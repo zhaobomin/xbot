@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from xbot.config.schema import MCPServerConfig
 from xbot.agent.capabilities.catalog import CapabilityCatalog, canonical_tool_name
 from xbot.agent.capabilities.policy import CapabilityPolicy
 from xbot.agent.capabilities.skills_loader import SkillsLoader
+from xbot.config.schema import MCPServerConfig
 
 
 def _write_skill(root: Path, name: str, body: str) -> None:

@@ -6,14 +6,15 @@ Tests for:
 """
 
 import asyncio
+
 import pytest
 
 from xbot.bus.queue import (
+    InteractionRequest,
+    InteractionResponse,
     MessageBus,
     PermissionRequest,
     PermissionResponse,
-    InteractionRequest,
-    InteractionResponse,
 )
 
 

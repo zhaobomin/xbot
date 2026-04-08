@@ -7,13 +7,14 @@ This test suite prevents regression of bugs fixed in 2026-03-25:
 - Bug 2: original_input variable scope issue
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from xbot.agent.interaction.response_handlers import RuntimeResponseHandlers
 from xbot.agent.state.machine import SessionPhase
 from xbot.bus.events import InboundMessage
-from xbot.bus.queue import InteractionRequest, MessageBus, InteractionResponse
+from xbot.bus.queue import InteractionRequest, MessageBus
 
 
 class MockRuntime:
@@ -551,7 +552,8 @@ class TestFeishuInteractionFormatting:
     @pytest.mark.asyncio
     async def test_question_interaction_uses_post_format(self):
         """Verify question interactions use post format with options."""
-        from unittest.mock import patch, MagicMock, AsyncMock
+        from unittest.mock import MagicMock, patch
+
         from xbot.bus.events import OutboundMessage
         from xbot.channels.feishu import FeishuChannel, FeishuConfig
 
@@ -587,7 +589,8 @@ class TestFeishuInteractionFormatting:
     @pytest.mark.asyncio
     async def test_approval_interaction_uses_post_format(self):
         """Bug 7 fix: approval interactions should also use post format."""
-        from unittest.mock import patch, MagicMock, AsyncMock
+        from unittest.mock import MagicMock, patch
+
         from xbot.bus.events import OutboundMessage
         from xbot.channels.feishu import FeishuChannel, FeishuConfig
 
@@ -623,7 +626,8 @@ class TestFeishuInteractionFormatting:
     @pytest.mark.asyncio
     async def test_confirmation_interaction_uses_post_format(self):
         """Bug 7 fix: confirmation interactions should also use post format."""
-        from unittest.mock import patch, MagicMock, AsyncMock
+        from unittest.mock import MagicMock, patch
+
         from xbot.bus.events import OutboundMessage
         from xbot.channels.feishu import FeishuChannel, FeishuConfig
 
@@ -659,7 +663,8 @@ class TestFeishuInteractionFormatting:
     @pytest.mark.asyncio
     async def test_interaction_formatting_includes_options(self):
         """Verify formatted message includes all options."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
+
         from xbot.bus.events import OutboundMessage
         from xbot.channels.feishu import FeishuChannel, FeishuConfig
 
@@ -696,7 +701,8 @@ class TestFeishuInteractionFormatting:
     @pytest.mark.asyncio
     async def test_suggested_question_mentions_free_text(self):
         """Suggested questions should tell users they can type custom content."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
+
         from xbot.bus.events import OutboundMessage
         from xbot.channels.feishu import FeishuChannel, FeishuConfig
 
@@ -728,7 +734,8 @@ class TestFeishuInteractionFormatting:
     @pytest.mark.asyncio
     async def test_strict_question_mentions_reply_with_options(self):
         """Strict questions should still require option-only replies."""
-        from unittest.mock import patch, MagicMock
+        from unittest.mock import MagicMock, patch
+
         from xbot.bus.events import OutboundMessage
         from xbot.channels.feishu import FeishuChannel, FeishuConfig
 

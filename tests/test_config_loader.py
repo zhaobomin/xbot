@@ -1,16 +1,14 @@
 """Tests for config loader."""
 
 import json
-import pytest
 from pathlib import Path
-from unittest.mock import patch
 
 from xbot.config.loader import (
+    _migrate_config,
+    get_config_path,
     load_config,
     save_config,
     set_config_path,
-    get_config_path,
-    _migrate_config,
 )
 from xbot.config.schema import Config
 
@@ -22,7 +20,7 @@ class TestConfigPath:
         """Test default config path."""
         # Reset the global path
         set_config_path(None)
-        
+
         # Default should be ~/.xbot/config.json
         path = get_config_path()
         assert path == Path.home() / ".xbot" / "config.json"
@@ -31,9 +29,9 @@ class TestConfigPath:
         """Test setting custom config path."""
         custom_path = tmp_path / "custom" / "config.json"
         set_config_path(custom_path)
-        
+
         assert get_config_path() == custom_path
-        
+
         # Reset
         set_config_path(None)
 
@@ -41,10 +39,10 @@ class TestConfigPath:
         """Test that get_config_path returns the set path."""
         custom_path = tmp_path / "instance" / "config.json"
         set_config_path(custom_path)
-        
+
         result = get_config_path()
         assert result == custom_path
-        
+
         # Reset
         set_config_path(None)
 
@@ -55,9 +53,9 @@ class TestLoadConfig:
     def test_load_config_creates_default_when_not_exists(self, tmp_path):
         """Test loading config when file doesn't exist returns default."""
         config_path = tmp_path / "nonexistent" / "config.json"
-        
+
         config = load_config(config_path)
-        
+
         assert isinstance(config, Config)
         # Should have default values
         assert config.agents.type == "claude_sdk"  # Default agent type
@@ -74,9 +72,9 @@ class TestLoadConfig:
             }
         }
         config_path.write_text(json.dumps(config_data), encoding="utf-8")
-        
+
         config = load_config(config_path)
-        
+
         assert config.agents.defaults.model == "test-model"
         assert config.agents.defaults.provider == "anthropic"
 
@@ -107,7 +105,7 @@ class TestLoadConfig:
 
         with caplog.at_level("WARNING"):
             config = load_config(config_path)
-        
+
         assert isinstance(config, Config)
 
 
@@ -118,9 +116,9 @@ class TestSaveConfig:
         """Test that save_config creates parent directories."""
         config_path = tmp_path / "nested" / "dir" / "config.json"
         config = Config()
-        
+
         save_config(config, config_path)
-        
+
         assert config_path.exists()
         assert config_path.parent.is_dir()
 
@@ -129,9 +127,9 @@ class TestSaveConfig:
         config_path = tmp_path / "config.json"
         config = Config()
         config.agents.defaults.model = "my-model"
-        
+
         save_config(config, config_path)
-        
+
         data = json.loads(config_path.read_text(encoding="utf-8"))
         assert data["agents"]["defaults"]["model"] == "my-model"
 
@@ -139,9 +137,9 @@ class TestSaveConfig:
         """Test that save_config uses camelCase aliases."""
         config_path = tmp_path / "config.json"
         config = Config()
-        
+
         save_config(config, config_path)
-        
+
         data = json.loads(config_path.read_text(encoding="utf-8"))
         # Check that camelCase aliases are used
         assert "maxTokens" in data["agents"]["defaults"]
@@ -159,9 +157,9 @@ class TestMigrateConfig:
                 }
             }
         }
-        
+
         result = _migrate_config(old_config)
-        
+
         assert result["tools"]["restrictToWorkspace"] is True
         assert "restrictToWorkspace" not in result["tools"]["exec"]
 
@@ -175,9 +173,9 @@ class TestMigrateConfig:
                 }
             }
         }
-        
+
         result = _migrate_config(config)
-        
+
         # Existing value should be preserved
         assert result["tools"]["restrictToWorkspace"] is False
 

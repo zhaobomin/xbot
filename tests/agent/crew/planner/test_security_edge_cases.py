@@ -1,12 +1,11 @@
 """Tests for security fixes and additional edge cases."""
 
-import pytest
-import tempfile
-from pathlib import Path
-import yaml
 
+import pytest
+import yaml
 from typer.testing import CliRunner
 
+from xbot.agent.crew.cli.plan_cmd import app
 from xbot.agent.crew.planner.models import (
     Capability,
     GoalAnalysis,
@@ -16,11 +15,9 @@ from xbot.agent.crew.planner.models import (
     RoleTier,
     TaskPlan,
 )
-from xbot.agent.crew.planner.task_planner import TaskPlanner
 from xbot.agent.crew.planner.role_creator import RoleCreator
 from xbot.agent.crew.planner.role_pool import RolePoolManager
-from xbot.agent.crew.cli.plan_cmd import app
-
+from xbot.agent.crew.planner.task_planner import TaskPlanner
 
 runner = CliRunner()
 
@@ -30,7 +27,6 @@ class TestSecurityFixes:
 
     def test_path_traversal_in_delete_rejected(self, tmp_path):
         """Test that path traversal in role delete is rejected."""
-        from xbot.agent.crew.cli.role_cmd import roles_delete
 
         # Create a directory outside the custom dir
         outside_dir = tmp_path.parent / "outside"
@@ -270,7 +266,7 @@ class TestRolePoolManagerThreadSafety:
             try:
                 for _ in range(10):
                     pool = manager.get_pool()
-                    roles = pool.get_available_roles()
+                    _ = pool.get_available_roles()
                     time.sleep(0.001)
             except Exception as e:
                 errors.append(str(e))
@@ -305,7 +301,7 @@ class TestRolePoolManagerThreadSafety:
             try:
                 for _ in range(20):
                     pool = manager.get_pool()
-                    roles = pool.get_available_roles()
+                    _ = pool.get_available_roles()
                     time.sleep(0.005)
             except Exception as e:
                 errors.append(str(e))

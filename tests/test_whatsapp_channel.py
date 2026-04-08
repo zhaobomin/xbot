@@ -2,8 +2,9 @@
 
 import asyncio
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
@@ -74,9 +75,9 @@ class TestWhatsAppChannelStartStop:
         channel._connected = True
         channel._ws = MagicMock()
         channel._ws.close = AsyncMock()
-        
+
         await channel.stop()
-        
+
         assert channel._running is False
         assert channel._connected is False
         assert channel._ws is None
@@ -85,7 +86,7 @@ class TestWhatsAppChannelStartStop:
     async def test_start_sets_running_flag(self):
         """Test that start sets running flag."""
         channel = WhatsAppChannel(WhatsAppConfig(), MessageBus())
-        
+
         # Mock websockets.connect to fail immediately to avoid hanging
         with patch("websockets.connect") as mock_connect:
             mock_connect.side_effect = Exception("test error")
@@ -94,7 +95,7 @@ class TestWhatsAppChannelStartStop:
                 await asyncio.wait_for(channel.start(), timeout=0.5)
             except asyncio.TimeoutError:
                 pass
-        
+
         # Running should be False after exception
 
 
@@ -107,13 +108,13 @@ class TestWhatsAppChannelSend:
         channel = WhatsAppChannel(WhatsAppConfig(), MessageBus())
         channel._ws = None
         channel._connected = False
-        
+
         msg = OutboundMessage(
             channel="whatsapp",
             chat_id="1234567890",
             content="test message",
         )
-        
+
         await channel.send(msg)
         # Should return early without error
 
@@ -124,15 +125,15 @@ class TestWhatsAppChannelSend:
         channel._connected = True
         channel._ws = MagicMock()
         channel._ws.send = AsyncMock()
-        
+
         msg = OutboundMessage(
             channel="whatsapp",
             chat_id="1234567890@s.whatsapp.net",
             content="test message",
         )
-        
+
         await channel.send(msg)
-        
+
         # Check that send was called with correct payload
         assert channel._ws.send.called
         call_args = channel._ws.send.call_args[0][0]
@@ -168,7 +169,7 @@ class TestWhatsAppChannelHandleBridgeMessage:
     async def test_handle_invalid_json(self, caplog):
         """Test handling invalid JSON from bridge."""
         channel = WhatsAppChannel(WhatsAppConfig(), MessageBus())
-        
+
         await channel._handle_bridge_message("not valid json")
         # Should log warning but not crash
 
@@ -176,32 +177,32 @@ class TestWhatsAppChannelHandleBridgeMessage:
     async def test_handle_status_message(self, caplog):
         """Test handling status message from bridge."""
         channel = WhatsAppChannel(WhatsAppConfig(), MessageBus())
-        
+
         await channel._handle_bridge_message(json.dumps({
             "type": "status",
             "status": "connected"
         }))
-        
+
         assert channel._connected is True
 
     @pytest.mark.asyncio
     async def test_handle_incoming_message_deduplication(self):
         """Test that duplicate messages are ignored."""
         channel = WhatsAppChannel(WhatsAppConfig(), MessageBus())
-        
+
         msg_data = {
             "type": "message",
             "id": "msg_123",
             "sender": "1234567890@s.whatsapp.net",
             "content": "test",
         }
-        
+
         # First message should be processed (adds to seen set)
         await channel._handle_bridge_message(json.dumps(msg_data))
-        
+
         # Second message with same ID should be ignored (already in seen set)
         await channel._handle_bridge_message(json.dumps(msg_data))
-        
+
         # The message ID should only be in the processed dict once
         assert "msg_123" in channel._processed_message_ids
 
@@ -211,14 +212,13 @@ class TestWhatsAppChannelProcessedMessages:
 
     def test_processed_message_ids_limit(self):
         """Test that processed message IDs are limited to 1000."""
-        from collections import OrderedDict
-        
+
         channel = WhatsAppChannel(WhatsAppConfig(), MessageBus())
-        
+
         # Simulate the limit logic from the code
         for i in range(1500):
             channel._processed_message_ids[str(i)] = None
             while len(channel._processed_message_ids) > 1000:
                 channel._processed_message_ids.popitem(last=False)
-        
+
         assert len(channel._processed_message_ids) == 1000

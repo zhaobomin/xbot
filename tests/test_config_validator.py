@@ -1,16 +1,16 @@
 """Tests for config validator."""
 
+
 import pytest
-from unittest.mock import MagicMock, patch
 from pydantic import SecretStr
 
+from xbot.config.schema import Config, ProviderConfig
 from xbot.config.validator import (
     ConfigurationError,
+    get_all_provider_names_safe,
     validate_config,
     validate_provider_for_agent,
-    get_all_provider_names_safe,
 )
-from xbot.config.schema import Config, ProviderConfig, ProvidersConfig
 
 
 class TestConfigurationError:
@@ -24,7 +24,7 @@ class TestConfigurationError:
         """Test raising ConfigurationError with message."""
         with pytest.raises(ConfigurationError) as exc_info:
             raise ConfigurationError("Test error message")
-        
+
         assert "Test error message" in str(exc_info.value)
 
 
@@ -37,7 +37,7 @@ class TestValidateConfig:
         config.agents.type = "claude_sdk"
         config.agents.defaults.provider = "auto"
         config.providers.anthropic.api_key = "sk-test"
-        
+
         # Should not raise
         validate_config(config)
 
@@ -55,10 +55,10 @@ class TestValidateConfig:
         config = Config()
         config.agents.type = "claude_sdk"
         config.agents.defaults.provider = "nonexistent_provider"
-        
+
         with pytest.raises(ConfigurationError) as exc_info:
             validate_config(config)
-        
+
         assert "Unknown provider" in str(exc_info.value)
 
     def test_validate_config_sdk_incompatible_provider(self):
@@ -79,10 +79,10 @@ class TestValidateConfig:
         config.agents.type = "claude_sdk"
         config.agents.defaults.provider = "anthropic"
         # No API key set
-        
+
         with pytest.raises(ConfigurationError) as exc_info:
             validate_config(config)
-        
+
         assert "API key not configured" in str(exc_info.value)
 
     def test_validate_config_success(self):
@@ -91,7 +91,7 @@ class TestValidateConfig:
         config.agents.type = "claude_sdk"
         config.agents.defaults.provider = "anthropic"
         config.providers.anthropic.api_key = "sk-test-key"
-        
+
         # Should not raise
         validate_config(config)
 
@@ -101,7 +101,7 @@ class TestValidateConfig:
         config.agents.type = "claude_sdk"
         config.agents.defaults.provider = "aliyun_coding_plan"
         config.providers.aliyun_coding_plan.api_key = "test-key"
-        
+
         # Should not raise
         validate_config(config)
 
@@ -117,7 +117,7 @@ class TestValidateProviderForAgent:
         """Test validation fails for unknown provider."""
         with pytest.raises(ConfigurationError) as exc_info:
             validate_provider_for_agent("unknown_provider", "claude_sdk")
-        
+
         assert "Unknown provider" in str(exc_info.value)
 
     def test_validate_sdk_compatible_provider(self):
@@ -146,7 +146,7 @@ class TestGetAllProviderNamesSafe:
     def test_returns_list(self):
         """Test that function returns a list."""
         result = get_all_provider_names_safe()
-        
+
         assert isinstance(result, list)
 
     def test_includes_known_providers(self):

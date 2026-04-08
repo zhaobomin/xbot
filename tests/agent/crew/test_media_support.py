@@ -9,9 +9,9 @@ TTD approach:
 from __future__ import annotations
 
 import pytest
-from pathlib import Path
-from xbot.agent.crew.models import TaskDefinition, AgentRole, CrewConfig, parse_crew_config
+
 from xbot.agent.crew.context import CrewExecutionContext
+from xbot.agent.crew.models import AgentRole, TaskDefinition, parse_crew_config
 
 
 class TestTaskDefinitionMediaField:
@@ -128,8 +128,9 @@ class TestCrewExecutionContextMedia:
 
     def test_add_result_without_media(self):
         """Add result without media (backward compatibility)."""
-        from xbot.agent.crew.models import TaskResult
         from datetime import datetime
+
+        from xbot.agent.crew.models import TaskResult
 
         ctx = CrewExecutionContext()
         result = TaskResult(
@@ -145,8 +146,9 @@ class TestCrewExecutionContextMedia:
 
     def test_add_result_with_media(self):
         """Add result with media."""
-        from xbot.agent.crew.models import TaskResult
         from datetime import datetime
+
+        from xbot.agent.crew.models import TaskResult
 
         ctx = CrewExecutionContext()
         result = TaskResult(
@@ -181,7 +183,7 @@ class TestCrewExecutionContextMedia:
 
     def test_build_task_prompt_with_media(self):
         """Build prompt with media indication."""
-        from xbot.agent.crew.models import AgentRole, TaskDefinition
+        from xbot.agent.crew.models import TaskDefinition
 
         ctx = CrewExecutionContext()
         role = AgentRole(
@@ -207,7 +209,7 @@ class TestCrewExecutionContextMedia:
 
     def test_build_agent_context(self):
         """Build complete agent context with media."""
-        from xbot.agent.crew.models import AgentRole, TaskDefinition
+        from xbot.agent.crew.models import TaskDefinition
 
         ctx = CrewExecutionContext()
         role = AgentRole(
@@ -241,8 +243,9 @@ class TestAgentPoolMedia:
         """run_task should accept media parameter."""
         # This is a signature test - we can't easily mock the backend
         # Just verify the method accepts the parameter
-        from xbot.agent.crew.agent_pool import AgentPool
         import inspect
+
+        from xbot.agent.crew.agent_pool import AgentPool
 
         sig = inspect.signature(AgentPool.run_task)
         params = list(sig.parameters.keys())
@@ -251,8 +254,9 @@ class TestAgentPoolMedia:
     @pytest.mark.asyncio
     async def test_run_task_streaming_with_media(self):
         """run_task_streaming should accept media parameter."""
-        from xbot.agent.crew.agent_pool import AgentPool
         import inspect
+
+        from xbot.agent.crew.agent_pool import AgentPool
 
         sig = inspect.signature(AgentPool.run_task_streaming)
         params = list(sig.parameters.keys())
@@ -275,8 +279,9 @@ class TestBackwardCompatibility:
 
     def test_existing_context_usage(self):
         """Existing context usage patterns still work."""
-        from xbot.agent.crew.models import TaskResult, AgentRole, TaskDefinition
         from datetime import datetime
+
+        from xbot.agent.crew.models import TaskDefinition, TaskResult
 
         ctx = CrewExecutionContext()
 

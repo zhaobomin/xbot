@@ -1,12 +1,12 @@
 """Tests for WeCom (Enterprise WeChat) channel."""
 
-import asyncio
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
-from xbot.channels.wecom import WecomChannel, WecomConfig, WECOM_AVAILABLE
+from xbot.channels.wecom import WecomChannel, WecomConfig
 
 
 class TestWecomConfig:
@@ -97,9 +97,9 @@ class TestWecomChannelStartStop:
         channel._running = True
         channel._client = MagicMock()
         channel._client.disconnect = AsyncMock()
-        
+
         await channel.stop()
-        
+
         assert channel._running is False
 
 
@@ -109,7 +109,7 @@ class TestWecomChannelMessageHandling:
     def test_msg_type_map(self):
         """Test message type mapping."""
         from xbot.channels.wecom import MSG_TYPE_MAP
-        
+
         assert MSG_TYPE_MAP["image"] == "[image]"
         assert MSG_TYPE_MAP["voice"] == "[voice]"
         assert MSG_TYPE_MAP["file"] == "[file]"
@@ -122,7 +122,7 @@ class TestWecomChannelMessageHandling:
             WecomConfig(bot_id="test", secret="pass"),
             MessageBus(),
         )
-        frame = {"frame": "value"}
+        _ = {"frame": "value"}
         channel._handle_message = AsyncMock()
         channel._client = MagicMock()
         channel._client.reply_stream = AsyncMock()
@@ -181,23 +181,22 @@ class TestWecomChannelProcessedMessages:
     def test_processed_message_ids_is_ordered_dict(self):
         """Test that processed message IDs are stored in OrderedDict."""
         from collections import OrderedDict
-        
+
         channel = WecomChannel(
             WecomConfig(bot_id="test", secret="pass"),
             MessageBus()
         )
-        
+
         assert isinstance(channel._processed_message_ids, OrderedDict)
 
     def test_processed_message_ids_limit(self):
         """Test that processed message IDs are limited."""
-        from collections import OrderedDict
-        
+
         channel = WecomChannel(
             WecomConfig(bot_id="test", secret="pass"),
             MessageBus()
         )
-        
+
         # Simulate adding many message IDs
         for i in range(1500):
             channel._processed_message_ids[str(i)] = None

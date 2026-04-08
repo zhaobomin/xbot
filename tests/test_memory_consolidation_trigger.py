@@ -3,15 +3,14 @@
 Phase 1.2: Verify single trigger point for memory consolidation.
 """
 
-import asyncio
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from xbot.agent.memory.store import MemoryConsolidator, MemoryStore
-from xbot.session.manager import Session, SessionManager
+from xbot.agent.memory.store import MemoryConsolidator
 from xbot.providers.base import LLMResponse, ToolCallRequest
+from xbot.session.manager import Session, SessionManager
 
 
 def _make_messages(count: int = 50) -> list[dict]:

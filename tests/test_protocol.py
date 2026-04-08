@@ -1,6 +1,5 @@
 """Tests for agent protocol definitions."""
 
-import pytest
 
 from xbot.agent.protocol import AgentContext, AgentResponse
 

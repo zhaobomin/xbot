@@ -5,8 +5,6 @@ from __future__ import annotations
 import importlib
 import sys
 
-import pytest
-
 
 def _remove_beartype_path_hook() -> None:
     """Remove beartype claw path hook when preloaded by host shell/profile.

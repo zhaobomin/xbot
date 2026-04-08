@@ -4,8 +4,7 @@ import pytest
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
-from xbot.channels.slack import SlackChannel
-from xbot.channels.slack import SlackConfig
+from xbot.channels.slack import SlackChannel, SlackConfig
 
 
 class _FakeAsyncWebClient:

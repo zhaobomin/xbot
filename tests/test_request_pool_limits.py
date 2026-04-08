@@ -6,18 +6,16 @@ Tests that request pools have proper limits and cleanup expired requests.
 
 import asyncio
 import time
-from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from xbot.bus.queue import (
+    REQUEST_TIMEOUT_SECONDS,
+    InteractionRequest,
+    InteractionResponse,
     MessageBus,
     PermissionRequest,
     PermissionResponse,
-    InteractionRequest,
-    InteractionResponse,
-    MAX_PENDING_REQUESTS,
-    REQUEST_TIMEOUT_SECONDS,
 )
 
 

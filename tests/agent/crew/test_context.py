@@ -305,7 +305,7 @@ class TestCheckpoint:
         )
         ctx.add_result(result)
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory():
             checkpoint_path = save_checkpoint(
                 crew_config=config,
                 config_path="/path/to/config.yaml",
@@ -347,7 +347,7 @@ class TestCheckpoint:
 
         ctx = CrewExecutionContext()
 
-        with tempfile.TemporaryDirectory() as tmpdir:
+        with tempfile.TemporaryDirectory():
             checkpoint_path = save_checkpoint(
                 crew_config=config,
                 config_path="",

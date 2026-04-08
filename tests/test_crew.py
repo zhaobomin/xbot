@@ -1091,8 +1091,9 @@ class TestOutputPersistenceIntegration:
 
     def test_full_output_lifecycle(self, tmp_path: Path):
         """Test complete output lifecycle: create, save, finalize, load."""
-        from xbot.agent.crew.output.persist import OutputPersister, create_persister
         from datetime import datetime
+
+        from xbot.agent.crew.output.persist import create_persister
 
         # Create persister
         persister = create_persister(str(tmp_path), "test-crew")
@@ -1158,7 +1159,7 @@ class TestOutputPersistenceIntegration:
 
     def test_format_detection_and_parsing(self):
         """Test format detection and parsing integration."""
-        from xbot.agent.crew.output.format import OutputParser, detect_format, OutputFormat
+        from xbot.agent.crew.output.format import OutputFormat, OutputParser, detect_format
 
         parser = OutputParser()
 
@@ -1182,7 +1183,7 @@ class TestOutputRepairIntegration:
 
     def test_repair_flow(self):
         """Test the repair flow with a mock LLM."""
-        from xbot.agent.crew.output.format import OutputParser, OutputFormat
+        from xbot.agent.crew.output.format import OutputFormat, OutputParser
         from xbot.agent.crew.output.repair import OutputRepairer, should_attempt_repair
 
         parser = OutputParser()
@@ -1210,10 +1211,11 @@ class TestEndToEndConfigOutput:
 
     def test_config_to_output_flow(self, tmp_path: Path):
         """Test full flow: load config -> simulate run -> save outputs."""
+        from datetime import datetime
+
         from xbot.agent.crew.config.loader import CrewConfigLoader
         from xbot.agent.crew.config.validator import validate_crew_config
         from xbot.agent.crew.output.persist import OutputPersister
-        from datetime import datetime
 
         # 1. Create config
         config_yaml = tmp_path / "crew.yaml"

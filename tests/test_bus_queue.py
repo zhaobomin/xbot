@@ -1,13 +1,12 @@
 """Tests for bus/queue.py - MessageBus and request data classes."""
 
-import asyncio
 import time
 from unittest.mock import AsyncMock
 
 import pytest
 
+from xbot.bus.events import InboundMessage, OutboundMessage
 from xbot.bus.queue import (
-    MAX_PENDING_REQUESTS,
     REQUEST_TIMEOUT_SECONDS,
     InteractionRequest,
     InteractionResponse,
@@ -15,7 +14,6 @@ from xbot.bus.queue import (
     PermissionRequest,
     PermissionResponse,
 )
-from xbot.bus.events import InboundMessage, OutboundMessage
 
 
 class TestPermissionRequest:

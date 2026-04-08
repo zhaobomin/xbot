@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -77,7 +76,6 @@ class TestListTemplates:
     def test_all_template_configs_are_valid_crew_configs(self):
         """Test that all template configs can be loaded as CrewConfig."""
         from xbot.agent.crew import load_crew_config
-        from xbot.agent.crew.models import CrewConfig
 
         templates = list_templates()
 
@@ -166,7 +164,6 @@ class TestInitProject:
 
     def test_default_config_has_valid_structure(self, tmp_path: Path):
         """Test that default config is valid CrewConfig."""
-        from xbot.agent.crew.models import CrewConfig
 
         project_dir = tmp_path / "test_project"
         config_path = init_project(project_dir)

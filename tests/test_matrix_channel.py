@@ -15,8 +15,8 @@ from xbot.channels.matrix import (
     MATRIX_HTML_FORMAT,
     TYPING_NOTICE_TIMEOUT_MS,
     MatrixChannel,
+    MatrixConfig,
 )
-from xbot.channels.matrix import MatrixConfig
 
 _ROOM_SEND_UNSET = object()
 

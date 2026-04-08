@@ -1,13 +1,11 @@
 """Tests for output format parsing: JSON, Markdown, Structured, Raw."""
 
-import json
 
-import pytest
 
 from xbot.agent.crew.models import OutputFormat
 from xbot.agent.crew.output.format import (
-    ParsedOutput,
     OutputParser,
+    ParsedOutput,
     detect_format,
     format_output,
 )

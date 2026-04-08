@@ -6,8 +6,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from xbot.agent.state.session_manager import SessionManager
 from xbot.agent.state.machine import SessionPhase
+from xbot.agent.state.session_manager import SessionManager
 
 
 @pytest.mark.asyncio

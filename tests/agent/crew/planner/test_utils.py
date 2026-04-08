@@ -1,8 +1,8 @@
 """Tests for the utility classes in utils.py."""
 
-import pytest
 import tempfile
-from pathlib import Path
+
+import pytest
 
 from xbot.agent.crew.planner.models import (
     Capability,

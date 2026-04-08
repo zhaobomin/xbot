@@ -1,23 +1,20 @@
 """Tests for process execution flow: human review, Sequential, and Hierarchical."""
 
-import asyncio
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
 from xbot.agent.crew.agent_pool import TaskProgress
 from xbot.agent.crew.models import (
     AgentRole,
-    CrewConfig,
     OutputFormat,
-    ProcessType,
     TaskDefinition,
     TaskResult,
     UserAction,
 )
-from xbot.agent.crew.process import BaseProcess, HierarchicalProcess, SequentialProcess
-from xbot.agent.crew.state import CrewPhase, CrewStateManager, TaskPhase
+from xbot.agent.crew.process import HierarchicalProcess, SequentialProcess
+from xbot.agent.crew.state import CrewStateManager, TaskPhase
 
 
 class MockPermissionHandler:

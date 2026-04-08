@@ -1,17 +1,17 @@
 """Tests for Mochat channel."""
 
 import asyncio
-from collections import deque
+from unittest.mock import patch
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
 from xbot.channels.mochat import (
+    DelayState,
+    MochatBufferedEntry,
     MochatChannel,
     MochatConfig,
-    MochatBufferedEntry,
-    DelayState,
     MochatTarget,
     _safe_dict,
     _str_field,
@@ -66,7 +66,7 @@ class TestMochatBufferedEntry:
             message_id="msg123",
             group_id="group1",
         )
-        
+
         assert entry.raw_body == "test message"
         assert entry.author == "user1"
         assert entry.sender_name == "Test User"
@@ -78,7 +78,7 @@ class TestMochatBufferedEntry:
             raw_body="test",
             author="user1",
         )
-        
+
         assert entry.sender_name == ""
         assert entry.sender_username == ""
         assert entry.timestamp is None
@@ -91,7 +91,7 @@ class TestDelayState:
     def test_creation(self):
         """Test creating a delay state."""
         state = DelayState()
-        
+
         assert state.entries == []
         assert isinstance(state.lock, asyncio.Lock)
         assert state.timer is None
@@ -103,7 +103,7 @@ class TestMochatTarget:
     def test_creation(self):
         """Test creating a target."""
         target = MochatTarget(id="target123", is_panel=True)
-        
+
         assert target.id == "target123"
         assert target.is_panel is True
 
@@ -165,7 +165,7 @@ class TestMochatChannelStartStop:
         channel = MochatChannel(MochatConfig(), MessageBus())
         channel._running = True
         channel._socket = None
-        
+
         await channel.stop()
 
         assert channel._running is False
@@ -201,13 +201,13 @@ class TestMochatChannelSend:
         channel = MochatChannel(MochatConfig(), MessageBus())
         channel._socket = None
         channel._ws_connected = False
-        
+
         msg = OutboundMessage(
             channel="mochat",
             chat_id="panel123",
             content="test message",
         )
-        
+
         await channel.send(msg)
         # Should return early without error
 
@@ -218,19 +218,19 @@ class TestMochatChannelMessageHandling:
     def test_seen_set_and_queue_initialized(self):
         """Test that seen_set and seen_queue are initialized."""
         channel = MochatChannel(MochatConfig(), MessageBus())
-        
+
         assert isinstance(channel._seen_set, dict)
         assert isinstance(channel._seen_queue, dict)
 
     def test_delay_states_initialized(self):
         """Test that delay_states is initialized."""
         channel = MochatChannel(MochatConfig(), MessageBus())
-        
+
         assert isinstance(channel._delay_states, dict)
 
     def test_session_set_initialized(self):
         """Test that session_set is initialized."""
         channel = MochatChannel(MochatConfig(), MessageBus())
-        
+
         assert isinstance(channel._session_set, set)
         assert isinstance(channel._panel_set, set)

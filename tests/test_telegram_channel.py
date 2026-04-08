@@ -1,5 +1,4 @@
 import asyncio
-from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -7,8 +6,7 @@ import pytest
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
-from xbot.channels.telegram import TELEGRAM_REPLY_CONTEXT_MAX_LEN, TelegramChannel
-from xbot.channels.telegram import TelegramConfig
+from xbot.channels.telegram import TELEGRAM_REPLY_CONTEXT_MAX_LEN, TelegramChannel, TelegramConfig
 
 
 class _FakeHTTPXRequest:

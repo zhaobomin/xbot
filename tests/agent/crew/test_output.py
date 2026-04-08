@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import json
 import tempfile
-from pathlib import Path
-
-import pytest
 
 from xbot.agent.crew.output.format import (
     OutputFormat,
@@ -15,16 +12,14 @@ from xbot.agent.crew.output.format import (
     detect_format,
     format_output,
 )
-from xbot.agent.crew.output.truncate import (
-    OutputTruncator,
-    TruncationResult,
-    TruncationStrategy,
-    truncate_output,
-)
 from xbot.agent.crew.output.repair import (
     OutputRepairer,
-    RepairResult,
     should_attempt_repair,
+)
+from xbot.agent.crew.output.truncate import (
+    OutputTruncator,
+    TruncationStrategy,
+    truncate_output,
 )
 
 
@@ -177,7 +172,7 @@ class TestOutputRepair:
     def test_repair_valid_json_not_needed(self):
         """Test repair doesn't change valid JSON."""
         # Mock LLM call that should not be invoked
-        repairer = OutputRepairer(llm_call=lambda x: "should not be called")
+        _ = OutputRepairer(llm_call=lambda x: "should not be called")
         parsed = format_output('{"key": "value"}', OutputFormat.JSON)
         assert parsed.valid
         assert not should_attempt_repair(parsed)
@@ -498,7 +493,6 @@ class TestOutputRepairEdgeCases:
     def test_should_attempt_repair_structured(self):
         """Test should_attempt_repair for structured format."""
         # Create a manually constructed invalid structured output
-        from xbot.agent.crew.output.format import ParsedOutput
         parsed = ParsedOutput(
             format=OutputFormat.STRUCTURED,
             raw="bad",

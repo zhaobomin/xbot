@@ -1,6 +1,5 @@
 """Tests for agent hook handlers."""
 
-import pytest
 from datetime import datetime
 from unittest.mock import MagicMock
 

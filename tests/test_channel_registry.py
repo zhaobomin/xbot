@@ -1,13 +1,14 @@
 """Tests for channel registry."""
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock
 
 from xbot.channels.registry import (
-    discover_channel_names,
-    load_channel_class,
-    discover_plugins,
     discover_all,
+    discover_channel_names,
+    discover_plugins,
+    load_channel_class,
 )
 
 
@@ -43,7 +44,7 @@ class TestLoadChannelClass:
     def test_loads_telegram_channel(self):
         """Test loading the Telegram channel class."""
         from xbot.channels.base import BaseChannel
-        
+
         cls = load_channel_class("telegram")
         assert issubclass(cls, BaseChannel)
         assert cls.name == "telegram"
@@ -51,7 +52,7 @@ class TestLoadChannelClass:
     def test_loads_feishu_channel(self):
         """Test loading the Feishu channel class."""
         from xbot.channels.base import BaseChannel
-        
+
         cls = load_channel_class("feishu")
         assert issubclass(cls, BaseChannel)
         assert cls.name == "feishu"
@@ -59,7 +60,7 @@ class TestLoadChannelClass:
     def test_loads_slack_channel(self):
         """Test loading the Slack channel class."""
         from xbot.channels.base import BaseChannel
-        
+
         cls = load_channel_class("slack")
         assert issubclass(cls, BaseChannel)
         assert cls.name == "slack"

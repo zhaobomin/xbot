@@ -4,8 +4,7 @@ import pytest
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
-from xbot.channels.qq import QQChannel
-from xbot.channels.qq import QQConfig
+from xbot.channels.qq import QQChannel, QQConfig
 
 
 class _FakeApi:

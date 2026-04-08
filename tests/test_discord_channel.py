@@ -1,8 +1,9 @@
 """Tests for Discord channel."""
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
@@ -83,9 +84,9 @@ class TestDiscordChannelStartStop:
         channel._heartbeat_task = asyncio.create_task(asyncio.sleep(10))
         channel._http = MagicMock()
         channel._http.aclose = AsyncMock()
-        
+
         await channel.stop()
-        
+
         assert channel._running is False
         assert channel._heartbeat_task is None
         assert channel._http is None
@@ -125,13 +126,13 @@ class TestDiscordChannelSend:
         """Test that send without HTTP client logs warning."""
         channel = DiscordChannel(DiscordConfig(token="test"), MessageBus())
         channel._http = None
-        
+
         msg = OutboundMessage(
             channel="discord",
             chat_id="123456",
             content="test message",
         )
-        
+
         await channel.send(msg)
         # Should return early without error
 
@@ -139,21 +140,21 @@ class TestDiscordChannelSend:
     async def test_send_basic_message(self):
         """Test sending a basic text message."""
         channel = DiscordChannel(DiscordConfig(token="test"), MessageBus())
-        
+
         mock_http = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_http.post = AsyncMock(return_value=mock_response)
         channel._http = mock_http
-        
+
         msg = OutboundMessage(
             channel="discord",
             chat_id="123456",
             content="test message",
         )
-        
+
         await channel.send(msg)
-        
+
         # Check that post was called
         assert mock_http.post.called
         call_args = mock_http.post.call_args
@@ -163,22 +164,22 @@ class TestDiscordChannelSend:
     async def test_send_with_reply(self):
         """Test sending a message with reply reference."""
         channel = DiscordChannel(DiscordConfig(token="test"), MessageBus())
-        
+
         mock_http = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_http.post = AsyncMock(return_value=mock_response)
         channel._http = mock_http
-        
+
         msg = OutboundMessage(
             channel="discord",
             chat_id="123456",
             content="reply message",
             reply_to="789012",
         )
-        
+
         await channel.send(msg)
-        
+
         # Check that message_reference was included
         call_args = mock_http.post.call_args
         payload = call_args[1]["json"]
@@ -193,13 +194,13 @@ class TestDiscordChannelSplitMessage:
     async def test_long_message_is_split(self):
         """Test that messages longer than 2000 chars are split."""
         channel = DiscordChannel(DiscordConfig(token="test"), MessageBus())
-        
+
         mock_http = MagicMock()
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_http.post = AsyncMock(return_value=mock_response)
         channel._http = mock_http
-        
+
         # Create a message longer than Discord limit
         long_content = "x" * 3000
         msg = OutboundMessage(
@@ -207,7 +208,7 @@ class TestDiscordChannelSplitMessage:
             chat_id="123456",
             content=long_content,
         )
-        
+
         await channel.send(msg)
 
         # Should have been called multiple times for chunks
@@ -278,7 +279,7 @@ class TestDiscordCircuitBreaker:
     @pytest.mark.asyncio
     async def test_circuit_breaker_after_max_reconnects(self, monkeypatch):
         """Test that circuit breaker activates after max reconnect attempts."""
-        from xbot.channels.discord import MAX_RECONNECT_ATTEMPTS, CIRCUIT_BREAKER_TIMEOUT
+        from xbot.channels.discord import CIRCUIT_BREAKER_TIMEOUT, MAX_RECONNECT_ATTEMPTS
 
         channel = DiscordChannel(DiscordConfig(token="test"), MessageBus())
 

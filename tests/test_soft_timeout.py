@@ -11,12 +11,13 @@ Key behaviors:
 """
 
 import asyncio
-import pytest
 from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
 
 from xbot.agent.crew.agent_pool import AgentPool, TaskProgress
-from xbot.agent.crew.models import TaskDefinition, TaskResult, AgentRole, CrewConfig, ProcessType
+from xbot.agent.crew.models import AgentRole, TaskDefinition, TaskResult
 from xbot.agent.crew.process import SequentialProcess
 from xbot.agent.crew.state import CrewStateManager, TaskPhase
 

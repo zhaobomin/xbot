@@ -8,9 +8,10 @@ Tests for:
 
 import json
 from unittest.mock import MagicMock
+
 import pytest
 
-from xbot.cron.service import CronService, _validate_schedule_for_add, _now_ms
+from xbot.cron.service import CronService, _now_ms
 from xbot.cron.types import CronSchedule, CronStore
 
 

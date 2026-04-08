@@ -5,10 +5,10 @@ import pytest
 from xbot.agent.state.machine import (
     BUSY_STATES,
     FINAL_STATES,
+    VALID_TRANSITIONS,
     SessionPhase,
     SessionState,
     SessionStateMachine,
-    VALID_TRANSITIONS,
 )
 
 

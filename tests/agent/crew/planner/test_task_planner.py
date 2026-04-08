@@ -6,8 +6,6 @@ from xbot.agent.crew.planner.models import (
     Capability,
     GoalAnalysis,
     RoleDefinition,
-    RolePool,
-    RolePoolConfig,
     RoleSelection,
     RoleTier,
     TaskPlan,

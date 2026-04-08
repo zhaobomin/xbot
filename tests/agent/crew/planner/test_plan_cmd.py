@@ -1,19 +1,14 @@
 """Tests for plan_cmd CLI module."""
 
-import pytest
-from pathlib import Path
 import tempfile
-from unittest.mock import patch, MagicMock
+from pathlib import Path
+from unittest.mock import MagicMock
 
-from click.testing import CliRunner
 from typer.testing import CliRunner as TyperCliRunner
 
 from xbot.agent.crew.cli.plan_cmd import (
     app,
-    crew_plan,
-    crew_run_dynamic,
 )
-
 
 runner = TyperCliRunner()
 
@@ -171,9 +166,10 @@ class TestPrintCrewResult:
 
     def test_print_successful_result(self):
         """Test printing successful result."""
-        from xbot.agent.crew.cli.plan_cmd import _print_crew_result
-        from io import StringIO
         import sys
+        from io import StringIO
+
+        from xbot.agent.crew.cli.plan_cmd import _print_crew_result
 
         # Create mock result
         result = MagicMock()
@@ -196,9 +192,10 @@ class TestPrintCrewResult:
 
     def test_print_failed_result(self):
         """Test printing failed result."""
-        from xbot.agent.crew.cli.plan_cmd import _print_crew_result
-        from io import StringIO
         import sys
+        from io import StringIO
+
+        from xbot.agent.crew.cli.plan_cmd import _print_crew_result
 
         # Create mock result
         result = MagicMock()

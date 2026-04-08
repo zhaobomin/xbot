@@ -20,7 +20,6 @@ from xbot.agent.protocol import (
     AgentContext,
     AgentResponse,
     StructuredLLMResponse,
-    ToolCall,
 )
 from xbot.agent.service import AgentService
 from xbot.agent.state.machine import SessionPhase, SessionStateMachine
@@ -33,7 +32,6 @@ from xbot.bus.queue import (
     PermissionRequest,
     PermissionResponse,
 )
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -1067,7 +1065,6 @@ class TestCrossComponentIntegration:
     def test_skills_and_catalog_integration(self, tmp_path: Path) -> None:
         """SkillsLoader feeds CapabilityCatalog correctly."""
         from xbot.agent.capabilities.catalog import CapabilityCatalog
-        from xbot.agent.capabilities.skills_loader import SkillsLoader
 
         skills_dir = tmp_path / "skills" / "weather"
         skills_dir.mkdir(parents=True)

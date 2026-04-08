@@ -1,6 +1,5 @@
 """Tests for agent types."""
 
-import pytest
 from xbot.agent.types import AgentConfig, SessionConfig
 
 

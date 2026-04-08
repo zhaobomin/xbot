@@ -1,30 +1,27 @@
 """Tests for bug fixes in round 3."""
 
-import pytest
 import tempfile
 from pathlib import Path
-import yaml
 
+import pytest
+import yaml
 from typer.testing import CliRunner
 
+from xbot.agent.crew.cli.role_cmd import app as role_app
+from xbot.agent.crew.planner.config_generator import ConfigGenerator
+from xbot.agent.crew.planner.crew_planner import CrewPlanner
 from xbot.agent.crew.planner.models import (
     Capability,
     CrewPlan,
     GoalAnalysis,
     RoleDefinition,
-    RolePool,
     RolePoolConfig,
     RoleSelection,
     RoleTier,
     TaskPlan,
 )
-from xbot.agent.crew.planner.task_planner import TaskPlanner
-from xbot.agent.crew.planner.role_selector import RoleSelector
 from xbot.agent.crew.planner.role_pool import RolePoolManager
-from xbot.agent.crew.planner.crew_planner import CrewPlanner
-from xbot.agent.crew.planner.config_generator import ConfigGenerator
-from xbot.agent.crew.cli.plan_cmd import app as plan_app
-from xbot.agent.crew.cli.role_cmd import app as role_app
+from xbot.agent.crew.planner.role_selector import RoleSelector
 
 runner = CliRunner()
 

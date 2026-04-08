@@ -312,7 +312,7 @@ class TestRolePoolMethods:
         core_roles = pool.get_roles_by_tier(RoleTier.CORE)
         assert len(core_roles) >= 4  # At least researcher, coder, reviewer, tester
 
-        extended_roles = pool.get_roles_by_tier(RoleTier.EXTENDED)
+        _ = pool.get_roles_by_tier(RoleTier.EXTENDED)
         # May be 0 if extended tier not enabled
 
     def test_find_by_capabilities_no_match(self, pool):

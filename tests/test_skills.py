@@ -1,7 +1,6 @@
 """Tests for skills loader."""
 
 from pathlib import Path
-from unittest.mock import patch
 
 import pytest
 
@@ -190,7 +189,6 @@ class TestSkillsLoader:
 
     def test_check_requirements_env(self, loader: SkillsLoader) -> None:
         """Test checking environment variable requirements."""
-        import os
 
         # Test with an env var that likely exists
         meta = {"requires": {"env": ["PATH"]}}

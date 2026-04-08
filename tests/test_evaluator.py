@@ -1,7 +1,7 @@
 import pytest
 
-from xbot.utils.evaluator import evaluate_response
 from xbot.providers.base import LLMResponse, ToolCallRequest
+from xbot.utils.evaluator import evaluate_response
 
 
 class DummyCaller:
