@@ -21,7 +21,7 @@ from xbot.utils.helpers import ensure_dir
 
 logger = get_logger(__name__)
 if TYPE_CHECKING:
-    from xbot.agent.service import AgentService
+    from xbot.runtime.core.service import AgentService
 
 # Patch sqlite3 for chromadb compatibility (requires sqlite >= 3.35.0)
 # This must be done before any chromadb imports

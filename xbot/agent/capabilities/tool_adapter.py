@@ -8,14 +8,12 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from xbot.agent.capabilities.catalog import canonical_tool_name
-from xbot.agent.tools.cron import CronTool
-from xbot.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
-from xbot.agent.tools.memory import MemoryTool
-from xbot.agent.tools.message import MessageTool
-from xbot.agent.tools.shell import ExecTool
-from xbot.agent.tools.skill_loader import LoadSkillContentTool
-from xbot.agent.tools.web import WebFetchTool, WebSearchTool
+from xbot.capabilities.catalog import canonical_tool_name
+from xbot.tools.cron import CronTool
+from xbot.tools.memory import MemoryTool
+from xbot.tools.message import MessageTool
+from xbot.tools.skill_loader import LoadSkillContentTool
+from xbot.tools.web import WebFetchTool, WebSearchTool
 from xbot.logging import get_logger
 
 logger = get_logger(__name__)
@@ -108,8 +106,10 @@ class ToolAdapter:
         }
 
     def _register_xbot_tools(self) -> None:
-        """Register xbot-specific tools."""
-        allowed_dir = self.workspace if getattr(self.tools_config, "restrict_to_workspace", False) else None
+        """Register xbot extension tools.
+
+        SDK-native tools (filesystem/shell) are intentionally excluded.
+        """
 
         # Message tool - for sending messages to channels
         bus = self.shared_resources.get("bus")
@@ -143,33 +143,6 @@ class ToolAdapter:
 
         self._tools["web_search"] = WebSearchTool(config=search_config, proxy=proxy, timeout=web_search_timeout)
         self._tools["web_fetch"] = WebFetchTool(proxy=proxy, web_config=self.tools_config.web if self.tools_config else None, timeout=web_fetch_timeout)
-
-        # File tools (with workspace restriction)
-        self._tools["read_file"] = ReadFileTool(
-            workspace=self.workspace,
-            allowed_dir=allowed_dir,
-        )
-        self._tools["write_file"] = WriteFileTool(
-            workspace=self.workspace,
-            allowed_dir=allowed_dir,
-        )
-        self._tools["edit_file"] = EditFileTool(
-            workspace=self.workspace,
-            allowed_dir=allowed_dir,
-        )
-        self._tools["list_dir"] = ListDirTool(
-            workspace=self.workspace,
-            allowed_dir=allowed_dir,
-        )
-
-        # Shell tool
-        exec_config = self.tools_config.exec if self.tools_config else None
-        self._tools["exec"] = ExecTool(
-            working_dir=str(self.workspace),
-            timeout=exec_config.timeout if exec_config else 60,
-            restrict_to_workspace=bool(getattr(self.tools_config, "restrict_to_workspace", False)),
-            path_append=exec_config.path_append if exec_config else "",
-        )
 
         # Memory tool - for reading, searching, and writing long-term memory
         memory_store = self.shared_resources.get("memory_store")
@@ -333,3 +306,15 @@ class ToolAdapter:
                     len(tools),
                     [t.name for t in tools],
                 )
+
+    def clear_context(self, session_key: str) -> None:
+        """Clear per-session context for tools that keep session-local state."""
+        with self._context_lock:
+            self._tool_context.pop(session_key, None)
+            for tool_name in ("message", "cron"):
+                tool = self._tools.get(tool_name)
+                if tool and hasattr(tool, "clear_context"):
+                    try:
+                        tool.clear_context(session_key)
+                    except Exception:
+                        logger.debug("Failed to clear %s context for session %s", tool_name, session_key)

@@ -31,7 +31,7 @@ def __getattr__(name: str) -> Any:
         "SkillsLoader": ("xbot.agent.capabilities.skills_loader", "SkillsLoader"),
         "AgentResponse": ("xbot.agent.protocol", "AgentResponse"),
         "AgentContext": ("xbot.agent.protocol", "AgentContext"),
-        "AgentService": ("xbot.agent.service", "AgentService"),
+        "AgentService": ("xbot.runtime.core.service", "AgentService"),
     }
     module_attr = lazy_exports.get(name)
     if module_attr is None:

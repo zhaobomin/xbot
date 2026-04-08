@@ -13,7 +13,7 @@ from xbot.utils.helpers import ensure_dir, estimate_message_tokens, estimate_pro
 
 logger = get_logger(__name__)
 if TYPE_CHECKING:
-    from xbot.agent.service import AgentService
+    from xbot.runtime.core.service import AgentService
     from xbot.session.manager import Session, SessionManager
 
 

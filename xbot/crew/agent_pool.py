@@ -51,7 +51,7 @@ class AgentPool:
         Raises:
             RuntimeError: If no backends could be initialised.
         """
-        from xbot.agent.service import AgentService
+        from xbot.runtime.core.service import AgentService
         from xbot.runtime.core.types import AgentConfig
 
         roles = self.crew_config.agents

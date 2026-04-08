@@ -286,7 +286,7 @@ class CrewOrchestrator:
 
         try:
             from xbot.runtime.core.protocol import AgentContext
-            from xbot.agent.service import AgentService
+            from xbot.runtime.core.service import AgentService
             from xbot.runtime.core.types import AgentConfig
 
             agents_config = self.xbot_config.agents.model_copy(deep=True)

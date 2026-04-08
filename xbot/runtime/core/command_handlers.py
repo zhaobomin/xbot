@@ -14,7 +14,7 @@ from xbot.bus.events import InboundMessage, OutboundMessage
 from xbot.logging import get_logger
 
 if TYPE_CHECKING:
-    from xbot.agent.service import AgentService
+    from xbot.runtime.core.service import AgentService
 
 logger = get_logger(__name__)
 
