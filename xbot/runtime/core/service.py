@@ -402,6 +402,13 @@ class AgentService:
 
         logger.info("AgentService shutting down...")
 
+        # Cancel background consolidation tasks.
+        if self._async_consolidation_tasks:
+            for task in list(self._async_consolidation_tasks):
+                task.cancel()
+            await asyncio.gather(*self._async_consolidation_tasks, return_exceptions=True)
+            self._async_consolidation_tasks.clear()
+
         # Disconnect all clients
         await self._client_pool.disconnect_all()
 
@@ -1773,6 +1780,35 @@ class AgentService:
             and all(isinstance(part, str) and part for part in resolved_target)
         )
 
+    async def _trigger_memory_consolidation(self, session_key: str, session: Any) -> None:
+        """Trigger memory consolidation according to configured mode."""
+        if self._memory_consolidator is None:
+            return
+
+        runtime_config = self._shared_resources.get("config")
+        sdk_cfg = getattr(getattr(runtime_config, "agents", None), "claude_sdk", None)
+        mode = getattr(sdk_cfg, "memory_consolidation_mode", "off")
+        if mode == "off":
+            return
+
+        if mode == "sync":
+            await self._memory_consolidator.maybe_consolidate_by_tokens(session)
+            return
+
+        if mode == "async":
+            async def _safe_consolidate() -> None:
+                try:
+                    await self._memory_consolidator.maybe_consolidate_by_tokens(session)
+                except asyncio.CancelledError:
+                    logger.debug("Memory consolidation cancelled for session %s", session_key)
+                    raise
+                except Exception as e:
+                    logger.warning("Async memory consolidation failed for %s: %s", session_key, e)
+
+            task = asyncio.create_task(_safe_consolidate(), name=f"memory-consolidation:{session_key}")
+            self._async_consolidation_tasks.add(task)
+            task.add_done_callback(lambda t: self._async_consolidation_tasks.discard(t))
+
     def _set_session_routing(self, session_key: str, channel: str, chat_id: str) -> None:
         """Persist runtime routing for compact hook delivery."""
         sm = self._shared_resources.get("state_manager")
@@ -1957,6 +1993,142 @@ class AgentService:
             chat_id=chat_id,
             on_progress=on_progress,
             media=media,
+        )
+
+    async def call_for_structured(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+    ) -> StructuredLLMResponse:
+        """Execute a structured LLM call with messages and tools.
+
+        Used by heartbeat, evaluator, and memory consolidation for
+        single-turn tool-use calls that bypass the interactive SDK session.
+
+        Args:
+            messages: Chat messages (system/user/assistant roles)
+            tools: Tool definitions (OpenAI-style or Anthropic-style)
+            tool_choice: Tool choice strategy
+            max_tokens: Max output tokens
+            temperature: Sampling temperature
+
+        Returns:
+            StructuredLLMResponse with content and optional tool calls
+        """
+        import httpx
+
+        env = self._build_env_config()
+        api_key = env.get("ANTHROPIC_API_KEY")
+        base_url = env.get("ANTHROPIC_BASE_URL")
+
+        if not api_key:
+            return StructuredLLMResponse(
+                content="Error: No API key configured",
+                finish_reason="error",
+            )
+
+        # Separate system messages from conversation messages
+        system_parts: list[str] = []
+        non_system: list[dict[str, Any]] = []
+        for msg in messages:
+            if msg.get("role") == "system":
+                system_parts.append(msg.get("content", ""))
+            else:
+                non_system.append(msg)
+
+        # Build request payload
+        payload: dict[str, Any] = {
+            "model": self._config.model if self._config else "claude-sonnet-4-5",
+            "messages": non_system,
+            "max_tokens": max_tokens or 4096,
+        }
+
+        if system_parts:
+            payload["system"] = "\n".join(system_parts)
+
+        if tools:
+            payload["tools"] = tools
+
+        if tool_choice:
+            payload["tool_choice"] = tool_choice
+
+        if temperature is not None:
+            payload["temperature"] = temperature
+
+        # Build headers
+        headers = {
+            "x-api-key": api_key,
+            "anthropic-version": "2023-06-01",
+            "content-type": "application/json",
+        }
+
+        # Build URL
+        api_base = base_url or "https://api.anthropic.com"
+        url = f"{api_base.rstrip('/')}/v1/messages"
+
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                response = await client.post(url, json=payload, headers=headers)
+                response.raise_for_status()
+                data = response.json()
+
+            # Parse response
+            content_blocks = data.get("content", [])
+            text_parts: list[str] = []
+            tool_calls = []
+
+            for block in content_blocks:
+                block_type = block.get("type")
+                if block_type == "text":
+                    text_parts.append(block.get("text", ""))
+                elif block_type == "tool_use":
+                    tool_calls.append({
+                        "id": block.get("id", ""),
+                        "name": block.get("name", ""),
+                        "input": block.get("input", {}),
+                    })
+
+            return StructuredLLMResponse(
+                content="\n".join(text_parts) if text_parts else "",
+                tool_calls=tool_calls if tool_calls else None,
+                finish_reason=data.get("stop_reason", "end_turn"),
+            )
+        except Exception as e:
+            logger.error("Structured LLM call failed: %s", e)
+            return StructuredLLMResponse(
+                content=f"Error: {e}",
+                finish_reason="error",
+            )
+
+    async def call_for_consolidation(
+        self,
+        *,
+        messages: list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        tool_choice: Any = None,
+    ) -> StructuredLLMResponse:
+        """Execute a structured LLM call for memory consolidation.
+
+        Delegates to call_for_structured with consolidation defaults.
+
+        Args:
+            messages: Chat messages
+            tools: Tool definitions
+            tool_choice: Tool choice strategy
+
+        Returns:
+            StructuredLLMResponse with content and optional tool calls
+        """
+        return await self.call_for_structured(
+            messages=messages,
+            tools=tools,
+            tool_choice=tool_choice,
+            max_tokens=2048,
+            temperature=0.0,
         )
 
     async def call_for_auxiliary(
