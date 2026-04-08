@@ -213,15 +213,12 @@ class AgentService:
             enable_vector_search = bool(getattr(memory_cfg, "enable_vector_search", False))
 
             llm_model = getattr(memory_cfg, "llm_model", None)
-            embedding_model = getattr(memory_cfg, "embedding_model", None)
             llm_config = {"model_name": llm_model} if llm_model else None
-            embedding_config = {"model_name": embedding_model} if embedding_model else None
 
             self._context_builder = ContextBuilder(
                 workspace=workspace_path,
                 use_reme=use_reme,
                 llm_config=llm_config,
-                embedding_config=embedding_config,
                 enable_vector_search=enable_vector_search,
             )
 
