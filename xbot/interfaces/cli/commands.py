@@ -37,8 +37,8 @@ from rich.text import Text
 
 from xbot import __logo__, __version__
 from xbot.agent import AgentService
-from xbot.agent.crew.cli.plan_cmd import crew_plan, crew_run_dynamic
-from xbot.agent.crew.cli.role_cmd import app as roles_app
+from xbot.crew.cli.plan_cmd import crew_plan, crew_run_dynamic
+from xbot.crew.cli.role_cmd import app as roles_app
 from xbot.agent.interaction.permission import CLIPermissionHandler, InteractivePermissionHandler
 from xbot.agent.interaction.progress_coalescer import ProgressCoalescer
 from xbot.agent.task_supervisor import ServiceTaskRegistry
@@ -1420,9 +1420,9 @@ def crew_run(
     """
     from pathlib import Path
 
-    from xbot.agent.crew import CrewOrchestrator, load_crew_config
-    from xbot.agent.crew.config import CrewConfigLoader
-    from xbot.agent.crew.models import parse_crew_config
+    from xbot.crew import CrewOrchestrator, load_crew_config
+    from xbot.crew.config import CrewConfigLoader
+    from xbot.crew.models import parse_crew_config
 
     # 1. Load xbot global config
     xbot_config = _load_runtime_config(config, workspace)
@@ -1510,7 +1510,7 @@ def crew_show(
     config_file: str = typer.Argument(..., help="Path to crew YAML config"),
 ):
     """Display and validate a crew config file."""
-    from xbot.agent.crew import load_crew_config
+    from xbot.crew import load_crew_config
 
     try:
         crew_config = load_crew_config(Path(config_file))
@@ -1560,7 +1560,7 @@ def crew_init(
     path: str | None = typer.Option(None, "--path", "-p", help="Parent directory (default: current dir)"),
 ):
     """Initialize a new crew project with a template."""
-    from xbot.agent.crew.templates import get_template, init_project, list_templates
+    from xbot.crew.templates import get_template, init_project, list_templates
 
     # Validate template if specified
     if template:
@@ -1603,7 +1603,7 @@ def crew_init(
 @crew_app.command("templates")
 def crew_templates():
     """List available crew templates."""
-    from xbot.agent.crew.templates import list_templates
+    from xbot.crew.templates import list_templates
 
     templates = list_templates()
 
@@ -1632,7 +1632,7 @@ def crew_validate(
     dry_run: bool = typer.Option(False, "--dry-run", help="Simulate execution without running"),
 ):
     """Validate a crew configuration file."""
-    from xbot.agent.crew import load_crew_config
+    from xbot.crew import load_crew_config
 
     console.print(f"\n[bold]Validating:[/bold] {config_file}\n")
 
@@ -1810,8 +1810,8 @@ def crew_resume(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
     """Resume a crew from a checkpoint."""
-    from xbot.agent.crew import CrewOrchestrator, load_crew_config
-    from xbot.agent.crew.context import load_checkpoint
+    from xbot.crew import CrewOrchestrator, load_crew_config
+    from xbot.crew.context import load_checkpoint
 
     project_path = Path(project_dir).resolve()
     checkpoint_dir = project_path / ".xbot" / "crew_checkpoints"
@@ -1979,7 +1979,7 @@ def crew_graph(
     mermaid: bool = typer.Option(False, "--mermaid", help="Output Mermaid diagram format"),
 ):
     """Generate a task dependency graph."""
-    from xbot.agent.crew import load_crew_config
+    from xbot.crew import load_crew_config
 
     try:
         crew_config = load_crew_config(Path(config_file))
