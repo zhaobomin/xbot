@@ -572,7 +572,7 @@ class AgentService:
     def _init_tool_adapter(self) -> None:
         """Initialize the ToolAdapter for built-in tools access."""
         try:
-            from xbot.agent.capabilities.tool_adapter import ToolAdapter
+            from xbot.capabilities.tool_adapter import ToolAdapter
 
             workspace = self._shared_resources.get("workspace", ".")
             tools_config = self._shared_resources.get("tools_config")

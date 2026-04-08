@@ -24,13 +24,13 @@ __all__ = [
 
 def __getattr__(name: str) -> Any:
     lazy_exports: dict[str, tuple[str, str]] = {
-        "ContextBuilder": ("xbot.agent.context.builder", "ContextBuilder"),
-        "CapabilityCatalog": ("xbot.agent.capabilities.catalog", "CapabilityCatalog"),
-        "CapabilityPolicy": ("xbot.agent.capabilities.policy", "CapabilityPolicy"),
-        "MemoryStore": ("xbot.agent.memory.store", "MemoryStore"),
-        "SkillsLoader": ("xbot.agent.capabilities.skills_loader", "SkillsLoader"),
-        "AgentResponse": ("xbot.agent.protocol", "AgentResponse"),
-        "AgentContext": ("xbot.agent.protocol", "AgentContext"),
+        "ContextBuilder": ("xbot.runtime.core.context.builder", "ContextBuilder"),
+        "CapabilityCatalog": ("xbot.capabilities.catalog", "CapabilityCatalog"),
+        "CapabilityPolicy": ("xbot.capabilities.policy", "CapabilityPolicy"),
+        "MemoryStore": ("xbot.memory.store", "MemoryStore"),
+        "SkillsLoader": ("xbot.capabilities.skills_loader", "SkillsLoader"),
+        "AgentResponse": ("xbot.runtime.core.protocol", "AgentResponse"),
+        "AgentContext": ("xbot.runtime.core.protocol", "AgentContext"),
         "AgentService": ("xbot.runtime.core.service", "AgentService"),
     }
     module_attr = lazy_exports.get(name)
