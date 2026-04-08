@@ -1,6 +1,6 @@
-"""Message bus module for decoupled channel-agent communication."""
+"""Compatibility facade for bus package.
 
-from xbot.bus.events import InboundMessage, OutboundMessage
-from xbot.bus.queue import MessageBus
+Preferred location: ``xbot.platform.bus``.
+"""
 
-__all__ = ["MessageBus", "InboundMessage", "OutboundMessage"]
+from xbot.platform.bus import *  # noqa: F403
