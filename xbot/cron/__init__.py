@@ -1,6 +1,8 @@
-"""Cron service for scheduled agent tasks."""
+"""Compatibility facade for cron package.
 
-from xbot.cron.service import CronService
-from xbot.cron.types import CronJob, CronSchedule
+Preferred location: ``xbot.runtime.system.cron``.
+"""
+
+from xbot.runtime.system.cron import CronJob, CronSchedule, CronService
 
 __all__ = ["CronService", "CronJob", "CronSchedule"]

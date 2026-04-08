@@ -1,5 +1,8 @@
-"""Heartbeat service for periodic agent wake-ups."""
+"""Compatibility facade for heartbeat package.
 
-from xbot.heartbeat.service import HeartbeatService
+Preferred location: ``xbot.runtime.system.heartbeat``.
+"""
+
+from xbot.runtime.system.heartbeat import HeartbeatService
 
 __all__ = ["HeartbeatService"]
