@@ -1,6 +1,6 @@
-"""Agent tools module."""
+"""Compatibility facade for agent tools package.
 
-from xbot.agent.tools.base import Tool
-from xbot.agent.tools.registry import ToolRegistry
+Preferred location: ``xbot.tools``.
+"""
 
-__all__ = ["Tool", "ToolRegistry"]
+from xbot.tools import *  # noqa: F403
