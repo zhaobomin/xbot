@@ -7,7 +7,6 @@ from pathlib import Path
 from typing import Any, Callable
 
 from xbot.capabilities.catalog import CapabilityCatalog
-from xbot.capabilities.skills_loader import SkillsLoader
 
 
 @dataclass
@@ -101,13 +100,6 @@ class ServiceContainer:
         return runtime
 
     def list_skills(self) -> list[dict[str, Any]]:
-        loader = SkillsLoader(self.config.workspace_path)
-        result = []
-        for item in loader.list_skills(filter_unavailable=False):
-            result.append({
-                "name": item["name"],
-                "path": item["path"],
-                "source": item["source"],
-                "type": item["type"],
-            })
-        return result
+        # Skills are now managed by Claude Code SDK natively via add_dirs
+        # Return empty list as skills are not tracked by xbot anymore
+        return []

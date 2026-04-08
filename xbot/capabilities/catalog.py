@@ -6,8 +6,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from xbot.capabilities.skills_loader import SkillsLoader
-
 _TOOL_ALIASES = {
     "shell": "exec",
 }
@@ -59,25 +57,13 @@ class CapabilityCatalog:
 
     def __init__(self, workspace: str | Path, builtin_skills_dir: Path | None = None):
         self.workspace = Path(workspace)
-        self.skills = SkillsLoader(self.workspace, builtin_skills_dir=builtin_skills_dir)
+        # Skills are now loaded natively by Claude Code SDK via add_dirs parameter
+        # SkillsLoader has been removed as part of migration to SDK native mode
 
     def list_skills(self, *, include_unavailable: bool = False) -> list[SkillCapability]:
-        records = self.skills.list_skills(filter_unavailable=not include_unavailable)
-        result: list[SkillCapability] = []
-        for record in records:
-            try:
-                tool_exposable = self.skills.is_tool_exposable(record["name"])
-            except (FileNotFoundError, OSError):
-                tool_exposable = False
-            result.append(
-                SkillCapability(
-                    name=record["name"],
-                    path=record["path"],
-                    source=record["source"],
-                    tool_exposable=tool_exposable,
-                )
-            )
-        return result
+        # Skills are now managed by Claude Code SDK natively
+        # This method returns empty list as skills are loaded via add_dirs
+        return []
 
     @staticmethod
     def list_builtin_tools() -> list[BuiltinToolCapability]:

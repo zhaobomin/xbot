@@ -1,7 +1,7 @@
 """Integration tests for xbot's major architecture components.
 
 These tests verify the interactions between AgentService, ClientPool,
-MessageBus, SessionStateMachine, SkillsLoader, RuntimeResponseHandlers,
+MessageBus, SessionStateMachine, RuntimeResponseHandlers,
 and the config system without requiring real API keys or network access.
 """
 
@@ -566,135 +566,7 @@ class TestRuntimeResponseHandlersDelegation:
 
 
 # ---------------------------------------------------------------------------
-# 7. SkillsLoader Integration
-# ---------------------------------------------------------------------------
-
-class TestSkillsLoaderIntegration:
-    """Test SkillsLoader with real filesystem skills."""
-
-    @pytest.fixture
-    def skill_workspace(self, tmp_path: Path) -> Path:
-        skills_dir = tmp_path / "skills"
-
-        # Create several test skills
-        weather = skills_dir / "weather"
-        weather.mkdir(parents=True)
-        (weather / "SKILL.md").write_text(
-            "---\nname: weather\ndescription: Get weather\n"
-            "tool_exposable: true\n---\n# Weather\nFetch weather data."
-        )
-
-        cron = skills_dir / "cron-job"
-        cron.mkdir(parents=True)
-        (cron / "SKILL.md").write_text(
-            "---\nname: cron-job\ndescription: Schedule tasks\n---\n"
-            "# Cron\nSchedule periodic tasks."
-        )
-
-        hidden = skills_dir / "internal"
-        hidden.mkdir(parents=True)
-        (hidden / "SKILL.md").write_text(
-            "---\nname: internal\ndescription: Internal only\n"
-            "user-invocable: false\ndisable-model-invocation: true\n---\nInternal."
-        )
-
-        return tmp_path
-
-    def test_list_skills_finds_all(self, skill_workspace: Path) -> None:
-        from xbot.capabilities.skills_loader import SkillsLoader
-
-        loader = SkillsLoader(skill_workspace, builtin_skills_dir=skill_workspace / "no_builtin")
-        skills = loader.list_skills(filter_unavailable=False)
-        names = [s["name"] for s in skills]
-
-        assert "weather" in names
-        assert "cron-job" in names
-        assert "internal" in names
-
-    def test_list_available_skills_filters_hidden(self, skill_workspace: Path) -> None:
-        from xbot.capabilities.skills_loader import SkillsLoader
-
-        loader = SkillsLoader(skill_workspace, builtin_skills_dir=skill_workspace / "no_builtin")
-        skills = loader.list_available_skills()
-        names = [s["name"] for s in skills]
-
-        assert "weather" in names
-        assert "cron-job" in names
-        # internal has disable-model-invocation: true, should be filtered
-        assert "internal" not in names
-
-    def test_load_skill_content(self, skill_workspace: Path) -> None:
-        from xbot.capabilities.skills_loader import SkillsLoader
-
-        loader = SkillsLoader(skill_workspace, builtin_skills_dir=skill_workspace / "no_builtin")
-        content = loader.load_skill("weather")
-
-        assert content is not None
-        assert "Fetch weather data" in content
-
-    def test_load_skill_not_found(self, skill_workspace: Path) -> None:
-        from xbot.capabilities.skills_loader import SkillsLoader
-
-        loader = SkillsLoader(skill_workspace, builtin_skills_dir=skill_workspace / "no_builtin")
-        assert loader.load_skill("nonexistent") is None
-
-    def test_is_model_invocable(self, skill_workspace: Path) -> None:
-        from xbot.capabilities.skills_loader import SkillsLoader
-
-        loader = SkillsLoader(skill_workspace, builtin_skills_dir=skill_workspace / "no_builtin")
-
-        assert loader.is_model_invocable("weather") is True
-        assert loader.is_model_invocable("internal") is False
-
-    def test_is_user_invocable(self, skill_workspace: Path) -> None:
-        from xbot.capabilities.skills_loader import SkillsLoader
-
-        loader = SkillsLoader(skill_workspace, builtin_skills_dir=skill_workspace / "no_builtin")
-
-        assert loader.is_user_invocable("weather") is True
-        assert loader.is_user_invocable("internal") is False
-
-    def test_is_tool_exposable(self, skill_workspace: Path) -> None:
-        from xbot.capabilities.skills_loader import SkillsLoader
-
-        loader = SkillsLoader(skill_workspace, builtin_skills_dir=skill_workspace / "no_builtin")
-
-        assert loader.is_tool_exposable("weather") is True
-        assert loader.is_tool_exposable("cron-job") is False
-
-    def test_strip_frontmatter(self, skill_workspace: Path) -> None:
-        from xbot.capabilities.skills_loader import SkillsLoader
-
-        loader = SkillsLoader(skill_workspace, builtin_skills_dir=skill_workspace / "no_builtin")
-        content = "---\nname: test\n---\n# Hello"
-        stripped = loader.strip_frontmatter(content)
-
-        assert "---" not in stripped
-        assert "# Hello" in stripped
-
-    def test_workspace_overrides_builtin(self, tmp_path: Path) -> None:
-        from xbot.capabilities.skills_loader import SkillsLoader
-
-        workspace_skills = tmp_path / "skills"
-        builtin_skills = tmp_path / "builtin"
-
-        ws = workspace_skills / "shared"
-        ws.mkdir(parents=True)
-        (ws / "SKILL.md").write_text("---\nname: shared\ndescription: ws version\n---\nworkspace")
-
-        bi = builtin_skills / "shared"
-        bi.mkdir(parents=True)
-        (bi / "SKILL.md").write_text("---\nname: shared\ndescription: builtin version\n---\nbuiltin")
-
-        loader = SkillsLoader(tmp_path, builtin_skills_dir=builtin_skills)
-        content = loader.load_skill("shared")
-
-        assert content is not None
-        assert "workspace" in content
-
-
-# ---------------------------------------------------------------------------
-# 8. CapabilityCatalog + Policy Integration
+# 7. CapabilityCatalog + Policy Integration
 # ---------------------------------------------------------------------------
 
 class TestCapabilityCatalogPolicyIntegration:
@@ -748,25 +620,26 @@ class TestCapabilityCatalogPolicyIntegration:
         assert "mcp_docs_search" in resolution.allowed
         assert "mcp_github_issues" in resolution.allowed
 
-    def test_policy_allows_skill_tools(self, tmp_path: Path) -> None:
+    def test_policy_allows_skill_tools(self) -> None:
+        # Skills are now loaded natively by Claude Code SDK
+        # This test validates that skill_ prefixed tools are recognized
         from xbot.capabilities.catalog import CapabilityCatalog
         from xbot.capabilities.policy import CapabilityPolicy
 
-        skills_dir = tmp_path / "skills" / "weather"
-        skills_dir.mkdir(parents=True)
-        (skills_dir / "SKILL.md").write_text(
-            "---\ndescription: weather\ntool_exposable: true\n---\nweather body"
-        )
-
-        catalog = CapabilityCatalog(tmp_path)
+        catalog = CapabilityCatalog(Path("/tmp/nonexistent"))
         policy = CapabilityPolicy(catalog)
 
+        # SDK-native skills are managed by Claude Code, not xbot
+        # skill_ tools should be skipped/passed through
         resolution = policy.resolve_agent_tools(
-            ["skill_weather"],
+            ["skill_weather", "read_file"],
             backend="claude_sdk",
         )
 
-        assert "skill_weather" in resolution.allowed
+        # Skills are managed by SDK, so skill_weather is not in allowed list
+        # but read_file (builtin) should be allowed
+        assert "read_file" in resolution.allowed
+        assert "skill_weather" not in resolution.allowed  # SDK manages this
 
 
 # ---------------------------------------------------------------------------
@@ -1062,25 +935,18 @@ class TestCrossComponentIntegration:
         # Verify bus is accessible
         assert handlers._bus is bus
 
-    def test_skills_and_catalog_integration(self, tmp_path: Path) -> None:
-        """SkillsLoader feeds CapabilityCatalog correctly."""
+    def test_skills_and_catalog_integration(self) -> None:
+        """CapabilityCatalog returns empty skills list as SDK manages skills."""
         from xbot.capabilities.catalog import CapabilityCatalog
 
-        skills_dir = tmp_path / "skills" / "weather"
-        skills_dir.mkdir(parents=True)
-        (skills_dir / "SKILL.md").write_text(
-            "---\nname: weather\ndescription: Get weather\ntool_exposable: true\n---\ncontent"
-        )
-
-        catalog = CapabilityCatalog(tmp_path, builtin_skills_dir=tmp_path / "no_builtin")
+        # Skills are now loaded natively by Claude Code SDK
+        catalog = CapabilityCatalog(Path("/tmp/nonexistent"))
 
         skill_caps = catalog.list_skills(include_unavailable=True)
-        assert len(skill_caps) == 1
-        assert skill_caps[0].name == "weather"
-        assert skill_caps[0].tool_exposable is True
+        assert len(skill_caps) == 0  # Skills managed by SDK
 
         tool_names = catalog.skill_tool_names(include_unavailable=True)
-        assert "skill_weather" in tool_names
+        assert len(tool_names) == 0  # No xbot-managed skills
 
     @pytest.mark.asyncio
     async def test_multiple_sessions_independent_state(

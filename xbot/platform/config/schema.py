@@ -44,6 +44,9 @@ class AgentDefaults(Base):
     # Deprecated compatibility field: accepted from old configs but ignored at runtime.
     memory_window: int | None = Field(default=None, exclude=True)
     reasoning_effort: str | None = None  # low / medium / high — enables LLM thinking mode
+    # 是否将 AGENTS.md/SOUL.md/USER.md/TOOLS.md 加载到 system prompt
+    # 设为 false 时仅禁用这 4 个 bootstrap 文件加载，identity/memory 等部分仍保留
+    load_bootstrap_files: bool = True
 
     @property
     def should_warn_deprecated_memory_window(self) -> bool:

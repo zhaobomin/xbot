@@ -215,11 +215,16 @@ class AgentService:
             llm_model = getattr(memory_cfg, "llm_model", None)
             llm_config = {"model_name": llm_model} if llm_model else None
 
+            # Read load_bootstrap_files from agents.defaults config
+            agents_defaults = getattr(getattr(runtime_config, "agents", None), "defaults", None)
+            load_bootstrap = getattr(agents_defaults, "load_bootstrap_files", True)
+
             self._context_builder = ContextBuilder(
                 workspace=workspace_path,
                 use_reme=use_reme,
                 llm_config=llm_config,
                 enable_vector_search=enable_vector_search,
+                load_bootstrap_files=load_bootstrap,
             )
 
             # Ensure MemoryTool shares the same memory store as ContextBuilder.
@@ -696,6 +701,69 @@ class AgentService:
             append_xbot_prompt,
         )
 
+    def _build_system_prompt(self) -> str:
+        """Build the system prompt for the agent.
+
+        Restores the ContextBuilder → system prompt link from v0.3.35
+        (formerly in OptionsBuilder._build_system_prompt).
+
+        Priority:
+          1. Explicit system_prompt from AgentConfig (non-empty) — preserves old behaviour.
+          2. ContextBuilder.build_system_prompt() when available.
+          3. Bare-minimum fallback string.
+
+        Returns:
+            The complete system prompt string.
+        """
+        # Priority 1: explicit system_prompt in AgentConfig wins
+        if self._config and self._config.system_prompt:
+            logger.debug("[AgentService] Using explicit system_prompt from AgentConfig")
+            return self._config.system_prompt
+
+        # Priority 2: build via ContextBuilder
+        if self._context_builder is not None:
+            base_prompt = self._context_builder.build_system_prompt()
+            identity_section = self._build_runtime_identity_section()
+            if identity_section:
+                base_prompt = f"{base_prompt}\n\n{identity_section}"
+            logger.debug(
+                "[AgentService] Built system prompt via ContextBuilder (%d chars)",
+                len(base_prompt),
+            )
+            return base_prompt
+
+        # Fallback
+        logger.warning("[AgentService] ContextBuilder not available, using default system prompt")
+        return "你是 xbot，一个智能助手。"
+
+    def _build_runtime_identity_section(self) -> str:
+        """Build runtime identity section appended to the system prompt.
+
+        Reports the configured model and provider so the agent can answer
+        “which model are you running?” accurately even when wrapped by an SDK.
+        """
+        config = self._shared_resources.get("config")
+        if config is None:
+            return ""
+
+        defaults = getattr(getattr(config, "agents", None), "defaults", None)
+        if defaults is None:
+            return ""
+
+        lines = [
+            "## Runtime Identity",
+            "",
+            "- Agent name: `xbot`",
+            "- Agent backend: `claude_sdk`",
+            f"- Configured model: `{defaults.model}`",
+            f"- Configured provider: `{defaults.provider}`",
+            "",
+            "When the user asks which model, provider, or agent is running, "
+            "report the configured values above exactly.",
+            "Do not infer or substitute a different model name from the surrounding SDK or toolchain.",
+        ]
+        return "\n".join(lines)
+
     async def _get_or_create_client(
         self,
         session_key: str,
@@ -758,10 +826,13 @@ class AgentService:
         add_dirs = self._build_skill_add_dirs(workspace_expanded)
         plugins = self._build_plugin_configs(workspace_expanded)
 
+        # Build system prompt via ContextBuilder (restores v0.3.35 behaviour)
+        system_prompt = self._build_system_prompt()
+
         options = ClaudeAgentOptions(
             cwd=workspace_expanded,
             model=self._config.model,
-            system_prompt=self._config.system_prompt,
+            system_prompt=system_prompt,
             mcp_servers=mcp_servers if mcp_servers else None,
             agents=agents,
             env=env,

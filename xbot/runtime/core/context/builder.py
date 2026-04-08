@@ -6,7 +6,6 @@ import platform
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from xbot.capabilities.skills_loader import SkillsLoader
 from xbot.memory.store import MemoryStore
 from xbot.runtime.core.context.commands import CommandsLoader
 from xbot.platform.logging.core import get_logger
@@ -30,6 +29,7 @@ class ContextBuilder:
         use_reme: bool = True,
         llm_config: dict[str, Any] | None = None,
         enable_vector_search: bool = False,
+        load_bootstrap_files: bool = True,
     ):
         """Initialize context builder.
 
@@ -38,10 +38,13 @@ class ContextBuilder:
             use_reme: Use ReMe memory backend if available
             llm_config: LLM configuration for memory summarization
             enable_vector_search: Enable vector-based memory search
+            load_bootstrap_files: Whether to load AGENTS.md/SOUL.md/USER.md/TOOLS.md
+                into the system prompt. Set to False to skip bootstrap files while
+                keeping identity/memory sections intact.
         """
         self.workspace = workspace
-        self.skills = SkillsLoader(workspace)
         self.commands = CommandsLoader(workspace)
+        self._load_bootstrap_files_enabled = load_bootstrap_files
 
         reme_available = False
         reme_store_cls = None
@@ -100,60 +103,7 @@ class ContextBuilder:
         if memory:
             parts.append(f"# Memory\n\n{memory}")
 
-        # Build lightweight Skills Catalog (Claude Code Level 1)
-        # Full skill content is loaded on-demand via load_skill_content tool (Level 2)
-        skills_catalog = self._build_skills_catalog()
-        if skills_catalog:
-            parts.append(skills_catalog)
-
         return "\n\n---\n\n".join(parts)
-
-    def _build_skills_catalog(self) -> str:
-        """Build lightweight Skills Catalog with descriptions only.
-
-        This implements Claude Code's Level 1 lazy loading:
-        - Only skill names and descriptions are included in the system prompt
-        - Full content is loaded on-demand via load_skill_content tool
-        - Supporting files are loaded via read_file tool (Level 3)
-        """
-        skills = self.skills.list_available_skills()
-        if not skills:
-            return ""
-
-        lines = [
-            "# Active Skills",
-            "",
-            "The following skills extend your capabilities. To use a skill, read its SKILL.md file using the read_file tool.",
-            "Skills with available=\"false\" need dependencies installed first - you can try installing them with apt/brew.",
-            "",
-            "<skills>",
-        ]
-        all_skill_locations = self.skills.list_skills(filter_unavailable=False)
-
-        for skill in skills:
-            available = skill.get("available", True)
-            status = "true" if available else "false"
-            name = skill["name"]
-            desc = skill.get("description", name)
-            # Find location for this skill
-            loc = next((s["path"] for s in all_skill_locations if s["name"] == name), "")
-
-            lines.append(f'  <skill available="{status}">')
-            lines.append(f"    <name>{name}</name>")
-            lines.append(f"    <description>{desc}</description>")
-            lines.append(f"    <location>{loc}</location>")
-
-            # Show missing requirements for unavailable skills
-            if not available and skill.get("requires"):
-                lines.append(f"    <requires>{skill['requires']}</requires>")
-
-            lines.append("  </skill>")
-
-        lines.append("</skills>")
-        lines.append("")
-        lines.append("When a skill matches the user's request, invoke the Skill tool.")
-
-        return "\n".join(lines)
 
     def _get_identity(self) -> str:
         """Get the core identity section."""
@@ -208,7 +158,13 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         return ContextBuilder._RUNTIME_CONTEXT_TAG + "\n" + "\n".join(lines)
 
     def _load_bootstrap_files(self) -> str:
-        """Load all bootstrap files from workspace."""
+        """Load all bootstrap files from workspace.
+
+        Returns empty string when load_bootstrap_files is disabled.
+        """
+        if not self._load_bootstrap_files_enabled:
+            return ""
+
         parts = []
 
         for filename in self.BOOTSTRAP_FILES:

@@ -12,7 +12,6 @@ from xbot.capabilities.catalog import canonical_tool_name
 from xbot.tools.cron import CronTool
 from xbot.tools.memory import MemoryTool
 from xbot.tools.message import MessageTool
-from xbot.tools.skill_loader import LoadSkillContentTool
 from xbot.tools.web import WebFetchTool, WebSearchTool
 from xbot.platform.logging.core import get_logger
 
@@ -42,8 +41,8 @@ class ToolAdapter:
         workspace: str,
         tools_config: Any = None,
         shared_resources: dict[str, Any] | None = None,
-        skills_loader: Any = None,
-        skill_progress_callback: Any = None,
+        skills_loader: Any = None,  # Deprecated: Skills are now loaded by SDK natively
+        skill_progress_callback: Any = None,  # Deprecated
     ):
         """Initialize the tool adapter.
 
@@ -51,8 +50,8 @@ class ToolAdapter:
             workspace: Workspace path
             tools_config: Tools configuration
             shared_resources: Shared resources for tools that need them
-            skills_loader: SkillsLoader instance for skill loading tool
-            skill_progress_callback: Optional callback for skill loading progress
+            skills_loader: Deprecated - Skills are now loaded by Claude Code SDK natively
+            skill_progress_callback: Deprecated
         """
         self.workspace = Path(workspace)
         self.tools_config = tools_config
@@ -151,12 +150,8 @@ class ToolAdapter:
             memory_store=memory_store,
         )
 
-        # Skill loading tool - for on-demand skill content loading
-        if self.skills_loader:
-            self._tools["load_skill_content"] = LoadSkillContentTool(
-                skills_loader=self.skills_loader,
-                progress_callback=self.skill_progress_callback,
-            )
+        # Note: LoadSkillContentTool has been removed
+        # Skills are now loaded natively by Claude Code SDK via add_dirs parameter
 
     def _ensure_core_tools_registered(self) -> None:
         """Ensure core xbot tools are registered even if Python skills were synced first.
