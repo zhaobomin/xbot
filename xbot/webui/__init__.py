@@ -1,5 +1,6 @@
-"""Standalone WebUI adapter for xbot."""
+"""Compatibility package for WebUI.
 
-from xbot.webui.app import create_app
+Preferred location: ``xbot.interfaces.webui``.
+"""
 
-__all__ = ["create_app"]
+from xbot.interfaces.webui import *  # noqa: F403
