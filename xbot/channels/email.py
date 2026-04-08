@@ -1,12 +1,12 @@
 """Email channel implementation using IMAP polling + SMTP replies."""
 
 import asyncio
-from collections import OrderedDict
 import html
 import imaplib
 import re
 import smtplib
 import ssl
+from collections import OrderedDict
 from datetime import date
 from email import policy
 from email.header import decode_header, make_header
@@ -15,17 +15,15 @@ from email.parser import BytesParser
 from email.utils import parseaddr
 from typing import Any
 
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
 from pydantic import Field
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
 from xbot.config.schema import Base
+from xbot.logging import get_logger
 
-
+logger = get_logger(__name__)
 class EmailConfig(Base):
     """Email channel configuration (IMAP inbound + SMTP outbound)."""
 
@@ -133,7 +131,7 @@ class EmailChannel(BaseChannel):
                         content=item["content"],
                         metadata=item.get("metadata", {}),
                     )
-            except Exception as e:
+            except Exception:
                 logger.exception("Email polling error")
 
             await asyncio.sleep(poll_seconds)

@@ -210,7 +210,6 @@ class CrewPlanner:
 
         Delegates to GoalAnalyzer.infer_capabilities.
         """
-        from xbot.agent.crew.planner.models import Capability
         return self.goal_analyzer.infer_capabilities(goal)
 
     def _infer_complexity(self, goal: str) -> str:

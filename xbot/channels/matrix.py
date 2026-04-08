@@ -5,18 +5,23 @@ import mimetypes
 from pathlib import Path
 from typing import Any, Literal, TypeAlias
 
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
 from pydantic import Field
 
+from xbot.bus.events import OutboundMessage
+from xbot.bus.queue import MessageBus
+from xbot.channels.base import BaseChannel
+from xbot.config.paths import get_data_dir, get_media_dir
+from xbot.config.schema import Base
+from xbot.logging import get_logger
+from xbot.utils.helpers import safe_filename
+
+logger = get_logger(__name__)
 try:
     import nh3
     from mistune import create_markdown
     from nio import (
         AsyncClient,
         AsyncClientConfig,
-        ContentRepositoryConfigError,
         DownloadError,
         InviteEvent,
         JoinError,
@@ -37,13 +42,6 @@ except ImportError as e:
     raise ImportError(
         "Matrix dependencies not installed. Run: pip install xbot[matrix]"
     ) from e
-
-from xbot.bus.events import OutboundMessage
-from xbot.bus.queue import MessageBus
-from xbot.channels.base import BaseChannel
-from xbot.config.paths import get_data_dir, get_media_dir
-from xbot.config.schema import Base
-from xbot.utils.helpers import safe_filename
 
 TYPING_NOTICE_TIMEOUT_MS = 30_000
 # Must stay below TYPING_NOTICE_TIMEOUT_MS so the indicator doesn't expire mid-processing.

@@ -6,18 +6,14 @@ import platform
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
-
-from xbot.utils.helpers import current_time_str
-
+from xbot.agent.capabilities.skills_loader import SkillsLoader
 from xbot.agent.context.commands import CommandsLoader
 from xbot.agent.memory.store import MemoryStore
-from xbot.agent.capabilities.skills_loader import SkillsLoader
-from xbot.utils.helpers import build_assistant_message, detect_image_mime
+from xbot.logging import get_logger
 from xbot.utils.file_reader import FileType, classify_file, format_file_reference
+from xbot.utils.helpers import build_assistant_message, current_time_str, detect_image_mime
 
+logger = get_logger(__name__)
 if TYPE_CHECKING:
     from xbot.agent.memory.reme import ReMeMemoryStore
 
@@ -51,7 +47,8 @@ class ContextBuilder:
         reme_store_cls = None
         if use_reme:
             try:
-                from xbot.agent.memory.reme import ReMeMemoryStore as _ReMeMemoryStore, _REME_AVAILABLE
+                from xbot.agent.memory.reme import _REME_AVAILABLE
+                from xbot.agent.memory.reme import ReMeMemoryStore as _ReMeMemoryStore
 
                 reme_available = bool(_REME_AVAILABLE)
                 reme_store_cls = _ReMeMemoryStore

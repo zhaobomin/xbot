@@ -6,9 +6,9 @@ including context compaction notifications.
 
 from __future__ import annotations
 
+import inspect
 from dataclasses import dataclass
 from datetime import datetime
-import inspect
 from typing import TYPE_CHECKING, Any, Callable
 
 from xbot.logging import get_logger
@@ -16,7 +16,7 @@ from xbot.logging import get_logger
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from claude_agent_sdk import PreCompactHookInput, HookContext
+    from claude_agent_sdk import HookContext, PreCompactHookInput
 
 
 @dataclass

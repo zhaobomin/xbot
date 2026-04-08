@@ -8,9 +8,6 @@ import time
 import unicodedata
 from typing import Any, Literal
 
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
 from pydantic import Field
 from telegram import BotCommand, ReplyParameters, Update
 from telegram.error import Conflict, TimedOut
@@ -22,9 +19,11 @@ from xbot.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
 from xbot.config.paths import get_media_dir
 from xbot.config.schema import Base
+from xbot.logging import get_logger
 from xbot.security.network import validate_url_target
 from xbot.utils.helpers import split_message
 
+logger = get_logger(__name__)
 TELEGRAM_MAX_MESSAGE_LEN = 4000  # Telegram message character limit
 TELEGRAM_REPLY_CONTEXT_MAX_LEN = TELEGRAM_MAX_MESSAGE_LEN  # Max length for reply context in user message
 
@@ -474,7 +473,7 @@ class TelegramChannel(BaseChannel):
                     reply_parameters=reply_params,
                     **(thread_kwargs or {}),
                 )
-            except Exception as e2:
+            except Exception:
                 logger.exception("Error sending Telegram message")
 
     async def _send_with_streaming(

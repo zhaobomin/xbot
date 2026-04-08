@@ -19,16 +19,12 @@ Usage:
 from __future__ import annotations
 
 import asyncio
-from contextvars import ContextVar
 import json
 import time
 import uuid
 from contextlib import nullcontext
+from contextvars import ContextVar
 from typing import Any, Literal
-
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
 
 from xbot.bus.queue import (
     InteractionRequest,
@@ -36,6 +32,9 @@ from xbot.bus.queue import (
     MessageBus,
     PermissionRequest,
 )
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class BasePermissionHandler:
@@ -466,8 +465,6 @@ class PermissionRequestHandler(BasePermissionHandler):
         if not session_key or session_key not in self._session_context:
             logger.warning("No session context for AskUserQuestion")
             return "deny", "No active session context"
-
-        ctx = self._session_context[session_key]
 
         # 提取问题和选项
         questions = tool_input.get("questions", [])

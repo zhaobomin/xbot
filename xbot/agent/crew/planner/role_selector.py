@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import json
-import re
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from xbot.agent.crew.planner.models import (
     Capability,
     GoalAnalysis,
     RoleDefinition,
-    RoleGap,
     RolePool,
     RoleSelection,
 )
@@ -101,7 +98,7 @@ class RoleSelector:
 
         return RoleSelection(
             selected_roles=selected,
-            selection_reason={r.name: f"Capability match for goal" for r in selected},
+            selection_reason={r.name: "Capability match for goal" for r in selected},
             skipped_roles=[r.name for r, _ in candidates if r not in selected],
             coverage_score=coverage,
             created_roles=created_roles,

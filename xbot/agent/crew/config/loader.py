@@ -23,7 +23,6 @@ from xbot.agent.crew.config.merger import (
 from xbot.agent.crew.config.variables import (
     VariableError,
     VariableResolver,
-    resolve_config_variables,
 )
 
 

@@ -14,7 +14,6 @@ from typing import Literal
 
 from xbot.providers.registry import PROVIDERS, find_by_name
 
-
 # Set of SDK-compatible provider names (all providers in the slimmed-down registry)
 SDK_COMPATIBLE_PROVIDER_NAMES = frozenset(spec.name for spec in PROVIDERS)
 

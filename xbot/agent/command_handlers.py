@@ -9,9 +9,9 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
-from xbot.logging import get_logger
 from xbot.agent.state.machine import SessionPhase
 from xbot.bus.events import InboundMessage, OutboundMessage
+from xbot.logging import get_logger
 
 if TYPE_CHECKING:
     from xbot.agent.service import AgentService

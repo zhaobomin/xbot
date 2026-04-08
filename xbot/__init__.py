@@ -16,9 +16,10 @@ def _git_info() -> dict[str, str]:
     repo = Path(__file__).resolve().parent.parent
     info: dict[str, str] = {}
     try:
-        run = lambda cmd: subprocess.check_output(
-            cmd, cwd=repo, stderr=subprocess.DEVNULL, timeout=5
-        ).decode().strip()
+        def run(cmd: list[str]) -> str:
+            return subprocess.check_output(
+                cmd, cwd=repo, stderr=subprocess.DEVNULL, timeout=5
+            ).decode().strip()
 
         info["commit"] = run(["git", "rev-parse", "--short=8", "HEAD"])
         info["branch"] = run(["git", "rev-parse", "--abbrev-ref", "HEAD"])

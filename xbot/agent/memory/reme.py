@@ -13,16 +13,13 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
-from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from xbot.logging import get_logger
-
-logger = get_logger(__name__)
-
 from xbot.utils.helpers import ensure_dir
 
+logger = get_logger(__name__)
 if TYPE_CHECKING:
     from xbot.agent.service import AgentService
 
@@ -37,7 +34,7 @@ def _patch_sqlite3() -> bool:
             try:
                 import pysqlite3
                 sys.modules['sqlite3'] = pysqlite3
-                logger.debug(f"sqlite3 patched with pysqlite3")
+                logger.debug("sqlite3 patched with pysqlite3")
                 return True
             except ImportError:
                 logger.warning("pysqlite3 not available, ReMe may not work")

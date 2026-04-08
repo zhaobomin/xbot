@@ -8,11 +8,6 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
-
-from xbot.agent.crew.agent_pool import AgentPool
 from xbot.agent.crew.context import CrewExecutionContext, load_checkpoint
 from xbot.agent.crew.models import CrewConfig, CrewResult, ProcessType, TaskResult
 from xbot.agent.crew.process import HierarchicalProcess, SequentialProcess
@@ -21,8 +16,9 @@ from xbot.agent.crew.state import CrewPhase, CrewStateManager, TaskPhase
 from xbot.agent.crew.validation import CrewValidator
 from xbot.agent.interaction.permission import BasePermissionHandler
 from xbot.config.schema import Config
+from xbot.logging import get_logger
 
-
+logger = get_logger(__name__)
 class CrewOrchestrator:
     """Assembles pool, context, state manager, and process to run a crew.
 
@@ -69,7 +65,7 @@ class CrewOrchestrator:
         if task_errors:
             # Return early with validation failure
             error_messages = [e.to_result_message() for e in task_errors]
-            summary = f"Validation failed:\n" + "\n".join(f"  - {m}" for m in error_messages)
+            summary = "Validation failed:\n" + "\n".join(f"  - {m}" for m in error_messages)
             logger.error(f"[crew] {summary}")
             return CrewResult(
                 crew_name=self.crew_config.name,
@@ -281,7 +277,6 @@ class CrewOrchestrator:
         Returns:
             Callable that takes a prompt and returns LLM response, or None.
         """
-        import concurrent.futures
         import threading
 
         # Guard: only proceed if we have a real Config instance.
@@ -290,8 +285,8 @@ class CrewOrchestrator:
             return None
 
         try:
-            from xbot.agent.service import AgentService
             from xbot.agent.protocol import AgentContext
+            from xbot.agent.service import AgentService
             from xbot.agent.types import AgentConfig
 
             agents_config = self.xbot_config.agents.model_copy(deep=True)

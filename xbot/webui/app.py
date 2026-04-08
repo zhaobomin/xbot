@@ -9,7 +9,7 @@ import shutil
 import unicodedata
 import zipfile
 from collections import OrderedDict
-from datetime import datetime, timedelta, UTC
+from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from typing import Any
@@ -31,6 +31,15 @@ from pydantic import BaseModel, Field, SecretStr
 
 from xbot.config.schema import MCPServerConfig
 from xbot.cron.types import CronPayload, CronSchedule
+from xbot.webui.auth import (
+    AuthManager,
+    UserStore,
+    ensure_password_file,
+    get_or_create_jwt_secret,
+    print_password_banner,
+)
+from xbot.webui.services import ServiceContainer
+from xbot.webui.session_keys import to_internal_session_key
 
 # ---------------------------------------------------------------------------
 # Security: Name validation for skills and MCP servers
@@ -128,12 +137,6 @@ def _check_login_rate_limit(client_ip: str) -> None:
 def _clear_login_rate_limit() -> None:
     """Clear all rate limit state. For testing only."""
     _LOGIN_ATTEMPTS.clear()
-
-
-from xbot.webui.auth import AuthManager, UserStore, ensure_password_file, get_or_create_jwt_secret, print_password_banner
-from xbot.webui.services import ServiceContainer
-from xbot.webui.session_keys import to_internal_session_key
-
 
 class LoginRequest(BaseModel):
     username: str

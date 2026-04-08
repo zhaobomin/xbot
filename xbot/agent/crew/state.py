@@ -10,16 +10,14 @@ from __future__ import annotations
 from enum import Enum
 from typing import Callable
 
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
-
 from xbot.agent.crew.models import TaskDefinition
+from xbot.logging import get_logger
 
 # ---------------------------------------------------------------------------
 # Crew-level states
 # ---------------------------------------------------------------------------
 
+logger = get_logger(__name__)
 class CrewPhase(str, Enum):
     CREATED = "created"
     INITIALIZING = "initializing"

@@ -7,15 +7,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
-
 from xbot.agent.crew.models import AgentRole, CrewConfig
 from xbot.agent.protocol import AgentContext
 from xbot.config.schema import AgentsConfig, Config
+from xbot.logging import get_logger
 
-
+logger = get_logger(__name__)
 @dataclass
 class TaskProgress:
     """Progress event from task execution."""

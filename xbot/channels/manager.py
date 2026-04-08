@@ -5,18 +5,16 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
-
+from xbot.agent.task_supervisor import ServiceTaskRegistry
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
-from xbot.agent.task_supervisor import ServiceTaskRegistry
 from xbot.channels.base import BaseChannel
 from xbot.config.schema import Config
+from xbot.logging import get_logger
 
 # Deprecated: retry is now handled by each channel's send() implementation.
 # Kept for backward compatibility with external code that may reference them.
+logger = get_logger(__name__)
 MAX_RETRIES = 3
 RETRY_DELAYS = [1, 2, 4]
 

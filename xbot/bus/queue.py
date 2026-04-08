@@ -7,14 +7,11 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+from xbot.bus.events import InboundMessage, OutboundMessage
 from xbot.logging import get_logger
 
-logger = get_logger(__name__)
-
-from xbot.bus.events import InboundMessage, OutboundMessage
-
-
 # Constants for request pool management
+logger = get_logger(__name__)
 MAX_PENDING_REQUESTS = 1000
 REQUEST_TIMEOUT_SECONDS = 600  # 10 minutes default timeout
 

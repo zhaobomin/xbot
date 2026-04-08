@@ -10,17 +10,16 @@ from typing import Any
 from urllib.parse import unquote, urlparse
 
 import httpx
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
 from pydantic import Field
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
 from xbot.config.schema import Base
+from xbot.logging import get_logger
 from xbot.utils.helpers import sanitize_download_filename
 
+logger = get_logger(__name__)
 try:
     from dingtalk_stream import (
         AckMessage,
@@ -144,7 +143,7 @@ class NanobotDingTalkHandler(CallbackHandler):
 
             return AckMessage.STATUS_OK, "OK"
 
-        except Exception as e:
+        except Exception:
             logger.exception("Error processing DingTalk message")
             # Return OK to avoid retry loop from DingTalk server
             return AckMessage.STATUS_OK, "Error"
@@ -277,7 +276,7 @@ class DingTalkChannel(BaseChannel):
                 # Expire 60s early to be safe
                 self._token_expiry = time.time() + int(res_data.get("expireIn", 7200)) - 60
                 return self._access_token
-            except Exception as e:
+            except Exception:
                 logger.exception("Failed to get DingTalk access token")
                 return None
 
@@ -287,9 +286,12 @@ class DingTalkChannel(BaseChannel):
 
     def _guess_upload_type(self, media_ref: str) -> str:
         ext = Path(urlparse(media_ref).path).suffix.lower()
-        if ext in self._IMAGE_EXTS: return "image"
-        if ext in self._AUDIO_EXTS: return "voice"
-        if ext in self._VIDEO_EXTS: return "video"
+        if ext in self._IMAGE_EXTS:
+            return "image"
+        if ext in self._AUDIO_EXTS:
+            return "voice"
+        if ext in self._VIDEO_EXTS:
+            return "video"
         return "file"
 
     def _guess_filename(self, media_ref: str, upload_type: str) -> str:
@@ -410,8 +412,10 @@ class DingTalkChannel(BaseChannel):
             if resp.status_code != 200:
                 logger.error("DingTalk send failed msgKey=%s status=%s body=%s", msg_key, resp.status_code, body[:500])
                 return False
-            try: result = resp.json()
-            except Exception: result = {}
+            try:
+                result = resp.json()
+            except Exception:
+                result = {}
             errcode = result.get("errcode")
             if errcode not in (None, 0):
                 logger.error("DingTalk send api error msgKey=%s errcode=%s body=%s", msg_key, errcode, body[:500])
@@ -540,7 +544,7 @@ class DingTalkChannel(BaseChannel):
                     "conversation_type": conversation_type,
                 },
             )
-        except Exception as e:
+        except Exception:
             logger.exception("Error publishing DingTalk message")
 
     async def _download_dingtalk_file(
@@ -587,6 +591,6 @@ class DingTalkChannel(BaseChannel):
             await asyncio.to_thread(file_path.write_bytes, file_resp.content)
             logger.info("DingTalk file saved: %s", file_path)
             return str(file_path)
-        except Exception as e:
+        except Exception:
             logger.exception("DingTalk file download error")
             return None

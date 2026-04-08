@@ -4,16 +4,15 @@ import asyncio
 from collections import deque
 from typing import TYPE_CHECKING, Any, Literal
 
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
+from pydantic import Field
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
 from xbot.config.schema import Base
-from pydantic import Field
+from xbot.logging import get_logger
 
+logger = get_logger(__name__)
 try:
     import botpy
     from botpy.message import C2CMessage, GroupMessage
@@ -95,8 +94,8 @@ class QQChannel(BaseChannel):
             return
 
         self._running = True
-        BotClass = _make_bot_class(self)
-        self._client = BotClass()
+        bot_class = _make_bot_class(self)
+        self._client = bot_class()
         logger.info("QQ bot started (C2C & Group supported)")
         await self._run_bot()
 

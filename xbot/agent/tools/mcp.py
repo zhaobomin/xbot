@@ -6,15 +6,13 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
 
 from xbot.agent.mcp_config import resolve_mcp_server_config
 from xbot.agent.tools.base import Tool
 from xbot.agent.tools.registry import ToolRegistry
+from xbot.logging import get_logger
 
-
+logger = get_logger(__name__)
 class MCPToolTimeoutError(Exception):
     """Raised when an MCP tool call times out."""
     def __init__(self, tool_name: str, timeout: float):
@@ -134,10 +132,11 @@ async def _connect_single_mcp_server(
 
     Each server gets its own AsyncExitStack, so failures don't affect other servers.
     """
-    from mcp import ClientSession, StdioServerParameters
     from mcp.client.sse import sse_client
     from mcp.client.stdio import stdio_client
     from mcp.client.streamable_http import streamable_http_client
+
+    from mcp import ClientSession, StdioServerParameters
 
     conn = MCPServerConnection(name=name, session=None)
 

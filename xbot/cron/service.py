@@ -9,14 +9,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Coroutine
 
+from xbot.agent.task_supervisor import ServiceTaskRegistry
+from xbot.cron.types import CronJob, CronJobState, CronPayload, CronSchedule, CronStore
 from xbot.logging import get_logger
 
 logger = get_logger(__name__)
-
-from xbot.cron.types import CronJob, CronJobState, CronPayload, CronSchedule, CronStore
-from xbot.agent.task_supervisor import ServiceTaskRegistry
-
-
 def _now_ms() -> int:
     return int(time.time() * 1000)
 
@@ -237,7 +234,7 @@ class CronService:
         self._last_mtime = self.store_path.stat().st_mtime
         # Clear load failure flag after successful save
         self._load_failed = False
-    
+
     async def start(self) -> None:
         """Start the cron service."""
         self._running = True
@@ -321,9 +318,8 @@ class CronService:
         logger.info("Cron: executing job '%s' (%s)", job.name, job.id)
 
         try:
-            response = None
             if self.on_job:
-                response = await self.on_job(job)
+                await self.on_job(job)
 
             job.state.last_status = "ok"
             job.state.last_error = None

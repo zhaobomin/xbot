@@ -1,16 +1,16 @@
 """CLI commands for xbot."""
 
 import asyncio
-from contextlib import contextmanager, nullcontext
 import json
 import os
+import re as _re
 import select
 import signal
 import sys
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Callable
 
-# Force UTF-8 encoding for Windows console
 if sys.platform == "win32":
     if sys.stdout.encoding != "utf-8":
         os.environ["PYTHONIOENCODING"] = "utf-8"
@@ -18,19 +18,18 @@ if sys.platform == "win32":
         try:
             sys.stdout.reconfigure(encoding="utf-8", errors="replace")
             sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-        except (OSError, ValueError) as e:
+        except (OSError, ValueError):
             # OSError: handle invalid (redirected/piped)
             # ValueError: reconfigure not supported
             pass
 
 import typer
-from prompt_toolkit import print_formatted_text
-from prompt_toolkit import PromptSession
+from prompt_toolkit import PromptSession, print_formatted_text
+from prompt_toolkit.application import run_in_terminal
 from prompt_toolkit.enums import EditingMode
 from prompt_toolkit.formatted_text import ANSI, HTML
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
-from prompt_toolkit.application import run_in_terminal
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
@@ -38,11 +37,12 @@ from rich.text import Text
 
 from xbot import __logo__, __version__
 from xbot.agent import AgentService
+from xbot.agent.crew.cli.plan_cmd import crew_plan, crew_run_dynamic
+from xbot.agent.crew.cli.role_cmd import app as roles_app
+from xbot.agent.interaction.permission import CLIPermissionHandler, InteractivePermissionHandler
 from xbot.agent.interaction.progress_coalescer import ProgressCoalescer
 from xbot.agent.task_supervisor import ServiceTaskRegistry
-from xbot.webui.cli import webui_app
-from xbot.config.paths import get_workspace_path
-from xbot.config.paths import get_data_dir
+from xbot.config.paths import get_data_dir, get_workspace_path
 from xbot.config.schema import Config
 from xbot.logging import configure_logging, get_logger, set_package_logging_enabled
 from xbot.utils.helpers import (
@@ -50,7 +50,10 @@ from xbot.utils.helpers import (
     sync_workspace_skill_pack,
     sync_workspace_templates,
 )
-from xbot.agent.interaction.permission import CLIPermissionHandler, InteractivePermissionHandler
+from xbot.webui.cli import webui_app
+
+# Force UTF-8 encoding for Windows console
+logger = get_logger(__name__)
 
 app = typer.Typer(
     name="xbot",
@@ -60,7 +63,6 @@ app = typer.Typer(
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
-logger = get_logger(__name__)
 
 
 def _resolve_heartbeat_target(
@@ -113,8 +115,6 @@ def _resolve_heartbeat_target(
 # ---------------------------------------------------------------------------
 # File reference parsing for @path syntax
 # ---------------------------------------------------------------------------
-
-import re as _re
 
 _FILE_REF_RE = _re.compile(
     r"""(?:^|(?<=\s))@(?:"([^"@]+?\.[a-zA-Z0-9]+)"|'([^'@]+?\.[a-zA-Z0-9]+)'|([^\s"'@]+?\.[a-zA-Z0-9]+))""",
@@ -676,8 +676,8 @@ def gateway(
     health_port: int | None = typer.Option(None, "--health-port", help="Health check HTTP port (default: gateway_port - 710)"),
 ):
     """Start the xbot gateway."""
-    from xbot.agent.monitoring.health import HealthCheckService
     from xbot.agent.interaction.permission import PermissionRequestHandler
+    from xbot.agent.monitoring.health import HealthCheckService
     from xbot.agent.state import SessionManager as StateManager
     from xbot.bus.queue import MessageBus
     from xbot.channels.manager import ChannelManager
@@ -695,7 +695,7 @@ def gateway(
     health_port = health_port if health_port is not None else (port - 710)
 
     console.print(f"{__logo__} Starting xbot gateway version {__version__} on port {port}...")
-    console.print(f"[dim]Agent type: claude_sdk[/dim]")
+    console.print("[dim]Agent type: claude_sdk[/dim]")
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
     session_manager = SessionManager(config.workspace_path)
@@ -1071,7 +1071,7 @@ def agent(
                 _thinking_ref = _ThinkingSpinner(enabled=not logs)
                 _permission_handler.set_thinking_spinner(_thinking_ref)
 
-            bus_task = task_registry.spawn("interactive-cli", agent_loop.run(), name="agent-loop")
+            task_registry.spawn("interactive-cli", agent_loop.run(), name="agent-loop")
             turn_done = asyncio.Event()
             turn_done.set()
             turn_response: list[str] = []
@@ -1113,7 +1113,7 @@ def agent(
                     except asyncio.CancelledError:
                         break
 
-            outbound_task = task_registry.spawn(
+            task_registry.spawn(
                 "interactive-cli",
                 _consume_outbound(),
                 name="outbound-consumer",
@@ -1397,15 +1397,9 @@ def status():
 crew_app = typer.Typer(help="Multi-agent crew orchestration")
 app.add_typer(crew_app, name="crew")
 
-# Add roles subcommand group
-from xbot.agent.crew.cli.role_cmd import app as roles_app
 crew_app.add_typer(roles_app, name="roles", help="Role pool management")
 
 # Add dynamic planning commands
-from xbot.agent.crew.cli.plan_cmd import (
-    crew_plan,
-    crew_run_dynamic,
-)
 crew_app.command("plan")(crew_plan)
 crew_app.command("run-dynamic")(crew_run_dynamic)
 
@@ -1425,6 +1419,7 @@ def crew_run(
     Variables can be set with --var name=value and used in the config as ${name}.
     """
     from pathlib import Path
+
     from xbot.agent.crew import CrewOrchestrator, load_crew_config
     from xbot.agent.crew.config import CrewConfigLoader
     from xbot.agent.crew.models import parse_crew_config
@@ -1483,7 +1478,6 @@ def crew_run(
             filled = int(bar_width * completed_count[0] / task_count) if task_count > 0 else 0
             bar = "█" * filled + "░" * (bar_width - filled)
 
-            status = kwargs.get("status", "")
             task_name = kwargs.get("task_name", "")
 
             if task_name:
@@ -1643,8 +1637,6 @@ def crew_validate(
     console.print(f"\n[bold]Validating:[/bold] {config_file}\n")
 
     errors = []
-    warnings = []
-
     # 1. Load and parse YAML
     try:
         crew_config = load_crew_config(Path(config_file))
@@ -1943,8 +1935,6 @@ def crew_history(
             crew_name = data.get("crew_name", "unknown")
             crew_phase = data.get("crew_phase", "unknown")
             completed = len(data.get("completed_tasks", []))
-            total_tasks = len([t for t in data.get("completed_tasks", [])])
-
             # Calculate duration if possible
             started_at = data.get("started_at")
             checkpoint_at = data.get("checkpoint_at")
@@ -2079,9 +2069,8 @@ def crew_export(
         xbot crew export . -f json
         xbot crew export . --run code_review_20240325
     """
-    from pathlib import Path
     import json
-    from datetime import datetime
+    from pathlib import Path
 
     project_path = Path(project_dir).expanduser().resolve()
     runs_dir = project_path / ".xbot" / "crew_runs"

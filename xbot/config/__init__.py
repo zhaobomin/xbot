@@ -12,15 +12,15 @@ from xbot.config.paths import (
     get_runtime_subdir,
     get_workspace_path,
 )
-from xbot.config.schema import Config
-from xbot.config.validator import validate_config, ConfigurationError
 from xbot.config.provider_registry import (
-    ProviderSpec,
     PROVIDER_REGISTRY,
+    ProviderSpec,
     get_provider_spec,
     get_sdk_compatible_providers,
     is_provider_sdk_compatible,
 )
+from xbot.config.schema import Config
+from xbot.config.validator import ConfigurationError, validate_config
 
 __all__ = [
     "Config",

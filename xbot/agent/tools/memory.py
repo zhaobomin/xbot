@@ -269,4 +269,4 @@ class MemoryTool(Tool):
         with open(self.history_file, "a", encoding="utf-8") as f:
             f.write(entry)
 
-        return f"Entry appended to history log."
+        return "Entry appended to history log."

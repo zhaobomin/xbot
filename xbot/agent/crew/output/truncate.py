@@ -15,8 +15,6 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from xbot.agent.crew.output.format import OutputFormat
-
 
 @dataclass
 class TruncationResult:
@@ -192,7 +190,7 @@ class OutputTruncator:
                     boundary = self._find_next_boundary(lines, i)
                     if boundary and self._calculate_length(lines, 0, boundary) <= max_length * 1.1:
                         result_lines.extend(lines[i:boundary])
-                        current_length = sum(len(l) + 1 for l in result_lines)
+                        current_length = sum(len(line) + 1 for line in result_lines)
                         truncated = True
                         truncation_point = boundary
                         break
@@ -324,7 +322,6 @@ class OutputTruncator:
         """Find sections containing important content."""
         sections = []
         lines = content.split('\n')
-        section_start = 0
         current_section: list[int] = []
 
         for i, line in enumerate(lines):

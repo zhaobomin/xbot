@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 from typing import Any, Callable
 
 from aiohttp import web
+
 from xbot.logging import get_logger
 
 logger = get_logger(__name__)
@@ -208,10 +209,10 @@ class HealthCheckService:
         await self._site.start()
 
         logger.info(f"Health check service started on http://{self.host}:{self.port}")
-        logger.info(f"  GET /health - Full health check")
-        logger.info(f"  GET /health/live - Liveness probe")
-        logger.info(f"  GET /health/ready - Readiness probe")
-        logger.info(f"  GET /status - Detailed status")
+        logger.info("  GET /health - Full health check")
+        logger.info("  GET /health/live - Liveness probe")
+        logger.info("  GET /health/ready - Readiness probe")
+        logger.info("  GET /status - Detailed status")
 
     async def stop(self) -> None:
         """Stop the HTTP health check server."""

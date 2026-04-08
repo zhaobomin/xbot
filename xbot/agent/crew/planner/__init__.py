@@ -7,6 +7,8 @@ This module provides intelligent crew planning capabilities:
 - Crew configuration generation
 """
 
+from xbot.agent.crew.planner.config_generator import ConfigGenerator
+from xbot.agent.crew.planner.crew_planner import CrewPlanner
 from xbot.agent.crew.planner.models import (
     Capability,
     CrewPlan,
@@ -21,12 +23,10 @@ from xbot.agent.crew.planner.models import (
     RoleTier,
     TaskPlan,
 )
-from xbot.agent.crew.planner.role_pool import RolePoolManager, parse_tier_list
 from xbot.agent.crew.planner.role_creator import RoleCreator, validate_role_file
+from xbot.agent.crew.planner.role_pool import RolePoolManager, parse_tier_list
 from xbot.agent.crew.planner.role_selector import RoleSelector
 from xbot.agent.crew.planner.task_planner import TaskPlanner
-from xbot.agent.crew.planner.config_generator import ConfigGenerator
-from xbot.agent.crew.planner.crew_planner import CrewPlanner
 
 __all__ = [
     # Models

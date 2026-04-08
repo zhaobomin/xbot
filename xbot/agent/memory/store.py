@@ -9,11 +9,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from xbot.logging import get_logger
-
-logger = get_logger(__name__)
-
 from xbot.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain
 
+logger = get_logger(__name__)
 if TYPE_CHECKING:
     from xbot.agent.service import AgentService
     from xbot.session.manager import Session, SessionManager

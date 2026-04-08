@@ -20,7 +20,6 @@ from rich.table import Table
 
 from xbot.agent.crew.planner import (
     CrewPlanner,
-    CrewPlan,
     RolePoolConfig,
     RoleTier,
 )
@@ -155,7 +154,7 @@ def crew_plan(
         console.print(Panel(syntax, title="Generated Crew Config", border_style="green"))
 
     # Show summary
-    console.print(f"\n[bold]Summary:[/bold]")
+    console.print("\n[bold]Summary:[/bold]")
     console.print(f"  Crew Name: {plan.name}")
     console.print(f"  Process: {plan.process}")
     console.print(f"  Roles: {len(plan.roles)}")
@@ -215,10 +214,10 @@ def crew_run_dynamic(
         xbot crew run-dynamic "Analyze and fix bugs in the codebase"
         xbot crew run-dynamic "Write documentation" --tier extended --save-config
     """
-    from xbot.agent.crew import CrewOrchestrator, load_crew_config
-    from xbot.agent.crew.models import parse_crew_config
+    from xbot.agent.crew import CrewOrchestrator
     from xbot.agent.crew.config import CrewConfigLoader
-    from xbot.cli.commands import _load_runtime_config, InteractivePermissionHandler
+    from xbot.agent.crew.models import parse_crew_config
+    from xbot.cli.commands import InteractivePermissionHandler, _load_runtime_config
 
     # Validate goal length
     if len(goal) > 10000:
@@ -263,7 +262,7 @@ def crew_run_dynamic(
         raise typer.Exit(1)
 
     # Show plan summary
-    console.print(f"\n[green]✓ Plan generated[/green]")
+    console.print("\n[green]✓ Plan generated[/green]")
     console.print(f"  Roles: {', '.join(r.name for r in plan.roles)}")
     console.print(f"  Tasks: {len(plan.tasks)}")
     console.print(f"  Confidence: {plan.confidence:.0%}")
@@ -298,7 +297,7 @@ def crew_run_dynamic(
             console.print(f"[dim]Config saved to: {config_path}[/dim]")
 
         # Step 3: Load and execute
-        console.print(f"\n[bold cyan]Executing crew...[/bold cyan]\n")
+        console.print("\n[bold cyan]Executing crew...[/bold cyan]\n")
 
         # Load xbot config
         xbot_config = _load_runtime_config(config, workspace)

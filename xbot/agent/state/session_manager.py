@@ -7,7 +7,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
-from xbot.agent.state.machine import SessionPhase, SessionState, VALID_TRANSITIONS
+from xbot.agent.state.machine import VALID_TRANSITIONS, SessionPhase, SessionState
 from xbot.logging import get_logger
 
 if TYPE_CHECKING:

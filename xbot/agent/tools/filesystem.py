@@ -102,12 +102,12 @@ class ReadFileTool(_FsTool):
             limit = limit or self._DEFAULT_LIMIT
             start = max(offset - 1, 0)
             end = start + limit
-            
+
             numbered = []
             total_lines = 0
-            _MAX_LINE_SCAN = 100_000  # Stop counting after this threshold for large files
+            max_line_scan = 100_000  # Stop counting after this threshold for large files
             truncated_count = False
-            
+
             # Use streaming approach to avoid loading whole file into memory
             with open(fp, "r", encoding="utf-8", errors="replace") as f:
                 for i, line in enumerate(f):
@@ -115,15 +115,15 @@ class ReadFileTool(_FsTool):
                     if start <= i < end:
                         line_text = line.rstrip("\r\n")
                         numbered.append(f"{i + 1}| {line_text}")
-                    
+
                     # For very large files, stop scanning once past the requested range
-                    if i >= end and total_lines >= _MAX_LINE_SCAN:
+                    if i >= end and total_lines >= max_line_scan:
                         truncated_count = True
                         break
-            
+
             if not numbered and total_lines == 0:
                 return f"(Empty file: {path})"
-                
+
             if start >= total_lines and total_lines > 0:
                 return f"Error: offset {offset} is beyond end of file ({total_lines} lines)"
 
@@ -206,13 +206,13 @@ def _find_match(content: str, old_text: str) -> tuple[str | None, int]:
     old_lines = old_text.splitlines()
     if not old_lines:
         return None, 0
-    stripped_old = [l.strip() for l in old_lines]
+    stripped_old = [line.strip() for line in old_lines]
     content_lines = content.splitlines()
 
     candidates = []
     for i in range(len(content_lines) - len(stripped_old) + 1):
         window = content_lines[i : i + len(stripped_old)]
-        if [l.strip() for l in window] == stripped_old:
+        if [line.strip() for line in window] == stripped_old:
             candidates.append("\n".join(window))
 
     if candidates:

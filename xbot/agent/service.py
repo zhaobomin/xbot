@@ -11,16 +11,16 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 
-from xbot.logging import get_logger
 from xbot.agent.capabilities.catalog import CapabilityCatalog, canonical_tool_name
-from xbot.agent.protocol import AgentContext, AgentResponse, StructuredLLMResponse, ToolCall
-from xbot.agent.types import AgentConfig
-from xbot.agent.client_pool import ClientPool
 from xbot.agent.capabilities.handoff import HandoffPolicy
-from xbot.agent.state.machine import SessionPhase
+from xbot.agent.client_pool import ClientPool
 from xbot.agent.command_handlers import LocalCommandHandler
 from xbot.agent.interaction.event_formatter import format_rate_limit_event, format_task_notification
+from xbot.agent.protocol import AgentContext, AgentResponse, StructuredLLMResponse, ToolCall
+from xbot.agent.state.machine import SessionPhase
+from xbot.agent.types import AgentConfig
 from xbot.bus.events import InboundMessage, OutboundMessage
+from xbot.logging import get_logger
 
 if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeSDKClient
@@ -501,7 +501,6 @@ class AgentService:
         Returns:
             ClaudeSDKClient instance
         """
-        from claude_agent_sdk import ClaudeAgentOptions
 
         # Build options
         options = self._build_sdk_options()

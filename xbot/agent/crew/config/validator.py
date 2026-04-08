@@ -220,7 +220,7 @@ class CrewConfigValidator:
                 result.add_error(
                     f"{path}.agent",
                     f"Task '{name}' is missing 'agent' field",
-                    [f"Add: agent: <agent_name>"],
+                    ["Add: agent: <agent_name>"],
                 )
 
             # Check timeout
@@ -274,29 +274,29 @@ class CrewConfigValidator:
                 task_deps[task["name"]] = task.get("context_from", [])
 
         # DFS to find cycles
-        WHITE, GRAY, BLACK = 0, 1, 2
-        colors = {name: WHITE for name in task_deps}
+        white, gray, black = 0, 1, 2
+        colors = {name: white for name in task_deps}
         cycles: list[list[str]] = []
 
         def dfs(node: str, path: list[str]) -> None:
-            colors[node] = GRAY
+            colors[node] = gray
             path.append(node)
 
             for dep in task_deps.get(node, []):
                 if dep not in colors:
                     continue
-                if colors[dep] == GRAY:
+                if colors[dep] == gray:
                     # Found cycle
                     cycle_start = path.index(dep)
                     cycles.append(path[cycle_start:] + [dep])
-                elif colors[dep] == WHITE:
+                elif colors[dep] == white:
                     dfs(dep, path)
 
             path.pop()
-            colors[node] = BLACK
+            colors[node] = black
 
         for node in task_deps:
-            if colors[node] == WHITE:
+            if colors[node] == white:
                 dfs(node, [])
 
         for cycle in cycles:
@@ -330,7 +330,7 @@ class CrewConfigValidator:
                     result.add_warning(
                         f"agents.{agent}",
                         f"Agent '{agent}' handles {count}/{total_tasks} tasks ({ratio:.0%})",
-                        [f"Consider distributing tasks to other agents"],
+                        ["Consider distributing tasks to other agents"],
                     )
 
         # Check dependency chain depth

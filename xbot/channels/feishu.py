@@ -2,6 +2,7 @@
 
 import asyncio
 import contextlib
+import importlib.util
 import json
 import multiprocessing as mp
 import os
@@ -11,13 +12,9 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, Callable, Literal
 
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
 from pydantic import Field
 
 from xbot.bus.events import OutboundMessage
@@ -25,16 +22,15 @@ from xbot.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
 from xbot.channels.feishu_content import (
     MSG_TYPE_MAP,
-    _extract_interactive_content,
     _extract_post_content,
-    _extract_post_text,
     _extract_share_card_content,
 )
 from xbot.config.paths import get_media_dir
 from xbot.config.schema import Base
+from xbot.logging import get_logger
 from xbot.utils.helpers import sanitize_download_filename
 
-import importlib.util
+logger = get_logger(__name__)
 
 FEISHU_AVAILABLE = importlib.util.find_spec("lark_oapi") is not None
 
@@ -329,7 +325,11 @@ class FeishuChannel(BaseChannel):
 
     def _add_reaction_sync(self, message_id: str, emoji_type: str) -> None:
         """Sync helper for adding reaction (runs in thread pool)."""
-        from lark_oapi.api.im.v1 import CreateMessageReactionRequest, CreateMessageReactionRequestBody, Emoji
+        from lark_oapi.api.im.v1 import (
+            CreateMessageReactionRequest,
+            CreateMessageReactionRequestBody,
+            Emoji,
+        )
         try:
             request = CreateMessageReactionRequest.builder() \
                 .message_id(message_id) \
@@ -1053,7 +1053,7 @@ class FeishuChannel(BaseChannel):
                             "interactive", json.dumps(card, ensure_ascii=False),
                         )
 
-        except Exception as e:
+        except Exception:
             logger.exception("Error sending Feishu message")
 
     def _on_message_sync(self, data: Any) -> None:
@@ -1074,7 +1074,7 @@ class FeishuChannel(BaseChannel):
             return
 
         try:
-            future = asyncio.run_coroutine_threadsafe(
+            _ = asyncio.run_coroutine_threadsafe(
                 self._on_message(data), self._main_loop
             )
             # Don't wait for result - fire and forget for better throughput
@@ -1214,7 +1214,7 @@ class FeishuChannel(BaseChannel):
                 }
             )
 
-        except Exception as e:
+        except Exception:
             logger.exception("Error processing Feishu message")
 
     def _on_reaction_created(self, data: Any) -> None:

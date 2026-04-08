@@ -10,17 +10,16 @@ from datetime import datetime, timezone
 from typing import Any
 
 import httpx
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
+from pydantic import Field
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
 from xbot.config.paths import get_runtime_subdir
 from xbot.config.schema import Base
-from pydantic import Field
+from xbot.logging import get_logger
 
+logger = get_logger(__name__)
 try:
     import socketio
     SOCKETIO_AVAILABLE = True

@@ -144,8 +144,8 @@ class UserStore:
         """Get password hash from the dedicated password file."""
         if not PASSWORD_FILE.exists():
             raise RuntimeError(
-                f"WebUI password file missing or corrupted.\n"
-                f"Run `xbot webui --reset-password` to generate a new password."
+                "WebUI password file missing or corrupted.\n"
+                "Run `xbot webui --reset-password` to generate a new password."
             )
         return PASSWORD_FILE.read_text(encoding="utf-8").strip()
 

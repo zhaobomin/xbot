@@ -9,13 +9,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Generator
 
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
-
 from xbot.config.paths import get_legacy_sessions_dir
+from xbot.logging import get_logger
 from xbot.utils.helpers import ensure_dir, safe_filename
 
+logger = get_logger(__name__)
 try:
     import fcntl  # type: ignore
 except ImportError:  # pragma: no cover

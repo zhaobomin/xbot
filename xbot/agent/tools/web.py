@@ -14,12 +14,11 @@ import httpx
 from httpx._config import DEFAULT_LIMITS, Proxy, create_ssl_context
 from httpx._transports.base import AsyncBaseTransport
 from httpx._transports.default import AsyncResponseStream, map_httpcore_exceptions
+
+from xbot.agent.tools.base import Tool
 from xbot.logging import get_logger
 
 logger = get_logger(__name__)
-
-from xbot.agent.tools.base import Tool
-
 if TYPE_CHECKING:
     from xbot.config.schema import WebSearchConfig
 
@@ -241,7 +240,7 @@ class WebSearchTool(Tool):
         proxy: str | None = None,
         timeout: float | None = None,
     ):
-        from xbot.config.schema import WebSearchConfig, TimeoutsConfig
+        from xbot.config.schema import TimeoutsConfig, WebSearchConfig
 
         self.config = config if config is not None else WebSearchConfig()
         self.proxy = proxy
@@ -350,7 +349,7 @@ class WebSearchTool(Tool):
             headers = {"Accept": "application/json", "Authorization": f"Bearer {api_key}"}
             async with httpx.AsyncClient(proxy=self.proxy) as client:
                 r = await client.get(
-                    f"https://s.jina.ai/",
+                    "https://s.jina.ai/",
                     params={"q": query},
                     headers=headers,
                     timeout=self.timeout,
@@ -416,9 +415,21 @@ class WebFetchTool(Tool):
         if self.disable_security_checks:
             logger.warning("WebFetchTool: SSRF security checks are DISABLED via config. This is unsafe in production.")
 
-    async def execute(self, url: str, extractMode: str = "markdown", maxChars: int | None = None, **kwargs: Any) -> str:
-        max_chars = maxChars or self.max_chars
-        logger.debug("WebFetch: url='%s', extractMode=%s, maxChars=%s", url, extractMode, max_chars)
+    async def execute(
+        self,
+        url: str,
+        extract_mode: str = "markdown",
+        max_chars: int | None = None,
+        **kwargs: Any,
+    ) -> str:
+        # Backward compatibility for camelCase call sites.
+        if "extractMode" in kwargs and extract_mode == "markdown":
+            extract_mode = str(kwargs.pop("extractMode"))
+        if "maxChars" in kwargs and max_chars is None:
+            max_chars = int(kwargs.pop("maxChars"))
+
+        max_chars = max_chars or self.max_chars
+        logger.debug("WebFetch: url='%s', extractMode=%s, maxChars=%s", url, extract_mode, max_chars)
 
         if not self.disable_security_checks:
             is_valid, error_msg = _validate_url_safe(url)
@@ -429,7 +440,7 @@ class WebFetchTool(Tool):
         result = await self._fetch_jina(url, max_chars)
         if result is None:
             logger.debug("WebFetch: Jina failed, falling back to readability for '%s'", url)
-            result = await self._fetch_readability(url, extractMode, max_chars)
+            result = await self._fetch_readability(url, extract_mode, max_chars)
 
         logger.debug("WebFetch: completed for '%s', result_len=%s", url, len(result))
         return result

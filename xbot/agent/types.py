@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 # Re-export from protocol.py for backward compatibility
-from xbot.agent.protocol import AgentResponse, AgentContext
+from xbot.agent.protocol import AgentContext, AgentResponse
 
 # Re-export from state/machine.py for backward compatibility
 from xbot.agent.state.machine import SessionPhase, SessionState

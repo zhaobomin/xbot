@@ -7,8 +7,6 @@ Feishu message types (share cards, interactive cards, posts, etc.).
 from __future__ import annotations
 
 import json
-from typing import Any
-
 
 # Message type display mapping
 MSG_TYPE_MAP = {

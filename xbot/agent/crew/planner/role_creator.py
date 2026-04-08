@@ -8,10 +8,8 @@ This module provides functionality to:
 
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
-from typing import Any
 
 import yaml
 
@@ -141,7 +139,6 @@ class RoleCreator:
         Returns:
             RoleCreationResult with the created role or errors.
         """
-        errors = []
         warnings = []
 
         # Generate role definition from request

@@ -14,9 +14,9 @@ from typing import Optional
 
 import typer
 from rich.console import Console
-from rich.table import Table
 from rich.panel import Panel
 from rich.syntax import Syntax
+from rich.table import Table
 
 from xbot.agent.crew.planner import (
     Capability,
@@ -325,7 +325,7 @@ def roles_create(
 
     # Show role details
     role = result.role
-    console.print(f"\n[green]✓ Role created successfully![/green]")
+    console.print("\n[green]✓ Role created successfully![/green]")
     console.print(f"\n[bold]Role: {role.display_name} ({role.name})[/bold]")
     console.print(f"  Description: {role.description}")
     console.print(f"  Capabilities: {', '.join(c.value for c in role.capabilities)}")
@@ -336,7 +336,7 @@ def roles_create(
         save_path = creator.save_role(role)
         console.print(f"\n[green]Saved to: {save_path}[/green]")
     else:
-        console.print(f"\n[dim]Use --output to save the role to a file[/dim]")
+        console.print("\n[dim]Use --output to save the role to a file[/dim]")
 
 
 @app.command("validate")
@@ -367,7 +367,7 @@ def roles_validate(
             console.print(f"[dim]Capabilities:[/dim] {', '.join(c.value for c in role.capabilities)}")
             console.print(f"[dim]Tools:[/dim] {', '.join(role.tools) if role.tools else 'all'}")
     else:
-        console.print(f"[red]✗ Role validation failed[/red]")
+        console.print("[red]✗ Role validation failed[/red]")
         for err in errors:
             console.print(f"  • {err}")
         raise typer.Exit(1)
@@ -466,7 +466,7 @@ def roles_delete(
     try:
         role_path.resolve().relative_to(custom_path)
     except ValueError:
-        console.print(f"[red]Security error: Invalid path[/red]")
+        console.print("[red]Security error: Invalid path[/red]")
         raise typer.Exit(1)
 
     if not role_path.exists():

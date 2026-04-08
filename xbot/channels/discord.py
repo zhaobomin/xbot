@@ -8,19 +8,18 @@ from pathlib import Path
 from typing import Any, Literal
 
 import httpx
-from pydantic import Field
 import websockets
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
+from pydantic import Field
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
 from xbot.config.paths import get_media_dir
 from xbot.config.schema import Base
+from xbot.logging import get_logger
 from xbot.utils.helpers import split_message
 
+logger = get_logger(__name__)
 DISCORD_API_BASE = "https://discord.com/api/v10"
 MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024  # 20MB
 MAX_MESSAGE_LEN = 2000  # Discord message character limit
@@ -76,8 +75,8 @@ class DiscordChannel(BaseChannel):
         self._running = True
         self._http = httpx.AsyncClient(timeout=30.0)
 
-        MAX_RECONNECT_DELAY = 60  # seconds
-        INITIAL_RECONNECT_DELAY = 1
+        max_reconnect_delay = 60  # seconds
+        initial_reconnect_delay = 1
 
         while self._running:
             try:
@@ -105,7 +104,7 @@ class DiscordChannel(BaseChannel):
                     continue
 
                 # Exponential backoff: 1, 2, 4, 8, 16, 32, 60, 60, ...
-                delay = min(INITIAL_RECONNECT_DELAY * (2 ** self._reconnect_attempts), MAX_RECONNECT_DELAY)
+                delay = min(initial_reconnect_delay * (2 ** self._reconnect_attempts), max_reconnect_delay)
                 self._reconnect_attempts += 1
                 logger.info("Reconnecting to Discord gateway in %ds (attempt %d/%d)...", delay, self._reconnect_attempts, MAX_RECONNECT_ATTEMPTS)
                 await asyncio.sleep(delay)
@@ -189,7 +188,7 @@ class DiscordChannel(BaseChannel):
                     continue
                 response.raise_for_status()
                 return True
-            except Exception as e:
+            except Exception:
                 if attempt == 2:
                     logger.exception("Error sending Discord message")
                 else:

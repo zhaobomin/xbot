@@ -5,10 +5,6 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
-
 from xbot.agent.interaction.response_parser import (
     derive_interaction_action,
     is_response_keyword,
@@ -17,6 +13,9 @@ from xbot.agent.interaction.response_parser import (
 from xbot.agent.state.machine import SessionPhase
 from xbot.bus.events import InboundMessage, OutboundMessage
 from xbot.bus.queue import InteractionResponse, PermissionResponse
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 if TYPE_CHECKING:
     from xbot.agent.service import AgentService

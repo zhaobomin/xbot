@@ -4,9 +4,7 @@ import asyncio
 import re
 from typing import Any
 
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
+from pydantic import Field
 from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 from slack_sdk.socket_mode.websockets import SocketModeClient
@@ -15,12 +13,12 @@ from slackify_markdown import slackify_markdown
 
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
-from pydantic import Field
-
 from xbot.channels.base import BaseChannel
 from xbot.config.schema import Base
+from xbot.logging import get_logger
 
 # Slack-specific retry configuration
+logger = get_logger(__name__)
 SLACK_MAX_RETRIES = 3
 SLACK_RETRY_DELAYS = [1, 2, 4]  # Exponential backoff in seconds
 

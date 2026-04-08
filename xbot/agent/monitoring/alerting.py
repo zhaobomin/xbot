@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -130,7 +130,7 @@ class AlertService:
 严重程度: {severity}"""
 
         if details:
-            alert_text += f"\n\n详情:\n"
+            alert_text += "\n\n详情:\n"
             for key, value in details.items():
                 alert_text += f"- {key}: {value}\n"
 

@@ -9,31 +9,29 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import uuid
 from abc import ABC, abstractmethod
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from xbot.logging import get_logger
-
-logger = get_logger(__name__)
-
-from xbot.agent.crew.agent_pool import AgentPool, TaskProgress
+from xbot.agent.crew.agent_pool import AgentPool
 from xbot.agent.crew.context import CrewExecutionContext, save_checkpoint
 from xbot.agent.crew.models import CrewConfig, OutputFormat, TaskDefinition, TaskResult, UserAction
 from xbot.agent.crew.output import (
     OutputParser,
     OutputPersister,
-    OutputTruncator,
     OutputRepairer,
+    OutputTruncator,
     TruncationStrategy,
     should_attempt_repair,
 )
 from xbot.agent.crew.state import CrewStateManager, TaskPhase
-from xbot.agent.crew.validation import CrewValidator, ExecutionPreconditions
+from xbot.agent.crew.validation import CrewValidator
 from xbot.agent.interaction.permission import BasePermissionHandler
+from xbot.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class BaseProcess(ABC):
@@ -644,7 +642,7 @@ class BaseProcess(ABC):
             success = False
             raise
         except asyncio.TimeoutError:
-            output = f"Redo timed out after extensions"
+            output = "Redo timed out after extensions"
             status = "failed"
             success = False
         except Exception as exc:
