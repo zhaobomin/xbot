@@ -1,5 +1,8 @@
-"""Session management module."""
+"""Compatibility facade for session package.
 
-from xbot.session.manager import Session, SessionManager
+Preferred location: ``xbot.runtime.session``.
+"""
 
-__all__ = ["SessionManager", "Session"]
+from xbot.runtime.session.manager import SessionManager
+
+__all__ = ["SessionManager"]
