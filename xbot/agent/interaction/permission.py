@@ -26,6 +26,11 @@ from contextlib import nullcontext
 from contextvars import ContextVar
 from typing import Any, Literal
 
+from xbot.agent.interaction.ask_user_validation import (
+    match_option,
+    normalize_validation_mode,
+    split_answers,
+)
 from xbot.bus.queue import (
     InteractionRequest,
     InteractionResponse,
@@ -151,25 +156,9 @@ class BasePermissionHandler:
         Returns:
             answers 列表，格式为 [{"question": "...", "answer": "..."}]
         """
-        import re
-
-        def match_option(candidate: str, valid_options: list[str]) -> str | None:
-            """尝试匹配候选答案到有效选项。"""
-            candidate_lower = candidate.lower().strip()
-            for opt in valid_options:
-                opt_lower = opt.lower()
-                # 精确匹配（忽略大小写）
-                if candidate_lower == opt_lower:
-                    return opt
-                # 前缀匹配：允许用户输入简写，但避免把自定义值错误归一化到短选项
-                if candidate_lower and opt_lower.startswith(candidate_lower):
-                    return opt
-            return None
-
         # 分割多个答案：只用逗号分割（支持中文逗号、英文逗号、顿号）
         # 不用空格分割，避免破坏包含空格的选项
-        parts = re.split(r'[，,、]+', user_response.strip())
-        parts = [p.strip() for p in parts if p.strip()]
+        parts = split_answers(user_response)
 
         # 校验：答案数量与问题数量是否匹配
         num_parts = len(parts)
@@ -471,7 +460,7 @@ class PermissionRequestHandler(BasePermissionHandler):
         if not questions:
             return "deny", "No questions provided"
 
-        validation_mode = str(tool_input.get("validation_mode") or "suggested").lower()
+        validation_mode = normalize_validation_mode(tool_input.get("validation_mode"))
         allow_free_text = bool(tool_input.get("allow_free_text", validation_mode != "strict"))
 
         # 构建合并的提示消息和所有有效选项

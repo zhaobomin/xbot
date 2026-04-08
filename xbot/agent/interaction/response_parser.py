@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+from xbot.agent.interaction.ask_user_validation import (
+    normalize_validation_mode as _normalize_validation_mode,
+)
+
 ALLOW_RESPONSE_KEYWORDS = frozenset({"允许", "allow", "yes", "y", "是", "ok", "同意", "确认"})
 DENY_RESPONSE_KEYWORDS = frozenset({"拒绝", "deny", "no", "n", "否", "取消"})
 
@@ -45,3 +49,8 @@ def derive_interaction_action(kind: str, content: str) -> str:
     if normalized in DENY_RESPONSE_KEYWORDS:
         return "cancel" if kind == "confirmation" else "deny"
     return "reply"
+
+
+def normalize_validation_mode(mode: str | None) -> str:
+    """Backward-compatible wrapper for AskUserQuestion mode canonicalization."""
+    return _normalize_validation_mode(mode)
