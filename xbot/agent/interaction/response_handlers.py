@@ -74,16 +74,13 @@ class RuntimeResponseHandlers:
         *,
         clear_session: bool = False,
     ) -> None:
-        """Clear retry state for one request and optionally stale session-scoped entries."""
+        """Clear retry state for a session, including stale request-scoped entries."""
         retry_counts = self._interaction_retry_counts
 
         # Remove the legacy session-scoped key during the migration to request-scoped tracking.
         retry_counts.pop(session_key, None)
 
-        if request_id is not None:
-            retry_counts.pop(self._interaction_retry_key(session_key, request_id), None)
-
-        if clear_session:
+        if request_id is not None or clear_session:
             prefix = f"{session_key}:"
             stale_keys = [key for key in retry_counts if key.startswith(prefix)]
             for key in stale_keys:

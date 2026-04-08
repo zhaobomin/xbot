@@ -500,7 +500,7 @@ class TestBugFixes:
 
     @pytest.mark.asyncio
     async def test_retry_count_isolated_by_request_id(self, handler, runtime, mock_transaction):
-        """A new request in the same session should not inherit the old request retry count."""
+        """A new request in the same session should not inherit or leak the old request retry count."""
         runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
         runtime.session_manager.transaction.return_value = mock_transaction
 
@@ -551,6 +551,19 @@ class TestBugFixes:
         assert runtime._interaction_retry_counts.get(
             interaction_retry_key("test:session14", "req-isolation-2")
         ) == 1
+
+        success_msg = InboundMessage(
+            channel="test",
+            sender_id="user1",
+            chat_id="chat1",
+            content="A",
+            session_key_override="test:session14",
+        )
+        result = await handler.handle_interaction_response(success_msg)
+
+        assert result is True
+        assert interaction_retry_key("test:session14", "req-isolation-1") not in runtime._interaction_retry_counts
+        assert interaction_retry_key("test:session14", "req-isolation-2") not in runtime._interaction_retry_counts
 
     # ============================================================
     # Additional edge cases
