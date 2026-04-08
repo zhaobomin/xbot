@@ -1,5 +1,6 @@
-"""Utility functions for xbot."""
+"""Compatibility facade for utils package.
 
-from xbot.utils.helpers import ensure_dir
+Preferred location: ``xbot.platform.utils``.
+"""
 
-__all__ = ["ensure_dir"]
+from xbot.platform.utils import *  # noqa: F403
