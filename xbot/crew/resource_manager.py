@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from xbot.crew.models import CrewConfig, TaskResult
     from xbot.crew.process import BaseProcess
     from xbot.crew.state import CrewStateManager
-    from xbot.agent.interaction.permission import BasePermissionHandler
+    from xbot.interaction.permission import BasePermissionHandler
     from xbot.config.schema import Config
 
 

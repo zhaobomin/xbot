@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from xbot.crew.models import AgentRole, CrewConfig
-from xbot.agent.protocol import AgentContext
+from xbot.runtime.core.protocol import AgentContext
 from xbot.config.schema import AgentsConfig, Config
 from xbot.logging import get_logger
 
@@ -52,7 +52,7 @@ class AgentPool:
             RuntimeError: If no backends could be initialised.
         """
         from xbot.agent.service import AgentService
-        from xbot.agent.types import AgentConfig
+        from xbot.runtime.core.types import AgentConfig
 
         roles = self.crew_config.agents
         if only_roles is not None:

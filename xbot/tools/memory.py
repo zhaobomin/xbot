@@ -78,7 +78,7 @@ class MemoryTool(Tool):
     def _get_memory_store(self):
         """Get or create memory store."""
         if self._memory_store is None:
-            from xbot.agent.memory.reme import ReMeMemoryStore
+            from xbot.memory.reme import ReMeMemoryStore
             self._memory_store = ReMeMemoryStore(self.workspace)
         return self._memory_store
 

@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
-from xbot.agent.state.machine import SessionPhase
+from xbot.runtime.state.machine import SessionPhase
 from xbot.bus.events import InboundMessage, OutboundMessage
 from xbot.logging import get_logger
 
@@ -321,7 +321,7 @@ class LocalCommandHandler:
             try:
                 config = svc._shared_resources.get("config")
                 if config:
-                    from xbot.agent.context.model_manager import ModelManager
+                    from xbot.runtime.core.context.model_manager import ModelManager
                     svc._model_manager = ModelManager(config)
             except Exception as e:
                 logger.debug("ModelManager init failed: %s", e)

@@ -9,7 +9,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Coroutine
 
-from xbot.agent.task_supervisor import ServiceTaskRegistry
+from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
 from xbot.runtime.system.cron.types import CronJob, CronJobState, CronPayload, CronSchedule, CronStore
 from xbot.logging import get_logger
 

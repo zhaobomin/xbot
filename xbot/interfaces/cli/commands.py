@@ -39,9 +39,9 @@ from xbot import __logo__, __version__
 from xbot.agent import AgentService
 from xbot.crew.cli.plan_cmd import crew_plan, crew_run_dynamic
 from xbot.crew.cli.role_cmd import app as roles_app
-from xbot.agent.interaction.permission import CLIPermissionHandler, InteractivePermissionHandler
-from xbot.agent.interaction.progress_coalescer import ProgressCoalescer
-from xbot.agent.task_supervisor import ServiceTaskRegistry
+from xbot.interaction.permission import CLIPermissionHandler, InteractivePermissionHandler
+from xbot.interaction.progress_coalescer import ProgressCoalescer
+from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
 from xbot.config.paths import get_data_dir, get_workspace_path
 from xbot.config.schema import Config
 from xbot.logging import configure_logging, get_logger, set_package_logging_enabled
@@ -626,7 +626,7 @@ def _make_agent_service(
     permission_handler=None,
 ):
     """Create the unified agent service."""
-    from xbot.agent.types import AgentConfig
+    from xbot.runtime.core.types import AgentConfig
 
     agent_config = AgentConfig(
         model=config.agents.defaults.model,
@@ -676,9 +676,9 @@ def gateway(
     health_port: int | None = typer.Option(None, "--health-port", help="Health check HTTP port (default: gateway_port - 710)"),
 ):
     """Start the xbot gateway."""
-    from xbot.agent.interaction.permission import PermissionRequestHandler
+    from xbot.interaction.permission import PermissionRequestHandler
     from xbot.runtime.system.monitoring.health import HealthCheckService
-    from xbot.agent.state import SessionManager as StateManager
+    from xbot.runtime.state import SessionManager as StateManager
     from xbot.bus.queue import MessageBus
     from xbot.channels.manager import ChannelManager
     from xbot.config.paths import get_cron_dir
@@ -731,8 +731,8 @@ def gateway(
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
-        from xbot.agent.tools.cron import CronTool
-        from xbot.agent.tools.message import MessageTool
+        from xbot.tools.cron import CronTool
+        from xbot.tools.message import MessageTool
         from xbot.utils.evaluator import evaluate_response
 
         reminder_note = (
@@ -917,7 +917,7 @@ def agent(
     logs: bool = typer.Option(False, "--logs/--no-logs", help="Show xbot runtime logs during chat"),
 ):
     """Interact with the agent directly."""
-    from xbot.agent.state import SessionManager as StateManager
+    from xbot.runtime.state import SessionManager as StateManager
     from xbot.bus.queue import MessageBus
     from xbot.config.paths import get_cron_dir
     from xbot.cron.service import CronService

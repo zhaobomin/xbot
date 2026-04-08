@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from xbot.agent.task_supervisor import ServiceTaskRegistry
+from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
 from xbot.bus.events import OutboundMessage
 from xbot.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel

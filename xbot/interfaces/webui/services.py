@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
 
-from xbot.agent.capabilities.catalog import CapabilityCatalog
-from xbot.agent.capabilities.skills_loader import SkillsLoader
+from xbot.capabilities.catalog import CapabilityCatalog
+from xbot.capabilities.skills_loader import SkillsLoader
 
 
 @dataclass

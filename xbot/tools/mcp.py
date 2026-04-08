@@ -7,7 +7,7 @@ from typing import Any
 
 import httpx
 
-from xbot.agent.mcp_config import resolve_mcp_server_config
+from xbot.runtime.core.mcp_config import resolve_mcp_server_config
 from xbot.tools.base import Tool
 from xbot.tools.registry import ToolRegistry
 from xbot.logging import get_logger

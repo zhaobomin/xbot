@@ -14,7 +14,7 @@ from xbot.crew.process import HierarchicalProcess, SequentialProcess
 from xbot.crew.resource_manager import CrewResourceManager
 from xbot.crew.state import CrewPhase, CrewStateManager, TaskPhase
 from xbot.crew.validation import CrewValidator
-from xbot.agent.interaction.permission import BasePermissionHandler
+from xbot.interaction.permission import BasePermissionHandler
 from xbot.config.schema import Config
 from xbot.logging import get_logger
 
@@ -285,9 +285,9 @@ class CrewOrchestrator:
             return None
 
         try:
-            from xbot.agent.protocol import AgentContext
+            from xbot.runtime.core.protocol import AgentContext
             from xbot.agent.service import AgentService
-            from xbot.agent.types import AgentConfig
+            from xbot.runtime.core.types import AgentConfig
 
             agents_config = self.xbot_config.agents.model_copy(deep=True)
             shared_resources = {

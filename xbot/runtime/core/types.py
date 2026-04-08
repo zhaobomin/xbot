@@ -13,7 +13,7 @@ from typing import Any
 from xbot.runtime.core.protocol import AgentContext, AgentResponse
 
 # Re-export from state/machine.py for backward compatibility
-from xbot.agent.state.machine import SessionPhase, SessionState
+from xbot.runtime.state.machine import SessionPhase, SessionState
 
 
 @dataclass
