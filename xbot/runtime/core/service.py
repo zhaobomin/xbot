@@ -15,8 +15,10 @@ from xbot.capabilities.catalog import CapabilityCatalog, canonical_tool_name
 from xbot.capabilities.handoff import HandoffPolicy
 from xbot.capabilities.policy import CapabilityPolicy
 from xbot.interaction.event_formatter import format_rate_limit_event, format_task_notification
+from xbot.memory.store import MemoryConsolidator
 from xbot.runtime.core.client_pool import ClientPool
 from xbot.runtime.core.command_handlers import LocalCommandHandler
+from xbot.runtime.core.context.builder import ContextBuilder
 from xbot.runtime.core.protocol import AgentContext, AgentResponse, StructuredLLMResponse, ToolCall
 from xbot.runtime.core.types import AgentConfig
 from xbot.runtime.state.machine import SessionPhase
@@ -144,6 +146,12 @@ class AgentService:
         self._active_tasks: dict[str, asyncio.Task] = {}
         self._direct_progress_callbacks: dict[str, ProgressCallback] = {}
 
+        # ReMe integration: ContextBuilder and MemoryConsolidator
+        self._context_builder: Any | None = None
+        self._memory_consolidator: Any | None = None
+        self._sdk_settings_file: str | None = None
+        self._async_consolidation_tasks: set[asyncio.Task] = set()
+
         # For backward compatibility with AgentRuntime interface
         self._pending_config = config
         self._pending_resources = shared_resources
@@ -185,6 +193,53 @@ class AgentService:
         # Initialize handoff policy for SDK subagent observability
         agents_config = getattr(self._config, "agents", None)
         self._handoff_policy = HandoffPolicy(agents_config)
+
+        # Initialize ReMe main chain: ContextBuilder + MemoryConsolidator
+        runtime_config = self._shared_resources.get("config")
+        workspace_path = Path(self._shared_resources.get("workspace", ".")).expanduser().resolve()
+        sessions = self._shared_resources.get("session_manager")
+        if sessions is None:
+            try:
+                from xbot.runtime.state.session_manager import SessionManager
+                sessions = SessionManager(workspace_path)
+                self._shared_resources["session_manager"] = sessions
+            except Exception as e:
+                logger.warning("Failed to initialize SessionManager: %s", e)
+
+        if runtime_config:
+            memory_cfg = getattr(getattr(runtime_config, "tools", None), "memory", None)
+            memory_provider = getattr(memory_cfg, "provider", "file")
+            use_reme = memory_provider == "reme"
+            enable_vector_search = bool(getattr(memory_cfg, "enable_vector_search", False))
+
+            llm_model = getattr(memory_cfg, "llm_model", None)
+            embedding_model = getattr(memory_cfg, "embedding_model", None)
+            llm_config = {"model_name": llm_model} if llm_model else None
+            embedding_config = {"model_name": embedding_model} if embedding_model else None
+
+            self._context_builder = ContextBuilder(
+                workspace=workspace_path,
+                use_reme=use_reme,
+                llm_config=llm_config,
+                embedding_config=embedding_config,
+                enable_vector_search=enable_vector_search,
+            )
+
+            # Ensure MemoryTool shares the same memory store as ContextBuilder.
+            self._shared_resources["memory_store"] = self._context_builder.memory
+
+            if sessions is not None:
+                self._memory_consolidator = MemoryConsolidator(
+                    workspace=workspace_path,
+                    backend=self,
+                    sessions=sessions,
+                    context_window_tokens=getattr(runtime_config.agents.defaults, "context_window_tokens", 65_536),
+                    build_messages=self._context_builder.build_messages,
+                    get_tool_definitions=self._get_tool_definitions,
+                    memory_store=self._context_builder.memory,
+                )
+
+            self._log_memory_runtime_config(runtime_config)
 
         # Initialize tool adapter for built-in tools (cron, message, etc.)
         self._init_tool_adapter()
@@ -586,6 +641,56 @@ class AgentService:
         except Exception as e:
             logger.warning("Failed to initialize ToolAdapter: %s", e)
             self._tool_adapter = None
+
+    def _resolve_setting_sources(self, sdk_config: Any, run_mode: str) -> list[str] | None:
+        """Resolve SDK setting_sources based on memory integration mode and run mode."""
+        memory_integration = getattr(sdk_config, "memory_integration", None) if sdk_config else None
+        if isinstance(memory_integration, dict):
+            mode = memory_integration.get("mode", "auto")
+            sources_cfg = memory_integration.get("setting_sources", {})
+            key = "gateway" if run_mode == "gateway" else "cli"
+            if mode == "off":
+                return None
+            return list(sources_cfg.get(key, ["user", "project", "local"]))
+
+        mode = getattr(memory_integration, "mode", "auto")
+        if not isinstance(mode, str):
+            mode = "auto"
+        if mode == "off":
+            return None
+
+        sources_cfg = getattr(memory_integration, "setting_sources", None)
+        if sources_cfg is None:
+            return ["user", "project", "local"]
+
+        key = "gateway" if run_mode == "gateway" else "cli"
+        return list(getattr(sources_cfg, key, ["user", "project", "local"]))
+
+    def _log_memory_runtime_config(self, runtime_config: Any) -> None:
+        """Log memory wiring details for observability."""
+        sdk_cfg = getattr(getattr(runtime_config, "agents", None), "claude_sdk", None)
+        memory_cfg = getattr(getattr(runtime_config, "tools", None), "memory", None)
+        memory_provider = getattr(memory_cfg, "provider", "file")
+        consolidation_mode = getattr(sdk_cfg, "memory_consolidation_mode", "off")
+        run_mode = str(self._shared_resources.get("run_mode", "cli")).lower()
+        setting_sources = self._resolve_setting_sources(sdk_cfg, run_mode)
+        strategy = getattr(sdk_cfg, "system_prompt_strategy", None)
+        if isinstance(strategy, dict):
+            preset = strategy.get("preset", "xbot")
+            append_xbot_prompt = strategy.get("append_xbot_prompt", True)
+        else:
+            preset = getattr(strategy, "preset", "xbot")
+            append_xbot_prompt = getattr(strategy, "append_xbot_prompt", True)
+        logger.info(
+            "[AgentService] Memory runtime: run_mode=%s, memory_provider=%s, "
+            "memory_consolidation_mode=%s, setting_sources=%s, system_prompt_strategy=%s/%s",
+            run_mode,
+            memory_provider,
+            consolidation_mode,
+            setting_sources,
+            preset,
+            append_xbot_prompt,
+        )
 
     async def _get_or_create_client(
         self,
