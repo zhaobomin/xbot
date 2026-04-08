@@ -633,6 +633,15 @@ class AgentService:
 
     # === Internal Methods ===
 
+    def _get_tool_definitions(self) -> list[dict[str, Any]]:
+        """Return tool definitions for token estimation.
+
+        In SDK mode, xbot tools are exposed via MCP and the SDK manages tool
+        definitions internally. Returns an empty list as a safe fallback for
+        token counting purposes.
+        """
+        return []
+
     def _init_tool_adapter(self) -> None:
         """Initialize the ToolAdapter for built-in tools access."""
         try:
