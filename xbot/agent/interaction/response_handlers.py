@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
-import re
 from typing import TYPE_CHECKING
 
+from xbot.agent.interaction.ask_user_validation import (
+    match_option,
+    normalize_validation_mode,
+    split_answers,
+)
 from xbot.agent.interaction.response_parser import (
     derive_interaction_action,
     is_response_keyword,
@@ -58,6 +62,56 @@ class RuntimeResponseHandlers:
             if sm is not None:
                 return sm
         return getattr(self._runtime, "session_manager", None)
+
+    def _interaction_retry_key(self, session_key: str, request_id: str) -> str:
+        """Build a request-scoped retry key."""
+        return f"{session_key}:{request_id}"
+
+    def _clear_interaction_retry_state(
+        self,
+        session_key: str,
+        request_id: str | None = None,
+        *,
+        clear_session: bool = False,
+    ) -> None:
+        """Clear retry state for one request and optionally stale session-scoped entries."""
+        retry_counts = self._interaction_retry_counts
+
+        # Remove the legacy session-scoped key during the migration to request-scoped tracking.
+        retry_counts.pop(session_key, None)
+
+        if request_id is not None:
+            retry_counts.pop(self._interaction_retry_key(session_key, request_id), None)
+
+        if clear_session:
+            prefix = f"{session_key}:"
+            stale_keys = [key for key in retry_counts if key.startswith(prefix)]
+            for key in stale_keys:
+                retry_counts.pop(key, None)
+
+    def _match_interaction_option(self, content: str, metadata: dict[str, object]) -> str | None:
+        """Normalize a user reply against the request's valid options."""
+        valid_options = [str(option) for option in metadata.get("valid_options") or []]
+        question_options_map = metadata.get("question_options_map") or []
+        question_count = int(metadata.get("question_count") or 0)
+
+        if question_count > 1 and question_options_map:
+            parts = split_answers(content)
+            if len(parts) != question_count:
+                return None
+
+            normalized_parts: list[str] = []
+            for idx, part in enumerate(parts):
+                raw_options = question_options_map[idx] if idx < len(question_options_map) else []
+                options = [str(option) for option in raw_options]
+                part_match = match_option(part, options)
+                if part_match is None:
+                    return None
+                normalized_parts.append(part_match)
+
+            return ", ".join(normalized_parts)
+
+        return match_option(content, valid_options)
 
     async def handle_permission_response(self, msg: InboundMessage) -> bool:
         """Check if the message is a permission response and handle it."""
@@ -135,6 +189,8 @@ class RuntimeResponseHandlers:
         if self._bus is None:
             return False
 
+        del retry_count
+
         if getattr(self._runtime, '_is_local_runtime_command', lambda _: False)(msg.content):
             return False
 
@@ -152,6 +208,7 @@ class RuntimeResponseHandlers:
 
         if not request_id:
             if is_interaction_keyword:
+                self._clear_interaction_retry_state(msg.session_key, clear_session=True)
                 await self._bus.publish_outbound(
                     OutboundMessage(
                         channel=msg.channel,
@@ -187,9 +244,11 @@ class RuntimeResponseHandlers:
                     content=user_msg,
                 )
             )
-            # Clean up retry count to prevent memory leak
-            if hasattr(self, '_interaction_retry_counts'):
-                self._interaction_retry_counts.pop(msg.session_key, None)
+            self._clear_interaction_retry_state(
+                msg.session_key,
+                request_id=request_id,
+                clear_session=True,
+            )
             return True
 
         if current_phase != SessionPhase.WAITING_INTERACTION:
@@ -211,50 +270,29 @@ class RuntimeResponseHandlers:
                     content="⚠️ 交互请求已过期或被取消，请重新发起操作。",
                 )
             )
-            # Clean up retry count
-            if hasattr(self, '_interaction_retry_counts'):
-                self._interaction_retry_counts.pop(msg.session_key, None)
+            self._clear_interaction_retry_state(
+                msg.session_key,
+                request_id=request_id,
+                clear_session=True,
+            )
             return True
 
         # AskUserQuestion 答案验证：检查用户回复是否在有效选项内
         # 保存原始输入用于日志记录
         original_input = content
         if req.kind == "question" and req.metadata:
-            valid_options = req.metadata.get("valid_options", [])
-            validation_mode = req.metadata.get("validation_mode", "strict")
+            valid_options = [str(opt) for opt in req.metadata.get("valid_options", [])]
+            validation_mode = normalize_validation_mode(
+                req.metadata.get("validation_mode") or "strict"
+            )
             if valid_options:
-                def _match_option(candidate: str, options: list[object]) -> str | None:
-                    normalized_candidate = candidate.lower().strip()
-                    for option in options:
-                        if normalized_candidate == str(option).lower().strip():
-                            return str(option)
-                    return None
-
-                matched_option = None
-                question_options_map = req.metadata.get("question_options_map") or []
-                question_count = int(req.metadata.get("question_count") or 0)
-                if question_count > 1 and question_options_map:
-                    parts = [p.strip() for p in re.split(r"[，,、]+", content.strip()) if p.strip()]
-                    if len(parts) == question_count:
-                        normalized_parts: list[str] = []
-                        for idx, part in enumerate(parts):
-                            options = list(question_options_map[idx]) if idx < len(question_options_map) else []
-                            part_match = _match_option(part, options)
-                            if part_match is None:
-                                normalized_parts = []
-                                break
-                            normalized_parts.append(part_match)
-                        if normalized_parts:
-                            matched_option = ", ".join(normalized_parts)
-                    # else: parts count doesn't match question_count → matched_option stays None
-                else:
-                    matched_option = _match_option(content, list(valid_options))
+                matched_option = self._match_interaction_option(content, req.metadata)
 
                 if matched_option is None and validation_mode == "strict":
-                    retry_count += 1
-                    # Update retry count in runtime
-                    if hasattr(self, '_interaction_retry_counts'):
-                        self._interaction_retry_counts[msg.session_key] = retry_count
+                    retry_key = self._interaction_retry_key(msg.session_key, request_id)
+                    current_retry_count = int(self._interaction_retry_counts.get(retry_key, 0))
+                    retry_count = current_retry_count + 1
+                    self._interaction_retry_counts[retry_key] = retry_count
 
                     if retry_count >= 3:
                         await self._bus.publish_outbound(
@@ -268,9 +306,10 @@ class RuntimeResponseHandlers:
                             msg.session_key, validate_on_commit=False
                         ) as tx:
                             tx.set_phase(SessionPhase.IDLE, reason="invalid_answer_max_retries")
-                        # Clean up retry count
-                        self._interaction_retry_counts.pop(msg.session_key, None)
-                        # Fix: Clear the pending interaction request to prevent stale state
+                        self._clear_interaction_retry_state(
+                            msg.session_key,
+                            request_id=request_id,
+                        )
                         await self._bus.aclear_interaction_request(request_id)
                         return True
 
@@ -288,12 +327,16 @@ class RuntimeResponseHandlers:
                 if matched_option is not None:
                     # 匹配成功，使用标准化后的选项值，清理重试计数
                     content = matched_option
-                    if hasattr(self, '_interaction_retry_counts'):
-                        self._interaction_retry_counts.pop(msg.session_key, None)
+                    self._clear_interaction_retry_state(
+                        msg.session_key,
+                        request_id=request_id,
+                    )
                 elif validation_mode == "suggested":
                     # 建议模式允许用户输入自定义值，直接透传原始内容
-                    if hasattr(self, '_interaction_retry_counts'):
-                        self._interaction_retry_counts.pop(msg.session_key, None)
+                    self._clear_interaction_retry_state(
+                        msg.session_key,
+                        request_id=request_id,
+                    )
 
         action = derive_interaction_action(kind=req.kind, content=content)
         # 构建响应 metadata，包含原始输入用于日志记录
@@ -322,9 +365,11 @@ class RuntimeResponseHandlers:
                     content="⚠️ 交互请求已过期或被取消，请重新发起操作。",
                 )
             )
-            # Clean up retry count
-            if hasattr(self, '_interaction_retry_counts'):
-                self._interaction_retry_counts.pop(msg.session_key, None)
+            self._clear_interaction_retry_state(
+                msg.session_key,
+                request_id=request_id,
+                clear_session=True,
+            )
             return True
 
         logger.info(f"Interaction response submitted: action={action}, request={request_id}")
@@ -340,8 +385,9 @@ class RuntimeResponseHandlers:
             f"transition={old_phase.value}->RUNNING"
         )
 
-        # Clean up retry count on success
-        if hasattr(self, '_interaction_retry_counts'):
-            self._interaction_retry_counts.pop(msg.session_key, None)
+        self._clear_interaction_retry_state(
+            msg.session_key,
+            request_id=request_id,
+        )
 
         return True

@@ -46,6 +46,11 @@ class MockTransaction:
             pass  # Mock doesn't need to actually set anything
 
 
+def interaction_retry_key(session_key: str, request_id: str) -> str:
+    """Build the request-scoped retry key used by runtime handlers."""
+    return f"{session_key}:{request_id}"
+
+
 class TestBugFixes:
     """Tests for bugs fixed in 2026-03-25."""
 
@@ -219,7 +224,9 @@ class TestBugFixes:
 
         assert result is True
         # Retry count should be set (not cleaned up) for invalid answer
-        assert runtime._interaction_retry_counts.get("test:session4") == 1
+        assert runtime._interaction_retry_counts.get(
+            interaction_retry_key("test:session4", "req-test")
+        ) == 1
 
     # ============================================================
     # Bug 7: approval/confirmation types should show options
@@ -260,7 +267,7 @@ class TestBugFixes:
 
         assert result is True
         # Should accept valid option
-        assert "test:session5" not in runtime._interaction_retry_counts
+        assert interaction_retry_key("test:session5", "req-approval") not in runtime._interaction_retry_counts
 
     @pytest.mark.asyncio
     async def test_confirmation_interaction_sends_with_options(self, handler, runtime, mock_transaction):
@@ -451,6 +458,100 @@ class TestBugFixes:
         assert "invalid reply" in outbound.content
         assert "第 1/3 次尝试" in outbound.content
 
+    @pytest.mark.asyncio
+    async def test_retry_count_accumulates_with_default_retry_arg(self, handler, runtime, mock_transaction):
+        """Retry progression should come from stored request state, not caller args."""
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
+
+        request = InteractionRequest(
+            request_id="req-default-retry",
+            session_key="test:session13",
+            channel="test",
+            chat_id="chat1",
+            kind="question",
+            prompt="Choose",
+            suggestions=["A", "B"],
+            metadata={"valid_options": ["A", "B"], "validation_mode": "strict"},
+        )
+        await runtime.bus.publish_interaction_request(request)
+        await runtime.bus.consume_outbound()
+
+        msg = InboundMessage(
+            channel="test",
+            sender_id="user1",
+            chat_id="chat1",
+            content="invalid",
+            session_key_override="test:session13",
+        )
+
+        first_result = await handler.handle_interaction_response(msg)
+        assert first_result is True
+        first_outbound = await runtime.bus.consume_outbound()
+        assert "第 1/3 次尝试" in first_outbound.content
+
+        second_result = await handler.handle_interaction_response(msg)
+        assert second_result is True
+        second_outbound = await runtime.bus.consume_outbound()
+        assert "第 2/3 次尝试" in second_outbound.content
+        assert runtime._interaction_retry_counts.get(
+            interaction_retry_key("test:session13", "req-default-retry")
+        ) == 2
+
+    @pytest.mark.asyncio
+    async def test_retry_count_isolated_by_request_id(self, handler, runtime, mock_transaction):
+        """A new request in the same session should not inherit the old request retry count."""
+        runtime.session_manager.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.session_manager.transaction.return_value = mock_transaction
+
+        first_request = InteractionRequest(
+            request_id="req-isolation-1",
+            session_key="test:session14",
+            channel="test",
+            chat_id="chat1",
+            kind="question",
+            prompt="Choose",
+            suggestions=["A", "B"],
+            metadata={"valid_options": ["A", "B"], "validation_mode": "strict"},
+        )
+        await runtime.bus.publish_interaction_request(first_request)
+        await runtime.bus.consume_outbound()
+
+        msg = InboundMessage(
+            channel="test",
+            sender_id="user1",
+            chat_id="chat1",
+            content="invalid",
+            session_key_override="test:session14",
+        )
+
+        await handler.handle_interaction_response(msg)
+        first_outbound = await runtime.bus.consume_outbound()
+        assert "第 1/3 次尝试" in first_outbound.content
+        assert runtime._interaction_retry_counts.get(
+            interaction_retry_key("test:session14", "req-isolation-1")
+        ) == 1
+
+        second_request = InteractionRequest(
+            request_id="req-isolation-2",
+            session_key="test:session14",
+            channel="test",
+            chat_id="chat1",
+            kind="question",
+            prompt="Choose again",
+            suggestions=["A", "B"],
+            metadata={"valid_options": ["A", "B"], "validation_mode": "strict"},
+        )
+        await runtime.bus.publish_interaction_request(second_request)
+        await runtime.bus.consume_outbound()
+
+        await handler.handle_interaction_response(msg)
+        second_outbound = await runtime.bus.consume_outbound()
+        assert "第 1/3 次尝试" in second_outbound.content
+        assert runtime._interaction_retry_counts.get(
+            interaction_retry_key("test:session14", "req-isolation-2")
+        ) == 1
+
     # ============================================================
     # Additional edge cases
     # ============================================================
@@ -492,7 +593,7 @@ class TestBugFixes:
                 await runtime.bus.consume_outbound()
 
         # After 3rd attempt, retry count should be cleaned up
-        assert "test:session11" not in runtime._interaction_retry_counts
+        assert interaction_retry_key("test:session11", "req-max-retry") not in runtime._interaction_retry_counts
 
     @pytest.mark.asyncio
     async def test_retry_count_cleaned_on_success(self, handler, runtime, mock_transaction):
@@ -526,7 +627,9 @@ class TestBugFixes:
         await handler.handle_interaction_response(msg1, retry_count=0)
 
         # Verify retry count is set
-        assert runtime._interaction_retry_counts.get("test:session12") == 1
+        assert runtime._interaction_retry_counts.get(
+            interaction_retry_key("test:session12", "req-success")
+        ) == 1
 
         # Consume error message
         await runtime.bus.consume_outbound()
@@ -543,7 +646,7 @@ class TestBugFixes:
 
         assert result is True
         # Retry count should be cleaned up on success
-        assert "test:session12" not in runtime._interaction_retry_counts
+        assert interaction_retry_key("test:session12", "req-success") not in runtime._interaction_retry_counts
 
 
 class TestFeishuInteractionFormatting:
