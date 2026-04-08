@@ -18,7 +18,7 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
-from xbot.agent.crew.planner import (
+from xbot.crew.planner import (
     CrewPlanner,
     RolePoolConfig,
     RoleTier,
@@ -214,9 +214,9 @@ def crew_run_dynamic(
         xbot crew run-dynamic "Analyze and fix bugs in the codebase"
         xbot crew run-dynamic "Write documentation" --tier extended --save-config
     """
-    from xbot.agent.crew import CrewOrchestrator
-    from xbot.agent.crew.config import CrewConfigLoader
-    from xbot.agent.crew.models import parse_crew_config
+    from xbot.crew import CrewOrchestrator
+    from xbot.crew.config import CrewConfigLoader
+    from xbot.crew.models import parse_crew_config
     from xbot.cli.commands import InteractivePermissionHandler, _load_runtime_config
 
     # Validate goal length

@@ -4,19 +4,19 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from xbot.agent.crew.planner.models import (
+from xbot.crew.planner.models import (
     Capability,
     GoalAnalysis,
     RoleDefinition,
     RolePool,
     RoleSelection,
 )
-from xbot.agent.crew.planner.prompts import ROLE_SELECTION_PROMPT
-from xbot.agent.crew.planner.utils import LLMResponseParser
+from xbot.crew.planner.prompts import ROLE_SELECTION_PROMPT
+from xbot.crew.planner.utils import LLMResponseParser
 from xbot.logging import get_logger
 
 if TYPE_CHECKING:
-    from xbot.agent.crew.planner.role_creator import RoleCreator
+    from xbot.crew.planner.role_creator import RoleCreator
 
 logger = get_logger(__name__)
 

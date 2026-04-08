@@ -4,16 +4,16 @@ from __future__ import annotations
 
 from collections import defaultdict, deque
 
-from xbot.agent.crew.planner.models import (
+from xbot.crew.planner.models import (
     Capability,
     GoalAnalysis,
     RoleDefinition,
     RoleSelection,
     TaskPlan,
 )
-from xbot.agent.crew.planner.prompts import TASK_PLANNING_PROMPT
-from xbot.agent.crew.planner.utils import LLMResponseParser
-from xbot.agent.crew.planner.validators import LLMValidator
+from xbot.crew.planner.prompts import TASK_PLANNING_PROMPT
+from xbot.crew.planner.utils import LLMResponseParser
+from xbot.crew.planner.validators import LLMValidator
 from xbot.logging import get_logger
 
 logger = get_logger(__name__)

@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable
 
-from xbot.agent.crew.output.format import OutputFormat, ParsedOutput
+from xbot.crew.output.format import OutputFormat, ParsedOutput
 
 
 @dataclass
@@ -193,7 +193,7 @@ Please reformat the content correctly. Output only the corrected content:"""
         schema: dict | None,
     ) -> ParsedOutput:
         """Validate the repaired content."""
-        from xbot.agent.crew.output.format import OutputParser
+        from xbot.crew.output.format import OutputParser
 
         parser = OutputParser()
         return parser.parse(repaired, target_format, schema)

@@ -14,14 +14,14 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TypeVar
 
-from xbot.agent.crew.planner.models import (
+from xbot.crew.planner.models import (
     Capability,
     RoleDefinition,
     RoleTier,
 )
 
 if TYPE_CHECKING:
-    from xbot.agent.crew.models import AgentRole
+    from xbot.crew.models import AgentRole
 
 
 T = TypeVar('T')
@@ -217,7 +217,7 @@ class RoleConverter:
     @staticmethod
     def to_agent_role(role: RoleDefinition) -> "AgentRole":
         """Convert to execution-time AgentRole."""
-        from xbot.agent.crew.models import AgentRole
+        from xbot.crew.models import AgentRole
 
         return AgentRole(
             name=role.name,

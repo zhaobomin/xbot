@@ -9,17 +9,17 @@ from __future__ import annotations
 import time
 from typing import Any, Callable
 
-from xbot.agent.crew.planner.config_generator import ConfigGenerator
-from xbot.agent.crew.planner.goal_analyzer import GoalAnalyzer
-from xbot.agent.crew.planner.models import (
+from xbot.crew.planner.config_generator import ConfigGenerator
+from xbot.crew.planner.goal_analyzer import GoalAnalyzer
+from xbot.crew.planner.models import (
     CrewPlan,
     GoalAnalysis,
     RolePoolConfig,
     RoleSelection,
 )
-from xbot.agent.crew.planner.role_pool import RolePoolManager
-from xbot.agent.crew.planner.role_selector import RoleSelector
-from xbot.agent.crew.planner.task_planner import TaskPlanner
+from xbot.crew.planner.role_pool import RolePoolManager
+from xbot.crew.planner.role_selector import RoleSelector
+from xbot.crew.planner.task_planner import TaskPlanner
 from xbot.logging import get_logger
 
 logger = get_logger(__name__)

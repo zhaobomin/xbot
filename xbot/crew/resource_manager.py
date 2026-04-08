@@ -21,10 +21,10 @@ from xbot.logging import get_logger
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from xbot.agent.crew.agent_pool import AgentPool
-    from xbot.agent.crew.models import CrewConfig, TaskResult
-    from xbot.agent.crew.process import BaseProcess
-    from xbot.agent.crew.state import CrewStateManager
+    from xbot.crew.agent_pool import AgentPool
+    from xbot.crew.models import CrewConfig, TaskResult
+    from xbot.crew.process import BaseProcess
+    from xbot.crew.state import CrewStateManager
     from xbot.agent.interaction.permission import BasePermissionHandler
     from xbot.config.schema import Config
 
@@ -162,7 +162,7 @@ class CrewResourceManager:
             exc_type: Exception type
             exc_val: Exception value
         """
-        from xbot.agent.crew.state import CrewPhase
+        from xbot.crew.state import CrewPhase
 
         if exc_type is asyncio.CancelledError:
             # Cancelled - transition to ABORTING -> ABORTED
@@ -205,7 +205,7 @@ class CrewResourceManager:
         Returns:
             "completed" if all tasks succeeded, "failed" otherwise
         """
-        from xbot.agent.crew.state import CrewPhase
+        from xbot.crew.state import CrewPhase
 
         # Check state manager's final phase
         current_phase = self.state_manager.crew_phase
@@ -245,8 +245,8 @@ class CrewResourceManager:
         Args:
             only_roles: Optional set of roles to initialize (for resume)
         """
-        from xbot.agent.crew.agent_pool import AgentPool
-        from xbot.agent.crew.state import CrewPhase
+        from xbot.crew.agent_pool import AgentPool
+        from xbot.crew.state import CrewPhase
 
         self.pool = AgentPool(
             self.crew_config,

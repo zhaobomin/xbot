@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from typing import Any
 
 # Import OutputFormat from models to avoid duplicate definition
-from xbot.agent.crew.models import OutputFormat
+from xbot.crew.models import OutputFormat
 
 
 @dataclass

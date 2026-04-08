@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator
 
-from xbot.agent.crew.models import AgentRole, CrewConfig
+from xbot.crew.models import AgentRole, CrewConfig
 from xbot.agent.protocol import AgentContext
 from xbot.config.schema import AgentsConfig, Config
 from xbot.logging import get_logger

@@ -6,21 +6,21 @@ Provides:
 - Enhanced validation with detailed messages
 """
 
-from xbot.agent.crew.config.loader import (
+from xbot.crew.config.loader import (
     ConfigLoadError,
     CrewConfigLoader,
     load_crew_config_with_inheritance,
 )
-from xbot.agent.crew.config.merger import (
+from xbot.crew.config.merger import (
     MergeError,
     merge_configs,
 )
-from xbot.agent.crew.config.validator import (
+from xbot.crew.config.validator import (
     CrewConfigValidator,
     ValidationResult,
     validate_crew_config,
 )
-from xbot.agent.crew.config.variables import (
+from xbot.crew.config.variables import (
     VariableError,
     VariableResolver,
     resolve_config_variables,

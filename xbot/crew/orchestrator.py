@@ -8,12 +8,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from xbot.agent.crew.context import CrewExecutionContext, load_checkpoint
-from xbot.agent.crew.models import CrewConfig, CrewResult, ProcessType, TaskResult
-from xbot.agent.crew.process import HierarchicalProcess, SequentialProcess
-from xbot.agent.crew.resource_manager import CrewResourceManager
-from xbot.agent.crew.state import CrewPhase, CrewStateManager, TaskPhase
-from xbot.agent.crew.validation import CrewValidator
+from xbot.crew.context import CrewExecutionContext, load_checkpoint
+from xbot.crew.models import CrewConfig, CrewResult, ProcessType, TaskResult
+from xbot.crew.process import HierarchicalProcess, SequentialProcess
+from xbot.crew.resource_manager import CrewResourceManager
+from xbot.crew.state import CrewPhase, CrewStateManager, TaskPhase
+from xbot.crew.validation import CrewValidator
 from xbot.agent.interaction.permission import BasePermissionHandler
 from xbot.config.schema import Config
 from xbot.logging import get_logger

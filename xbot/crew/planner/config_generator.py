@@ -7,8 +7,8 @@ from pathlib import Path
 
 import yaml
 
-from xbot.agent.crew.planner.models import CrewPlan, RoleDefinition, TaskPlan
-from xbot.agent.crew.planner.utils import RoleConverter
+from xbot.crew.planner.models import CrewPlan, RoleDefinition, TaskPlan
+from xbot.crew.planner.utils import RoleConverter
 from xbot.logging import get_logger
 
 logger = get_logger(__name__)

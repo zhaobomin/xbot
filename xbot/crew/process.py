@@ -15,10 +15,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from xbot.agent.crew.agent_pool import AgentPool
-from xbot.agent.crew.context import CrewExecutionContext, save_checkpoint
-from xbot.agent.crew.models import CrewConfig, OutputFormat, TaskDefinition, TaskResult, UserAction
-from xbot.agent.crew.output import (
+from xbot.crew.agent_pool import AgentPool
+from xbot.crew.context import CrewExecutionContext, save_checkpoint
+from xbot.crew.models import CrewConfig, OutputFormat, TaskDefinition, TaskResult, UserAction
+from xbot.crew.output import (
     OutputParser,
     OutputPersister,
     OutputRepairer,
@@ -26,8 +26,8 @@ from xbot.agent.crew.output import (
     TruncationStrategy,
     should_attempt_repair,
 )
-from xbot.agent.crew.state import CrewStateManager, TaskPhase
-from xbot.agent.crew.validation import CrewValidator
+from xbot.crew.state import CrewStateManager, TaskPhase
+from xbot.crew.validation import CrewValidator
 from xbot.agent.interaction.permission import BasePermissionHandler
 from xbot.logging import get_logger
 

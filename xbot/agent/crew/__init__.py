@@ -1,72 +1,32 @@
-"""Multi-agent crew orchestration for xbot.
+"""Compatibility module alias for crew package.
 
-This package implements crew-based task coordination where multiple
-AI agent roles collaborate on complex workflows.
-
-Modules:
-- models: Core data models for crew configuration
-- orchestrator: Crew execution engine
-- planner: Dynamic crew planning (role pool, task planning)
+Preferred location: ``xbot.crew``.
 """
 
-from xbot.agent.crew.models import (
-    AgentRole,
-    CrewConfig,
-    CrewResult,
-    ProcessType,
-    TaskDefinition,
-    TaskResult,
-    load_crew_config,
-)
-from xbot.agent.crew.orchestrator import CrewOrchestrator
+from __future__ import annotations
 
-# Planner module - dynamic crew planning
-from xbot.agent.crew.planner import (
-    Capability,
-    ConfigGenerator,
-    CrewPlan,
-    CrewPlanner,
-    GoalAnalysis,
-    RoleCreator,
-    RoleDefinition,
-    RolePool,
-    RolePoolConfig,
-    RolePoolManager,
-    RoleSelection,
-    RoleSelector,
-    RoleTier,
-    TaskPlan,
-    TaskPlanner,
-    parse_tier_list,
-    validate_role_file,
-)
+import importlib
+import pkgutil
+import sys
 
-__all__ = [
-    # Core models
-    "AgentRole",
-    "CrewConfig",
-    "CrewOrchestrator",
-    "CrewResult",
-    "ProcessType",
-    "TaskDefinition",
-    "TaskResult",
-    "load_crew_config",
-    # Planner
-    "Capability",
-    "ConfigGenerator",
-    "CrewPlan",
-    "CrewPlanner",
-    "GoalAnalysis",
-    "RoleCreator",
-    "RoleDefinition",
-    "RolePool",
-    "RolePoolConfig",
-    "RolePoolManager",
-    "RoleSelector",
-    "RoleSelection",
-    "RoleTier",
-    "TaskPlan",
-    "TaskPlanner",
-    "parse_tier_list",
-    "validate_role_file",
-]
+import xbot.crew as _impl
+
+
+def _alias_submodules() -> None:
+    """Ensure legacy ``xbot.agent.crew.*`` imports share module identity.
+
+    Without this bridge, importing both ``xbot.agent.crew`` and ``xbot.crew``
+    can create duplicate module objects and break ``isinstance`` checks.
+    """
+
+    prefix = f"{_impl.__name__}."
+    legacy_prefix = f"{__name__}."
+
+    for module_info in pkgutil.walk_packages(_impl.__path__, prefix):
+        module = importlib.import_module(module_info.name)
+        legacy_name = module_info.name.replace(prefix, legacy_prefix, 1)
+        sys.modules[legacy_name] = module
+
+
+_alias_submodules()
+sys.modules[__name__] = _impl

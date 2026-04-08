@@ -4,7 +4,7 @@ This module provides centralized validation functions to solve the recurring
 bug pattern of using `or` operator with falsy values (0, False, [], "").
 
 Usage:
-    from xbot.agent.crew.planner.validators import LLMValidator
+    from xbot.crew.planner.validators import LLMValidator
 
     # Instead of:
     timeout = data.get("timeout") or 300  # BUG: 0 becomes 300
@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from xbot.agent.crew.planner.models import Capability
+from xbot.crew.planner.models import Capability
 from xbot.logging import get_logger
 
 logger = get_logger(__name__)

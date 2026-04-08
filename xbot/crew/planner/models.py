@@ -16,7 +16,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from xbot.agent.crew.models import AgentRole
+    from xbot.crew.models import AgentRole
 
 
 class RoleTier(str, Enum):
@@ -106,7 +106,7 @@ class RoleDefinition:
         Returns:
             AgentRole instance for use with CrewOrchestrator.
         """
-        from xbot.agent.crew.planner.utils import RoleConverter
+        from xbot.crew.planner.utils import RoleConverter
         return RoleConverter.to_agent_role(self)
 
     def matches_capabilities(self, required: list[Capability]) -> float:
@@ -129,7 +129,7 @@ class RoleDefinition:
 
         Delegates to RoleConverter.to_yaml_dict for consistency.
         """
-        from xbot.agent.crew.planner.utils import RoleConverter
+        from xbot.crew.planner.utils import RoleConverter
         return RoleConverter.to_yaml_dict(self)
 
 
@@ -332,7 +332,7 @@ class CrewPlan:
 
         Uses RoleConverter for consistent agent configuration.
         """
-        from xbot.agent.crew.planner.utils import RoleConverter
+        from xbot.crew.planner.utils import RoleConverter
 
         agents_dict = {}
         for role in self.roles:

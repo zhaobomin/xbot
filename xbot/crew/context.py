@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from xbot.agent.crew.models import AgentRole, CrewConfig, TaskDefinition, TaskResult
+from xbot.crew.models import AgentRole, CrewConfig, TaskDefinition, TaskResult
 from xbot.logging import get_logger
 
 logger = get_logger(__name__)

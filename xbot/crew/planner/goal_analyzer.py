@@ -12,10 +12,10 @@ from __future__ import annotations
 
 from typing import Any, Callable
 
-from xbot.agent.crew.planner.models import Capability, GoalAnalysis
-from xbot.agent.crew.planner.prompts import GOAL_ANALYSIS_PROMPT
-from xbot.agent.crew.planner.utils import LLMResponseParser
-from xbot.agent.crew.planner.validators import LLMValidator
+from xbot.crew.planner.models import Capability, GoalAnalysis
+from xbot.crew.planner.prompts import GOAL_ANALYSIS_PROMPT
+from xbot.crew.planner.utils import LLMResponseParser
+from xbot.crew.planner.validators import LLMValidator
 from xbot.logging import get_logger
 
 logger = get_logger(__name__)

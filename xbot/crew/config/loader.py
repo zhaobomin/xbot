@@ -15,12 +15,12 @@ from typing import Any
 
 import yaml
 
-from xbot.agent.crew.config.merger import (
+from xbot.crew.config.merger import (
     MergeError,
     get_inheritance_chain,
     merge_configs,
 )
-from xbot.agent.crew.config.variables import (
+from xbot.crew.config.variables import (
     VariableError,
     VariableResolver,
 )

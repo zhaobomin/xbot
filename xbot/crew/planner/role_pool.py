@@ -6,14 +6,14 @@ from pathlib import Path
 
 import yaml
 
-from xbot.agent.crew.planner.models import (
+from xbot.crew.planner.models import (
     Capability,
     RoleDefinition,
     RolePool,
     RolePoolConfig,
     RoleTier,
 )
-from xbot.agent.crew.planner.validators import LLMValidator
+from xbot.crew.planner.validators import LLMValidator
 from xbot.logging import get_logger
 
 logger = get_logger(__name__)

@@ -18,14 +18,14 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
-from xbot.agent.crew.planner import (
+from xbot.crew.planner import (
     Capability,
     RoleDefinition,
     RolePoolConfig,
     RolePoolManager,
     RoleTier,
 )
-from xbot.agent.crew.planner.role_creator import RoleCreator, validate_role_file
+from xbot.crew.planner.role_creator import RoleCreator, validate_role_file
 
 app = typer.Typer(help="Role pool management commands")
 console = Console()
