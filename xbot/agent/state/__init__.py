@@ -1,14 +1,6 @@
-"""Session state management.
+"""Compatibility facade for agent state package.
 
-This module provides simplified session state management using SessionManager
-as the single source of truth.
+Preferred location: ``xbot.runtime.state``.
 """
 
-from xbot.agent.state.machine import SessionPhase, SessionState
-from xbot.agent.state.session_manager import SessionManager
-
-__all__ = [
-    "SessionManager",
-    "SessionPhase",
-    "SessionState",
-]
+from xbot.runtime.state import *  # noqa: F403
