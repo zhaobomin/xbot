@@ -1,4 +1,4 @@
-from xbot.session.manager import Session
+from xbot.runtime.session.manager import Session
 
 
 def _assert_no_orphans(history: list[dict]) -> None:

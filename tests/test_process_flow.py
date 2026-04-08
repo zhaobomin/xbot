@@ -5,16 +5,16 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from xbot.agent.crew.agent_pool import TaskProgress
-from xbot.agent.crew.models import (
+from xbot.crew.agent_pool import TaskProgress
+from xbot.crew.models import (
     AgentRole,
     OutputFormat,
     TaskDefinition,
     TaskResult,
     UserAction,
 )
-from xbot.agent.crew.process import HierarchicalProcess, SequentialProcess
-from xbot.agent.crew.state import CrewStateManager, TaskPhase
+from xbot.crew.process import HierarchicalProcess, SequentialProcess
+from xbot.crew.state import CrewStateManager, TaskPhase
 
 
 class MockPermissionHandler:

@@ -1,4 +1,4 @@
-from xbot.providers.base import ToolCallRequest
+from xbot.platform.providers.base import ToolCallRequest
 
 
 def test_tool_call_request_serializes_provider_fields() -> None:

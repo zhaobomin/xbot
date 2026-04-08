@@ -3,9 +3,9 @@ from typing import Any
 
 import pytest
 
-from xbot.agent.tools.base import Tool
-from xbot.agent.tools.registry import ToolRegistry
-from xbot.agent.tools.shell import ExecTool
+from xbot.tools.base import Tool
+from xbot.tools.registry import ToolRegistry
+from xbot.tools.shell import ExecTool
 
 
 class SampleTool(Tool):
@@ -434,7 +434,7 @@ async def test_exec_timeout_capped_at_max() -> None:
 
 
 def test_tool_adapter_applies_workspace_restriction_to_sdk_tools(tmp_path) -> None:
-    from xbot.agent.capabilities.tool_adapter import ToolAdapter
+    from xbot.capabilities.tool_adapter import ToolAdapter
 
     tools_config = SimpleNamespace(
         web=SimpleNamespace(proxy=None, search=None),
@@ -450,8 +450,13 @@ def test_tool_adapter_applies_workspace_restriction_to_sdk_tools(tmp_path) -> No
 
     adapter._register_xbot_tools()
 
-    assert adapter.get_tool("read_file")._allowed_dir == tmp_path
-    assert adapter.get_tool("write_file")._allowed_dir == tmp_path
-    assert adapter.get_tool("edit_file")._allowed_dir == tmp_path
-    assert adapter.get_tool("list_dir")._allowed_dir == tmp_path
-    assert adapter.get_tool("shell").restrict_to_workspace is True
+    # SDK-native filesystem/shell tools should not be re-exposed by xbot adapter.
+    assert adapter.get_tool("read_file") is None
+    assert adapter.get_tool("write_file") is None
+    assert adapter.get_tool("edit_file") is None
+    assert adapter.get_tool("list_dir") is None
+    assert adapter.get_tool("shell") is None
+
+    # xbot web extensions remain available.
+    assert adapter.get_tool("web_search") is not None
+    assert adapter.get_tool("web_fetch") is not None

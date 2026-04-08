@@ -5,18 +5,18 @@ from __future__ import annotations
 import json
 import tempfile
 
-from xbot.agent.crew.output.format import (
+from xbot.crew.output.format import (
     OutputFormat,
     OutputParser,
     ParsedOutput,
     detect_format,
     format_output,
 )
-from xbot.agent.crew.output.repair import (
+from xbot.crew.output.repair import (
     OutputRepairer,
     should_attempt_repair,
 )
-from xbot.agent.crew.output.truncate import (
+from xbot.crew.output.truncate import (
     OutputTruncator,
     TruncationStrategy,
     truncate_output,
@@ -229,7 +229,7 @@ class TestOutputPersist:
     def test_create_persister(self):
         """Test creating a persister."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            from xbot.agent.crew.output.persist import OutputPersister
+            from xbot.crew.output.persist import OutputPersister
 
             persister = OutputPersister(tmpdir, "test_crew")
             persister.initialize()
@@ -243,7 +243,7 @@ class TestOutputPersist:
         from datetime import datetime
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            from xbot.agent.crew.output.persist import OutputPersister
+            from xbot.crew.output.persist import OutputPersister
 
             persister = OutputPersister(tmpdir, "test_crew")
             persister.initialize()
@@ -266,7 +266,7 @@ class TestOutputPersist:
         from datetime import datetime
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            from xbot.agent.crew.output.persist import OutputPersister
+            from xbot.crew.output.persist import OutputPersister
 
             persister = OutputPersister(tmpdir, "test_crew")
             persister.initialize()
@@ -289,7 +289,7 @@ class TestOutputPersist:
     def test_save_artifact(self):
         """Test saving an artifact."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            from xbot.agent.crew.output.persist import OutputPersister
+            from xbot.crew.output.persist import OutputPersister
 
             persister = OutputPersister(tmpdir, "test_crew")
             persister.initialize()
@@ -503,7 +503,7 @@ class TestOutputRepairEdgeCases:
 
     def test_repair_json_convenience(self):
         """Test repair_json convenience function."""
-        from xbot.agent.crew.output.repair import repair_json
+        from xbot.crew.output.repair import repair_json
 
         # With LLM call provided, repair should succeed
         result = repair_json("{bad}", llm_call=lambda x: '{"fixed": true}')
@@ -518,7 +518,7 @@ class TestOutputPersistEdgeCases:
         from datetime import datetime
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            from xbot.agent.crew.output.persist import OutputPersister
+            from xbot.crew.output.persist import OutputPersister
 
             persister = OutputPersister(tmpdir, "test_crew")
             persister.initialize()
@@ -543,7 +543,7 @@ class TestOutputPersistEdgeCases:
     def test_save_binary_artifact(self):
         """Test saving binary artifact."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            from xbot.agent.crew.output.persist import OutputPersister
+            from xbot.crew.output.persist import OutputPersister
 
             persister = OutputPersister(tmpdir, "test_crew")
             persister.initialize()
@@ -562,7 +562,7 @@ class TestOutputPersistEdgeCases:
         from datetime import datetime
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            from xbot.agent.crew.output.persist import OutputPersister
+            from xbot.crew.output.persist import OutputPersister
 
             persister = OutputPersister(tmpdir, "test_crew")
             persister.initialize()
@@ -578,7 +578,7 @@ class TestOutputPersistEdgeCases:
 
     def test_safe_filename(self):
         """Test filename sanitization."""
-        from xbot.agent.crew.output.persist import OutputPersister
+        from xbot.crew.output.persist import OutputPersister
 
         persister = OutputPersister("/tmp", "test")
         assert persister._safe_filename("My Task Name") == "my_task_name"
@@ -588,7 +588,7 @@ class TestOutputPersistEdgeCases:
 
     def test_get_extension(self):
         """Test extension mapping."""
-        from xbot.agent.crew.output.persist import OutputPersister
+        from xbot.crew.output.persist import OutputPersister
 
         persister = OutputPersister("/tmp", "test")
         assert persister._get_extension("json") == "json"
@@ -599,7 +599,7 @@ class TestOutputPersistEdgeCases:
     def test_finalize_without_initialize(self):
         """Test finalize without initialization."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            from xbot.agent.crew.output.persist import OutputPersister
+            from xbot.crew.output.persist import OutputPersister
 
             persister = OutputPersister(tmpdir, "test_crew")
             # finalize should handle uninitialized state
@@ -609,7 +609,7 @@ class TestOutputPersistEdgeCases:
     def test_custom_run_id(self):
         """Test custom run ID."""
         with tempfile.TemporaryDirectory() as tmpdir:
-            from xbot.agent.crew.output.persist import OutputPersister
+            from xbot.crew.output.persist import OutputPersister
 
             persister = OutputPersister(tmpdir, "test_crew", run_id="custom_run_123")
             persister.initialize()
@@ -803,7 +803,7 @@ class TestOutputIntegration:
         from datetime import datetime
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            from xbot.agent.crew.output.persist import OutputPersister
+            from xbot.crew.output.persist import OutputPersister
 
             # Initialize persister
             persister = OutputPersister(tmpdir, "integration_test")
@@ -846,7 +846,7 @@ class TestOutputIntegration:
             return '{"fixed": true, "items": []}'
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            from xbot.agent.crew.output.persist import OutputPersister
+            from xbot.crew.output.persist import OutputPersister
 
             persister = OutputPersister(tmpdir, "repair_test")
             persister.initialize()
@@ -877,7 +877,7 @@ class TestOutputIntegration:
         from datetime import datetime
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            from xbot.agent.crew.output.persist import OutputPersister
+            from xbot.crew.output.persist import OutputPersister
 
             persister = OutputPersister(tmpdir, "multi_format")
             persister.initialize()
@@ -990,7 +990,7 @@ More details here.
         from datetime import datetime
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            from xbot.agent.crew.output.persist import OutputPersister
+            from xbot.crew.output.persist import OutputPersister
 
             persister = OutputPersister(tmpdir, "artifact_test")
             persister.initialize()
@@ -1030,7 +1030,7 @@ Analysis completed successfully.
         from datetime import datetime
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            from xbot.agent.crew.output.persist import OutputPersister
+            from xbot.crew.output.persist import OutputPersister
 
             persister = OutputPersister(tmpdir, "summary_test")
             persister.initialize()
@@ -1054,7 +1054,7 @@ Analysis completed successfully.
         from datetime import datetime
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            from xbot.agent.crew.output.persist import OutputPersister
+            from xbot.crew.output.persist import OutputPersister
 
             persister = OutputPersister(tmpdir, "large_output", retention_days=7)
             persister.initialize()
@@ -1159,7 +1159,7 @@ Additional information.
         from datetime import datetime
 
         with tempfile.TemporaryDirectory() as tmpdir:
-            from xbot.agent.crew.output.persist import OutputPersister
+            from xbot.crew.output.persist import OutputPersister
 
             persister = OutputPersister(tmpdir, "error_test")
             persister.initialize()

@@ -2,7 +2,8 @@
 
 import pytest
 
-from xbot.agent.interaction.permission import BasePermissionHandler
+from xbot.interaction.permission import BasePermissionHandler
+from xbot.interaction.response_parser import normalize_validation_mode
 
 
 class TestParseAnswers:
@@ -115,6 +116,17 @@ class TestParseAnswers:
         # Should match to "北京市"
         assert answers[0]["answer"] == "北京市"
 
+    def test_parse_answers_ambiguous_prefix_keeps_original(self, handler):
+        """Test ambiguous prefixes follow the shared validator behavior."""
+        questions = [
+            {"question": "选择？", "options": [{"label": "北京市"}, {"label": "北京南站"}]},
+        ]
+        question_options_map = [["北京市", "北京南站"]]
+
+        answers = handler._parse_answers("北京", questions, question_options_map)
+
+        assert answers[0]["answer"] == "北京"
+
     def test_parse_answers_no_match_keeps_original(self, handler):
         """Test that non-matching answer keeps original value."""
         questions = [
@@ -180,6 +192,10 @@ class TestParseAnswers:
         assert answers[0]["answer"] == "红"
         assert answers[1]["answer"] == "大"
         assert answers[2]["answer"] == "圆"
+
+    def test_unknown_validation_mode_falls_back_to_suggested(self):
+        """Test unknown validation modes use the shared suggested fallback."""
+        assert normalize_validation_mode("weird-mode") == "suggested"
 
 
 class TestHandleAskUserQuestionMulti:

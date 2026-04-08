@@ -7,10 +7,10 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from xbot.agent.crew.cli.role_cmd import app as role_app
-from xbot.agent.crew.planner.config_generator import ConfigGenerator
-from xbot.agent.crew.planner.crew_planner import CrewPlanner
-from xbot.agent.crew.planner.models import (
+from xbot.crew.cli.role_cmd import app as role_app
+from xbot.crew.planner.config_generator import ConfigGenerator
+from xbot.crew.planner.crew_planner import CrewPlanner
+from xbot.crew.planner.models import (
     Capability,
     CrewPlan,
     GoalAnalysis,
@@ -20,8 +20,8 @@ from xbot.agent.crew.planner.models import (
     RoleTier,
     TaskPlan,
 )
-from xbot.agent.crew.planner.role_pool import RolePoolManager
-from xbot.agent.crew.planner.role_selector import RoleSelector
+from xbot.crew.planner.role_pool import RolePoolManager
+from xbot.crew.planner.role_selector import RoleSelector
 
 runner = CliRunner()
 

@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from xbot.cron.service import CronService
-from xbot.cron.types import CronSchedule
+from xbot.runtime.system.cron.service import CronService
+from xbot.runtime.system.cron.types import CronSchedule
 
 
 def test_add_job_rejects_unknown_timezone(tmp_path) -> None:

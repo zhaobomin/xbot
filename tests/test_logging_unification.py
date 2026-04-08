@@ -5,7 +5,7 @@ from pathlib import Path
 
 
 def _reload_logging_module():
-    import xbot.logging as xbot_logging
+    import xbot.platform.logging.core as xbot_logging
 
     return importlib.reload(xbot_logging)
 

@@ -2,8 +2,8 @@
 
 
 
-from xbot.agent.crew.models import OutputFormat
-from xbot.agent.crew.output.format import (
+from xbot.crew.models import OutputFormat
+from xbot.crew.output.format import (
     OutputParser,
     ParsedOutput,
     detect_format,

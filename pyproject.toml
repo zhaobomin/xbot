@@ -78,7 +78,7 @@ dev = [
 ]
 
 [project.scripts]
-xbot = "xbot.cli.commands:app"
+xbot = "xbot.interfaces.cli.commands:app"
 
 [build-system]
 requires = ["hatchling"]
@@ -90,12 +90,13 @@ allow-direct-references = true
 [tool.hatch.build]
 include = [
     "xbot/**/*.py",
-    "xbot/webui/frontend/dist/**",
-    "xbot/webui/frontend/public/**",
-    "xbot/templates/**/*.md",
+    "xbot/interfaces/webui/frontend/dist/**",
+    "xbot/interfaces/webui/frontend/public/**",
+    "xbot/interfaces/webui/frontend-new/dist/**",
+    "xbot/interfaces/webui/frontend-new/public/**",
+    "xbot/templates/**",
     "xbot/skills/**/*.md",
     "xbot/skills/**/*.sh",
-    "xbot/init_templates/**",
 ]
 
 [tool.hatch.build.targets.wheel]

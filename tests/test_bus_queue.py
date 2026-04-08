@@ -5,8 +5,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from xbot.bus.events import InboundMessage, OutboundMessage
-from xbot.bus.queue import (
+from xbot.platform.bus.events import InboundMessage, OutboundMessage
+from xbot.platform.bus.queue import (
     REQUEST_TIMEOUT_SECONDS,
     InteractionRequest,
     InteractionResponse,

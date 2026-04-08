@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from xbot.agent.client_pool import ClientPool
+from xbot.runtime.core.client_pool import ClientPool
 
 
 class TestClientPool:

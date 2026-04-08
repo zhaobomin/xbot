@@ -6,13 +6,13 @@ from pathlib import Path
 import pytest
 import yaml
 
-from xbot.agent.crew.planner.models import (
+from xbot.crew.planner.models import (
     Capability,
     RoleDefinition,
     RolePoolConfig,
     RoleTier,
 )
-from xbot.agent.crew.planner.role_pool import (
+from xbot.crew.planner.role_pool import (
     RolePoolManager,
     parse_tier_list,
 )

@@ -3,7 +3,7 @@
 
 import pytest
 
-from xbot.agent.crew.output.truncate import (
+from xbot.crew.output.truncate import (
     OutputTruncator,
     TruncationResult,
     TruncationStrategy,

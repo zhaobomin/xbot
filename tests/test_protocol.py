@@ -1,7 +1,7 @@
 """Tests for agent protocol definitions."""
 
 
-from xbot.agent.protocol import AgentContext, AgentResponse
+from xbot.runtime.core.protocol import AgentContext, AgentResponse
 
 
 class TestAgentResponse:

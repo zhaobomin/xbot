@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from xbot.agent.crew.context import CrewExecutionContext, load_checkpoint, save_checkpoint
-from xbot.agent.crew.models import AgentRole, CrewConfig, TaskDefinition, TaskResult
+from xbot.crew.context import CrewExecutionContext, load_checkpoint, save_checkpoint
+from xbot.crew.models import AgentRole, CrewConfig, TaskDefinition, TaskResult
 
 
 class TestCrewExecutionContext:

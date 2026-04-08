@@ -3,14 +3,14 @@
 from datetime import datetime
 from unittest.mock import MagicMock
 
-from xbot.agent.crew.context import CrewExecutionContext
-from xbot.agent.crew.models import (
+from xbot.crew.context import CrewExecutionContext
+from xbot.crew.models import (
     AgentRole,
     TaskDefinition,
     TaskResult,
 )
-from xbot.agent.crew.orchestrator import CrewOrchestrator
-from xbot.agent.crew.state import CrewStateManager, TaskPhase
+from xbot.crew.orchestrator import CrewOrchestrator
+from xbot.crew.state import CrewStateManager, TaskPhase
 
 
 class MockPermissionHandler:

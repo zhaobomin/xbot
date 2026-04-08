@@ -1,4 +1,4 @@
-"""Comprehensive tests for xbot.agent.crew module."""
+"""Comprehensive tests for xbot.crew module."""
 
 from __future__ import annotations
 
@@ -11,12 +11,12 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 import yaml
 
-from xbot.agent.crew.context import (
+from xbot.crew.context import (
     CrewExecutionContext,
     load_checkpoint,
     save_checkpoint,
 )
-from xbot.agent.crew.models import (
+from xbot.crew.models import (
     AgentRole,
     CrewConfig,
     ProcessType,
@@ -24,7 +24,7 @@ from xbot.agent.crew.models import (
     TaskResult,
     load_crew_config,
 )
-from xbot.agent.crew.state import (
+from xbot.crew.state import (
     CrewPhase,
     CrewStateManager,
     InvalidTransitionError,
@@ -581,7 +581,7 @@ def _mock_permission(responses: list[str] | None = None):
 class TestSequentialProcess:
     @pytest.mark.asyncio
     async def test_executes_all_tasks_in_order(self):
-        from xbot.agent.crew.process import SequentialProcess
+        from xbot.crew.process import SequentialProcess
 
         config = _make_crew_config(
             tasks=[
@@ -615,7 +615,7 @@ class TestSequentialProcess:
 
     @pytest.mark.asyncio
     async def test_skips_downstream_on_upstream_failure(self):
-        from xbot.agent.crew.process import SequentialProcess
+        from xbot.crew.process import SequentialProcess
 
         config = _make_crew_config(
             tasks=[
@@ -652,7 +652,7 @@ class TestSequentialProcess:
 
     @pytest.mark.asyncio
     async def test_human_review_continue(self):
-        from xbot.agent.crew.process import SequentialProcess
+        from xbot.crew.process import SequentialProcess
 
         config = _make_crew_config(
             tasks=[_make_task(name="t1", human_review=True)],
@@ -676,7 +676,7 @@ class TestSequentialProcess:
     @pytest.mark.asyncio
     async def test_human_review_abort_skips_remaining(self):
         """Bug3 fix: abort should add skipped TaskResults for remaining tasks."""
-        from xbot.agent.crew.process import SequentialProcess
+        from xbot.crew.process import SequentialProcess
 
         config = _make_crew_config(
             tasks=[
@@ -708,7 +708,7 @@ class TestSequentialProcess:
 
     @pytest.mark.asyncio
     async def test_human_review_annotate(self):
-        from xbot.agent.crew.process import SequentialProcess
+        from xbot.crew.process import SequentialProcess
 
         config = _make_crew_config(
             tasks=[_make_task(name="t1", human_review=True)],
@@ -732,7 +732,7 @@ class TestSequentialProcess:
 
     @pytest.mark.asyncio
     async def test_human_review_edit(self):
-        from xbot.agent.crew.process import SequentialProcess
+        from xbot.crew.process import SequentialProcess
 
         config = _make_crew_config(
             tasks=[_make_task(name="t1", human_review=True)],
@@ -755,7 +755,7 @@ class TestSequentialProcess:
 
     @pytest.mark.asyncio
     async def test_human_review_skip(self):
-        from xbot.agent.crew.process import SequentialProcess
+        from xbot.crew.process import SequentialProcess
 
         config = _make_crew_config(
             tasks=[_make_task(name="t1", human_review=True)],
@@ -778,7 +778,7 @@ class TestSequentialProcess:
 
     @pytest.mark.asyncio
     async def test_human_briefing_injected_into_prompt(self):
-        from xbot.agent.crew.process import SequentialProcess
+        from xbot.crew.process import SequentialProcess
 
         config = _make_crew_config(
             tasks=[_make_task(name="t1", human_briefing=True)],
@@ -804,7 +804,7 @@ class TestSequentialProcess:
 
     @pytest.mark.asyncio
     async def test_resume_skips_completed_tasks(self):
-        from xbot.agent.crew.process import SequentialProcess
+        from xbot.crew.process import SequentialProcess
 
         config = _make_crew_config(
             tasks=[
@@ -840,7 +840,7 @@ class TestSequentialProcess:
 
     @pytest.mark.asyncio
     async def test_timeout_marks_task_failed(self):
-        from xbot.agent.crew.process import SequentialProcess
+        from xbot.crew.process import SequentialProcess
 
         config = _make_crew_config(
             tasks=[_make_task(name="t1", timeout=1)],
@@ -877,7 +877,7 @@ class TestCrewOrchestrator:
     @pytest.mark.asyncio
     async def test_apply_checkpoint_restores_success_only(self):
         """Bug5 fix: only success/completed tasks are restored on resume."""
-        from xbot.agent.crew.orchestrator import CrewOrchestrator
+        from xbot.crew.orchestrator import CrewOrchestrator
 
         config = _make_crew_config(
             tasks=[
@@ -921,13 +921,13 @@ class TestCrewOrchestrator:
 
 class TestHierarchicalParsePlan:
     def test_parses_valid_json_array(self):
-        from xbot.agent.crew.process import HierarchicalProcess
+        from xbot.crew.process import HierarchicalProcess
 
         result = HierarchicalProcess._parse_plan('["t1", "t2", "t3"]')
         assert result == ["t1", "t2", "t3"]
 
     def test_parses_json_embedded_in_text(self):
-        from xbot.agent.crew.process import HierarchicalProcess
+        from xbot.crew.process import HierarchicalProcess
 
         result = HierarchicalProcess._parse_plan(
             'Here is my plan:\n["t1", "t2"]\nDone.'
@@ -935,17 +935,17 @@ class TestHierarchicalParsePlan:
         assert result == ["t1", "t2"]
 
     def test_returns_none_for_no_array(self):
-        from xbot.agent.crew.process import HierarchicalProcess
+        from xbot.crew.process import HierarchicalProcess
 
         assert HierarchicalProcess._parse_plan("no json here") is None
 
     def test_returns_none_for_non_string_array(self):
-        from xbot.agent.crew.process import HierarchicalProcess
+        from xbot.crew.process import HierarchicalProcess
 
         assert HierarchicalProcess._parse_plan("[1, 2, 3]") is None
 
     def test_returns_none_for_invalid_json(self):
-        from xbot.agent.crew.process import HierarchicalProcess
+        from xbot.crew.process import HierarchicalProcess
 
         assert HierarchicalProcess._parse_plan("[invalid json]") is None
 
@@ -1008,7 +1008,7 @@ class TestConfigInheritance:
             ],
         }))
 
-        from xbot.agent.crew.config.loader import CrewConfigLoader
+        from xbot.crew.config.loader import CrewConfigLoader
         loader = CrewConfigLoader()
         config = loader.load(child_yaml)
 
@@ -1037,7 +1037,7 @@ class TestConfigInheritance:
             ],
         }))
 
-        from xbot.agent.crew.config.loader import CrewConfigLoader
+        from xbot.crew.config.loader import CrewConfigLoader
         loader = CrewConfigLoader(cli_vars={"CREW_NAME": "cli-name"})
         config = loader.load(config_yaml)
 
@@ -1056,7 +1056,7 @@ class TestConfigInheritance:
             ],
         }))
 
-        from xbot.agent.crew.config.loader import CrewConfigLoader
+        from xbot.crew.config.loader import CrewConfigLoader
         loader = CrewConfigLoader()
         config = loader.load(config_yaml)
 
@@ -1076,8 +1076,8 @@ class TestConfigInheritance:
             ],
         }))
 
-        from xbot.agent.crew.config.loader import CrewConfigLoader
-        from xbot.agent.crew.config.validator import validate_crew_config
+        from xbot.crew.config.loader import CrewConfigLoader
+        from xbot.crew.config.validator import validate_crew_config
         loader = CrewConfigLoader()
         config = loader.load(config_yaml)
 
@@ -1093,7 +1093,7 @@ class TestOutputPersistenceIntegration:
         """Test complete output lifecycle: create, save, finalize, load."""
         from datetime import datetime
 
-        from xbot.agent.crew.output.persist import create_persister
+        from xbot.crew.output.persist import create_persister
 
         # Create persister
         persister = create_persister(str(tmp_path), "test-crew")
@@ -1140,7 +1140,7 @@ class TestOutputPersistenceIntegration:
 
     def test_truncation_integration(self):
         """Test that truncation works with real content."""
-        from xbot.agent.crew.output.truncate import OutputTruncator, TruncationStrategy
+        from xbot.crew.output.truncate import OutputTruncator, TruncationStrategy
 
         truncator = OutputTruncator()
 
@@ -1159,7 +1159,7 @@ class TestOutputPersistenceIntegration:
 
     def test_format_detection_and_parsing(self):
         """Test format detection and parsing integration."""
-        from xbot.agent.crew.output.format import OutputFormat, OutputParser, detect_format
+        from xbot.crew.output.format import OutputFormat, OutputParser, detect_format
 
         parser = OutputParser()
 
@@ -1183,8 +1183,8 @@ class TestOutputRepairIntegration:
 
     def test_repair_flow(self):
         """Test the repair flow with a mock LLM."""
-        from xbot.agent.crew.output.format import OutputFormat, OutputParser
-        from xbot.agent.crew.output.repair import OutputRepairer, should_attempt_repair
+        from xbot.crew.output.format import OutputFormat, OutputParser
+        from xbot.crew.output.repair import OutputRepairer, should_attempt_repair
 
         parser = OutputParser()
 
@@ -1213,9 +1213,9 @@ class TestEndToEndConfigOutput:
         """Test full flow: load config -> simulate run -> save outputs."""
         from datetime import datetime
 
-        from xbot.agent.crew.config.loader import CrewConfigLoader
-        from xbot.agent.crew.config.validator import validate_crew_config
-        from xbot.agent.crew.output.persist import OutputPersister
+        from xbot.crew.config.loader import CrewConfigLoader
+        from xbot.crew.config.validator import validate_crew_config
+        from xbot.crew.output.persist import OutputPersister
 
         # 1. Create config
         config_yaml = tmp_path / "crew.yaml"

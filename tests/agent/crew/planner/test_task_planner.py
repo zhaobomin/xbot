@@ -2,7 +2,7 @@
 
 import pytest
 
-from xbot.agent.crew.planner.models import (
+from xbot.crew.planner.models import (
     Capability,
     GoalAnalysis,
     RoleDefinition,
@@ -10,7 +10,7 @@ from xbot.agent.crew.planner.models import (
     RoleTier,
     TaskPlan,
 )
-from xbot.agent.crew.planner.task_planner import TaskPlanner
+from xbot.crew.planner.task_planner import TaskPlanner
 
 
 class TestTaskPlannerInit:

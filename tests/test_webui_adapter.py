@@ -8,12 +8,12 @@ import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from xbot.bus.queue import MessageBus
-from xbot.cli.commands import app
-from xbot.config.schema import Config, MCPServerConfig
-from xbot.cron.types import CronJob, CronJobState, CronPayload, CronSchedule
-from xbot.session.manager import SessionManager
-from xbot.webui.auth import set_password
+from xbot.platform.bus.queue import MessageBus
+from xbot.interfaces.cli.commands import app
+from xbot.platform.config.schema import Config, MCPServerConfig
+from xbot.runtime.system.cron.types import CronJob, CronJobState, CronPayload, CronSchedule
+from xbot.runtime.session.manager import SessionManager
+from xbot.interfaces.webui.auth import set_password
 
 
 class _FakeRuntime:
@@ -171,8 +171,8 @@ class _Services:
 
 
 def _build_client(tmp_path: Path) -> tuple[TestClient, _Services]:
-    from xbot.webui.app import _clear_login_rate_limit, create_app
-    from xbot.webui.services import ServiceContainer
+    from xbot.interfaces.webui.app import _clear_login_rate_limit, create_app
+    from xbot.interfaces.webui.services import ServiceContainer
 
     # Clear login rate limit between tests
     _clear_login_rate_limit()
@@ -181,7 +181,7 @@ def _build_client(tmp_path: Path) -> tuple[TestClient, _Services]:
     test_password_file = tmp_path / "webui-data" / "password"
     test_password_file.parent.mkdir(parents=True, exist_ok=True)
     # Monkeypatch the password file location for this test
-    import xbot.webui.auth as auth_module
+    import xbot.interfaces.webui.auth as auth_module
     auth_module.PASSWORD_FILE = test_password_file
     set_password("test-webui-password")
 
@@ -229,8 +229,8 @@ def test_webui_root_serves_html(tmp_path: Path) -> None:
 
 
 def test_webui_serves_frontend_dist_when_present(tmp_path: Path) -> None:
-    from xbot.webui.app import create_app
-    from xbot.webui.services import ServiceContainer
+    from xbot.interfaces.webui.app import create_app
+    from xbot.interfaces.webui.services import ServiceContainer
 
     dist_dir = tmp_path / "dist"
     dist_dir.mkdir()
@@ -255,8 +255,8 @@ def test_webui_serves_frontend_dist_when_present(tmp_path: Path) -> None:
 
 
 def test_webui_spa_routes_fall_back_to_index(tmp_path: Path) -> None:
-    from xbot.webui.app import create_app
-    from xbot.webui.services import ServiceContainer
+    from xbot.interfaces.webui.app import create_app
+    from xbot.interfaces.webui.services import ServiceContainer
 
     dist_dir = tmp_path / "dist"
     dist_dir.mkdir()
@@ -282,7 +282,7 @@ def test_webui_spa_routes_fall_back_to_index(tmp_path: Path) -> None:
 
 @pytest.mark.skip(reason="requires frontend build artifacts")
 def test_frontend_branding_uses_xbot_semantics() -> None:
-    frontend_root = Path("xbot/webui/frontend")
+    frontend_root = Path("xbot/interfaces/webui/frontend")
     dist_root = frontend_root / "dist"
 
     assert frontend_root.exists()
@@ -307,12 +307,12 @@ def test_frontend_branding_uses_xbot_semantics() -> None:
 
 def test_frontend_uses_svg_brand_assets() -> None:
     files = [
-        Path("xbot/webui/frontend/index.html"),
-        Path("xbot/webui/frontend/src/pages/Login.tsx"),
-        Path("xbot/webui/frontend/src/components/layout/Sidebar.tsx"),
-        Path("xbot/webui/frontend/src/components/layout/MobileTopBar.tsx"),
-        Path("xbot/webui/frontend/src/components/chat/ChatWindow.tsx"),
-        Path("xbot/webui/frontend/src/components/chat/MessageBubble.tsx"),
+        Path("xbot/interfaces/webui/frontend/index.html"),
+        Path("xbot/interfaces/webui/frontend/src/pages/Login.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/components/layout/Sidebar.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/components/layout/MobileTopBar.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/components/chat/ChatWindow.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/components/chat/MessageBubble.tsx"),
     ]
 
     for path in files:
@@ -323,10 +323,10 @@ def test_frontend_uses_svg_brand_assets() -> None:
 
 def test_frontend_uses_text_brand_mark_instead_of_logo_images() -> None:
     files = [
-        Path("xbot/webui/frontend/src/pages/Login.tsx"),
-        Path("xbot/webui/frontend/src/components/layout/Sidebar.tsx"),
-        Path("xbot/webui/frontend/src/components/layout/MobileTopBar.tsx"),
-        Path("xbot/webui/frontend/src/components/chat/ChatWindow.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/pages/Login.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/components/layout/Sidebar.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/components/layout/MobileTopBar.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/components/chat/ChatWindow.tsx"),
     ]
 
     for path in files:
@@ -335,7 +335,7 @@ def test_frontend_uses_text_brand_mark_instead_of_logo_images() -> None:
         assert "/icon.svg" not in content, f"stale svg icon reference in {path}"
         assert "xbot" in content, f"missing text brand mark in {path}"
 
-    bubble = Path("xbot/webui/frontend/src/components/chat/MessageBubble.tsx").read_text(encoding="utf-8")
+    bubble = Path("xbot/interfaces/webui/frontend/src/components/chat/MessageBubble.tsx").read_text(encoding="utf-8")
     assert "/icon.svg" not in bubble
     assert '"x"' in bubble or "'x'" in bubble
 
@@ -469,8 +469,8 @@ def test_cron_and_skills_management_endpoints(tmp_path: Path) -> None:
 
 
 def test_cron_management_crud_endpoints_with_real_service_shape(tmp_path: Path) -> None:
-    from xbot.webui.app import create_app
-    from xbot.webui.services import ServiceContainer
+    from xbot.interfaces.webui.app import create_app
+    from xbot.interfaces.webui.services import ServiceContainer
 
     class _RealShapeCronService:
         def __init__(self) -> None:
@@ -712,7 +712,7 @@ def test_websocket_disconnect_during_progress_does_not_crash(tmp_path: Path) -> 
 def test_safe_websocket_send_swallows_disconnect_errors() -> None:
     from starlette.websockets import WebSocketDisconnect
 
-    from xbot.webui.app import _safe_websocket_send_json
+    from xbot.interfaces.webui.app import _safe_websocket_send_json
 
     async def _run() -> None:
         await _safe_websocket_send_json(_ClosingWebSocket(WebSocketDisconnect(code=1006)), {"type": "progress"})
@@ -947,7 +947,7 @@ def test_mcp_runtime_reports_disconnected_server_details(tmp_path: Path) -> None
 
 def test_login_rate_limit_blocks_after_max_attempts(tmp_path: Path) -> None:
     """Test that login rate limiting blocks after max attempts."""
-    from xbot.webui.app import _MAX_ATTEMPTS_PER_IP, _clear_login_rate_limit
+    from xbot.interfaces.webui.app import _MAX_ATTEMPTS_PER_IP, _clear_login_rate_limit
 
     _clear_login_rate_limit()
     client, _services = _build_client(tmp_path)
@@ -971,7 +971,7 @@ def test_login_rate_limit_blocks_after_max_attempts(tmp_path: Path) -> None:
 
 def test_login_rate_limit_isolated_per_ip(tmp_path: Path, monkeypatch) -> None:
     """Test that rate limiting is per-IP, not global."""
-    from xbot.webui.app import _MAX_ATTEMPTS_PER_IP, _clear_login_rate_limit
+    from xbot.interfaces.webui.app import _MAX_ATTEMPTS_PER_IP, _clear_login_rate_limit
 
     _clear_login_rate_limit()
     client, _services = _build_client(tmp_path)

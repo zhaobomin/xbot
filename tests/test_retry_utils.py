@@ -5,7 +5,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_run_with_retry_retries_retryable_exceptions(monkeypatch) -> None:
-    from xbot.utils.retry import RetryPolicy, run_with_retry
+    from xbot.platform.utils.retry import RetryPolicy, run_with_retry
 
     calls = 0
     delays: list[float] = []
@@ -20,7 +20,7 @@ async def test_run_with_retry_retries_retryable_exceptions(monkeypatch) -> None:
             raise TimeoutError("retry me")
         return "ok"
 
-    monkeypatch.setattr("xbot.utils.retry.asyncio.sleep", _fake_sleep)
+    monkeypatch.setattr("xbot.platform.utils.retry.asyncio.sleep", _fake_sleep)
 
     result = await run_with_retry(
         RetryPolicy(
@@ -41,7 +41,7 @@ async def test_run_with_retry_retries_retryable_exceptions(monkeypatch) -> None:
 
 @pytest.mark.asyncio
 async def test_run_with_retry_stops_on_non_retryable_exception(monkeypatch) -> None:
-    from xbot.utils.retry import RetryPolicy, run_with_retry
+    from xbot.platform.utils.retry import RetryPolicy, run_with_retry
 
     delays: list[float] = []
 
@@ -51,7 +51,7 @@ async def test_run_with_retry_stops_on_non_retryable_exception(monkeypatch) -> N
     async def op() -> str:
         raise ValueError("fatal")
 
-    monkeypatch.setattr("xbot.utils.retry.asyncio.sleep", _fake_sleep)
+    monkeypatch.setattr("xbot.platform.utils.retry.asyncio.sleep", _fake_sleep)
 
     with pytest.raises(ValueError, match="fatal"):
         await run_with_retry(

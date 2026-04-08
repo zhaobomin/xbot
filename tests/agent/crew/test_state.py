@@ -2,8 +2,8 @@
 
 import pytest
 
-from xbot.agent.crew.models import TaskDefinition
-from xbot.agent.crew.state import (
+from xbot.crew.models import TaskDefinition
+from xbot.crew.state import (
     CREW_VALID_TRANSITIONS,
     TASK_VALID_TRANSITIONS,
     CrewPhase,

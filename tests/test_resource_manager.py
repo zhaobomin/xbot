@@ -10,9 +10,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from xbot.agent.crew.models import AgentRole, TaskResult
-from xbot.agent.crew.resource_manager import CrewResourceManager
-from xbot.agent.crew.state import CrewPhase, CrewStateManager
+from xbot.crew.models import AgentRole, TaskResult
+from xbot.crew.resource_manager import CrewResourceManager
+from xbot.crew.state import CrewPhase, CrewStateManager
 
 
 class TestCrewResourceManagerBasics:
@@ -276,7 +276,7 @@ class TestCrewResourceManagerPoolInit:
             started_at=datetime.now(),
         )
 
-        with patch("xbot.agent.crew.agent_pool.AgentPool") as mock_pool_cls:
+        with patch("xbot.crew.agent_pool.AgentPool") as mock_pool_cls:
             mock_pool = MagicMock()
             mock_pool.initialize = AsyncMock()
             mock_pool_cls.return_value = mock_pool
@@ -307,7 +307,7 @@ class TestCrewResourceManagerPoolInit:
             started_at=datetime.now(),
         )
 
-        with patch("xbot.agent.crew.agent_pool.AgentPool") as mock_pool_cls:
+        with patch("xbot.crew.agent_pool.AgentPool") as mock_pool_cls:
             mock_pool = MagicMock()
             mock_pool.initialize = AsyncMock()
             mock_pool_cls.return_value = mock_pool

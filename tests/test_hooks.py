@@ -9,7 +9,7 @@ class TestCompactEvent:
 
     def test_compact_event_creation(self) -> None:
         """Test creating a CompactEvent."""
-        from xbot.agent.hooks import CompactEvent
+        from xbot.runtime.core.hooks import CompactEvent
 
         event = CompactEvent(
             session_key="test:123",
@@ -27,7 +27,7 @@ class TestCompactEvent:
 
     def test_compact_event_with_results(self) -> None:
         """Test CompactEvent with post-compaction results."""
-        from xbot.agent.hooks import CompactEvent
+        from xbot.runtime.core.hooks import CompactEvent
 
         event = CompactEvent(
             session_key="test:456",
@@ -47,7 +47,7 @@ class TestCompactHookHandler:
 
     def test_handler_disabled(self) -> None:
         """Test that disabled handler returns None."""
-        from xbot.agent.hooks import CompactHookHandler
+        from xbot.runtime.core.hooks import CompactHookHandler
 
         handler = CompactHookHandler(enabled=False)
         # Create mock input and context
@@ -66,7 +66,7 @@ class TestCompactHookHandler:
 
     def test_handler_enabled_returns_message(self) -> None:
         """Test that enabled handler returns notification message dict."""
-        from xbot.agent.hooks import CompactHookHandler
+        from xbot.runtime.core.hooks import CompactHookHandler
 
         handler = CompactHookHandler(enabled=True)
         # Create mock input and context
@@ -87,7 +87,7 @@ class TestCompactHookHandler:
 
     def test_handler_stores_recent_events(self) -> None:
         """Test that handler stores recent events for debugging."""
-        from xbot.agent.hooks import CompactHookHandler
+        from xbot.runtime.core.hooks import CompactHookHandler
 
         handler = CompactHookHandler(enabled=True)
         mock_input = MagicMock()
@@ -106,7 +106,7 @@ class TestCompactHookHandler:
 
     def test_handler_limits_recent_events(self) -> None:
         """Test that handler limits recent events to 50."""
-        from xbot.agent.hooks import CompactHookHandler
+        from xbot.runtime.core.hooks import CompactHookHandler
 
         handler = CompactHookHandler(enabled=True)
 
@@ -134,7 +134,7 @@ class TestCompactHookHandler:
 
     def test_handler_zero_tokens(self) -> None:
         """Test handler returns proper message format."""
-        from xbot.agent.hooks import CompactHookHandler
+        from xbot.runtime.core.hooks import CompactHookHandler
 
         handler = CompactHookHandler(enabled=True)
         mock_input = MagicMock()
@@ -155,7 +155,7 @@ class TestBuildCompactHook:
 
     def test_build_compact_hook_enabled(self) -> None:
         """Test building hook configuration when enabled."""
-        from xbot.agent.hooks import build_compact_hook
+        from xbot.runtime.core.hooks import build_compact_hook
 
         hooks = build_compact_hook(enabled=True)
         assert hooks is not None
@@ -165,7 +165,7 @@ class TestBuildCompactHook:
 
     def test_build_compact_hook_disabled(self) -> None:
         """Test building hook configuration when disabled."""
-        from xbot.agent.hooks import build_compact_hook
+        from xbot.runtime.core.hooks import build_compact_hook
 
         hooks = build_compact_hook(enabled=False)
         assert hooks == {}

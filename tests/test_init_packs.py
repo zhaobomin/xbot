@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from xbot.utils.helpers import load_init_pack, sync_workspace_skill_pack
+from xbot.platform.utils.helpers import load_init_pack, sync_workspace_skill_pack
 
 
 def test_default_init_pack_includes_weather() -> None:

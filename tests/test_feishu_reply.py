@@ -9,8 +9,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from xbot.bus.events import OutboundMessage
-from xbot.bus.queue import MessageBus
+from xbot.platform.bus.events import OutboundMessage
+from xbot.platform.bus.queue import MessageBus
 from xbot.channels.feishu import FeishuChannel, FeishuConfig
 
 # ---------------------------------------------------------------------------

@@ -7,9 +7,9 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any
 
-from xbot.bus.events import InboundMessage, OutboundMessage
-from xbot.bus.queue import MessageBus
-from xbot.logging import get_logger
+from xbot.platform.bus.events import InboundMessage, OutboundMessage
+from xbot.platform.bus.queue import MessageBus
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 class BaseChannel(ABC):
@@ -43,7 +43,7 @@ class BaseChannel(ABC):
         if not self.transcription_api_key:
             return ""
         try:
-            from xbot.providers.transcription import GroqTranscriptionProvider
+            from xbot.platform.providers.transcription import GroqTranscriptionProvider
 
             provider = GroqTranscriptionProvider(api_key=self.transcription_api_key)
             return await provider.transcribe(file_path)

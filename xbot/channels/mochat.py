@@ -12,12 +12,12 @@ from typing import Any
 import httpx
 from pydantic import Field
 
-from xbot.bus.events import OutboundMessage
-from xbot.bus.queue import MessageBus
+from xbot.platform.bus.events import OutboundMessage
+from xbot.platform.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
-from xbot.config.paths import get_runtime_subdir
-from xbot.config.schema import Base
-from xbot.logging import get_logger
+from xbot.platform.config.paths import get_runtime_subdir
+from xbot.platform.config.schema import Base
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 try:

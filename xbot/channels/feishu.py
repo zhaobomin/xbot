@@ -17,18 +17,18 @@ from typing import Any, Callable, Literal
 
 from pydantic import Field
 
-from xbot.bus.events import OutboundMessage
-from xbot.bus.queue import MessageBus
+from xbot.platform.bus.events import OutboundMessage
+from xbot.platform.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
 from xbot.channels.feishu_content import (
     MSG_TYPE_MAP,
     _extract_post_content,
     _extract_share_card_content,
 )
-from xbot.config.paths import get_media_dir
-from xbot.config.schema import Base
-from xbot.logging import get_logger
-from xbot.utils.helpers import sanitize_download_filename
+from xbot.platform.config.paths import get_media_dir
+from xbot.platform.config.schema import Base
+from xbot.platform.logging.core import get_logger
+from xbot.platform.utils.helpers import sanitize_download_filename
 
 logger = get_logger(__name__)
 

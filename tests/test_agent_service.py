@@ -7,13 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from xbot.agent.protocol import AgentContext, AgentResponse
-from xbot.agent.service import AgentService
-from xbot.agent.state import SessionManager as StateManager
-from xbot.agent.state.machine import SessionPhase
-from xbot.agent.types import AgentConfig
-from xbot.bus.events import InboundMessage
-from xbot.config.schema import Config
+from xbot.runtime.core.protocol import AgentContext, AgentResponse
+from xbot.runtime.core.service import AgentService
+from xbot.runtime.state import SessionManager as StateManager
+from xbot.runtime.state.machine import SessionPhase
+from xbot.runtime.core.types import AgentConfig
+from xbot.platform.bus.events import InboundMessage
 
 
 class TestAgentService:
@@ -84,6 +83,58 @@ class TestAgentService:
 
             async for response in service.process(context):
                 responses.append(response)
+
+    @pytest.mark.asyncio
+    async def test_process_includes_media_references_in_query(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """process should inject media references into SDK query text."""
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        image_path = tmp_path / "demo.png"
+        image_path.write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+            b"\x00\x00\x00\rIHDR"
+            b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+            b"\x1f\x15\xc4\x89"
+            b"\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        text_path = tmp_path / "notes.txt"
+        text_path.write_text("hello", encoding="utf-8")
+
+        class ResultMessage:
+            pass
+
+        async def receive_messages():
+            yield ResultMessage()
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
+        mock_client.receive_messages = receive_messages
+        mock_client.get_server_info = AsyncMock(return_value={})
+
+        context = AgentContext(
+            session_key="test:media",
+            prompt="请分析附件",
+            channel="cli",
+            chat_id="direct",
+            media=[str(image_path), str(text_path)],
+        )
+
+        with patch.object(service, "_get_or_create_client", AsyncMock(return_value=mock_client)):
+            async for _ in service.process(context):
+                pass
+
+        mock_client.query.assert_awaited_once()
+        sent_prompt = mock_client.query.await_args.args[0]
+        assert "[Image: source:" in sent_prompt
+        assert str(image_path.resolve()) in sent_prompt
+        assert "[附件:" in sent_prompt
+        assert str(text_path.resolve()) in sent_prompt
 
     @pytest.mark.asyncio
     async def test_get_session_commands_default_no_connect(
@@ -353,7 +404,7 @@ class TestRunDispatch:
         service = await self._make_service(config, shared_resources)
 
         # Re-initialize commands_loader with the right path
-        from xbot.agent.context.commands import CommandsLoader
+        from xbot.runtime.core.context.commands import CommandsLoader
         service._commands_loader = CommandsLoader(tmp_path)
 
         async def fake_process(context):
@@ -722,60 +773,67 @@ class TestRunDispatch:
 
     @pytest.mark.asyncio
     async def test_dispatch_memory_consolidation_off(self, config, shared_resources, bus):
-        shared_resources["config"] = Config()
-        shared_resources["config"].agents.claude_sdk.memory_consolidation_mode = "off"
+        """Mode 'off' should skip memory consolidation."""
+        from xbot.platform.config.schema import Config
+        
+        runtime_config = Config()
+        runtime_config.agents.claude_sdk.memory_consolidation_mode = "off"
+        shared_resources["config"] = runtime_config
+        
         service = await self._make_service(config, shared_resources)
-
-        if service._memory_consolidator is not None:
-            service._memory_consolidator.maybe_consolidate_by_tokens = AsyncMock()
-
-        async def fake_process(_context):
-            yield AgentResponse(content="ok")
-
-        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="run")
-        with patch.object(service, "process", side_effect=fake_process):
-            await service._dispatch(msg, bus)
-
-        if service._memory_consolidator is not None:
-            service._memory_consolidator.maybe_consolidate_by_tokens.assert_not_called()
+        service._memory_consolidator = AsyncMock()
+        
+        # Trigger consolidation
+        session = MagicMock()
+        await service._trigger_memory_consolidation("test-session", session)
+        
+        # Should not call consolidator
+        service._memory_consolidator.maybe_consolidate_by_tokens.assert_not_called()
 
     # --- Test 22: memory consolidation mode=sync runs inline ---
 
     @pytest.mark.asyncio
     async def test_dispatch_memory_consolidation_sync(self, config, shared_resources, bus):
-        shared_resources["config"] = Config()
-        shared_resources["config"].agents.claude_sdk.memory_consolidation_mode = "sync"
+        """Mode 'sync' should run consolidation inline."""
+        from xbot.platform.config.schema import Config
+        
+        runtime_config = Config()
+        runtime_config.agents.claude_sdk.memory_consolidation_mode = "sync"
+        shared_resources["config"] = runtime_config
+        
         service = await self._make_service(config, shared_resources)
-
-        assert service._memory_consolidator is not None
-        service._memory_consolidator.maybe_consolidate_by_tokens = AsyncMock()
-
-        async def fake_process(_context):
-            yield AgentResponse(content="ok")
-
-        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="run")
-        with patch.object(service, "process", side_effect=fake_process):
-            await service._dispatch(msg, bus)
-
-        service._memory_consolidator.maybe_consolidate_by_tokens.assert_awaited()
+        service._memory_consolidator = AsyncMock()
+        
+        # Trigger consolidation
+        session = MagicMock()
+        await service._trigger_memory_consolidation("test-session", session)
+        
+        # Should call consolidator once
+        service._memory_consolidator.maybe_consolidate_by_tokens.assert_called_once_with(session)
 
     # --- Test 23: memory consolidation mode=async schedules task ---
 
     @pytest.mark.asyncio
     async def test_dispatch_memory_consolidation_async(self, config, shared_resources, bus):
-        shared_resources["config"] = Config()
-        shared_resources["config"].agents.claude_sdk.memory_consolidation_mode = "async"
+        """Mode 'async' should schedule background task."""
+        from xbot.platform.config.schema import Config
+        
+        runtime_config = Config()
+        runtime_config.agents.claude_sdk.memory_consolidation_mode = "async"
+        shared_resources["config"] = runtime_config
+        
         service = await self._make_service(config, shared_resources)
-
-        assert service._memory_consolidator is not None
-        service._memory_consolidator.maybe_consolidate_by_tokens = AsyncMock()
-
-        async def fake_process(_context):
-            yield AgentResponse(content="ok")
-
-        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="run")
-        with patch.object(service, "process", side_effect=fake_process):
-            await service._dispatch(msg, bus)
-
-        await asyncio.sleep(0)
-        service._memory_consolidator.maybe_consolidate_by_tokens.assert_awaited()
+        service._memory_consolidator = AsyncMock()
+        
+        # Trigger consolidation
+        session = MagicMock()
+        await service._trigger_memory_consolidation("test-session", session)
+        
+        # Should have scheduled a task
+        assert len(service._async_consolidation_tasks) == 1
+        
+        # Wait for task to complete
+        await asyncio.sleep(0.1)
+        
+        # Should call consolidator once
+        service._memory_consolidator.maybe_consolidate_by_tokens.assert_called_once_with(session)

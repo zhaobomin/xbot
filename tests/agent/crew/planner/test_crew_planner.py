@@ -2,8 +2,8 @@
 
 import pytest
 
-from xbot.agent.crew.planner.crew_planner import CrewPlanner
-from xbot.agent.crew.planner.models import (
+from xbot.crew.planner.crew_planner import CrewPlanner
+from xbot.crew.planner.models import (
     Capability,
     CrewPlan,
     GoalAnalysis,

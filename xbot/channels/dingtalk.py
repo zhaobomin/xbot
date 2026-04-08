@@ -12,12 +12,12 @@ from urllib.parse import unquote, urlparse
 import httpx
 from pydantic import Field
 
-from xbot.bus.events import OutboundMessage
-from xbot.bus.queue import MessageBus
+from xbot.platform.bus.events import OutboundMessage
+from xbot.platform.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
-from xbot.config.schema import Base
-from xbot.logging import get_logger
-from xbot.utils.helpers import sanitize_download_filename
+from xbot.platform.config.schema import Base
+from xbot.platform.logging.core import get_logger
+from xbot.platform.utils.helpers import sanitize_download_filename
 
 logger = get_logger(__name__)
 try:
@@ -554,7 +554,7 @@ class DingTalkChannel(BaseChannel):
         sender_id: str,
     ) -> str | None:
         """Download a DingTalk file to the media directory, return local path."""
-        from xbot.config.paths import get_media_dir
+        from xbot.platform.config.paths import get_media_dir
 
         try:
             token = await self._get_access_token()

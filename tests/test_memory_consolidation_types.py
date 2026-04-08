@@ -11,8 +11,8 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from xbot.agent.memory.store import MemoryStore
-from xbot.providers.base import LLMResponse, ToolCallRequest
+from xbot.memory.store import MemoryStore
+from xbot.platform.providers.base import LLMResponse, ToolCallRequest
 
 
 def _make_messages(message_count: int = 30):

@@ -10,15 +10,15 @@ import asyncio
 
 import pytest
 
-from xbot.bus.queue import (
+from xbot.platform.bus.queue import (
     InteractionRequest,
     InteractionResponse,
     MessageBus,
     PermissionRequest,
     PermissionResponse,
 )
-from xbot.cron.service import CronService, _compute_next_run, _now_ms
-from xbot.cron.types import CronSchedule
+from xbot.runtime.system.cron.service import CronService, _compute_next_run, _now_ms
+from xbot.runtime.system.cron.types import CronSchedule
 
 
 class TestExceptionHandlingBranches:

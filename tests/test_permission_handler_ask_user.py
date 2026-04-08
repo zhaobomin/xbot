@@ -2,7 +2,7 @@
 
 import pytest
 
-from xbot.agent.interaction.permission import BasePermissionHandler
+from xbot.interaction.permission import BasePermissionHandler
 
 
 class TestAskUserQuestionFormatting:

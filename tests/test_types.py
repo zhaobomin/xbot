@@ -1,6 +1,6 @@
 """Tests for agent types."""
 
-from xbot.agent.types import AgentConfig, SessionConfig
+from xbot.runtime.core.types import AgentConfig, SessionConfig
 
 
 class TestAgentConfig:

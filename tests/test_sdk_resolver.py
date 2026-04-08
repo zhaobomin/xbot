@@ -1,7 +1,7 @@
 """Tests for Claude SDK provider/model resolver."""
 
-from xbot.config.schema import Config
-from xbot.config.sdk_resolver import (
+from xbot.platform.config.schema import Config
+from xbot.platform.config.sdk_resolver import (
     detect_provider_from_model,
     normalize_sdk_model_name,
     resolve_sdk_provider_and_model,

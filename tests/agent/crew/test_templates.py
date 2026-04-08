@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from xbot.agent.crew.templates import (
+from xbot.crew.templates import (
     BUILTIN_TEMPLATES,
     CrewTemplate,
     get_template,
@@ -75,7 +75,7 @@ class TestListTemplates:
 
     def test_all_template_configs_are_valid_crew_configs(self):
         """Test that all template configs can be loaded as CrewConfig."""
-        from xbot.agent.crew import load_crew_config
+        from xbot.crew import load_crew_config
 
         templates = list_templates()
 
@@ -169,7 +169,7 @@ class TestInitProject:
         config_path = init_project(project_dir)
 
         # Should load without errors
-        from xbot.agent.crew import load_crew_config
+        from xbot.crew import load_crew_config
         crew_config = load_crew_config(config_path)
 
         assert crew_config.name == "test_project"
@@ -178,7 +178,7 @@ class TestInitProject:
 
     def test_template_config_is_valid(self, tmp_path: Path):
         """Test that template configs are valid."""
-        from xbot.agent.crew import load_crew_config
+        from xbot.crew import load_crew_config
 
         for template_name in BUILTIN_TEMPLATES:
             project_dir = tmp_path / f"project_{template_name}"

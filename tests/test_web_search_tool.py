@@ -3,8 +3,8 @@
 import httpx
 import pytest
 
-from xbot.agent.tools.web import WebSearchTool
-from xbot.config.schema import WebSearchConfig
+from xbot.tools.web import WebSearchTool
+from xbot.platform.config.schema import WebSearchConfig
 
 
 def _tool(provider: str = "brave", api_key: str = "", base_url: str = "") -> WebSearchTool:
@@ -60,7 +60,7 @@ async def test_searxng_search(monkeypatch):
 
     monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
     # Mock SSRF validation so the test domain isn't rejected
-    monkeypatch.setattr("xbot.agent.tools.web._validate_url_safe", lambda url: (True, ""))
+    monkeypatch.setattr("xbot.tools.web._validate_url_safe", lambda url: (True, ""))
     tool = _tool(provider="searxng", base_url="https://searx.example")
     result = await tool.execute(query="test")
     assert "Result" in result
@@ -75,8 +75,8 @@ async def test_duckduckgo_search(monkeypatch):
         def text(self, query, max_results=5):
             return [{"title": "DDG Result", "href": "https://ddg.example", "body": "From DuckDuckGo"}]
 
-    monkeypatch.setattr("xbot.agent.tools.web.DDGS", MockDDGS, raising=False)
-    import xbot.agent.tools.web as web_mod
+    monkeypatch.setattr("xbot.tools.web.DDGS", MockDDGS, raising=False)
+    import xbot.tools.web as web_mod
     monkeypatch.setattr(web_mod, "DDGS", MockDDGS, raising=False)
 
     monkeypatch.setattr("ddgs.DDGS", MockDDGS)

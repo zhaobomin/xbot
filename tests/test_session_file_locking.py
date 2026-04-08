@@ -7,7 +7,7 @@ Tests that concurrent access to session files is properly synchronized.
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from xbot.session.manager import Session, SessionManager
+from xbot.runtime.session.manager import Session, SessionManager
 
 
 class TestSessionFileLocking:

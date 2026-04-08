@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from xbot.config.paths import (
+from xbot.platform.config.paths import (
     get_bridge_install_dir,
     get_cli_history_path,
     get_cron_dir,
@@ -15,7 +15,7 @@ from xbot.config.paths import (
 
 def test_runtime_dirs_follow_config_path(monkeypatch, tmp_path: Path) -> None:
     config_file = tmp_path / "instance-a" / "config.json"
-    monkeypatch.setattr("xbot.config.paths.get_config_path", lambda: config_file)
+    monkeypatch.setattr("xbot.platform.config.paths.get_config_path", lambda: config_file)
 
     assert get_data_dir() == config_file.parent
     assert get_runtime_subdir("cron") == config_file.parent / "cron"
@@ -25,7 +25,7 @@ def test_runtime_dirs_follow_config_path(monkeypatch, tmp_path: Path) -> None:
 
 def test_media_dir_supports_channel_namespace(monkeypatch, tmp_path: Path) -> None:
     config_file = tmp_path / "instance-b" / "config.json"
-    monkeypatch.setattr("xbot.config.paths.get_config_path", lambda: config_file)
+    monkeypatch.setattr("xbot.platform.config.paths.get_config_path", lambda: config_file)
 
     assert get_media_dir() == config_file.parent / "media"
     assert get_media_dir("telegram") == config_file.parent / "media" / "telegram"

@@ -6,7 +6,7 @@ import importlib
 import pkgutil
 from typing import TYPE_CHECKING
 
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 

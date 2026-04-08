@@ -6,7 +6,7 @@ from unittest.mock import MagicMock
 
 from typer.testing import CliRunner as TyperCliRunner
 
-from xbot.agent.crew.cli.plan_cmd import (
+from xbot.crew.cli.plan_cmd import (
     app,
 )
 
@@ -169,7 +169,7 @@ class TestPrintCrewResult:
         import sys
         from io import StringIO
 
-        from xbot.agent.crew.cli.plan_cmd import _print_crew_result
+        from xbot.crew.cli.plan_cmd import _print_crew_result
 
         # Create mock result
         result = MagicMock()
@@ -195,7 +195,7 @@ class TestPrintCrewResult:
         import sys
         from io import StringIO
 
-        from xbot.agent.crew.cli.plan_cmd import _print_crew_result
+        from xbot.crew.cli.plan_cmd import _print_crew_result
 
         # Create mock result
         result = MagicMock()

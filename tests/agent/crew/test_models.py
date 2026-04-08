@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from xbot.agent.crew.models import (
+from xbot.crew.models import (
     AgentRole,
     CrewConfig,
     ProcessType,

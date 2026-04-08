@@ -9,7 +9,7 @@ import asyncio
 
 import pytest
 
-from xbot.bus.queue import (
+from xbot.platform.bus.queue import (
     InteractionRequest,
     InteractionResponse,
     MessageBus,

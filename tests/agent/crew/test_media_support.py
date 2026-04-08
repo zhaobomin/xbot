@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from xbot.agent.crew.context import CrewExecutionContext
-from xbot.agent.crew.models import AgentRole, TaskDefinition, parse_crew_config
+from xbot.crew.context import CrewExecutionContext
+from xbot.crew.models import AgentRole, TaskDefinition, parse_crew_config
 
 
 class TestTaskDefinitionMediaField:
@@ -130,7 +130,7 @@ class TestCrewExecutionContextMedia:
         """Add result without media (backward compatibility)."""
         from datetime import datetime
 
-        from xbot.agent.crew.models import TaskResult
+        from xbot.crew.models import TaskResult
 
         ctx = CrewExecutionContext()
         result = TaskResult(
@@ -148,7 +148,7 @@ class TestCrewExecutionContextMedia:
         """Add result with media."""
         from datetime import datetime
 
-        from xbot.agent.crew.models import TaskResult
+        from xbot.crew.models import TaskResult
 
         ctx = CrewExecutionContext()
         result = TaskResult(
@@ -183,7 +183,7 @@ class TestCrewExecutionContextMedia:
 
     def test_build_task_prompt_with_media(self):
         """Build prompt with media indication."""
-        from xbot.agent.crew.models import TaskDefinition
+        from xbot.crew.models import TaskDefinition
 
         ctx = CrewExecutionContext()
         role = AgentRole(
@@ -209,7 +209,7 @@ class TestCrewExecutionContextMedia:
 
     def test_build_agent_context(self):
         """Build complete agent context with media."""
-        from xbot.agent.crew.models import TaskDefinition
+        from xbot.crew.models import TaskDefinition
 
         ctx = CrewExecutionContext()
         role = AgentRole(
@@ -245,7 +245,7 @@ class TestAgentPoolMedia:
         # Just verify the method accepts the parameter
         import inspect
 
-        from xbot.agent.crew.agent_pool import AgentPool
+        from xbot.crew.agent_pool import AgentPool
 
         sig = inspect.signature(AgentPool.run_task)
         params = list(sig.parameters.keys())
@@ -256,7 +256,7 @@ class TestAgentPoolMedia:
         """run_task_streaming should accept media parameter."""
         import inspect
 
-        from xbot.agent.crew.agent_pool import AgentPool
+        from xbot.crew.agent_pool import AgentPool
 
         sig = inspect.signature(AgentPool.run_task_streaming)
         params = list(sig.parameters.keys())
@@ -281,7 +281,7 @@ class TestBackwardCompatibility:
         """Existing context usage patterns still work."""
         from datetime import datetime
 
-        from xbot.agent.crew.models import TaskDefinition, TaskResult
+        from xbot.crew.models import TaskDefinition, TaskResult
 
         ctx = CrewExecutionContext()
 

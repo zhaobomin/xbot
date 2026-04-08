@@ -13,9 +13,9 @@ from pathlib import Path
 import pytest
 import yaml
 
-from xbot.agent.crew.planner.config_generator import ConfigGenerator
-from xbot.agent.crew.planner.crew_planner import CrewPlanner
-from xbot.agent.crew.planner.models import (
+from xbot.crew.planner.config_generator import ConfigGenerator
+from xbot.crew.planner.crew_planner import CrewPlanner
+from xbot.crew.planner.models import (
     Capability,
     CrewPlan,
     GoalAnalysis,
@@ -26,8 +26,8 @@ from xbot.agent.crew.planner.models import (
     RoleTier,
     TaskPlan,
 )
-from xbot.agent.crew.planner.role_pool import RolePoolManager
-from xbot.agent.crew.planner.task_planner import TaskPlanner
+from xbot.crew.planner.role_pool import RolePoolManager
+from xbot.crew.planner.task_planner import TaskPlanner
 
 
 class TestComplexTaskDependencies:
@@ -505,7 +505,7 @@ class TestEdgeCases:
 
     def test_heuristic_selection_with_zero_candidates(self):
         """Test heuristic selection when no candidates match."""
-        from xbot.agent.crew.planner.role_selector import RoleSelector
+        from xbot.crew.planner.role_selector import RoleSelector
 
         selector = RoleSelector()
 

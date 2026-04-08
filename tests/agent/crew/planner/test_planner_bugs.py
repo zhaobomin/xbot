@@ -16,10 +16,10 @@ from pathlib import Path
 
 import pytest
 
-from xbot.agent.crew.planner.config_generator import ConfigGenerator
-from xbot.agent.crew.planner.crew_planner import CrewPlanner
-from xbot.agent.crew.planner.goal_analyzer import GoalAnalyzer
-from xbot.agent.crew.planner.models import (
+from xbot.crew.planner.config_generator import ConfigGenerator
+from xbot.crew.planner.crew_planner import CrewPlanner
+from xbot.crew.planner.goal_analyzer import GoalAnalyzer
+from xbot.crew.planner.models import (
     Capability,
     CrewPlan,
     GoalAnalysis,
@@ -28,11 +28,11 @@ from xbot.agent.crew.planner.models import (
     RoleTier,
     TaskPlan,
 )
-from xbot.agent.crew.planner.role_creator import RoleCreator
-from xbot.agent.crew.planner.role_pool import RolePoolManager
-from xbot.agent.crew.planner.role_selector import RoleSelector
-from xbot.agent.crew.planner.task_planner import TaskPlanner
-from xbot.agent.crew.planner.utils import LLMResponseParser, PlannerValidator
+from xbot.crew.planner.role_creator import RoleCreator
+from xbot.crew.planner.role_pool import RolePoolManager
+from xbot.crew.planner.role_selector import RoleSelector
+from xbot.crew.planner.task_planner import TaskPlanner
+from xbot.crew.planner.utils import LLMResponseParser, PlannerValidator
 
 # ---------------------------------------------------------------------------
 # GoalAnalyzer Tests
@@ -365,7 +365,7 @@ class TestRoleCreatorBuildRoleFromRequest:
     def test_build_with_empty_name_raises(self):
         """Empty name should raise ValueError."""
         creator = RoleCreator()
-        from xbot.agent.crew.planner.models import RoleCreationRequest
+        from xbot.crew.planner.models import RoleCreationRequest
         request = RoleCreationRequest(
             suggested_name="",
             required_capabilities=[Capability.ANALYZE],
@@ -377,7 +377,7 @@ class TestRoleCreatorBuildRoleFromRequest:
     def test_build_with_empty_capabilities_raises(self):
         """Empty capabilities should raise ValueError."""
         creator = RoleCreator()
-        from xbot.agent.crew.planner.models import RoleCreationRequest
+        from xbot.crew.planner.models import RoleCreationRequest
         request = RoleCreationRequest(
             suggested_name="test_role",
             required_capabilities=[],
@@ -855,7 +855,7 @@ class TestModelsDictConversion:
             capabilities=[Capability.ANALYZE],
             tools=None,
         )
-        from xbot.agent.crew.planner.utils import RoleConverter
+        from xbot.crew.planner.utils import RoleConverter
         result = RoleConverter.to_yaml_dict(role)
         # tools=None should not be in output (None means all tools available)
         assert "tools" not in result or result.get("tools") is None
@@ -1146,7 +1146,7 @@ class TestRolePoolManagerLoadRole:
 
         import yaml
 
-        from xbot.agent.crew.planner.role_pool import ROLE_POOL_DIR, RolePoolManager
+        from xbot.crew.planner.role_pool import ROLE_POOL_DIR, RolePoolManager
 
         manager = RolePoolManager()
 
