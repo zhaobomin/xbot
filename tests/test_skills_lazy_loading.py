@@ -342,9 +342,14 @@ Even more content here...
         )
         catalog_tokens = len(catalog_text.split())
 
-        # Get full content
+        # Get full content by loading each skill individually
         all_skills = loader.list_skills(filter_unavailable=True)
-        full_content = loader.load_skills_for_context([s["name"] for s in all_skills])
+        full_parts = []
+        for s in all_skills:
+            content = loader.load_skill(s["name"])
+            if content:
+                full_parts.append(content)
+        full_content = " ".join(full_parts)
         full_tokens = len(full_content.split())
 
         # Catalog should be significantly smaller

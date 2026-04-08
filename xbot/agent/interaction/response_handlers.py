@@ -27,14 +27,38 @@ class RuntimeResponseHandlers:
 
     def __init__(self, runtime: "AgentService"):
         self._runtime = runtime
+        self.__own_retry_counts: dict[str, int] = {}
+
+    @property
+    def _interaction_retry_counts(self) -> dict[str, int]:
+        """Delegate to runtime's dict if available, else use own dict."""
+        rt_counts = getattr(self._runtime, "_interaction_retry_counts", None)
+        if rt_counts is not None and isinstance(rt_counts, dict):
+            return rt_counts
+        return self.__own_retry_counts
 
     @property
     def _bus(self):
-        return self._runtime.bus
+        shared = getattr(self._runtime, "_shared_resources", None)
+        if shared:
+            bus = shared.get("bus")
+            if bus is not None:
+                return bus
+        return getattr(self._runtime, "bus", None)
 
     @property
     def _state_coordinator(self):
-        return self._runtime.session_manager
+        """Get state manager from shared resources.
+
+        In the new architecture, this returns the state SessionManager
+        which provides get_phase() and transition() methods.
+        """
+        shared = getattr(self._runtime, "_shared_resources", None)
+        if shared:
+            sm = shared.get("state_manager")
+            if sm is not None:
+                return sm
+        return getattr(self._runtime, "session_manager", None)
 
     async def handle_permission_response(self, msg: InboundMessage) -> bool:
         """Check if the message is a permission response and handle it."""
@@ -112,7 +136,7 @@ class RuntimeResponseHandlers:
         if self._bus is None:
             return False
 
-        if self._runtime._is_local_runtime_command(msg.content):
+        if getattr(self._runtime, '_is_local_runtime_command', lambda _: False)(msg.content):
             return False
 
         content = msg.content.strip()
@@ -165,8 +189,8 @@ class RuntimeResponseHandlers:
                 )
             )
             # Clean up retry count to prevent memory leak
-            if hasattr(self._runtime, '_interaction_retry_counts'):
-                self._runtime._interaction_retry_counts.pop(msg.session_key, None)
+            if hasattr(self, '_interaction_retry_counts'):
+                self._interaction_retry_counts.pop(msg.session_key, None)
             return True
 
         if current_phase != SessionPhase.WAITING_INTERACTION:
@@ -189,8 +213,8 @@ class RuntimeResponseHandlers:
                 )
             )
             # Clean up retry count
-            if hasattr(self._runtime, '_interaction_retry_counts'):
-                self._runtime._interaction_retry_counts.pop(msg.session_key, None)
+            if hasattr(self, '_interaction_retry_counts'):
+                self._interaction_retry_counts.pop(msg.session_key, None)
             return True
 
         # AskUserQuestion 答案验证：检查用户回复是否在有效选项内
@@ -230,8 +254,8 @@ class RuntimeResponseHandlers:
                 if matched_option is None and validation_mode == "strict":
                     retry_count += 1
                     # Update retry count in runtime
-                    if hasattr(self._runtime, '_interaction_retry_counts'):
-                        self._runtime._interaction_retry_counts[msg.session_key] = retry_count
+                    if hasattr(self, '_interaction_retry_counts'):
+                        self._interaction_retry_counts[msg.session_key] = retry_count
 
                     if retry_count >= 3:
                         await self._bus.publish_outbound(
@@ -246,7 +270,7 @@ class RuntimeResponseHandlers:
                         ) as tx:
                             tx.set_phase(SessionPhase.IDLE, reason="invalid_answer_max_retries")
                         # Clean up retry count
-                        self._runtime._interaction_retry_counts.pop(msg.session_key, None)
+                        self._interaction_retry_counts.pop(msg.session_key, None)
                         # Fix: Clear the pending interaction request to prevent stale state
                         await self._bus.aclear_interaction_request(request_id)
                         return True
@@ -265,12 +289,12 @@ class RuntimeResponseHandlers:
                 if matched_option is not None:
                     # 匹配成功，使用标准化后的选项值，清理重试计数
                     content = matched_option
-                    if hasattr(self._runtime, '_interaction_retry_counts'):
-                        self._runtime._interaction_retry_counts.pop(msg.session_key, None)
+                    if hasattr(self, '_interaction_retry_counts'):
+                        self._interaction_retry_counts.pop(msg.session_key, None)
                 elif validation_mode == "suggested":
                     # 建议模式允许用户输入自定义值，直接透传原始内容
-                    if hasattr(self._runtime, '_interaction_retry_counts'):
-                        self._runtime._interaction_retry_counts.pop(msg.session_key, None)
+                    if hasattr(self, '_interaction_retry_counts'):
+                        self._interaction_retry_counts.pop(msg.session_key, None)
 
         action = derive_interaction_action(kind=req.kind, content=content)
         # 构建响应 metadata，包含原始输入用于日志记录
@@ -300,8 +324,8 @@ class RuntimeResponseHandlers:
                 )
             )
             # Clean up retry count
-            if hasattr(self._runtime, '_interaction_retry_counts'):
-                self._runtime._interaction_retry_counts.pop(msg.session_key, None)
+            if hasattr(self, '_interaction_retry_counts'):
+                self._interaction_retry_counts.pop(msg.session_key, None)
             return True
 
         logger.info(f"Interaction response submitted: action={action}, request={request_id}")
@@ -318,7 +342,7 @@ class RuntimeResponseHandlers:
         )
 
         # Clean up retry count on success
-        if hasattr(self._runtime, '_interaction_retry_counts'):
-            self._runtime._interaction_retry_counts.pop(msg.session_key, None)
+        if hasattr(self, '_interaction_retry_counts'):
+            self._interaction_retry_counts.pop(msg.session_key, None)
 
         return True

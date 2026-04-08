@@ -622,6 +622,7 @@ def _make_agent_service(
     workspace: Path,
     cron_service,
     session_manager,
+    state_manager=None,
     permission_handler=None,
 ):
     """Create the unified agent service."""
@@ -642,6 +643,8 @@ def _make_agent_service(
         "config": config,
         "tools_config": config.tools,
     }
+    if state_manager is not None:
+        shared_resources["state_manager"] = state_manager
     if permission_handler is not None:
         shared_resources["permission_handler"] = permission_handler
 
@@ -675,6 +678,7 @@ def gateway(
     """Start the xbot gateway."""
     from xbot.agent.monitoring.health import HealthCheckService
     from xbot.agent.interaction.permission import PermissionRequestHandler
+    from xbot.agent.state import SessionManager as StateManager
     from xbot.bus.queue import MessageBus
     from xbot.channels.manager import ChannelManager
     from xbot.config.paths import get_cron_dir
@@ -695,6 +699,7 @@ def gateway(
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
     session_manager = SessionManager(config.workspace_path)
+    state_manager = StateManager()
 
     # Create health check service
     health = HealthCheckService(port=health_port, host=config.gateway.host)
@@ -719,6 +724,7 @@ def gateway(
         workspace=config.workspace_path,
         cron_service=cron,
         session_manager=session_manager,
+        state_manager=state_manager,
         permission_handler=permission_handler,
     )
 
@@ -755,7 +761,7 @@ def gateway(
             return response
 
         if job.payload.deliver and job.payload.to and response:
-            llm_call = agent.backend.call_for_auxiliary
+            llm_call = agent.backend.call_for_structured
             should_notify = await evaluate_response(
                 response, job.payload.message, llm_call,
             )
@@ -812,7 +818,7 @@ def gateway(
 
     async def _heartbeat_llm_call(*args, **kwargs):
         """Defer backend access until runtime (after agent.initialize())."""
-        return await agent.backend.call_for_auxiliary(*args, **kwargs)
+        return await agent.backend.call_for_structured(*args, **kwargs)
 
     hb_cfg = config.gateway.heartbeat
     heartbeat = HeartbeatService(

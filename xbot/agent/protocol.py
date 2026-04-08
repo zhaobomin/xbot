@@ -41,7 +41,34 @@ class AgentContext:
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass
+class ToolCall:
+    """Represents a single tool call from a structured LLM response."""
+
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass
+class StructuredLLMResponse:
+    """Response from a structured LLM call (messages + tools).
+
+    Used by heartbeat, evaluator, and memory consolidation for
+    single-turn tool-use calls that bypass the interactive SDK session.
+    """
+
+    content: str = ""
+    finish_reason: str = "stop"
+    tool_calls: list[ToolCall] = field(default_factory=list)
+
+    @property
+    def has_tool_calls(self) -> bool:
+        return bool(self.tool_calls)
+
+
 __all__ = [
     "AgentResponse",
     "AgentContext",
+    "ToolCall",
+    "StructuredLLMResponse",
 ]

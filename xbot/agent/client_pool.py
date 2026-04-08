@@ -74,11 +74,19 @@ class ClientPool:
                 raise ValueError("Options required to create client")
 
             client = ClaudeSDKClient(options)
+
+            # Connect the client (required before use)
+            try:
+                await asyncio.wait_for(client.connect(), timeout=120.0)
+            except asyncio.TimeoutError:
+                logger.error(f"SDK client connect timed out after 120s for session {session_key}")
+                raise RuntimeError(f"SDK client connect timed out after 120s for session {session_key}")
+
             self._clients[session_key] = ClientRecord(
                 session_key=session_key,
                 client=client,
             )
-            logger.info(f"Created client for session {session_key}")
+            logger.info(f"Created and connected client for session {session_key}")
             return client
 
     async def disconnect(self, session_key: str) -> bool:
@@ -112,7 +120,8 @@ class ClientPool:
         Returns:
             Number of clients disconnected
         """
-        keys = list(self._clients.keys())
+        async with self._lock:
+            keys = list(self._clients.keys())
         count = 0
         for key in keys:
             if await self.disconnect(key):

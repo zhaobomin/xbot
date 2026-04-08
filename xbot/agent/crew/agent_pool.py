@@ -85,7 +85,7 @@ class AgentPool:
                 # Convert AgentsConfig to AgentConfig for AgentService
                 agent_config = AgentConfig(
                     model=agents_config.defaults.model,
-                    system_prompt=agents_config.defaults.system_prompt,
+                    system_prompt="",  # System prompt is built dynamically by ContextBuilder
                     mcp_servers=getattr(agents_config.defaults, "mcp_servers", {}),
                     agents=getattr(agents_config.defaults, "agents", []),
                 )

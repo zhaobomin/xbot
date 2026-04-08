@@ -21,6 +21,7 @@ class TestClientPool:
         """Test creating a new client."""
         with patch("claude_agent_sdk.ClaudeSDKClient") as mock_client_class:
             mock_client = MagicMock()
+            mock_client.connect = AsyncMock()
             mock_client_class.return_value = mock_client
 
             client = await pool.get_or_create("session:1", options=MagicMock())
@@ -33,6 +34,7 @@ class TestClientPool:
         """Test getting an existing client."""
         with patch("claude_agent_sdk.ClaudeSDKClient") as mock_client_class:
             mock_client = MagicMock()
+            mock_client.connect = AsyncMock()
             mock_client_class.return_value = mock_client
 
             # First call creates
@@ -48,6 +50,7 @@ class TestClientPool:
         """Test disconnecting a client."""
         with patch("claude_agent_sdk.ClaudeSDKClient") as mock_client_class:
             mock_client = MagicMock()
+            mock_client.connect = AsyncMock()
             mock_client.disconnect = AsyncMock()
             mock_client_class.return_value = mock_client
 
@@ -61,8 +64,10 @@ class TestClientPool:
         """Test disconnecting all clients."""
         with patch("claude_agent_sdk.ClaudeSDKClient") as mock_client_class:
             mock_client1 = MagicMock()
+            mock_client1.connect = AsyncMock()
             mock_client1.disconnect = AsyncMock()
             mock_client2 = MagicMock()
+            mock_client2.connect = AsyncMock()
             mock_client2.disconnect = AsyncMock()
 
             # Create two clients
@@ -81,6 +86,7 @@ class TestClientPool:
         """Test getting pool snapshot."""
         with patch("claude_agent_sdk.ClaudeSDKClient") as mock_client_class:
             mock_client = MagicMock()
+            mock_client.connect = AsyncMock()
             mock_client_class.return_value = mock_client
 
             await pool.get_or_create("session:1", options=MagicMock())

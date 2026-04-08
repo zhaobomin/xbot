@@ -63,15 +63,21 @@ class CapabilityCatalog:
 
     def list_skills(self, *, include_unavailable: bool = False) -> list[SkillCapability]:
         records = self.skills.list_skills(filter_unavailable=not include_unavailable)
-        return [
-            SkillCapability(
-                name=record["name"],
-                path=record["path"],
-                source=record["source"],
-                tool_exposable=self.skills.is_tool_exposable(record["name"]),
+        result: list[SkillCapability] = []
+        for record in records:
+            try:
+                tool_exposable = self.skills.is_tool_exposable(record["name"])
+            except (FileNotFoundError, OSError):
+                tool_exposable = False
+            result.append(
+                SkillCapability(
+                    name=record["name"],
+                    path=record["path"],
+                    source=record["source"],
+                    tool_exposable=tool_exposable,
+                )
             )
-            for record in records
-        ]
+        return result
 
     @staticmethod
     def list_builtin_tools() -> list[BuiltinToolCapability]:
@@ -131,13 +137,12 @@ class CapabilityCatalog:
         return "tool"
 
     def skill_tool_names(self, *, include_unavailable: bool = False) -> set[str]:
-        """Return names of Python skill tools (tool_exposable skills with tool.py).
-
-        Note: SDK native skills are loaded via add_dirs and don't expose as tools.
-        This method returns Python skill plugin tools only.
-        """
-        # Python skill tools are managed by SkillManager, not extracted from skill body
-        return set()
+        """Return tool names for tool_exposable skills (prefixed with ``skill_``)."""
+        return {
+            f"skill_{cap.name}"
+            for cap in self.list_skills(include_unavailable=include_unavailable)
+            if cap.tool_exposable
+        }
 
     def build_summary(self, *, mcp_servers: dict[str, Any] | None = None) -> str:
         skills = self.list_skills(include_unavailable=True)

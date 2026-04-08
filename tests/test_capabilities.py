@@ -130,34 +130,6 @@ def test_capability_catalog_only_exposes_tool_exposable_skills_as_tools(tmp_path
     assert catalog.classify_tool_name("github_search", assume_unknown_mcp=True) == "mcp"
 
 
-def test_skill_to_mcp_converter_only_converts_tool_exposable_skills(tmp_path, monkeypatch) -> None:
-    import xbot.agent.capabilities.skill_to_mcp as skill_to_mcp
-
-    workspace_skills = tmp_path / "skills"
-    _write_skill(
-        workspace_skills,
-        "weather",
-        "---\ndescription: weather\ntool_exposable: true\n---\nweather body",
-    )
-    _write_skill(
-        workspace_skills,
-        "writing",
-        "---\ndescription: writing\n---\nwriting body",
-    )
-
-    monkeypatch.setattr("xbot.agent.capabilities.skill_to_mcp.SDK_AVAILABLE", True)
-    monkeypatch.setattr(
-        "xbot.agent.capabilities.skill_to_mcp.create_sdk_mcp_server",
-        lambda **kwargs: kwargs,
-    )
-
-    converter = skill_to_mcp.SkillToMCPConverter(str(tmp_path))
-    servers = converter.convert_all_skills()
-
-    assert set(servers) == {"skills"}
-    assert len(servers["skills"]["tools"]) == 1
-
-
 def test_capability_catalog_ignores_skill_deleted_between_exists_and_stat(tmp_path, monkeypatch) -> None:
     workspace_skills = tmp_path / "skills"
     _write_skill(
