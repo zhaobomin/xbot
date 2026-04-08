@@ -85,6 +85,49 @@ class TestAgentService:
             async for response in service.process(context):
                 responses.append(response)
 
+    @pytest.mark.asyncio
+    async def test_get_session_commands_default_no_connect(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """get_session_commands should not create/connect client by default."""
+        shared_resources["state_manager"] = StateManager()
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        with patch.object(service, "_get_or_create_client", AsyncMock()) as mock_get_client:
+            commands = await service.get_session_commands("test:c1")
+
+        mock_get_client.assert_not_called()
+        assert "/help" in commands
+
+    @pytest.mark.asyncio
+    async def test_get_session_commands_allow_connect_discovers_and_caches(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """allow_connect=True should discover SDK slash commands and cache them."""
+        shared_resources["state_manager"] = StateManager()
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        mock_client = MagicMock()
+        mock_client.get_server_info = AsyncMock(return_value={
+            "commands": ["/review", {"name": "schedule"}],
+        })
+
+        with patch.object(service, "_get_or_create_client", AsyncMock(return_value=mock_client)):
+            commands = await service.get_session_commands("test:c1", allow_connect=True)
+
+        assert "/review" in commands
+        assert "/schedule" in commands
+
+        cached = shared_resources["state_manager"].get_commands("test:c1")
+        assert "/review" in cached
+        assert "/schedule" in cached
+
 
 class TestRunDispatch:
     """Tests for the run() message routing and _dispatch() processing chain."""
@@ -211,6 +254,22 @@ class TestRunDispatch:
         out = bus.publish_outbound.call_args.args[0]
         assert "Runtime Commands" in out.content
         assert "!stop" in out.content
+        assert "Claude SDK slash commands" in out.content
+        assert "/help" in out.content
+        assert "Local Slash Commands" in out.content
+
+    @pytest.mark.asyncio
+    async def test_slash_clear_is_local_command(self, config, shared_resources, bus):
+        """`/clear` should be treated as local reset instead of SDK passthrough."""
+        service = await self._make_service(config, shared_resources)
+        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/clear")
+
+        assert service._command_handler.is_local_command("/clear")
+        await service._command_handler.handle(msg, bus)
+
+        assert bus.publish_outbound.call_count == 1
+        out = bus.publish_outbound.call_args.args[0]
+        assert "reset" in out.content.lower() or "fresh start" in out.content.lower()
 
     # --- Test 5: Local command !stop ---
 
@@ -434,6 +493,23 @@ class TestRunDispatch:
         assert "50,000" in result.progress_texts[0]
         assert "20,000" in result.progress_texts[0]
 
+        # Compact-boundary message from SDK data.compact_metadata
+        boundary_msg = MagicMock()
+        boundary_msg.subtype = "compact_boundary"
+        boundary_msg.message = ""
+        boundary_msg.data = {
+            "compact_metadata": {
+                "pre_tokens": 64000,
+                "post_tokens": 22000,
+                "trigger": "auto",
+            }
+        }
+        result = service._convert_system_message(boundary_msg)
+        assert result is not None
+        assert result.event_type == "system"
+        assert "64,000" in result.progress_texts[0]
+        assert "22,000" in result.progress_texts[0]
+
     # --- Test 13: _convert_system_message returns None for empty ---
 
     @pytest.mark.asyncio
@@ -446,3 +522,198 @@ class TestRunDispatch:
         empty_msg.message = ""
         result = service._convert_system_message(empty_msg)
         assert result is None
+
+    # --- Test 14: _dispatch stores routing for compact hook delivery ---
+
+    @pytest.mark.asyncio
+    async def test_dispatch_stores_routing(self, config, shared_resources, bus, state_manager):
+        """_dispatch should store session routing in state_manager."""
+        service = await self._make_service(config, shared_resources)
+
+        async def fake_process(_context):
+            yield AgentResponse(content="ok")
+
+        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="Hi")
+
+        with patch.object(service, "process", side_effect=fake_process):
+            await service._dispatch(msg, bus)
+
+        resolved = state_manager.resolve_compact_notification_target("test:c1")
+        assert resolved == ("test:c1", "test", "c1")
+
+    # --- Test 15: process syncs SDK session ID mapping ---
+
+    @pytest.mark.asyncio
+    async def test_process_syncs_sdk_session_mapping(self, config, shared_resources, state_manager):
+        """process should record sdk_session_id -> session_key mapping."""
+        service = await self._make_service(config, shared_resources)
+
+        sdk_message = MagicMock()
+        sdk_message.session_id = "sdk-session-1"
+        result_message = MagicMock()
+        result_message.session_id = "sdk-session-1"
+
+        async def receive_messages():
+            yield sdk_message
+            yield result_message
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
+        mock_client.receive_messages = receive_messages
+
+        context = AgentContext(session_key="test:c1", prompt="hello", channel="test", chat_id="c1")
+        with patch.object(service, "_get_or_create_client", AsyncMock(return_value=mock_client)):
+            async for _ in service.process(context):
+                pass
+
+        resolved = state_manager.resolve_compact_notification_target("sdk-session-1")
+        assert resolved == ("test:c1", "test", "c1")
+
+    @pytest.mark.asyncio
+    async def test_process_syncs_init_commands(self, config, shared_resources, state_manager):
+        """System init messages should persist discovered slash commands to state manager."""
+        service = await self._make_service(config, shared_resources)
+
+        init_message = MagicMock()
+        init_message.session_id = "sdk-session-2"
+        init_message.subtype = "init"
+        init_message.data = {"commands": ["/pdf", {"name": "review"}]}
+        result_message = MagicMock()
+        result_message.session_id = "sdk-session-2"
+
+        async def receive_messages():
+            yield init_message
+            yield result_message
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
+        mock_client.receive_messages = receive_messages
+
+        context = AgentContext(session_key="test:c1", prompt="hello", channel="test", chat_id="c1")
+        with patch.object(service, "_get_or_create_client", AsyncMock(return_value=mock_client)):
+            async for _ in service.process(context):
+                pass
+
+        commands = state_manager.get_commands("test:c1")
+        assert "/pdf" in commands
+        assert "/review" in commands
+
+    # --- Test 16: _convert_event handles task events ---
+
+    @pytest.mark.asyncio
+    async def test_convert_event_task_messages(self, config, shared_resources):
+        """TaskStarted/TaskProgress/TaskNotification should convert to task events."""
+        service = await self._make_service(config, shared_resources)
+
+        TaskStartedMessage = type("TaskStartedMessage", (), {})
+        TaskProgressMessage = type("TaskProgressMessage", (), {})
+        TaskNotificationMessage = type("TaskNotificationMessage", (), {})
+
+        started = TaskStartedMessage()
+        started.description = "Run worker"
+        started.task_id = "t1"
+        started.task_type = "agent"
+        r1 = service._convert_event(started)
+        assert r1 is not None
+        assert r1.event_type == "task"
+        assert r1.event_data["status"] == "started"
+
+        progress = TaskProgressMessage()
+        progress.description = "Working"
+        progress.task_id = "t1"
+        progress.last_tool_name = "bash"
+        r2 = service._convert_event(progress)
+        assert r2 is not None
+        assert r2.event_type == "task"
+        assert r2.event_data["status"] == "progress"
+        assert r2.tool_calls is not None
+
+        note = TaskNotificationMessage()
+        note.status = "completed"
+        note.summary = "Done"
+        note.task_id = "t1"
+        note.output_file = None
+        r3 = service._convert_event(note)
+        assert r3 is not None
+        assert r3.event_type == "task"
+        assert r3.event_data["status"] == "completed"
+
+    # --- Test 17: _convert_stream_event handles thinking_delta ---
+
+    @pytest.mark.asyncio
+    async def test_convert_stream_event_thinking_delta(self, config, shared_resources):
+        """StreamEvent thinking_delta should emit thinking progress."""
+        service = await self._make_service(config, shared_resources)
+
+        event_msg = MagicMock()
+        event_msg.event = {
+            "type": "content_block_delta",
+            "delta": {"type": "thinking_delta", "thinking": "analyzing"},
+        }
+
+        result = service._convert_stream_event(event_msg)
+        assert result is not None
+        assert result.event_type == "thinking"
+        assert result.progress_texts
+
+    # --- Test 18: dispatch forwards tool_call event_data ---
+
+    @pytest.mark.asyncio
+    async def test_dispatch_tool_call_event_data(self, config, shared_resources, bus):
+        """Tool-call progress should carry tool_calls payload in _event_data."""
+        service = await self._make_service(config, shared_resources)
+
+        tool_calls = [{"name": "bash", "input": {"cmd": "ls"}, "kind": "tool"}]
+
+        async def fake_process(_context):
+            yield AgentResponse(content="", tool_calls=tool_calls)
+            yield AgentResponse(content="done")
+
+        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="run")
+        with patch.object(service, "process", side_effect=fake_process):
+            await service._dispatch(msg, bus)
+
+        tool_events = [
+            c for c in bus.publish_outbound.call_args_list
+            if c.args[0].metadata.get("_event_type") == "tool_call"
+        ]
+        assert tool_events
+        assert tool_events[0].args[0].metadata.get("_event_data", {}).get("tool_calls") == tool_calls
+
+    # --- Test 19: skip empty usage summary (0/0) ---
+
+    @pytest.mark.asyncio
+    async def test_dispatch_skips_zero_usage_summary(self, config, shared_resources, bus):
+        """Usage summary should be skipped when input/output tokens are both zero."""
+        service = await self._make_service(config, shared_resources)
+
+        async def fake_process(_context):
+            yield AgentResponse(content="ok", usage={"input_tokens": 0, "output_tokens": 0})
+
+        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="run")
+        with patch.object(service, "process", side_effect=fake_process):
+            await service._dispatch(msg, bus)
+
+        usage_events = [
+            c for c in bus.publish_outbound.call_args_list
+            if c.args[0].metadata.get("_event_type") == "usage"
+        ]
+        assert usage_events == []
+
+    # --- Test 20: _convert_result_message parses dict usage correctly ---
+
+    @pytest.mark.asyncio
+    async def test_convert_result_message_dict_usage(self, config, shared_resources):
+        """Dict-based usage should not be parsed as 0/0."""
+        service = await self._make_service(config, shared_resources)
+
+        msg = MagicMock()
+        msg.result = "ok"
+        msg.usage = {"input_tokens": 123, "output_tokens": 45}
+        msg.stop_reason = "end_turn"
+        msg.num_turns = 1
+        msg.total_cost_usd = 0.01
+
+        result = service._convert_result_message(msg)
+        assert result is not None
+        assert result.usage == {"input_tokens": 123, "output_tokens": 45}

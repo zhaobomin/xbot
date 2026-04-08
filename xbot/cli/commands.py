@@ -917,6 +917,7 @@ def agent(
     logs: bool = typer.Option(False, "--logs/--no-logs", help="Show xbot runtime logs during chat"),
 ):
     """Interact with the agent directly."""
+    from xbot.agent.state import SessionManager as StateManager
     from xbot.bus.queue import MessageBus
     from xbot.config.paths import get_cron_dir
     from xbot.cron.service import CronService
@@ -926,6 +927,7 @@ def agent(
     sync_workspace_templates(config.workspace_path)
 
     bus = MessageBus()
+    state_manager = StateManager()
 
     # Create cron service for tool usage (no callback needed for CLI unless running)
     cron_store_path = get_cron_dir() / "jobs.json"
@@ -960,6 +962,7 @@ def agent(
         workspace=config.workspace_path,
         cron_service=cron,
         session_manager=None,
+        state_manager=state_manager,
         permission_handler=_permission_handler,
     )
 
@@ -1026,8 +1029,10 @@ def agent(
 
             with _thinking:
                 response = await agent_loop.process_direct(
-                    message,
-                    session_id,
+                    content=message,
+                    session_key=session_id,
+                    channel=cli_channel,
+                    chat_id=cli_chat_id,
                     on_progress=_coalesced_cli_progress,
                 )
                 for item in progress_coalescer.flush_all():

@@ -55,6 +55,9 @@ def format_usage_summary(usage: dict[str, Any] | None) -> str | None:
     input_tokens = usage.get("input_tokens")
     output_tokens = usage.get("output_tokens")
     if isinstance(input_tokens, int) and isinstance(output_tokens, int):
+        # Ignore placeholder/missing usage reports that surface as 0/0.
+        if input_tokens <= 0 and output_tokens <= 0:
+            return None
         return f"Usage: input {input_tokens:,} tokens, output {output_tokens:,} tokens"
     return None
 

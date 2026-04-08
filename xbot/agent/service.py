@@ -12,12 +12,14 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 
 from xbot.logging import get_logger
+from xbot.agent.capabilities.catalog import CapabilityCatalog, canonical_tool_name
 from xbot.agent.protocol import AgentContext, AgentResponse, StructuredLLMResponse, ToolCall
 from xbot.agent.types import AgentConfig
 from xbot.agent.client_pool import ClientPool
 from xbot.agent.capabilities.handoff import HandoffPolicy
 from xbot.agent.state.machine import SessionPhase
-from xbot.agent.command_handlers import LocalCommandHandler, LOCAL_COMMANDS
+from xbot.agent.command_handlers import LocalCommandHandler
+from xbot.agent.interaction.event_formatter import format_rate_limit_event, format_task_notification
 from xbot.bus.events import InboundMessage, OutboundMessage
 
 if TYPE_CHECKING:
@@ -94,6 +96,7 @@ class AgentService:
         self._commands_loader: Any = None
         self._command_handler: LocalCommandHandler | None = None
         self._active_tasks: dict[str, asyncio.Task] = {}
+        self._direct_progress_callbacks: dict[str, ProgressCallback] = {}
 
         # For backward compatibility with AgentRuntime interface
         self._pending_config = config
@@ -182,8 +185,12 @@ class AgentService:
             f"prompt={context.prompt[:50]}..."
         )
 
+        # Keep routing info fresh so compact hooks can always resolve targets.
+        self._set_session_routing(context.session_key, context.channel, context.chat_id)
+
         # Get or create client
         client = await self._get_or_create_client(context.session_key)
+        await self._refresh_session_commands_from_client(context.session_key, client)
 
         # Process through SDK using query + receive_messages pattern
         try:
@@ -201,6 +208,7 @@ class AgentService:
             try:
                 async with asyncio.timeout(idle_timeout) as cm:
                     async for message in client.receive_messages():
+                        self._sync_sdk_session_mapping(context.session_key, message)
                         # Reset idle timer on each message received
                         cm.reschedule(asyncio.get_event_loop().time() + idle_timeout)
                         msg_count += 1
@@ -256,12 +264,123 @@ class AgentService:
         logger.info(f"Resetting session {session_key}")
         await self._client_pool.disconnect(session_key)
 
-    async def get_session_commands(self, session_key: str) -> list[str]:
-        """Get available slash commands for a session."""
-        commands = sorted(LOCAL_COMMANDS)
-        if self._commands_loader:
-            commands.extend(self._commands_loader.get_command_names())
-        return commands
+    async def get_session_commands(
+        self,
+        session_key: str,
+        *,
+        include_live_connected: bool = True,
+        allow_connect: bool = False,
+    ) -> list[str]:
+        """Get available SDK slash commands for a session."""
+        # Baseline SDK commands that should always be visible.
+        commands: set[str] = {"/help", "/clear", "/compact"}
+        sdk_discovered: set[str] = set()
+
+        # Commands discovered from state manager (if any).
+        sm = self._shared_resources.get("state_manager")
+        if sm and hasattr(sm, "get_commands"):
+            try:
+                for cmd in sm.get_commands(session_key) or []:
+                    if not isinstance(cmd, str):
+                        continue
+                    c = cmd.strip()
+                    if not c:
+                        continue
+                    normalized = c if c.startswith("/") else f"/{c}"
+                    commands.add(normalized)
+                    sdk_discovered.add(normalized)
+            except Exception as e:
+                logger.debug("Failed to read state-manager commands for %s: %s", session_key, e)
+
+        # Optional live SDK discovery from connected client only.
+        if include_live_connected:
+            record = self._client_pool._clients.get(session_key) if hasattr(self._client_pool, "_clients") else None
+            if record is not None and getattr(record, "state", "") == "connected":
+                try:
+                    info = await record.client.get_server_info()
+                    discovered = set(self._extract_slash_commands(info))
+                    commands.update(discovered)
+                    sdk_discovered.update(discovered)
+                except Exception as e:
+                    logger.debug("Failed to get_server_info() for %s: %s", session_key, e)
+
+        # Optional fallback discovery that may create/connect a client.
+        if allow_connect:
+            try:
+                client = await self._get_or_create_client(session_key)
+                info = await client.get_server_info()
+                discovered = set(self._extract_slash_commands(info))
+                commands.update(discovered)
+                sdk_discovered.update(discovered)
+            except Exception as e:
+                logger.debug("SDK command discovery with allow_connect failed for %s: %s", session_key, e)
+
+        if sm and hasattr(sm, "set_commands") and sdk_discovered:
+            try:
+                sm.set_commands(session_key, sorted(sdk_discovered))
+            except Exception as e:
+                logger.debug("Failed to cache state-manager commands for %s: %s", session_key, e)
+
+        return sorted(commands)
+
+    def get_workspace_commands_summary(self) -> str:
+        """Return formatted workspace commands summary for help output."""
+        if not self._commands_loader:
+            return ""
+        try:
+            return self._commands_loader.build_commands_summary() or ""
+        except Exception as e:
+            logger.debug("Failed to build workspace commands summary: %s", e)
+            return ""
+
+    @staticmethod
+    def _extract_slash_commands(info: Any) -> list[str]:
+        """Extract slash commands from SDK server info payload."""
+        if not isinstance(info, dict):
+            return []
+
+        result: set[str] = set()
+
+        slash_commands = info.get("slash_commands")
+        if isinstance(slash_commands, list):
+            for item in slash_commands:
+                if isinstance(item, str) and item.strip():
+                    raw = item.strip()
+                    result.add(raw if raw.startswith("/") else f"/{raw}")
+
+        commands = info.get("commands")
+        if isinstance(commands, list):
+            for item in commands:
+                if isinstance(item, str) and item.strip():
+                    raw = item.strip()
+                    result.add(raw if raw.startswith("/") else f"/{raw}")
+                elif isinstance(item, dict):
+                    name = item.get("name")
+                    if isinstance(name, str) and name.strip():
+                        raw = name.strip()
+                        result.add(raw if raw.startswith("/") else f"/{raw}")
+
+        return sorted(result)
+
+    async def _refresh_session_commands_from_client(self, session_key: str, client: Any) -> None:
+        """Refresh and cache SDK commands from an already-connected client."""
+        sm = self._shared_resources.get("state_manager")
+        if not sm or not hasattr(sm, "set_commands"):
+            return
+        if hasattr(sm, "get_commands"):
+            try:
+                cached = sm.get_commands(session_key) or []
+                if cached:
+                    return
+            except Exception:
+                pass
+        try:
+            info = await client.get_server_info()
+            discovered = self._extract_slash_commands(info)
+            if discovered:
+                sm.set_commands(session_key, discovered)
+        except Exception as e:
+            logger.debug("Failed to refresh SDK commands for %s: %s", session_key, e)
 
     async def interrupt_session(self, session_key: str) -> dict[str, Any]:
         """Interrupt ongoing processing for a session."""
@@ -330,11 +449,25 @@ class AgentService:
     @staticmethod
     def _format_tool_hint(tool_calls: list[dict[str, Any]]) -> str:
         """Format tool calls into a readable hint string."""
-        parts = []
-        for tc in tool_calls:
-            name = tc.get("name", "unknown")
-            parts.append(f"\U0001f527 {name}")
-        return ", ".join(parts) if parts else "Using tools..."
+        def _kind_label(kind: str) -> str:
+            return {
+                "tool": "Tool",
+                "skill": "Skill",
+                "mcp": "MCP",
+            }.get(kind, "Tool")
+
+        def _fmt(tc: dict[str, Any]) -> str:
+            args = tc.get("input") or tc.get("arguments") or {}
+            val = next(iter(args.values()), None) if isinstance(args, dict) else None
+            name = str(tc.get("name", "tool"))
+            kind = str(tc.get("kind", "tool"))
+            prefix = f"{_kind_label(kind)}: "
+            if not isinstance(val, str):
+                return prefix + name
+            body = f'{name}("{val[:40]}…")' if len(val) > 40 else f'{name}("{val}")'
+            return prefix + body
+
+        return ", ".join(_fmt(tc) for tc in tool_calls) if tool_calls else "Using tools..."
 
     # === Internal Methods ===
 
@@ -524,12 +657,7 @@ class AgentService:
             from xbot.agent.hooks import CompactHookHandler
 
             def send_compact_notification(session_ref: str, message: str) -> None:
-                """Send compact notification to the user's channel via bus."""
-                bus = self._shared_resources.get("bus")
-                if bus is None:
-                    logger.warning("[Compact Notification] No bus available for session: %s", session_ref)
-                    return
-
+                """Send compact notification to direct callback and/or bus."""
                 # Resolve target channel/chat_id from state_manager
                 sm = self._shared_resources.get("state_manager")
                 resolved_target = None
@@ -539,21 +667,40 @@ class AgentService:
                     except Exception as e:
                         logger.debug("[Compact Notification] resolve failed for '%s': %s", session_ref, e)
 
-                if not resolved_target or len(resolved_target) < 3:
-                    logger.warning(
-                        "[Compact Notification] No routing info for session_ref='%s'. "
-                        "Notification will NOT be delivered.",
-                        session_ref,
-                    )
-                    return
+                if not self._is_valid_compact_target(resolved_target):
+                    resolved_target = None
 
-                session_key, channel, chat_id = resolved_target
-                logger.info(
-                    "[Compact Notification] target: session_key='%s', channel='%s', chat_id='%s'",
-                    session_key, channel, chat_id,
+                resolved_session_key = (
+                    str(resolved_target[0]) if resolved_target else str(session_ref)
                 )
+                bus = self._shared_resources.get("bus")
 
                 async def _send() -> None:
+                    # First priority: direct CLI callback (works without bus).
+                    try:
+                        handled = await self._emit_direct_progress_for_session(
+                            resolved_session_key,
+                            message,
+                            event_type="system",
+                            event_data={"subtype": "pre_compact"},
+                        )
+                        if handled:
+                            return
+                    except Exception as e:
+                        logger.debug("Direct compact notification failed for %s: %s", resolved_session_key, e)
+
+                    # Fallback: publish to bus for channel/interactive mode.
+                    if bus is None:
+                        logger.warning("[Compact Notification] No bus available for session: %s", session_ref)
+                        return
+                    if resolved_target is None:
+                        logger.warning(
+                            "[Compact Notification] No routing info for session_ref='%s'. "
+                            "Notification will NOT be delivered.",
+                            session_ref,
+                        )
+                        return
+                    session_key, channel, chat_id = resolved_target
                     try:
                         await bus.publish_outbound(
                             OutboundMessage(
@@ -568,7 +715,7 @@ class AgentService:
                                 },
                             )
                         )
-                        logger.debug("Sent compact notification to %s:%s", channel, chat_id)
+                        logger.debug("Sent compact notification to %s:%s (session=%s)", channel, chat_id, session_key)
                     except Exception as e:
                         logger.warning("Failed to send compact notification to %s:%s: %s", channel, chat_id, e)
 
@@ -595,6 +742,12 @@ class AgentService:
             return self._convert_assistant_message(event)
         elif event_type == "StreamEvent":
             return self._convert_stream_event(event)
+        elif event_type == "TaskStartedMessage":
+            return self._convert_task_started(event)
+        elif event_type == "TaskProgressMessage":
+            return self._convert_task_progress(event)
+        elif event_type == "TaskNotificationMessage":
+            return self._convert_task_notification(event)
         elif event_type == "ResultMessage":
             return self._convert_result_message(event)
         elif event_type == "SystemMessage":
@@ -625,12 +778,25 @@ class AgentService:
                     "kind": self._classify_tool_name(block.name),
                 })
 
+        event_type = ""
+        event_data: dict[str, Any] | None = None
+        if progress_texts and not text and not tool_calls:
+            event_type = "thinking"
+            event_data = {"thinking_chunks": len(progress_texts)}
+        elif tool_calls:
+            event_type = "tool_call"
+            event_data = {"tool_calls": len(tool_calls)}
+        elif text:
+            event_type = "content"
+
         return AgentResponse(
             content=text,
             progress_texts=progress_texts,
             tool_calls=tool_calls if tool_calls else None,
             finish_reason="tool_use" if tool_calls else "stop",
             raw_message=message,
+            event_type=event_type,
+            event_data=event_data,
         )
 
     def _convert_stream_event(self, message: Any) -> AgentResponse | None:
@@ -651,17 +817,123 @@ class AgentService:
                 is_delta=True,
                 delta_content=text,
                 raw_message=message,
+                event_type="content_delta",
             )
 
+        if delta_type == "thinking_delta":
+            thinking = delta.get("thinking", "") or delta.get("text", "")
+            if thinking:
+                return AgentResponse(
+                    content="",
+                    progress_texts=[f"Thinking: {thinking}"],
+                    raw_message=message,
+                    event_type="thinking",
+                )
+
         return None
+
+    def _convert_task_started(self, message: Any) -> AgentResponse:
+        """Convert TaskStartedMessage to AgentResponse."""
+        progress_texts = [f"Running: {message.description}"] if getattr(message, "description", None) else []
+        if self._handoff_policy:
+            if handoff_trace := self._handoff_policy.format_task_trace(
+                getattr(message, "description", ""),
+                getattr(message, "task_type", None),
+            ):
+                progress_texts.append(handoff_trace)
+        return AgentResponse(
+            content="",
+            progress_texts=progress_texts,
+            raw_message=message,
+            event_type="task",
+            event_data={
+                "status": "started",
+                "task_id": getattr(message, "task_id", None),
+                "task_type": getattr(message, "task_type", None),
+            },
+        )
+
+    def _convert_task_progress(self, message: Any) -> AgentResponse:
+        """Convert TaskProgressMessage to AgentResponse."""
+        tool_calls = None
+        last_tool_name = getattr(message, "last_tool_name", None)
+        if last_tool_name:
+            tool_calls = [{
+                "name": last_tool_name,
+                "input": {},
+                "kind": self._classify_tool_name(last_tool_name),
+            }]
+        return AgentResponse(
+            content="",
+            progress_texts=[f"Running: {message.description}"] if getattr(message, "description", None) else [],
+            tool_calls=tool_calls,
+            finish_reason="tool_use" if tool_calls else "stop",
+            raw_message=message,
+            event_type="task",
+            event_data={
+                "status": "progress",
+                "task_id": getattr(message, "task_id", None),
+                "last_tool_name": last_tool_name,
+            },
+        )
+
+    def _convert_task_notification(self, message: Any) -> AgentResponse:
+        """Convert TaskNotificationMessage to AgentResponse."""
+        progress_texts = [
+            format_task_notification(
+                status=getattr(message, "status", ""),
+                summary=getattr(message, "summary", None),
+                task_id=getattr(message, "task_id", None),
+                output_file=getattr(message, "output_file", None),
+            )
+        ]
+        if self._handoff_policy:
+            if handoff_trace := self._handoff_policy.format_task_trace(
+                str(getattr(message, "summary", None) or getattr(message, "status", "")),
+            ):
+                progress_texts.append(handoff_trace)
+        return AgentResponse(
+            content="",
+            progress_texts=progress_texts,
+            raw_message=message,
+            event_type="task",
+            event_data={
+                "status": getattr(message, "status", None),
+                "task_id": getattr(message, "task_id", None),
+                "output_file": getattr(message, "output_file", None),
+            },
+        )
 
     def _convert_result_message(self, message: Any) -> AgentResponse | None:
         """Convert ResultMessage to AgentResponse."""
         usage = None
         if hasattr(message, "usage") and message.usage:
+            usage_obj = message.usage
+            if isinstance(usage_obj, dict):
+                input_raw = (
+                    usage_obj.get("input_tokens")
+                    if "input_tokens" in usage_obj
+                    else usage_obj.get("inputTokens", usage_obj.get("total_input_tokens", 0))
+                )
+                output_raw = (
+                    usage_obj.get("output_tokens")
+                    if "output_tokens" in usage_obj
+                    else usage_obj.get("outputTokens", usage_obj.get("total_output_tokens", 0))
+                )
+            else:
+                input_raw = (
+                    getattr(usage_obj, "input_tokens", None)
+                    if getattr(usage_obj, "input_tokens", None) is not None
+                    else getattr(usage_obj, "inputTokens", getattr(usage_obj, "total_input_tokens", 0))
+                )
+                output_raw = (
+                    getattr(usage_obj, "output_tokens", None)
+                    if getattr(usage_obj, "output_tokens", None) is not None
+                    else getattr(usage_obj, "outputTokens", getattr(usage_obj, "total_output_tokens", 0))
+                )
             usage = {
-                "input_tokens": int(getattr(message.usage, "input_tokens", 0) or 0),
-                "output_tokens": int(getattr(message.usage, "output_tokens", 0) or 0),
+                "input_tokens": int(input_raw or 0),
+                "output_tokens": int(output_raw or 0),
             }
 
         content = message.result if isinstance(message.result, str) else ""
@@ -670,6 +942,12 @@ class AgentService:
             finish_reason="stop",
             usage=usage,
             raw_message=message,
+            event_type="result",
+            event_data={
+                "stop_reason": getattr(message, "stop_reason", None),
+                "num_turns": getattr(message, "num_turns", None),
+                "total_cost_usd": getattr(message, "total_cost_usd", None),
+            },
         )
 
     def _convert_system_message(self, message: Any) -> AgentResponse | None:
@@ -691,11 +969,38 @@ class AgentService:
                 event_data={"subtype": subtype},
             )
 
+        if subtype in ("compact_boundary",):
+            from xbot.agent.interaction.event_formatter import format_compact_event
+            data = getattr(message, "data", None)
+            compact_meta = data.get("compact_metadata", {}) if isinstance(data, dict) else {}
+            pre_tokens = compact_meta.get("pre_tokens")
+            post_tokens = compact_meta.get("post_tokens")
+            trigger = compact_meta.get("trigger")
+            text = format_compact_event(
+                pre_tokens=pre_tokens if isinstance(pre_tokens, int) else None,
+                post_tokens=post_tokens if isinstance(post_tokens, int) else None,
+                trigger=trigger if isinstance(trigger, str) else None,
+            )
+            return AgentResponse(
+                content="",
+                progress_texts=[text],
+                event_type="system",
+                event_data={"subtype": subtype, "compact_metadata": compact_meta},
+            )
+
         if subtype in ("compact_complete", "post_compact"):
             from xbot.agent.interaction.event_formatter import format_compact_event
+            data = getattr(message, "data", None)
+            compact_meta = data.get("compact_metadata", {}) if isinstance(data, dict) else {}
             pre_tokens = getattr(message, "pre_tokens", None)
             post_tokens = getattr(message, "post_tokens", None)
             trigger = getattr(message, "trigger", None)
+            if pre_tokens is None:
+                pre_tokens = compact_meta.get("pre_tokens")
+            if post_tokens is None:
+                post_tokens = compact_meta.get("post_tokens")
+            if trigger is None:
+                trigger = compact_meta.get("trigger")
             text = format_compact_event(
                 pre_tokens=pre_tokens, post_tokens=post_tokens, trigger=trigger,
             )
@@ -703,7 +1008,7 @@ class AgentService:
                 content="",
                 progress_texts=[text],
                 event_type="system",
-                event_data={"subtype": subtype},
+                event_data={"subtype": subtype, "compact_metadata": compact_meta if compact_meta else None},
             )
 
         # Other SystemMessage subtypes — log but don't discard silently
@@ -722,15 +1027,26 @@ class AgentService:
         """Convert RateLimitEvent to AgentResponse."""
         return AgentResponse(
             content="",
-            progress_texts=["Rate limit hit, waiting..."],
+            progress_texts=[format_rate_limit_event(getattr(message, "rate_limit_info", None))],
             raw_message=message,
+            event_type="rate_limit",
+            event_data={
+                "status": getattr(getattr(message, "rate_limit_info", None), "status", None),
+                "rate_limit_type": getattr(getattr(message, "rate_limit_info", None), "rate_limit_type", None),
+                "resets_at": getattr(getattr(message, "rate_limit_info", None), "resets_at", None),
+                "utilization": getattr(getattr(message, "rate_limit_info", None), "utilization", None),
+            },
         )
 
     def _classify_tool_name(self, name: str) -> str:
         """Classify a tool name into its kind."""
-        normalized = name.replace("_", "-").lower()
-        if normalized.startswith("mcp-"):
+        normalized = canonical_tool_name(name)
+        if normalized.startswith("mcp_"):
             return "mcp"
+        if normalized.startswith("skill_"):
+            return "skill"
+        if normalized in CapabilityCatalog.builtin_tool_names():
+            return "tool"
         return "tool"
 
     def _build_sdk_agents(self) -> dict[str, Any] | None:
@@ -783,6 +1099,9 @@ class AgentService:
         Returns:
             Response content as string
         """
+        if on_progress is not None:
+            self._register_direct_progress_callback(session_key, on_progress)
+
         context = AgentContext(
             session_key=session_key,
             prompt=content,
@@ -791,18 +1110,48 @@ class AgentService:
             media=media or [],
         )
 
-        result = []
-        async for response in self.process(context):
-            if on_progress and response.progress_texts:
-                for text in response.progress_texts:
-                    if asyncio.iscoroutinefunction(on_progress):
-                        await on_progress(text)
-                    else:
-                        await asyncio.to_thread(on_progress, text)
-            if response.content:
-                result.append(response.content)
+        try:
+            result = []
+            async for response in self.process(context):
+                if on_progress and response.progress_texts:
+                    for text in response.progress_texts:
+                        await self._emit_progress(
+                            on_progress,
+                            text,
+                            tool_hint=False,
+                            event_type=response.event_type or "progress",
+                            event_data=response.event_data,
+                        )
+                if on_progress and response.tool_hint_text:
+                    await self._emit_progress(
+                        on_progress,
+                        response.tool_hint_text,
+                        tool_hint=True,
+                        event_type="tool_hint",
+                    )
+                if on_progress and response.tool_calls:
+                    await self._emit_progress(
+                        on_progress,
+                        self._format_tool_hint(response.tool_calls),
+                        tool_hint=True,
+                        event_type="tool_call",
+                        event_data={"tool_calls": response.tool_calls},
+                    )
+                if on_progress and response.is_delta and response.delta_content:
+                    await self._emit_progress(
+                        on_progress,
+                        response.delta_content,
+                        event_type=response.event_type or "content_delta",
+                        event_data=response.event_data,
+                    )
+                if response.is_delta:
+                    result.append(response.delta_content)
+                elif response.content:
+                    result.append(response.content)
 
-        return "".join(result)
+            return "".join(result)
+        finally:
+            self._unregister_direct_progress_callback(session_key, on_progress)
 
     async def run(self) -> None:
         """Run the service with message bus integration.
@@ -875,6 +1224,9 @@ class AgentService:
         session_key = msg.session_key or f"{msg.channel}:{msg.chat_id}"
 
         try:
+            # Ensure routing exists before processing so hooks can resolve targets.
+            self._set_session_routing(session_key, msg.channel, msg.chat_id)
+
             # Transition to RUNNING
             sm = self._shared_resources.get("state_manager")
             if sm:
@@ -913,17 +1265,38 @@ class AgentService:
                             _progress=True, _event_type=evt_type,
                         )
 
+                # Forward explicit tool-hint text
+                if response.tool_hint_text:
+                    await self._publish_event(
+                        bus, msg.channel, msg.chat_id, response.tool_hint_text,
+                        source_metadata=msg.metadata,
+                        _tool_hint=True, _progress=True, _event_type="tool_hint",
+                    )
+
                 # Forward tool hints
                 if response.tool_calls:
                     hint = self._format_tool_hint(response.tool_calls)
                     await self._publish_event(
                         bus, msg.channel, msg.chat_id, hint,
                         source_metadata=msg.metadata,
+                        event_data={"tool_calls": response.tool_calls},
                         _tool_hint=True, _progress=True, _event_type="tool_call",
                     )
 
+                # Forward content deltas to progress stream
+                if response.is_delta and response.delta_content:
+                    await self._publish_event(
+                        bus, msg.channel, msg.chat_id, response.delta_content,
+                        source_metadata=msg.metadata,
+                        event_data=response.event_data,
+                        _progress=True,
+                        _event_type=response.event_type or "content_delta",
+                    )
+
                 # Accumulate final content
-                if response.content:
+                if response.is_delta:
+                    response_text.append(response.delta_content)
+                elif response.content:
                     response_text.append(response.content)
 
                 # Track usage
@@ -1000,6 +1373,129 @@ class AgentService:
                     reason = "dispatch_end"
                 sm.force_transition(session_key, target, reason=reason)
             self._active_tasks.pop(session_key, None)
+
+    @staticmethod
+    def _is_valid_compact_target(resolved_target: Any) -> bool:
+        return (
+            isinstance(resolved_target, tuple)
+            and len(resolved_target) == 3
+            and all(isinstance(part, str) and part for part in resolved_target)
+        )
+
+    def _set_session_routing(self, session_key: str, channel: str, chat_id: str) -> None:
+        """Persist runtime routing for compact hook delivery."""
+        sm = self._shared_resources.get("state_manager")
+        if sm and hasattr(sm, "set_routing"):
+            try:
+                sm.set_routing(session_key, channel, chat_id)
+            except Exception as e:
+                logger.debug("Failed to set routing for %s: %s", session_key, e)
+
+    def _sync_sdk_session_mapping(self, session_key: str, message: Any) -> None:
+        """Capture SDK session UUID from stream messages for hook routing."""
+        sm = self._shared_resources.get("state_manager")
+        if sm is None:
+            return
+
+        # Cache slash commands from SDK init messages.
+        try:
+            subtype = getattr(message, "subtype", None)
+            data = getattr(message, "data", None)
+            if subtype == "init" and isinstance(data, dict):
+                discovered = self._extract_slash_commands(data)
+                if discovered and hasattr(sm, "set_commands"):
+                    sm.set_commands(session_key, discovered)
+        except Exception as e:
+            logger.debug("Failed to sync init commands for %s: %s", session_key, e)
+
+        sdk_session_id = getattr(message, "session_id", None)
+        if not sdk_session_id:
+            data = getattr(message, "data", None)
+            if isinstance(data, dict):
+                sdk_session_id = data.get("session_id")
+        if not sdk_session_id:
+            return
+
+        set_sdk_impl = getattr(sm, "_set_sdk_session_id_impl", None)
+        if callable(set_sdk_impl):
+            try:
+                set_sdk_impl(session_key, str(sdk_session_id))
+                return
+            except Exception as e:
+                logger.debug("Failed to sync sdk_session_id for %s: %s", session_key, e)
+
+        set_sdk = getattr(sm, "set_sdk_session_id", None)
+        if callable(set_sdk):
+            try:
+                result = set_sdk(session_key, str(sdk_session_id))
+                if asyncio.iscoroutine(result):
+                    asyncio.create_task(result)
+            except Exception as e:
+                logger.debug("Failed to sync sdk_session_id for %s: %s", session_key, e)
+
+    def _register_direct_progress_callback(
+        self,
+        session_key: str,
+        callback: ProgressCallback,
+    ) -> None:
+        self._direct_progress_callbacks[session_key] = callback
+
+    def _unregister_direct_progress_callback(
+        self,
+        session_key: str,
+        callback: ProgressCallback | None,
+    ) -> None:
+        if callback is None:
+            return
+        current = self._direct_progress_callbacks.get(session_key)
+        if current is callback:
+            self._direct_progress_callbacks.pop(session_key, None)
+
+    async def _emit_progress(
+        self,
+        on_progress: ProgressCallback | None,
+        text: str,
+        *,
+        tool_hint: bool = False,
+        event_type: str = "progress",
+        event_data: dict[str, Any] | None = None,
+    ) -> None:
+        if on_progress is None:
+            return
+        kwargs = {
+            "tool_hint": tool_hint,
+            "event_type": event_type,
+            "event_data": event_data,
+        }
+        if asyncio.iscoroutinefunction(on_progress):
+            try:
+                await on_progress(text, **kwargs)
+            except TypeError:
+                await on_progress(text)
+            return
+        try:
+            await asyncio.to_thread(on_progress, text, **kwargs)
+        except TypeError:
+            await asyncio.to_thread(on_progress, text)
+
+    async def _emit_direct_progress_for_session(
+        self,
+        session_key: str,
+        content: str,
+        *,
+        event_type: str,
+        event_data: dict[str, Any] | None = None,
+    ) -> bool:
+        callback = self._direct_progress_callbacks.get(session_key)
+        if callback is None:
+            return False
+        await self._emit_progress(
+            callback,
+            content,
+            event_type=event_type,
+            event_data=event_data,
+        )
+        return True
 
     def stop(self) -> None:
         """Stop the service."""

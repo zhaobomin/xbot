@@ -21,6 +21,7 @@ logger = get_logger(__name__)
 # Local runtime commands (handled without going through SDK)
 LOCAL_COMMANDS = {"!help", "!restart", "!stop", "!reset", "!state", "!coord", "!ver"}
 LOCAL_COMMAND_PREFIXES = ("!model",)
+LOCAL_SLASH_COMMANDS = {"/help", "/clear", "/reset", "/restart", "/state"}
 
 
 class LocalCommandHandler:
@@ -33,6 +34,9 @@ class LocalCommandHandler:
     def is_local_command(content: str) -> bool:
         """Check if content is a local runtime command."""
         stripped = content.strip().lower()
+        slash = stripped.split(maxsplit=1)[0]
+        if slash in LOCAL_SLASH_COMMANDS:
+            return True
         if stripped in LOCAL_COMMANDS:
             return True
         return any(stripped.startswith(p) for p in LOCAL_COMMAND_PREFIXES)
@@ -44,8 +48,24 @@ class LocalCommandHandler:
         session_key = msg.session_key or f"{msg.channel}:{msg.chat_id}"
         response_text = ""
 
+        # Slash aliases handled locally for parity with v0.3.37 runtime behavior.
+        if cmd_lower.startswith("/"):
+            slash = cmd_lower.split(maxsplit=1)[0]
+            if slash == "/help":
+                cmd_lower = "!help"
+            elif slash == "/state":
+                cmd_lower = "!state"
+            elif slash == "/restart":
+                cmd_lower = "!restart"
+            elif slash == "/reset":
+                # Keep optional --soft passthrough.
+                cmd_lower = f"!reset{cmd_lower[len('/reset'):]}"
+            elif slash == "/clear":
+                # /clear = local fresh-start context reset.
+                cmd_lower = "!reset"
+
         if cmd_lower == "!help":
-            response_text = self._build_help_text()
+            response_text = await self._build_help_text(session_key=session_key, channel=msg.channel)
 
         elif cmd_lower == "!ver":
             from xbot import version_text
@@ -78,7 +98,7 @@ class LocalCommandHandler:
                 metadata=dict(msg.metadata or {}),
             ))
 
-    def _build_help_text(self) -> str:
+    async def _build_help_text(self, *, session_key: str, channel: str = "cli") -> str:
         """Build help text for all commands."""
         lines = ["**Runtime Commands:**"]
         lines.append("  !help — Show this help")
@@ -91,12 +111,39 @@ class LocalCommandHandler:
         lines.append("  !ver — Show version info")
         lines.append("  !model — Show current model and available models")
         lines.append("  !model <id> — Switch to a different model")
-        commands_loader = self._service._commands_loader
-        if commands_loader:
-            summary = commands_loader.build_commands_summary()
-            if summary:
-                lines.append("\n**Workspace Commands:**")
-                lines.append(summary)
+        lines.append("")
+        lines.append("**Local Slash Commands:**")
+        lines.append("  /help — Show this help")
+        lines.append("  /clear — Clear context and start fresh")
+        lines.append("  /reset [--soft] — Reset session (local alias)")
+        lines.append("  /state — Show session diagnostics")
+        lines.append("  /restart — Restart session")
+        summary = self._service.get_workspace_commands_summary()
+        if summary:
+            lines.append("\n**Workspace Commands:**")
+            lines.append(summary)
+        sdk_commands = []
+        try:
+            sdk_commands = await asyncio.wait_for(
+                self._service.get_session_commands(
+                    session_key,
+                    include_live_connected=True,
+                    allow_connect=True,
+                ),
+                timeout=4.0,
+            )
+        except TimeoutError:
+            logger.debug("Timed out loading SDK commands for help, using cached/fallback list")
+            sdk_commands = await self._service.get_session_commands(
+                session_key,
+                include_live_connected=False,
+                allow_connect=False,
+            )
+        except Exception as e:
+            logger.debug("Failed to load SDK commands for help: %s", e)
+        if sdk_commands:
+            lines.append("\n**Claude SDK slash commands:**")
+            lines.extend(f"  {cmd}" for cmd in sdk_commands if isinstance(cmd, str) and cmd.startswith("/"))
         return "\n".join(lines)
 
     async def _do_stop(self, session_key: str, bus: Any) -> str:
