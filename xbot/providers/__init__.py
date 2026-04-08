@@ -1,7 +1,6 @@
-"""LLM provider abstraction module."""
+"""Compatibility facade for providers package.
 
-from __future__ import annotations
+Preferred location: ``xbot.platform.providers``.
+"""
 
-from xbot.providers.base import LLMProvider, LLMResponse
-
-__all__ = ["LLMProvider", "LLMResponse"]
+from xbot.platform.providers import *  # noqa: F403

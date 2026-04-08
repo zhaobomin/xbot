@@ -1,19 +1,11 @@
-"""Compatibility proxy for config paths.
-
-Preferred implementation location: ``xbot.platform.config.paths``.
-"""
+"""Runtime path helpers derived from the active config context."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from xbot.platform.config.loader import get_config_path as _platform_get_config_path
+from xbot.platform.config.loader import get_config_path
 from xbot.utils.helpers import ensure_dir
-
-
-def get_config_path() -> Path:
-    """Get the active config path (compat shim)."""
-    return _platform_get_config_path()
 
 
 def get_data_dir() -> Path:
