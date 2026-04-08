@@ -16,10 +16,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from xbot.agent.crew.agent_pool import AgentPool, TaskProgress
-from xbot.agent.crew.models import AgentRole, TaskDefinition, TaskResult
-from xbot.agent.crew.process import SequentialProcess
-from xbot.agent.crew.state import CrewStateManager, TaskPhase
+from xbot.crew.agent_pool import AgentPool, TaskProgress
+from xbot.crew.models import AgentRole, TaskDefinition, TaskResult
+from xbot.crew.process import SequentialProcess
+from xbot.crew.state import CrewStateManager, TaskPhase
 
 
 class TestTaskDefinitionTimeout:
@@ -280,7 +280,7 @@ class TestSoftTimeoutExecution:
     @pytest.mark.asyncio
     async def test_max_extensions_limit(self) -> None:
         """Task should stop after MAX_EXTENSIONS even with progress."""
-        from xbot.agent.crew.process import SequentialProcess
+        from xbot.crew.process import SequentialProcess
 
         crew_config = MagicMock()
         crew_config.agents = {

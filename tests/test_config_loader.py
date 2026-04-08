@@ -3,14 +3,14 @@
 import json
 from pathlib import Path
 
-from xbot.config.loader import (
+from xbot.platform.config.loader import (
     _migrate_config,
     get_config_path,
     load_config,
     save_config,
     set_config_path,
 )
-from xbot.config.schema import Config
+from xbot.platform.config.schema import Config
 
 
 class TestConfigPath:

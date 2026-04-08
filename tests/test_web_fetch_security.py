@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from xbot.agent.tools.web import WebFetchTool
-from xbot.config.schema import WebToolsConfig
+from xbot.tools.web import WebFetchTool
+from xbot.platform.config.schema import WebToolsConfig
 
 
 def _fake_resolve_private(hostname, port, family=0, type_=0):
@@ -23,7 +23,7 @@ def _fake_resolve_public(hostname, port, family=0, type_=0):
 @pytest.mark.asyncio
 async def test_web_fetch_blocks_private_ip():
     tool = WebFetchTool()
-    with patch("xbot.security.network.socket.getaddrinfo", _fake_resolve_private):
+    with patch("xbot.platform.security.network.socket.getaddrinfo", _fake_resolve_private):
         result = await tool.execute(url="http://169.254.169.254/computeMetadata/v1/")
     data = json.loads(result)
     assert "error" in data
@@ -35,7 +35,7 @@ async def test_web_fetch_blocks_localhost():
     tool = WebFetchTool()
     def _resolve_localhost(hostname, port, family=0, type_=0):
         return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 0))]
-    with patch("xbot.security.network.socket.getaddrinfo", _resolve_localhost):
+    with patch("xbot.platform.security.network.socket.getaddrinfo", _resolve_localhost):
         result = await tool.execute(url="http://localhost/admin")
     data = json.loads(result)
     assert "error" in data
@@ -60,7 +60,7 @@ async def test_web_fetch_result_contains_untrusted_flag():
     async def _fake_get(self, url, **kwargs):
         return FakeResponse()
 
-    with patch("xbot.security.network.socket.getaddrinfo", _fake_resolve_public), \
+    with patch("xbot.platform.security.network.socket.getaddrinfo", _fake_resolve_public), \
          patch("httpx.AsyncClient.get", _fake_get):
         result = await tool.execute(url="https://example.com/page")
 
@@ -93,7 +93,7 @@ async def test_web_fetch_can_disable_security_checks(tmp_path) -> None:
     async def _fake_get(self, url, **kwargs):
         return FakeResponse()
 
-    with patch("xbot.security.network.socket.getaddrinfo", _fake_resolve_private), \
+    with patch("xbot.platform.security.network.socket.getaddrinfo", _fake_resolve_private), \
          patch("httpx.AsyncClient.get", _fake_get):
         result = await tool.execute(url="https://github.com/trending")
 
@@ -147,7 +147,7 @@ async def test_web_fetch_blocks_redirect_before_following_private_target():
 
     with patch.object(tool, "_fetch_jina", AsyncMock(return_value=None)), \
          patch("httpx.AsyncClient", FakeClient), \
-         patch("xbot.security.network.socket.getaddrinfo", _resolver):
+         patch("xbot.platform.security.network.socket.getaddrinfo", _resolver):
         result = await tool.execute(url="http://safe.example/start")
 
     data = json.loads(result)
@@ -158,7 +158,7 @@ async def test_web_fetch_blocks_redirect_before_following_private_target():
 
 @pytest.mark.asyncio
 async def test_pinned_network_backend_uses_resolved_ip_for_connection():
-    from xbot.agent.tools.web import _PinnedAsyncNetworkBackend
+    from xbot.tools.web import _PinnedAsyncNetworkBackend
 
     calls: list[str] = []
 

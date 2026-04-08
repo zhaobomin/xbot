@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from xbot.agent.tools.memory import MemoryTool
+from xbot.tools.memory import MemoryTool
 
 
 @pytest.fixture

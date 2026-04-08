@@ -29,7 +29,7 @@ from xbot.crew.output import (
 from xbot.crew.state import CrewStateManager, TaskPhase
 from xbot.crew.validation import CrewValidator
 from xbot.interaction.permission import BasePermissionHandler
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 

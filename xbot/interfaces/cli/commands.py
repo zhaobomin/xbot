@@ -36,21 +36,21 @@ from rich.table import Table
 from rich.text import Text
 
 from xbot import __logo__, __version__
-from xbot.agent import AgentService
+from xbot.runtime.core.service import AgentService
 from xbot.crew.cli.plan_cmd import crew_plan, crew_run_dynamic
 from xbot.crew.cli.role_cmd import app as roles_app
 from xbot.interaction.permission import CLIPermissionHandler, InteractivePermissionHandler
 from xbot.interaction.progress_coalescer import ProgressCoalescer
 from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
-from xbot.config.paths import get_data_dir, get_workspace_path
-from xbot.config.schema import Config
-from xbot.logging import configure_logging, get_logger, set_package_logging_enabled
-from xbot.utils.helpers import (
+from xbot.platform.config.paths import get_data_dir, get_workspace_path
+from xbot.platform.config.schema import Config
+from xbot.platform.logging.core import configure_logging, get_logger, set_package_logging_enabled
+from xbot.platform.utils.helpers import (
     sync_workspace_command_pack,
     sync_workspace_skill_pack,
     sync_workspace_templates,
 )
-from xbot.webui.cli import webui_app
+from xbot.interfaces.webui.cli import webui_app
 
 # Force UTF-8 encoding for Windows console
 logger = get_logger(__name__)
@@ -147,7 +147,7 @@ def _parse_media_from_input(
 
     Security: Paths outside the workspace are rejected with an error message.
     """
-    from xbot.config.paths import get_workspace_path
+    from xbot.platform.config.paths import get_workspace_path
 
     # Use provided workspace or fall back to configured workspace
     effective_workspace = workspace or get_workspace_path()
@@ -245,7 +245,7 @@ def _init_prompt_session() -> None:
     except Exception:
         pass
 
-    from xbot.config.paths import get_cli_history_path
+    from xbot.platform.config.paths import get_cli_history_path
 
     history_file = get_cli_history_path()
     history_file.parent.mkdir(parents=True, exist_ok=True)
@@ -436,8 +436,8 @@ def _run_init(
     install_command_pack: bool = False,
 ) -> None:
     """Initialize xbot configuration and workspace."""
-    from xbot.config.loader import get_config_path, load_config, save_config, set_config_path
-    from xbot.config.schema import Config
+    from xbot.platform.config.loader import get_config_path, load_config, save_config, set_config_path
+    from xbot.platform.config.schema import Config
 
     config_arg = config
 
@@ -592,8 +592,8 @@ def _onboard_plugins(config_path: Path) -> None:
 
 def _load_runtime_config(config: str | None = None, workspace: str | None = None) -> Config:
     """Load config and optionally override the active workspace."""
-    from xbot.config.loader import load_config, set_config_path
-    from xbot.config.validator import ConfigurationError, validate_config
+    from xbot.platform.config.loader import load_config, set_config_path
+    from xbot.platform.config.validator import ConfigurationError, validate_config
 
     config_path = None
     if config:
@@ -679,13 +679,13 @@ def gateway(
     from xbot.interaction.permission import PermissionRequestHandler
     from xbot.runtime.system.monitoring.health import HealthCheckService
     from xbot.runtime.state import SessionManager as StateManager
-    from xbot.bus.queue import MessageBus
+    from xbot.platform.bus.queue import MessageBus
     from xbot.channels.manager import ChannelManager
-    from xbot.config.paths import get_cron_dir
-    from xbot.cron.service import CronService
-    from xbot.cron.types import CronJob
-    from xbot.heartbeat.service import HeartbeatService
-    from xbot.session.manager import SessionManager
+    from xbot.platform.config.paths import get_cron_dir
+    from xbot.runtime.system.cron.service import CronService
+    from xbot.runtime.system.cron.types import CronJob
+    from xbot.runtime.system.heartbeat.service import HeartbeatService
+    from xbot.runtime.session.manager import SessionManager
 
     configure_logging(level="DEBUG" if verbose else "INFO")
 
@@ -733,7 +733,7 @@ def gateway(
         """Execute a cron job through the agent."""
         from xbot.tools.cron import CronTool
         from xbot.tools.message import MessageTool
-        from xbot.utils.evaluator import evaluate_response
+        from xbot.platform.utils.evaluator import evaluate_response
 
         reminder_note = (
             "[Scheduled Task] Timer finished.\n\n"
@@ -766,7 +766,7 @@ def gateway(
                 response, job.payload.message, llm_call,
             )
             if should_notify:
-                from xbot.bus.events import OutboundMessage
+                from xbot.platform.bus.events import OutboundMessage
                 await bus.publish_outbound(OutboundMessage(
                     channel=job.payload.channel or "cli",
                     chat_id=job.payload.to,
@@ -810,7 +810,7 @@ def gateway(
 
     async def on_heartbeat_notify(response: str) -> None:
         """Deliver a heartbeat response to the user's channel."""
-        from xbot.bus.events import OutboundMessage
+        from xbot.platform.bus.events import OutboundMessage
         if heartbeat_target is None:
             return  # No external channel available to deliver to
         channel, chat_id = heartbeat_target
@@ -918,9 +918,9 @@ def agent(
 ):
     """Interact with the agent directly."""
     from xbot.runtime.state import SessionManager as StateManager
-    from xbot.bus.queue import MessageBus
-    from xbot.config.paths import get_cron_dir
-    from xbot.cron.service import CronService
+    from xbot.platform.bus.queue import MessageBus
+    from xbot.platform.config.paths import get_cron_dir
+    from xbot.runtime.system.cron.service import CronService
 
     config = _load_runtime_config(config, workspace)
     _print_deprecated_memory_window_notice(config)
@@ -1044,7 +1044,7 @@ def agent(
         asyncio.run(run_once())
     else:
         # Interactive mode — route through bus like other channels
-        from xbot.bus.events import InboundMessage
+        from xbot.platform.bus.events import InboundMessage
         _init_prompt_session()
         console.print(f"{__logo__} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n")
 
@@ -1188,7 +1188,7 @@ app.add_typer(channels_app, name="channels")
 def channels_status():
     """Show channel status."""
     from xbot.channels.registry import discover_all
-    from xbot.config.loader import load_config
+    from xbot.platform.config.loader import load_config
 
     config = load_config()
 
@@ -1218,7 +1218,7 @@ def _get_bridge_dir() -> Path:
     import subprocess
 
     # User's bridge location
-    from xbot.config.paths import get_bridge_install_dir
+    from xbot.platform.config.paths import get_bridge_install_dir
 
     user_bridge = get_bridge_install_dir()
 
@@ -1279,8 +1279,8 @@ def channels_login():
     import shutil
     import subprocess
 
-    from xbot.config.loader import load_config
-    from xbot.config.paths import get_runtime_subdir
+    from xbot.platform.config.loader import load_config
+    from xbot.platform.config.paths import get_runtime_subdir
 
     config = load_config()
     bridge_dir = _get_bridge_dir()
@@ -1318,7 +1318,7 @@ app.add_typer(plugins_app, name="plugins")
 def plugins_list():
     """List all discovered channels (built-in and plugins)."""
     from xbot.channels.registry import discover_all, discover_channel_names
-    from xbot.config.loader import load_config
+    from xbot.platform.config.loader import load_config
 
     config = load_config()
     builtin_names = set(discover_channel_names())
@@ -1356,7 +1356,7 @@ def plugins_list():
 @app.command()
 def status():
     """Show xbot status."""
-    from xbot.config.loader import get_config_path, load_config
+    from xbot.platform.config.loader import get_config_path, load_config
 
     config_path = get_config_path()
     config = load_config()
@@ -1368,7 +1368,7 @@ def status():
     console.print(f"Workspace: {workspace} {'[green]✓[/green]' if workspace.exists() else '[red]✗[/red]'}")
 
     if config_path.exists():
-        from xbot.providers.registry import PROVIDERS
+        from xbot.platform.providers.registry import PROVIDERS
 
         console.print(f"Model: {config.agents.defaults.model}")
 
@@ -2296,7 +2296,7 @@ def provider_login(
     provider: str = typer.Argument(..., help="OAuth provider (e.g. 'openai-codex', 'github-copilot')"),
 ):
     """Authenticate with an OAuth provider."""
-    from xbot.providers.registry import PROVIDERS
+    from xbot.platform.providers.registry import PROVIDERS
 
     key = provider.replace("-", "_")
     spec = next((s for s in PROVIDERS if s.name == key and s.is_oauth), None)

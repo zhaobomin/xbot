@@ -14,14 +14,14 @@ from telegram.error import Conflict, TimedOut
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
-from xbot.bus.events import OutboundMessage
-from xbot.bus.queue import MessageBus
+from xbot.platform.bus.events import OutboundMessage
+from xbot.platform.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
-from xbot.config.paths import get_media_dir
-from xbot.config.schema import Base
-from xbot.logging import get_logger
-from xbot.security.network import validate_url_target
-from xbot.utils.helpers import split_message
+from xbot.platform.config.paths import get_media_dir
+from xbot.platform.config.schema import Base
+from xbot.platform.logging.core import get_logger
+from xbot.platform.security.network import validate_url_target
+from xbot.platform.utils.helpers import split_message
 
 logger = get_logger(__name__)
 TELEGRAM_MAX_MESSAGE_LEN = 4000  # Telegram message character limit

@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from xbot.platform.config.loader import get_config_path
-from xbot.utils.helpers import ensure_dir
+from xbot.platform.utils.helpers import ensure_dir
 
 
 def get_data_dir() -> Path:

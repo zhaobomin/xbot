@@ -3,7 +3,7 @@
 
 import pytest
 
-from xbot.agent.crew.planner.models import (
+from xbot.crew.planner.models import (
     Capability,
     CrewPlan,
     GoalAnalysis,
@@ -108,7 +108,7 @@ class TestRoleDefinition:
 
     def test_to_agent_role(self, sample_role):
         """Test conversion to AgentRole."""
-        from xbot.agent.crew.models import AgentRole
+        from xbot.crew.models import AgentRole
 
         agent_role = sample_role.to_agent_role()
         assert isinstance(agent_role, AgentRole)

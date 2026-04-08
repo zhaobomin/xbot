@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from xbot.agent.memory.store import MemoryStore
+from xbot.memory.store import MemoryStore
 
 
 def _make_messages(count: int = 5) -> list[dict]:
@@ -25,7 +25,7 @@ def _make_messages(count: int = 5) -> list[dict]:
 
 def _make_mock_backend():
     """Create a mock backend with call_for_consolidation method."""
-    from xbot.providers.base import LLMResponse, ToolCallRequest
+    from xbot.platform.providers.base import LLMResponse, ToolCallRequest
 
     backend = MagicMock()
     backend.call_for_consolidation = AsyncMock(
@@ -264,7 +264,7 @@ class TestConsolidationToolDefinition:
 
     def test_tool_has_clear_descriptions(self) -> None:
         """Tool parameters should have clear descriptions."""
-        from xbot.agent.memory.store import _SAVE_MEMORY_TOOL
+        from xbot.memory.store import _SAVE_MEMORY_TOOL
 
         tool = _SAVE_MEMORY_TOOL[0]
         function = tool['function']
@@ -282,7 +282,7 @@ class TestConsolidationToolDefinition:
 
     def test_tool_has_required_fields(self) -> None:
         """Tool should have both fields as required."""
-        from xbot.agent.memory.store import _SAVE_MEMORY_TOOL
+        from xbot.memory.store import _SAVE_MEMORY_TOOL
 
         tool = _SAVE_MEMORY_TOOL[0]
         function = tool['function']

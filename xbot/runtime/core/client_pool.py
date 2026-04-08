@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeSDKClient

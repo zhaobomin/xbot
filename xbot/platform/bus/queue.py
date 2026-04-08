@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any, Literal
 
 from xbot.platform.bus.events import InboundMessage, OutboundMessage
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 # Constants for request pool management
 logger = get_logger(__name__)

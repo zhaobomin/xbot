@@ -5,8 +5,8 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
-from xbot.agent.crew.cli.plan_cmd import app
-from xbot.agent.crew.planner.models import (
+from xbot.crew.cli.plan_cmd import app
+from xbot.crew.planner.models import (
     Capability,
     GoalAnalysis,
     RoleDefinition,
@@ -15,9 +15,9 @@ from xbot.agent.crew.planner.models import (
     RoleTier,
     TaskPlan,
 )
-from xbot.agent.crew.planner.role_creator import RoleCreator
-from xbot.agent.crew.planner.role_pool import RolePoolManager
-from xbot.agent.crew.planner.task_planner import TaskPlanner
+from xbot.crew.planner.role_creator import RoleCreator
+from xbot.crew.planner.role_pool import RolePoolManager
+from xbot.crew.planner.task_planner import TaskPlanner
 
 runner = CliRunner()
 
@@ -351,7 +351,7 @@ class TestComplexityInference:
 
     @pytest.fixture
     def planner(self):
-        from xbot.agent.crew.planner.crew_planner import CrewPlanner
+        from xbot.crew.planner.crew_planner import CrewPlanner
         return CrewPlanner()
 
     def test_mixed_simple_complex_keywords(self, planner):
@@ -377,7 +377,7 @@ class TestCapabilityInference:
 
     @pytest.fixture
     def planner(self):
-        from xbot.agent.crew.planner.crew_planner import CrewPlanner
+        from xbot.crew.planner.crew_planner import CrewPlanner
         return CrewPlanner()
 
     def test_no_matching_keywords(self, planner):
@@ -439,7 +439,7 @@ class TestRoleSelectionWithNoRoles:
 
     def test_selection_from_empty_pool(self):
         """Test selection from completely empty pool."""
-        from xbot.agent.crew.planner.role_selector import RoleSelector
+        from xbot.crew.planner.role_selector import RoleSelector
 
         selector = RoleSelector()
 
@@ -471,12 +471,12 @@ class TestConfigGeneratorRobustness:
 
     @pytest.fixture
     def generator(self):
-        from xbot.agent.crew.planner.config_generator import ConfigGenerator
+        from xbot.crew.planner.config_generator import ConfigGenerator
         return ConfigGenerator()
 
     def test_generate_with_empty_roles(self, generator):
         """Test generating config with no roles."""
-        from xbot.agent.crew.planner.models import CrewPlan
+        from xbot.crew.planner.models import CrewPlan
 
         plan = CrewPlan(
             name="empty",
@@ -509,7 +509,7 @@ class TestConfigGeneratorRobustness:
 
     def test_preview_with_no_tasks(self, generator):
         """Test preview with no tasks."""
-        from xbot.agent.crew.planner.models import CrewPlan
+        from xbot.crew.planner.models import CrewPlan
 
         role = RoleDefinition(
             name="agent1",

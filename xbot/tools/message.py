@@ -4,7 +4,7 @@ from contextvars import ContextVar
 from typing import Any, Awaitable, Callable
 
 from xbot.tools.base import Tool
-from xbot.bus.events import OutboundMessage
+from xbot.platform.bus.events import OutboundMessage
 
 
 class MessageTool(Tool):

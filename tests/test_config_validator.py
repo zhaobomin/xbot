@@ -4,8 +4,8 @@
 import pytest
 from pydantic import SecretStr
 
-from xbot.config.schema import Config, ProviderConfig
-from xbot.config.validator import (
+from xbot.platform.config.schema import Config, ProviderConfig
+from xbot.platform.config.validator import (
     ConfigurationError,
     get_all_provider_names_safe,
     validate_config,

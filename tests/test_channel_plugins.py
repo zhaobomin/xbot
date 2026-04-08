@@ -7,11 +7,11 @@ from unittest.mock import patch
 
 import pytest
 
-from xbot.bus.events import OutboundMessage
-from xbot.bus.queue import MessageBus
+from xbot.platform.bus.events import OutboundMessage
+from xbot.platform.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
 from xbot.channels.manager import ChannelManager
-from xbot.config.schema import ChannelsConfig
+from xbot.platform.config.schema import ChannelsConfig
 
 # ---------------------------------------------------------------------------
 # Helpers

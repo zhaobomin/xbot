@@ -11,12 +11,12 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable
 
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 
 if TYPE_CHECKING:
-    from xbot.bus.queue import MessageBus
+    from xbot.platform.bus.queue import MessageBus
 
 
 @dataclass
@@ -111,7 +111,7 @@ class AlertService:
         if not await self._reserve_alert_slot(title):
             return False
 
-        from xbot.bus.events import OutboundMessage
+        from xbot.platform.bus.events import OutboundMessage
 
         # Format alert message
         severity_emoji = {

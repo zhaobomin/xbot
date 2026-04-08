@@ -5,8 +5,8 @@ with clear error messages.
 """
 
 
-from xbot.agent.crew.models import AgentRole, CrewConfig, TaskDefinition
-from xbot.agent.crew.validation import (
+from xbot.crew.models import AgentRole, CrewConfig, TaskDefinition
+from xbot.crew.validation import (
     CrewValidator,
     ExecutionPreconditions,
     ValidationError,
@@ -235,7 +235,7 @@ class TestCrewValidatorValidateCrewConfig:
         process_type: str = "sequential",
     ) -> CrewConfig:
         """Helper to create minimal CrewConfig."""
-        from xbot.agent.crew.models import ProcessType
+        from xbot.crew.models import ProcessType
 
         return CrewConfig(
             name="test_crew",

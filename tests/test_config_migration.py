@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 from typer.testing import CliRunner
 
-from xbot.cli.commands import app
-from xbot.config.loader import load_config, save_config
+from xbot.interfaces.cli.commands import app
+from xbot.platform.config.loader import load_config, save_config
 
 runner = CliRunner()
 
@@ -75,8 +75,8 @@ def test_onboard_refresh_rewrites_legacy_config_defaults(tmp_path, monkeypatch) 
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("xbot.config.loader.get_config_path", lambda: config_path)
-    monkeypatch.setattr("xbot.cli.commands.get_workspace_path", lambda _workspace=None: workspace)
+    monkeypatch.setattr("xbot.platform.config.loader.get_config_path", lambda: config_path)
+    monkeypatch.setattr("xbot.interfaces.cli.commands.get_workspace_path", lambda _workspace=None: workspace)
 
     result = runner.invoke(app, ["onboard"], input="n\n")
 
@@ -108,8 +108,8 @@ def test_onboard_refresh_backfills_missing_channel_fields(tmp_path, monkeypatch)
         encoding="utf-8",
     )
 
-    monkeypatch.setattr("xbot.config.loader.get_config_path", lambda: config_path)
-    monkeypatch.setattr("xbot.cli.commands.get_workspace_path", lambda _workspace=None: workspace)
+    monkeypatch.setattr("xbot.platform.config.loader.get_config_path", lambda: config_path)
+    monkeypatch.setattr("xbot.interfaces.cli.commands.get_workspace_path", lambda _workspace=None: workspace)
     monkeypatch.setattr(
         "xbot.channels.registry.discover_all",
         lambda: {

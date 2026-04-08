@@ -20,9 +20,9 @@ from xbot.runtime.core.command_handlers import LocalCommandHandler
 from xbot.runtime.core.protocol import AgentContext, AgentResponse, StructuredLLMResponse, ToolCall
 from xbot.runtime.core.types import AgentConfig
 from xbot.runtime.state.machine import SessionPhase
-from xbot.bus.events import InboundMessage, OutboundMessage
-from xbot.logging import get_logger
-from xbot.utils.file_reader import FileType, classify_file, format_file_reference
+from xbot.platform.bus.events import InboundMessage, OutboundMessage
+from xbot.platform.logging.core import get_logger
+from xbot.platform.utils.file_reader import FileType, classify_file, format_file_reference
 
 if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeSDKClient

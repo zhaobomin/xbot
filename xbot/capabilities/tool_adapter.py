@@ -14,7 +14,7 @@ from xbot.tools.memory import MemoryTool
 from xbot.tools.message import MessageTool
 from xbot.tools.skill_loader import LoadSkillContentTool
 from xbot.tools.web import WebFetchTool, WebSearchTool
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 
@@ -116,7 +116,7 @@ class ToolAdapter:
         if bus:
             # Create async callback for message tool
             async def send_callback(msg):
-                from xbot.bus.events import OutboundMessage
+                from xbot.platform.bus.events import OutboundMessage
                 if hasattr(msg, 'channel') and hasattr(msg, 'chat_id') and hasattr(msg, 'content'):
                     await bus.publish_outbound(msg)
                 elif isinstance(msg, dict):

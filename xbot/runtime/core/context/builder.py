@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from xbot.capabilities.skills_loader import SkillsLoader
 from xbot.memory.store import MemoryStore
 from xbot.runtime.core.context.commands import CommandsLoader
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 from xbot.platform.utils.file_reader import FileType, classify_file, format_file_reference
 from xbot.platform.utils.helpers import build_assistant_message, current_time_str, detect_image_mime
 

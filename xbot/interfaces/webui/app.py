@@ -29,8 +29,8 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, SecretStr
 
-from xbot.config.schema import MCPServerConfig
-from xbot.cron.types import CronPayload, CronSchedule
+from xbot.platform.config.schema import MCPServerConfig
+from xbot.runtime.system.cron.types import CronPayload, CronSchedule
 from xbot.interfaces.webui.auth import (
     AuthManager,
     UserStore,
@@ -359,16 +359,14 @@ def create_app(
         resolved_frontend_dir = frontend_dir
     else:
         module_dir = Path(__file__).parent
-        package_root = module_dir.parent.parent
         frontend_candidates = (
             module_dir / "frontend" / "dist",
-            package_root / "webui" / "frontend" / "dist",
-            package_root / "webui" / "frontend-new" / "dist",
-            package_root / "webui" / "frontend-new" / "dev-dist",
+            module_dir / "frontend-new" / "dist",
+            module_dir / "frontend-new" / "dev-dist",
         )
         resolved_frontend_dir = next(
             (path for path in frontend_candidates if path.exists()),
-            frontend_candidates[1],
+            frontend_candidates[0],
         )
     app.state.frontend_dir = resolved_frontend_dir
     app.state.s3_config_path = resolved_data_dir / "s3.json"
@@ -889,7 +887,7 @@ def create_app(
         body: dict[str, Any],
         authorization: str | None = Header(default=None),
     ) -> dict[str, bool]:
-        from xbot.config.schema import Config
+        from xbot.platform.config.schema import Config
 
         _get_user_from_auth_header(authorization)
         content = str(body.get("content", ""))

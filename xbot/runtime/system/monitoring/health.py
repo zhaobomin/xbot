@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 from aiohttp import web
 
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 

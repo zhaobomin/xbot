@@ -8,13 +8,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from xbot.logging import get_logger
-from xbot.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain
+from xbot.platform.logging.core import get_logger
+from xbot.platform.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain
 
 logger = get_logger(__name__)
 if TYPE_CHECKING:
     from xbot.runtime.core.service import AgentService
-    from xbot.session.manager import Session, SessionManager
+    from xbot.runtime.session.manager import Session, SessionManager
 
 
 # === Consolidation Prompt Templates ===
@@ -185,7 +185,7 @@ class MemoryStore:
         formatted_messages = self._format_messages(messages)
 
         # Estimate token counts for context size hint
-        from xbot.utils.helpers import estimate_prompt_tokens
+        from xbot.platform.utils.helpers import estimate_prompt_tokens
         memory_tokens = estimate_prompt_tokens([
             {"role": "user", "content": current_memory}
         ]) if current_memory else 0

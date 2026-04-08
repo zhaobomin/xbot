@@ -9,8 +9,8 @@ from typing import Any, AsyncIterator
 
 from xbot.crew.models import AgentRole, CrewConfig
 from xbot.runtime.core.protocol import AgentContext
-from xbot.config.schema import AgentsConfig, Config
-from xbot.logging import get_logger
+from xbot.platform.config.schema import AgentsConfig, Config
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 @dataclass

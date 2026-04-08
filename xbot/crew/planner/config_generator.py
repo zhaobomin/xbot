@@ -9,7 +9,7 @@ import yaml
 
 from xbot.crew.planner.models import CrewPlan, RoleDefinition, TaskPlan
 from xbot.crew.planner.utils import RoleConverter
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 

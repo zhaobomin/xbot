@@ -31,13 +31,13 @@ from xbot.interaction.ask_user_validation import (
     normalize_validation_mode,
     split_answers,
 )
-from xbot.bus.queue import (
+from xbot.platform.bus.queue import (
     InteractionRequest,
     InteractionResponse,
     MessageBus,
     PermissionRequest,
 )
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 

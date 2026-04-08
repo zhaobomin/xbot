@@ -11,7 +11,7 @@ from typing import Any, Callable, Coroutine
 
 from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
 from xbot.runtime.system.cron.types import CronJob, CronJobState, CronPayload, CronSchedule, CronStore
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 def _now_ms() -> int:

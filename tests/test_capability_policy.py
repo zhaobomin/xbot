@@ -4,8 +4,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from xbot.agent.capabilities.catalog import CapabilityCatalog
-from xbot.agent.capabilities.policy import CapabilityPolicy, CapabilityResolution
+from xbot.capabilities.catalog import CapabilityCatalog
+from xbot.capabilities.policy import CapabilityPolicy, CapabilityResolution
 
 
 class TestCapabilityResolution:

@@ -1,6 +1,6 @@
 """Compatibility view over the canonical provider registry.
 
-`xbot.providers.registry` is the single source of truth for provider
+`xbot.platform.providers.registry` is the single source of truth for provider
 metadata. This module projects that registry into the config-oriented shape
 needed by config validation and Claude SDK compatibility checks.
 

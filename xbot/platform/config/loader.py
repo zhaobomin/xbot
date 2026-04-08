@@ -21,7 +21,7 @@ from typing import Any
 from pydantic import ValidationError
 
 from xbot.platform.config.schema import Config
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 

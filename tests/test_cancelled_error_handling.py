@@ -12,11 +12,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from xbot.agent.crew.agent_pool import AgentPool
-from xbot.agent.crew.models import CrewConfig, ProcessType, TaskDefinition, TaskResult
-from xbot.agent.crew.orchestrator import CrewOrchestrator
-from xbot.agent.crew.process import SequentialProcess
-from xbot.agent.crew.state import CrewStateManager, TaskPhase
+from xbot.crew.agent_pool import AgentPool
+from xbot.crew.models import CrewConfig, ProcessType, TaskDefinition, TaskResult
+from xbot.crew.orchestrator import CrewOrchestrator
+from xbot.crew.process import SequentialProcess
+from xbot.crew.state import CrewStateManager, TaskPhase
 
 
 class MockBackend:
@@ -65,7 +65,7 @@ class TestOrchestratorCancelledError:
 
         # Mock CrewResourceManager to simulate cancellation
         with patch.object(orchestrator, "_get_llm_repair_callable", return_value=None):
-            with patch("xbot.agent.crew.orchestrator.CrewResourceManager") as mock_mgr_cls:
+            with patch("xbot.crew.orchestrator.CrewResourceManager") as mock_mgr_cls:
                 mock_manager = MagicMock()
                 mock_manager.initialize_pool = AsyncMock()
                 mock_manager.set_process = MagicMock()
@@ -82,7 +82,7 @@ class TestOrchestratorCancelledError:
                 mock_mgr_cls.return_value = mock_manager
 
                 # Make SequentialProcess.execute raise CancelledError
-                with patch("xbot.agent.crew.orchestrator.SequentialProcess") as mock_process_cls:
+                with patch("xbot.crew.orchestrator.SequentialProcess") as mock_process_cls:
                     mock_process = MagicMock()
                     mock_process.execute = AsyncMock(side_effect=asyncio.CancelledError())
                     mock_process.finalize_output = MagicMock()
@@ -106,7 +106,7 @@ class TestOrchestratorCancelledError:
         _ = CrewStateManager(task_names=[], task_definitions=[])
 
         with patch.object(orchestrator, "_get_llm_repair_callable", return_value=None):
-            with patch("xbot.agent.crew.orchestrator.CrewResourceManager") as mock_mgr_cls:
+            with patch("xbot.crew.orchestrator.CrewResourceManager") as mock_mgr_cls:
                 mock_manager = MagicMock()
                 mock_manager.initialize_pool = AsyncMock()
                 mock_manager.set_process = MagicMock()
@@ -121,7 +121,7 @@ class TestOrchestratorCancelledError:
 
                 mock_mgr_cls.return_value = mock_manager
 
-                with patch("xbot.agent.crew.orchestrator.SequentialProcess") as mock_process_cls:
+                with patch("xbot.crew.orchestrator.SequentialProcess") as mock_process_cls:
                     mock_process = MagicMock()
                     mock_process.execute = AsyncMock(side_effect=asyncio.CancelledError())
                     mock_process.finalize_output = MagicMock()
@@ -141,7 +141,7 @@ class TestProcessCancelledError:
     @pytest.mark.asyncio
     async def test_execute_single_task_catches_cancelled(self) -> None:
         """Task execution should catch CancelledError and re-raise."""
-        from xbot.agent.crew.agent_pool import TaskProgress
+        from xbot.crew.agent_pool import TaskProgress
 
         pool = MagicMock()
         # Make run_task_streaming raise CancelledError
@@ -324,8 +324,8 @@ class TestRedoTaskBugFixes:
     @pytest.mark.asyncio
     async def test_redo_task_timeout_uses_correct_extended_count(self) -> None:
         """When redo times out, extended_count should be 0 (not undefined)."""
-        from xbot.agent.crew.agent_pool import TaskProgress
-        from xbot.agent.crew.models import AgentRole
+        from xbot.crew.agent_pool import TaskProgress
+        from xbot.crew.models import AgentRole
 
         pool = MagicMock()
 
@@ -391,7 +391,7 @@ class TestRedoTaskBugFixes:
     @pytest.mark.asyncio
     async def test_redo_task_exception_uses_correct_extended_count(self) -> None:
         """When redo raises exception, extended_count should be 0 (not undefined)."""
-        from xbot.agent.crew.models import AgentRole
+        from xbot.crew.models import AgentRole
 
         pool = MagicMock()
 
@@ -461,8 +461,8 @@ class TestExecuteWithSoftTimeoutEdgeCases:
     @pytest.mark.asyncio
     async def test_cancelled_error_clean_up_stream_task(self) -> None:
         """CancelledError should properly clean up the stream task."""
-        from xbot.agent.crew.agent_pool import TaskProgress
-        from xbot.agent.crew.models import AgentRole
+        from xbot.crew.agent_pool import TaskProgress
+        from xbot.crew.models import AgentRole
 
         pool = MagicMock()
 
@@ -539,8 +539,8 @@ class TestExecuteWithSoftTimeoutEdgeCases:
     @pytest.mark.asyncio
     async def test_stop_async_iteration_handled(self) -> None:
         """StopAsyncIteration should be handled correctly."""
-        from xbot.agent.crew.agent_pool import TaskProgress
-        from xbot.agent.crew.models import AgentRole
+        from xbot.crew.agent_pool import TaskProgress
+        from xbot.crew.models import AgentRole
 
         pool = MagicMock()
 
@@ -627,7 +627,7 @@ class TestStateTransitions:
 
     def test_invalid_transition_raises(self) -> None:
         """Invalid state transitions should raise."""
-        from xbot.agent.crew.state import InvalidTransitionError
+        from xbot.crew.state import InvalidTransitionError
 
         state_manager = CrewStateManager(
             task_names=["test_task"],

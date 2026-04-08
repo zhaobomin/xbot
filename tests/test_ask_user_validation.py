@@ -1,6 +1,6 @@
 """Tests for shared AskUserQuestion validation utilities."""
 
-from xbot.agent.interaction.ask_user_validation import (
+from xbot.interaction.ask_user_validation import (
     match_option,
     normalize_validation_mode,
     split_answers,

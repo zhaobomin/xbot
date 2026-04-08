@@ -13,8 +13,8 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from xbot.agent.capabilities.skills_loader import SkillsLoader
-from xbot.agent.tools.skill_loader import LoadSkillContentTool
+from xbot.capabilities.skills_loader import SkillsLoader
+from xbot.tools.skill_loader import LoadSkillContentTool
 
 
 def _write_skill(root: Path, name: str, body: str) -> None:

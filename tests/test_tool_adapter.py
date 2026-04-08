@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from xbot.agent.capabilities.tool_adapter import ToolAdapter
+from xbot.capabilities.tool_adapter import ToolAdapter
 
 
 class TestToolAdapter:
@@ -71,7 +71,7 @@ class TestToolAdapter:
 
     def test_create_mcp_server_no_sdk(self, workspace: Path) -> None:
         """Test MCP server creation when SDK not available."""
-        with patch("xbot.agent.capabilities.tool_adapter.SDK_AVAILABLE", False):
+        with patch("xbot.capabilities.tool_adapter.SDK_AVAILABLE", False):
             adapter = ToolAdapter(str(workspace))
             result = adapter.create_mcp_server()
             assert result == {}
@@ -90,11 +90,13 @@ class TestToolAdapterRegistration:
         adapter = ToolAdapter(str(workspace))
         adapter._register_xbot_tools()
 
-        # Check that basic tools are registered
-        assert "read_file" in adapter._tools
-        assert "write_file" in adapter._tools
-        assert "exec" in adapter._tools
+        # SDK-native tools are intentionally excluded from xbot MCP adapter.
+        assert "read_file" not in adapter._tools
+        assert "write_file" not in adapter._tools
+        assert "exec" not in adapter._tools
         assert "web_search" in adapter._tools
+        assert "web_fetch" in adapter._tools
+        assert "memory" in adapter._tools
 
     def test_register_tools_with_message(self, workspace: Path) -> None:
         """Test tool registration with message bus."""
@@ -123,21 +125,19 @@ class TestToolAdapterRegistration:
         adapter = ToolAdapter(str(workspace))
         adapter._register_xbot_tools()
 
-        tool = adapter.get_tool("read_file")
+        tool = adapter.get_tool("web_search")
         assert tool is not None
         assert hasattr(tool, "name")
-        assert tool.name == "read_file"
+        assert tool.name == "web_search"
 
-    def test_workspace_restriction(self, workspace: Path) -> None:
-        """Test workspace restriction is applied."""
+    def test_workspace_restriction_does_not_register_sdk_native_tools(self, workspace: Path) -> None:
+        """SDK-native filesystem/shell tools must stay out of xbot adapter."""
         config = MagicMock()
         config.restrict_to_workspace = True
-
         adapter = ToolAdapter(str(workspace), tools_config=config)
         adapter._register_xbot_tools()
-
-        # Tools should be created with workspace restriction
-        assert adapter._tools["read_file"]._allowed_dir == workspace
+        assert "read_file" not in adapter._tools
+        assert "exec" not in adapter._tools
 
     @pytest.mark.asyncio
     async def test_message_tool_uses_per_session_context(self, workspace: Path) -> None:

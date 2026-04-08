@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from xbot.session.manager import SessionManager
+from xbot.runtime.session.manager import SessionManager
 
 
 def append_session_trace(

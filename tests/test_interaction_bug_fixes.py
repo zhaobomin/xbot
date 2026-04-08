@@ -11,10 +11,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from xbot.agent.interaction.response_handlers import RuntimeResponseHandlers
-from xbot.agent.state.machine import SessionPhase
-from xbot.bus.events import InboundMessage
-from xbot.bus.queue import InteractionRequest, MessageBus
+from xbot.interaction.response_handlers import RuntimeResponseHandlers
+from xbot.runtime.state.machine import SessionPhase
+from xbot.platform.bus.events import InboundMessage
+from xbot.platform.bus.queue import InteractionRequest, MessageBus
 
 
 class MockRuntime:
@@ -670,7 +670,7 @@ class TestFeishuInteractionFormatting:
         """Verify question interactions use post format with options."""
         from unittest.mock import MagicMock, patch
 
-        from xbot.bus.events import OutboundMessage
+        from xbot.platform.bus.events import OutboundMessage
         from xbot.channels.feishu import FeishuChannel, FeishuConfig
 
         config = FeishuConfig(
@@ -707,7 +707,7 @@ class TestFeishuInteractionFormatting:
         """Bug 7 fix: approval interactions should also use post format."""
         from unittest.mock import MagicMock, patch
 
-        from xbot.bus.events import OutboundMessage
+        from xbot.platform.bus.events import OutboundMessage
         from xbot.channels.feishu import FeishuChannel, FeishuConfig
 
         config = FeishuConfig(
@@ -744,7 +744,7 @@ class TestFeishuInteractionFormatting:
         """Bug 7 fix: confirmation interactions should also use post format."""
         from unittest.mock import MagicMock, patch
 
-        from xbot.bus.events import OutboundMessage
+        from xbot.platform.bus.events import OutboundMessage
         from xbot.channels.feishu import FeishuChannel, FeishuConfig
 
         config = FeishuConfig(
@@ -781,7 +781,7 @@ class TestFeishuInteractionFormatting:
         """Verify formatted message includes all options."""
         from unittest.mock import MagicMock, patch
 
-        from xbot.bus.events import OutboundMessage
+        from xbot.platform.bus.events import OutboundMessage
         from xbot.channels.feishu import FeishuChannel, FeishuConfig
 
         config = FeishuConfig(
@@ -819,7 +819,7 @@ class TestFeishuInteractionFormatting:
         """Suggested questions should tell users they can type custom content."""
         from unittest.mock import MagicMock, patch
 
-        from xbot.bus.events import OutboundMessage
+        from xbot.platform.bus.events import OutboundMessage
         from xbot.channels.feishu import FeishuChannel, FeishuConfig
 
         config = FeishuConfig(app_id="test", app_secret="test")
@@ -852,7 +852,7 @@ class TestFeishuInteractionFormatting:
         """Strict questions should still require option-only replies."""
         from unittest.mock import MagicMock, patch
 
-        from xbot.bus.events import OutboundMessage
+        from xbot.platform.bus.events import OutboundMessage
         from xbot.channels.feishu import FeishuChannel, FeishuConfig
 
         config = FeishuConfig(app_id="test", app_secret="test")

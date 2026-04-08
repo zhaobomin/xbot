@@ -4,12 +4,12 @@ import tempfile
 
 import pytest
 
-from xbot.agent.crew.planner.models import (
+from xbot.crew.planner.models import (
     Capability,
     RoleDefinition,
     RoleTier,
 )
-from xbot.agent.crew.planner.utils import (
+from xbot.crew.planner.utils import (
     DependencyTracker,
     LLMResponseParser,
     PlannerValidator,

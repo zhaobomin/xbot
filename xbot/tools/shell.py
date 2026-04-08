@@ -22,7 +22,7 @@ class ExecTool(Tool):
         restrict_to_workspace: bool = False,
         path_append: str = "",
     ):
-        from xbot.config.schema import TimeoutsConfig
+        from xbot.platform.config.schema import TimeoutsConfig
         self.timeout = timeout or int(TimeoutsConfig().shell_exec)
         self.working_dir = Path(working_dir) if working_dir else None
         self.deny_patterns = deny_patterns or [
@@ -157,7 +157,7 @@ class ExecTool(Tool):
             if not any(re.search(p, lower) for p in self.allow_patterns):
                 return "Error: Command blocked by safety guard (not in allowlist)"
 
-        from xbot.security.network import contains_internal_url
+        from xbot.platform.security.network import contains_internal_url
         if contains_internal_url(cmd):
             return "Error: Command blocked by safety guard (internal/private URL detected)"
 

@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from xbot.session.manager import SessionManager
+from xbot.runtime.session.manager import SessionManager
 
 
 @pytest.mark.asyncio

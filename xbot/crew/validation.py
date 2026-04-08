@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from xbot.crew.models import CrewConfig, TaskDefinition
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 @dataclass

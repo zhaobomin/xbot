@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Coroutine
 
 from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 _HEARTBEAT_TOOL = [
@@ -107,7 +107,7 @@ class HeartbeatService:
 
         Returns (action, tasks) where action is 'skip' or 'run'.
         """
-        from xbot.utils.helpers import current_time_str
+        from xbot.platform.utils.helpers import current_time_str
 
         response = None
         for attempt, delay in enumerate((0, 1, 2, 4)):
@@ -188,7 +188,7 @@ class HeartbeatService:
 
     async def _tick(self) -> None:
         """Execute a single heartbeat tick."""
-        from xbot.utils.evaluator import evaluate_response
+        from xbot.platform.utils.evaluator import evaluate_response
 
         content = self._read_heartbeat_file()
         if not content:

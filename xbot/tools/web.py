@@ -16,11 +16,11 @@ from httpx._transports.base import AsyncBaseTransport
 from httpx._transports.default import AsyncResponseStream, map_httpcore_exceptions
 
 from xbot.tools.base import Tool
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 if TYPE_CHECKING:
-    from xbot.config.schema import WebSearchConfig
+    from xbot.platform.config.schema import WebSearchConfig
 
 # Shared constants
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36"
@@ -59,7 +59,7 @@ def _validate_url(url: str) -> tuple[bool, str]:
 
 def _validate_url_safe(url: str) -> tuple[bool, str]:
     """Validate URL with SSRF protection: scheme, domain, and resolved IP check."""
-    from xbot.security.network import validate_url_target
+    from xbot.platform.security.network import validate_url_target
     return validate_url_target(url)
 
 
@@ -194,7 +194,7 @@ class _PinnedAsyncHTTPTransport(AsyncBaseTransport):
 
 
 def _resolve_pinned_host(url: str) -> dict[str, str]:
-    from xbot.security.network import _resolve_host_ips
+    from xbot.platform.security.network import _resolve_host_ips
 
     parsed = urlparse(url)
     hostname = parsed.hostname
@@ -240,7 +240,7 @@ class WebSearchTool(Tool):
         proxy: str | None = None,
         timeout: float | None = None,
     ):
-        from xbot.config.schema import TimeoutsConfig, WebSearchConfig
+        from xbot.platform.config.schema import TimeoutsConfig, WebSearchConfig
 
         self.config = config if config is not None else WebSearchConfig()
         self.proxy = proxy
@@ -405,7 +405,7 @@ class WebFetchTool(Tool):
         web_config: Any | None = None,
         timeout: float | None = None,
     ):
-        from xbot.config.schema import TimeoutsConfig
+        from xbot.platform.config.schema import TimeoutsConfig
 
         self.max_chars = max_chars
         self.proxy = proxy
@@ -518,7 +518,7 @@ class WebFetchTool(Tool):
                     break
 
             if not self.disable_security_checks:
-                from xbot.security.network import validate_resolved_url
+                from xbot.platform.security.network import validate_resolved_url
                 redir_ok, redir_err = validate_resolved_url(str(r.url))
                 if not redir_ok:
                     return json.dumps({"error": f"Redirect blocked: {redir_err}", "url": url}, ensure_ascii=False)

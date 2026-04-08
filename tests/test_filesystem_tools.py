@@ -2,7 +2,7 @@
 
 import pytest
 
-from xbot.agent.tools.filesystem import (
+from xbot.tools.filesystem import (
     EditFileTool,
     ListDirTool,
     ReadFileTool,
@@ -292,7 +292,7 @@ class TestWorkspaceRestriction:
 
     @pytest.mark.asyncio
     async def test_extra_dirs_does_not_widen_write(self, tmp_path):
-        from xbot.agent.tools.filesystem import WriteFileTool
+        from xbot.tools.filesystem import WriteFileTool
 
         workspace = tmp_path / "ws"
         workspace.mkdir()

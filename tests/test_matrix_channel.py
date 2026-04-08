@@ -9,8 +9,8 @@ import pytest
 pytest.importorskip("nio")
 
 import xbot.channels.matrix as matrix_module
-from xbot.bus.events import OutboundMessage
-from xbot.bus.queue import MessageBus
+from xbot.platform.bus.events import OutboundMessage
+from xbot.platform.bus.queue import MessageBus
 from xbot.channels.matrix import (
     MATRIX_HTML_FORMAT,
     TYPING_NOTICE_TIMEOUT_MS,

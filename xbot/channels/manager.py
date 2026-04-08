@@ -6,11 +6,11 @@ import asyncio
 from typing import Any
 
 from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
-from xbot.bus.events import OutboundMessage
-from xbot.bus.queue import MessageBus
+from xbot.platform.bus.events import OutboundMessage
+from xbot.platform.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
-from xbot.config.schema import Config
-from xbot.logging import get_logger
+from xbot.platform.config.schema import Config
+from xbot.platform.logging.core import get_logger
 
 # Deprecated: retry is now handled by each channel's send() implementation.
 # Kept for backward compatibility with external code that may reference them.

@@ -11,9 +11,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from xbot.agent.memory.store import MemoryConsolidator
-from xbot.providers.base import LLMResponse, ToolCallRequest
-from xbot.session.manager import Session, SessionManager
+from xbot.memory.store import MemoryConsolidator
+from xbot.platform.providers.base import LLMResponse, ToolCallRequest
+from xbot.runtime.session.manager import Session, SessionManager
 
 # === Phase 1.1: 新阈值测试 (TDD - 先写测试) ===
 

@@ -217,7 +217,7 @@ def crew_run_dynamic(
     from xbot.crew import CrewOrchestrator
     from xbot.crew.config import CrewConfigLoader
     from xbot.crew.models import parse_crew_config
-    from xbot.cli.commands import InteractivePermissionHandler, _load_runtime_config
+    from xbot.interfaces.cli.commands import InteractivePermissionHandler, _load_runtime_config
 
     # Validate goal length
     if len(goal) > 10000:

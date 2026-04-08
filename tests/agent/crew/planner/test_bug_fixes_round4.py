@@ -17,9 +17,9 @@ from pathlib import Path
 
 import pytest
 
-from xbot.agent.crew.planner.crew_planner import CrewPlanner
-from xbot.agent.crew.planner.goal_analyzer import GoalAnalyzer
-from xbot.agent.crew.planner.models import (
+from xbot.crew.planner.crew_planner import CrewPlanner
+from xbot.crew.planner.goal_analyzer import GoalAnalyzer
+from xbot.crew.planner.models import (
     Capability,
     GoalAnalysis,
     RoleCreationRequest,
@@ -29,8 +29,8 @@ from xbot.agent.crew.planner.models import (
     RoleTier,
     TaskPlan,
 )
-from xbot.agent.crew.planner.role_creator import RoleCreator
-from xbot.agent.crew.planner.task_planner import TaskPlanner
+from xbot.crew.planner.role_creator import RoleCreator
+from xbot.crew.planner.task_planner import TaskPlanner
 
 # =============================================================================
 # Bug #1: None handling in dict.get()
@@ -470,7 +470,7 @@ backstory: ""
 capabilities: []
 """)
 
-            from xbot.agent.crew.planner.role_pool import RolePoolManager
+            from xbot.crew.planner.role_pool import RolePoolManager
             manager = RolePoolManager(RolePoolConfig(custom_roles_dir=tmpdir))
             pool = manager.get_pool()
 

@@ -14,18 +14,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from xbot.agent.client_pool import ClientPool
-from xbot.agent.interaction.response_handlers import RuntimeResponseHandlers
-from xbot.agent.protocol import (
+from xbot.runtime.core.client_pool import ClientPool
+from xbot.interaction.response_handlers import RuntimeResponseHandlers
+from xbot.runtime.core.protocol import (
     AgentContext,
     AgentResponse,
     StructuredLLMResponse,
 )
-from xbot.agent.service import AgentService
-from xbot.agent.state.machine import SessionPhase, SessionStateMachine
-from xbot.agent.types import AgentConfig
-from xbot.bus.events import InboundMessage, OutboundMessage
-from xbot.bus.queue import (
+from xbot.runtime.core.service import AgentService
+from xbot.runtime.state.machine import SessionPhase, SessionStateMachine
+from xbot.runtime.core.types import AgentConfig
+from xbot.platform.bus.events import InboundMessage, OutboundMessage
+from xbot.platform.bus.queue import (
     InteractionRequest,
     InteractionResponse,
     MessageBus,
@@ -601,7 +601,7 @@ class TestSkillsLoaderIntegration:
         return tmp_path
 
     def test_list_skills_finds_all(self, skill_workspace: Path) -> None:
-        from xbot.agent.capabilities.skills_loader import SkillsLoader
+        from xbot.capabilities.skills_loader import SkillsLoader
 
         loader = SkillsLoader(skill_workspace, builtin_skills_dir=skill_workspace / "no_builtin")
         skills = loader.list_skills(filter_unavailable=False)
@@ -612,7 +612,7 @@ class TestSkillsLoaderIntegration:
         assert "internal" in names
 
     def test_list_available_skills_filters_hidden(self, skill_workspace: Path) -> None:
-        from xbot.agent.capabilities.skills_loader import SkillsLoader
+        from xbot.capabilities.skills_loader import SkillsLoader
 
         loader = SkillsLoader(skill_workspace, builtin_skills_dir=skill_workspace / "no_builtin")
         skills = loader.list_available_skills()
@@ -624,7 +624,7 @@ class TestSkillsLoaderIntegration:
         assert "internal" not in names
 
     def test_load_skill_content(self, skill_workspace: Path) -> None:
-        from xbot.agent.capabilities.skills_loader import SkillsLoader
+        from xbot.capabilities.skills_loader import SkillsLoader
 
         loader = SkillsLoader(skill_workspace, builtin_skills_dir=skill_workspace / "no_builtin")
         content = loader.load_skill("weather")
@@ -633,13 +633,13 @@ class TestSkillsLoaderIntegration:
         assert "Fetch weather data" in content
 
     def test_load_skill_not_found(self, skill_workspace: Path) -> None:
-        from xbot.agent.capabilities.skills_loader import SkillsLoader
+        from xbot.capabilities.skills_loader import SkillsLoader
 
         loader = SkillsLoader(skill_workspace, builtin_skills_dir=skill_workspace / "no_builtin")
         assert loader.load_skill("nonexistent") is None
 
     def test_is_model_invocable(self, skill_workspace: Path) -> None:
-        from xbot.agent.capabilities.skills_loader import SkillsLoader
+        from xbot.capabilities.skills_loader import SkillsLoader
 
         loader = SkillsLoader(skill_workspace, builtin_skills_dir=skill_workspace / "no_builtin")
 
@@ -647,7 +647,7 @@ class TestSkillsLoaderIntegration:
         assert loader.is_model_invocable("internal") is False
 
     def test_is_user_invocable(self, skill_workspace: Path) -> None:
-        from xbot.agent.capabilities.skills_loader import SkillsLoader
+        from xbot.capabilities.skills_loader import SkillsLoader
 
         loader = SkillsLoader(skill_workspace, builtin_skills_dir=skill_workspace / "no_builtin")
 
@@ -655,7 +655,7 @@ class TestSkillsLoaderIntegration:
         assert loader.is_user_invocable("internal") is False
 
     def test_is_tool_exposable(self, skill_workspace: Path) -> None:
-        from xbot.agent.capabilities.skills_loader import SkillsLoader
+        from xbot.capabilities.skills_loader import SkillsLoader
 
         loader = SkillsLoader(skill_workspace, builtin_skills_dir=skill_workspace / "no_builtin")
 
@@ -663,7 +663,7 @@ class TestSkillsLoaderIntegration:
         assert loader.is_tool_exposable("cron-job") is False
 
     def test_strip_frontmatter(self, skill_workspace: Path) -> None:
-        from xbot.agent.capabilities.skills_loader import SkillsLoader
+        from xbot.capabilities.skills_loader import SkillsLoader
 
         loader = SkillsLoader(skill_workspace, builtin_skills_dir=skill_workspace / "no_builtin")
         content = "---\nname: test\n---\n# Hello"
@@ -673,7 +673,7 @@ class TestSkillsLoaderIntegration:
         assert "# Hello" in stripped
 
     def test_workspace_overrides_builtin(self, tmp_path: Path) -> None:
-        from xbot.agent.capabilities.skills_loader import SkillsLoader
+        from xbot.capabilities.skills_loader import SkillsLoader
 
         workspace_skills = tmp_path / "skills"
         builtin_skills = tmp_path / "builtin"
@@ -701,8 +701,8 @@ class TestCapabilityCatalogPolicyIntegration:
     """Test CapabilityCatalog and CapabilityPolicy work together."""
 
     def test_policy_allows_builtin_tools(self) -> None:
-        from xbot.agent.capabilities.catalog import CapabilityCatalog
-        from xbot.agent.capabilities.policy import CapabilityPolicy
+        from xbot.capabilities.catalog import CapabilityCatalog
+        from xbot.capabilities.policy import CapabilityPolicy
 
         catalog = CapabilityCatalog(Path("/tmp/nonexistent"))
         policy = CapabilityPolicy(catalog)
@@ -718,8 +718,8 @@ class TestCapabilityCatalogPolicyIntegration:
         assert resolution.dropped == []
 
     def test_policy_drops_unknown_tools(self, tmp_path: Path) -> None:
-        from xbot.agent.capabilities.catalog import CapabilityCatalog
-        from xbot.agent.capabilities.policy import CapabilityPolicy
+        from xbot.capabilities.catalog import CapabilityCatalog
+        from xbot.capabilities.policy import CapabilityPolicy
 
         catalog = CapabilityCatalog(tmp_path)
         policy = CapabilityPolicy(catalog)
@@ -733,8 +733,8 @@ class TestCapabilityCatalogPolicyIntegration:
         assert "totally_unknown_tool" in resolution.dropped
 
     def test_policy_allows_mcp_prefixed_tools(self, tmp_path: Path) -> None:
-        from xbot.agent.capabilities.catalog import CapabilityCatalog
-        from xbot.agent.capabilities.policy import CapabilityPolicy
+        from xbot.capabilities.catalog import CapabilityCatalog
+        from xbot.capabilities.policy import CapabilityPolicy
 
         catalog = CapabilityCatalog(tmp_path)
         policy = CapabilityPolicy(catalog)
@@ -749,8 +749,8 @@ class TestCapabilityCatalogPolicyIntegration:
         assert "mcp_github_issues" in resolution.allowed
 
     def test_policy_allows_skill_tools(self, tmp_path: Path) -> None:
-        from xbot.agent.capabilities.catalog import CapabilityCatalog
-        from xbot.agent.capabilities.policy import CapabilityPolicy
+        from xbot.capabilities.catalog import CapabilityCatalog
+        from xbot.capabilities.policy import CapabilityPolicy
 
         skills_dir = tmp_path / "skills" / "weather"
         skills_dir.mkdir(parents=True)
@@ -1064,7 +1064,7 @@ class TestCrossComponentIntegration:
 
     def test_skills_and_catalog_integration(self, tmp_path: Path) -> None:
         """SkillsLoader feeds CapabilityCatalog correctly."""
-        from xbot.agent.capabilities.catalog import CapabilityCatalog
+        from xbot.capabilities.catalog import CapabilityCatalog
 
         skills_dir = tmp_path / "skills" / "weather"
         skills_dir.mkdir(parents=True)

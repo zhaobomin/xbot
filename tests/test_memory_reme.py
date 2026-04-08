@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from xbot.agent.memory.reme import (
+from xbot.memory.reme import (
     _REME_AVAILABLE,
     ReMeMemoryStore,
     create_memory_store,

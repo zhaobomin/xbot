@@ -2,8 +2,8 @@
 
 import pytest
 
-from xbot.agent.interaction.permission import BasePermissionHandler
-from xbot.agent.interaction.response_parser import normalize_validation_mode
+from xbot.interaction.permission import BasePermissionHandler
+from xbot.interaction.response_parser import normalize_validation_mode
 
 
 class TestParseAnswers:

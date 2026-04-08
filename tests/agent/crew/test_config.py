@@ -7,20 +7,20 @@ from pathlib import Path
 
 import pytest
 
-from xbot.agent.crew.config.loader import (
+from xbot.crew.config.loader import (
     ConfigLoadError,
     CrewConfigLoader,
 )
-from xbot.agent.crew.config.merger import (
+from xbot.crew.config.merger import (
     check_inheritance_cycle,
     merge_agent_roles,
     merge_configs,
     merge_tasks,
 )
-from xbot.agent.crew.config.validator import (
+from xbot.crew.config.validator import (
     validate_crew_config,
 )
-from xbot.agent.crew.config.variables import (
+from xbot.crew.config.variables import (
     VariableError,
     VariableResolver,
 )
@@ -577,8 +577,8 @@ tasks:
     # BUG-2: OutputFormat enum duplicate definition
     def test_output_format_import_consistency(self):
         """Test that OutputFormat is consistent across modules (BUG-2)."""
-        from xbot.agent.crew.models import OutputFormat as ModelsOutputFormat
-        from xbot.agent.crew.output.format import OutputFormat as FormatOutputFormat
+        from xbot.crew.models import OutputFormat as ModelsOutputFormat
+        from xbot.crew.output.format import OutputFormat as FormatOutputFormat
 
         # Should be the same class
         assert ModelsOutputFormat is FormatOutputFormat

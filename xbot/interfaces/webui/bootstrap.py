@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from xbot.bus.queue import MessageBus
+from xbot.platform.bus.queue import MessageBus
 from xbot.channels.manager import ChannelManager
-from xbot.config.loader import save_config
-from xbot.cron.service import CronService
-from xbot.heartbeat.service import HeartbeatService
-from xbot.session.manager import SessionManager
+from xbot.platform.config.loader import save_config
+from xbot.runtime.system.cron.service import CronService
+from xbot.runtime.system.heartbeat.service import HeartbeatService
+from xbot.runtime.session.manager import SessionManager
 from xbot.interfaces.webui.services import ServiceContainer
 
 

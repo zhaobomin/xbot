@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from xbot.bus.queue import MessageBus
+from xbot.platform.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
 from xbot.channels.manager import ChannelManager
 
@@ -225,7 +225,7 @@ class TestChannelManagerProgressFiltering:
 
         task = asyncio.create_task(manager._dispatch_outbound())
         try:
-            from xbot.bus.events import OutboundMessage
+            from xbot.platform.bus.events import OutboundMessage
 
             await bus.publish_outbound(
                 OutboundMessage(
@@ -255,7 +255,7 @@ class TestChannelManagerProgressFiltering:
 
         task = asyncio.create_task(manager._dispatch_outbound())
         try:
-            from xbot.bus.events import OutboundMessage
+            from xbot.platform.bus.events import OutboundMessage
 
             await bus.publish_outbound(
                 OutboundMessage(
@@ -285,7 +285,7 @@ class TestChannelManagerProgressFiltering:
 
         task = asyncio.create_task(manager._dispatch_outbound())
         try:
-            from xbot.bus.events import OutboundMessage
+            from xbot.platform.bus.events import OutboundMessage
 
             await bus.publish_outbound(
                 OutboundMessage(
@@ -315,7 +315,7 @@ class TestChannelManagerProgressFiltering:
 
         task = asyncio.create_task(manager._dispatch_outbound())
         try:
-            from xbot.bus.events import OutboundMessage
+            from xbot.platform.bus.events import OutboundMessage
 
             await bus.publish_outbound(
                 OutboundMessage(
@@ -346,7 +346,7 @@ class TestChannelManagerProgressFiltering:
 
         task = asyncio.create_task(manager._dispatch_outbound())
         try:
-            from xbot.bus.events import OutboundMessage
+            from xbot.platform.bus.events import OutboundMessage
 
             await bus.publish_outbound(
                 OutboundMessage(
@@ -377,7 +377,7 @@ class TestChannelManagerProgressFiltering:
 
         task = asyncio.create_task(manager._dispatch_outbound())
         try:
-            from xbot.bus.events import OutboundMessage
+            from xbot.platform.bus.events import OutboundMessage
 
             await bus.publish_outbound(
                 OutboundMessage(
@@ -406,7 +406,7 @@ class TestChannelManagerProgressFiltering:
 
         task = asyncio.create_task(manager._dispatch_outbound())
         try:
-            from xbot.bus.events import OutboundMessage
+            from xbot.platform.bus.events import OutboundMessage
 
             await bus.publish_outbound(
                 OutboundMessage(
@@ -435,7 +435,7 @@ class TestChannelManagerProgressFiltering:
 
         task = asyncio.create_task(manager._dispatch_outbound())
         try:
-            from xbot.bus.events import OutboundMessage
+            from xbot.platform.bus.events import OutboundMessage
 
             await bus.publish_outbound(
                 OutboundMessage(
@@ -466,7 +466,7 @@ class TestChannelManagerProgressFiltering:
 
         task = asyncio.create_task(manager._dispatch_outbound())
         try:
-            from xbot.bus.events import OutboundMessage
+            from xbot.platform.bus.events import OutboundMessage
 
             await bus.publish_outbound(
                 OutboundMessage(
@@ -495,7 +495,7 @@ class TestChannelManagerProgressFiltering:
 
         task = asyncio.create_task(manager._dispatch_outbound())
         try:
-            from xbot.bus.events import OutboundMessage
+            from xbot.platform.bus.events import OutboundMessage
 
             await bus.publish_outbound(
                 OutboundMessage(
@@ -526,7 +526,7 @@ class TestChannelManagerProgressFiltering:
 
         task = asyncio.create_task(manager._dispatch_outbound())
         try:
-            from xbot.bus.events import OutboundMessage
+            from xbot.platform.bus.events import OutboundMessage
 
             await bus.publish_outbound(
                 OutboundMessage(
@@ -558,7 +558,7 @@ class TestChannelManagerProgressFiltering:
 
         task = asyncio.create_task(manager._dispatch_outbound())
         try:
-            from xbot.bus.events import OutboundMessage
+            from xbot.platform.bus.events import OutboundMessage
 
             events = [
                 ("content_delta", False, "delta chunk"),

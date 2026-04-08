@@ -7,9 +7,9 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
-from xbot.agent.tools.mcp import MCPToolWrapper, connect_mcp_servers
-from xbot.agent.tools.registry import ToolRegistry
-from xbot.config.schema import MCPServerConfig
+from xbot.tools.mcp import MCPToolWrapper, connect_mcp_servers
+from xbot.tools.registry import ToolRegistry
+from xbot.platform.config.schema import MCPServerConfig
 
 
 class _FakeTextContent:
@@ -263,7 +263,7 @@ async def test_connect_mcp_servers_enabled_tools_warns_on_unknown_entries(
     def _warning(message: str, *args: object) -> None:
         warnings.append(message % args if args else message)
 
-    monkeypatch.setattr("xbot.agent.tools.mcp.logger.warning", _warning)
+    monkeypatch.setattr("xbot.tools.mcp.logger.warning", _warning)
 
     stack = AsyncExitStack()
     await stack.__aenter__()
@@ -316,7 +316,7 @@ async def test_connect_mcp_servers_suppresses_known_sse_close_bug(
 ) -> None:
     fake_mcp_runtime["session"] = _make_fake_session(["demo"])
 
-    from xbot.agent.tools import mcp as mcp_module
+    from xbot.tools import mcp as mcp_module
 
     original_connect = mcp_module._connect_single_mcp_server
 

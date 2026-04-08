@@ -6,7 +6,7 @@ import asyncio
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 

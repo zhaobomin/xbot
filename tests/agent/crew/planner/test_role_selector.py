@@ -2,7 +2,7 @@
 
 import pytest
 
-from xbot.agent.crew.planner.models import (
+from xbot.crew.planner.models import (
     Capability,
     GoalAnalysis,
     RoleDefinition,
@@ -11,7 +11,7 @@ from xbot.agent.crew.planner.models import (
     RoleSelection,
     RoleTier,
 )
-from xbot.agent.crew.planner.role_selector import RoleSelector
+from xbot.crew.planner.role_selector import RoleSelector
 
 
 class TestRoleSelectorInit:

@@ -5,8 +5,8 @@ from pathlib import Path
 
 import pytest
 
-from xbot.agent.crew.planner.config_generator import ConfigGenerator
-from xbot.agent.crew.planner.models import (
+from xbot.crew.planner.config_generator import ConfigGenerator
+from xbot.crew.planner.models import (
     Capability,
     CrewPlan,
     GoalAnalysis,

@@ -3,8 +3,8 @@ from email.message import EmailMessage
 
 import pytest
 
-from xbot.bus.events import OutboundMessage
-from xbot.bus.queue import MessageBus
+from xbot.platform.bus.events import OutboundMessage
+from xbot.platform.bus.queue import MessageBus
 from xbot.channels.email import EmailChannel, EmailConfig
 
 

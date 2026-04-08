@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 import xbot.channels.dingtalk as dingtalk_module
-from xbot.bus.queue import MessageBus
+from xbot.platform.bus.queue import MessageBus
 from xbot.channels.dingtalk import DingTalkChannel, DingTalkConfig, NanobotDingTalkHandler
 
 
@@ -200,7 +200,7 @@ async def test_download_dingtalk_file(tmp_path, monkeypatch) -> None:
 
     # Redirect media dir to tmp_path
     monkeypatch.setattr(
-        "xbot.config.paths.get_media_dir",
+        "xbot.platform.config.paths.get_media_dir",
         lambda channel_name=None: tmp_path / channel_name if channel_name else tmp_path,
     )
 
@@ -239,7 +239,7 @@ async def test_download_dingtalk_file_sanitizes_filename(tmp_path, monkeypatch, 
     channel._http = _FakeHttp(responses=[_FakeResponse(200, {"downloadUrl": "https://example.com/tmpfile"}), _FakeResponse(200)])
     channel._http._responses[1].content = b"safe file"
     monkeypatch.setattr(
-        "xbot.config.paths.get_media_dir",
+        "xbot.platform.config.paths.get_media_dir",
         lambda channel_name=None: tmp_path / channel_name if channel_name else tmp_path,
     )
 

@@ -11,7 +11,7 @@ from enum import Enum
 from typing import Callable
 
 from xbot.crew.models import TaskDefinition
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 # ---------------------------------------------------------------------------
 # Crew-level states

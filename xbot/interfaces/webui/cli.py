@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import typer
 
-from xbot.logging import configure_logging
+from xbot.platform.logging.core import configure_logging
 from xbot.interfaces.webui.app import create_app
 from xbot.interfaces.webui.auth import (
     print_reset_password_banner,
@@ -27,7 +27,7 @@ def serve(
     """Start the standalone WebUI adapter."""
     import uvicorn
 
-    from xbot.cli.commands import _load_runtime_config, _make_agent_runtime
+    from xbot.interfaces.cli.commands import _load_runtime_config, _make_agent_runtime
 
     configure_logging(level="DEBUG" if verbose else "INFO")
     loaded = _load_runtime_config(config, workspace)

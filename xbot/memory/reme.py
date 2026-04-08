@@ -16,8 +16,8 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from xbot.logging import get_logger
-from xbot.utils.helpers import ensure_dir
+from xbot.platform.logging.core import get_logger
+from xbot.platform.utils.helpers import ensure_dir
 
 logger = get_logger(__name__)
 if TYPE_CHECKING:

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from xbot.agent.capabilities.skills_loader import SkillsLoader
+from xbot.capabilities.skills_loader import SkillsLoader
 
 
 class TestSkillsLoader:

@@ -8,8 +8,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from xbot.agent.service import AgentService
-from xbot.agent.types import AgentConfig
+from xbot.runtime.core.service import AgentService
+from xbot.runtime.core.types import AgentConfig
 
 
 class TestAgentServiceAsRouter:

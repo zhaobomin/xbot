@@ -16,7 +16,7 @@ from xbot.crew.planner.models import Capability, GoalAnalysis
 from xbot.crew.planner.prompts import GOAL_ANALYSIS_PROMPT
 from xbot.crew.planner.utils import LLMResponseParser
 from xbot.crew.planner.validators import LLMValidator
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 

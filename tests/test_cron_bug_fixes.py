@@ -11,8 +11,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from xbot.cron.service import CronService, _now_ms
-from xbot.cron.types import CronSchedule, CronStore
+from xbot.runtime.system.cron.service import CronService, _now_ms
+from xbot.runtime.system.cron.types import CronSchedule, CronStore
 
 
 class TestCronCorruptedFileProtection:

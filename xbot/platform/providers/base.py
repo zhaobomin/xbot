@@ -6,8 +6,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any
 
-from xbot.logging import get_logger
-from xbot.utils.retry import RetryPolicy, run_with_retry
+from xbot.platform.logging.core import get_logger
+from xbot.platform.utils.retry import RetryPolicy, run_with_retry
 
 logger = get_logger(__name__)
 

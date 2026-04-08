@@ -2,8 +2,8 @@
 
 import pytest
 
-from xbot.agent.crew.planner.goal_analyzer import GoalAnalyzer
-from xbot.agent.crew.planner.models import Capability, GoalAnalysis
+from xbot.crew.planner.goal_analyzer import GoalAnalyzer
+from xbot.crew.planner.models import Capability, GoalAnalysis
 
 
 class TestGoalAnalyzerInit:

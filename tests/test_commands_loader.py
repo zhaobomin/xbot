@@ -3,7 +3,7 @@
 import tempfile
 from pathlib import Path
 
-from xbot.agent.context.commands import CommandsLoader
+from xbot.runtime.core.context.commands import CommandsLoader
 
 
 class TestCommandsLoader:

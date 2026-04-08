@@ -20,7 +20,7 @@ from xbot.crew.planner.models import (
 from xbot.crew.planner.role_pool import RolePoolManager
 from xbot.crew.planner.role_selector import RoleSelector
 from xbot.crew.planner.task_planner import TaskPlanner
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 

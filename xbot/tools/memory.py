@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from xbot.tools.base import Tool
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 

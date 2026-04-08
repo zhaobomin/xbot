@@ -1,6 +1,6 @@
 """Tests for SkillsConfig and PluginsConfig."""
 
-from xbot.config.schema import Config, PluginsConfig, SkillsConfig
+from xbot.platform.config.schema import Config, PluginsConfig, SkillsConfig
 
 
 class TestSkillsConfig:

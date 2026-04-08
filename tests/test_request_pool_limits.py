@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from xbot.bus.queue import (
+from xbot.platform.bus.queue import (
     REQUEST_TIMEOUT_SECONDS,
     InteractionRequest,
     InteractionResponse,

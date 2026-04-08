@@ -10,7 +10,7 @@ import httpx
 from xbot.runtime.core.mcp_config import resolve_mcp_server_config
 from xbot.tools.base import Tool
 from xbot.tools.registry import ToolRegistry
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 class MCPToolTimeoutError(Exception):
@@ -36,7 +36,7 @@ class MCPToolWrapper(Tool):
     """Wraps a single MCP server tool as an xbot Tool."""
 
     def __init__(self, session, server_name: str, tool_def, tool_timeout: int | None = None):
-        from xbot.config.schema import TimeoutsConfig
+        from xbot.platform.config.schema import TimeoutsConfig
         self._session = session
         self._original_name = tool_def.name
         self._name = f"mcp_{server_name}_{tool_def.name}"

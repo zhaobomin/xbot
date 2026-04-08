@@ -7,7 +7,7 @@ import pytest
 
 @pytest.mark.asyncio
 async def test_service_task_registry_unregisters_completed_tasks_and_reports_errors() -> None:
-    from xbot.agent.task_supervisor import ServiceTaskRegistry
+    from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
 
     seen: list[tuple[str, str, str]] = []
     registry = ServiceTaskRegistry(
@@ -27,7 +27,7 @@ async def test_service_task_registry_unregisters_completed_tasks_and_reports_err
 
 @pytest.mark.asyncio
 async def test_service_task_registry_cancels_owner_tasks() -> None:
-    from xbot.agent.task_supervisor import ServiceTaskRegistry
+    from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
 
     registry = ServiceTaskRegistry()
     cancelled = False
@@ -52,7 +52,7 @@ async def test_service_task_registry_cancels_owner_tasks() -> None:
 @pytest.mark.asyncio
 async def test_service_task_registry_error_reporter_receives_all_exception_types() -> None:
     """Test that error reporter receives various exception types correctly."""
-    from xbot.agent.task_supervisor import ServiceTaskRegistry
+    from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
 
     seen: list[tuple[str, str, str]] = []
     registry = ServiceTaskRegistry(
@@ -85,7 +85,7 @@ async def test_service_task_registry_error_reporter_receives_all_exception_types
 @pytest.mark.asyncio
 async def test_service_task_registry_cancel_all_terminates_all_owners() -> None:
     """Test that cancel_all cancels tasks for all owners."""
-    from xbot.agent.task_supervisor import ServiceTaskRegistry
+    from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
 
     registry = ServiceTaskRegistry()
     cancelled_counts = {"owner-a": 0, "owner-b": 0}
@@ -116,7 +116,7 @@ async def test_service_task_registry_cancel_all_terminates_all_owners() -> None:
 @pytest.mark.asyncio
 async def test_service_task_registry_concurrent_spawn_and_cancel() -> None:
     """Test concurrent spawning and cancellation doesn't cause race conditions."""
-    from xbot.agent.task_supervisor import ServiceTaskRegistry
+    from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
 
     registry = ServiceTaskRegistry()
     spawned_count = 0
@@ -152,7 +152,7 @@ async def test_service_task_registry_concurrent_spawn_and_cancel() -> None:
 @pytest.mark.asyncio
 async def test_service_task_registry_cancelled_error_not_reported() -> None:
     """Test that CancelledError is not reported to error_reporter."""
-    from xbot.agent.task_supervisor import ServiceTaskRegistry
+    from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
 
     reported: list[str] = []
     registry = ServiceTaskRegistry(
@@ -176,7 +176,7 @@ async def test_service_task_registry_cancelled_error_not_reported() -> None:
 @pytest.mark.asyncio
 async def test_service_task_registry_cancel_nonexistent_owner_is_noop() -> None:
     """Test that cancelling a non-existent owner doesn't raise."""
-    from xbot.agent.task_supervisor import ServiceTaskRegistry
+    from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
 
     registry = ServiceTaskRegistry()
 
@@ -189,7 +189,7 @@ async def test_service_task_registry_cancel_nonexistent_owner_is_noop() -> None:
 @pytest.mark.asyncio
 async def test_service_task_registry_multiple_owners_isolated() -> None:
     """Test that tasks from different owners are properly isolated."""
-    from xbot.agent.task_supervisor import ServiceTaskRegistry
+    from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
 
     registry = ServiceTaskRegistry()
     results = {"owner-a": [], "owner-b": []}

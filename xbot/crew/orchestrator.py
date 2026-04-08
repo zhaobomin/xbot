@@ -15,8 +15,8 @@ from xbot.crew.resource_manager import CrewResourceManager
 from xbot.crew.state import CrewPhase, CrewStateManager, TaskPhase
 from xbot.crew.validation import CrewValidator
 from xbot.interaction.permission import BasePermissionHandler
-from xbot.config.schema import Config
-from xbot.logging import get_logger
+from xbot.platform.config.schema import Config
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 class CrewOrchestrator:

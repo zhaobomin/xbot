@@ -8,7 +8,7 @@ from contextlib import asynccontextmanager
 from typing import TYPE_CHECKING, Any
 
 from xbot.runtime.state.machine import VALID_TRANSITIONS, SessionPhase, SessionState
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeSDKClient

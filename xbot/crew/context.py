@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from xbot.crew.models import AgentRole, CrewConfig, TaskDefinition, TaskResult
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 class CrewExecutionContext:

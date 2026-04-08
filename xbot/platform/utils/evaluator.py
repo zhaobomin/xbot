@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, Awaitable, Callable
 
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 

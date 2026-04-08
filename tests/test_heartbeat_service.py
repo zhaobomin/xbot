@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from xbot.heartbeat.service import HeartbeatService
-from xbot.providers.base import LLMResponse, ToolCallRequest
+from xbot.runtime.system.heartbeat.service import HeartbeatService
+from xbot.platform.providers.base import LLMResponse, ToolCallRequest
 
 
 class DummyCaller:
@@ -177,7 +177,7 @@ async def test_tick_notifies_when_evaluator_says_yes(tmp_path, monkeypatch) -> N
     async def _eval_notify(*a, **kw):
         return True
 
-    monkeypatch.setattr("xbot.utils.evaluator.evaluate_response", _eval_notify)
+    monkeypatch.setattr("xbot.platform.utils.evaluator.evaluate_response", _eval_notify)
 
     await service._tick()
     assert executed == ["check deployments"]
@@ -222,7 +222,7 @@ async def test_tick_suppresses_when_evaluator_says_no(tmp_path, monkeypatch) -> 
     async def _eval_silent(*a, **kw):
         return False
 
-    monkeypatch.setattr("xbot.utils.evaluator.evaluate_response", _eval_silent)
+    monkeypatch.setattr("xbot.platform.utils.evaluator.evaluate_response", _eval_silent)
 
     await service._tick()
     assert executed == ["check status"]

@@ -9,9 +9,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Generator
 
-from xbot.config.paths import get_legacy_sessions_dir
-from xbot.logging import get_logger
-from xbot.utils.helpers import ensure_dir, safe_filename
+from xbot.platform.config.paths import get_legacy_sessions_dir
+from xbot.platform.logging.core import get_logger
+from xbot.platform.utils.helpers import ensure_dir, safe_filename
 
 logger = get_logger(__name__)
 try:

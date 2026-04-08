@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import pytest
 
-from xbot.agent.tools.filesystem import ReadFileTool
+from xbot.tools.filesystem import ReadFileTool
 
 
 @pytest.mark.asyncio

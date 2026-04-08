@@ -16,7 +16,7 @@ import asyncio
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 
@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from xbot.crew.process import BaseProcess
     from xbot.crew.state import CrewStateManager
     from xbot.interaction.permission import BasePermissionHandler
-    from xbot.config.schema import Config
+    from xbot.platform.config.schema import Config
 
 
 class CrewResourceManager:

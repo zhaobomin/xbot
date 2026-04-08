@@ -13,7 +13,7 @@ from xbot.crew.planner.models import (
 )
 from xbot.crew.planner.prompts import ROLE_SELECTION_PROMPT
 from xbot.crew.planner.utils import LLMResponseParser
-from xbot.logging import get_logger
+from xbot.platform.logging.core import get_logger
 
 if TYPE_CHECKING:
     from xbot.crew.planner.role_creator import RoleCreator
