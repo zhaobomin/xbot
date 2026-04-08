@@ -63,6 +63,40 @@ class PermissionConfig(Base):
     ]
 
 
+class ClaudeSDKMemorySettings(Base):
+    """Claude SDK settings payload for memory-related features."""
+
+    auto_memory_enabled: bool | None = None
+    auto_memory_directory: str | None = None
+    claude_md_excludes: list[str] = Field(default_factory=list)
+
+
+class ClaudeSDKSettingSourcesConfig(Base):
+    """SDK setting_sources by runtime mode."""
+
+    cli: list[Literal["user", "project", "local"]] = Field(
+        default_factory=lambda: ["user", "project", "local"]
+    )
+    gateway: list[Literal["user", "project", "local"]] = Field(
+        default_factory=lambda: ["user", "project", "local"]
+    )
+
+
+class ClaudeSDKMemoryIntegrationConfig(Base):
+    """Claude SDK memory integration strategy."""
+
+    mode: Literal["off", "auto", "on"] = "auto"
+    setting_sources: ClaudeSDKSettingSourcesConfig = Field(default_factory=ClaudeSDKSettingSourcesConfig)
+    sdk_settings: ClaudeSDKMemorySettings = Field(default_factory=ClaudeSDKMemorySettings)
+
+
+class ClaudeSDKSystemPromptStrategyConfig(Base):
+    """Claude SDK system prompt strategy."""
+
+    preset: Literal["xbot", "claude_code"] = "xbot"
+    append_xbot_prompt: bool = True
+
+
 class ClaudeSDKAgentConfig(Base):
     """Claude SDK Agent 特有配置.
 
@@ -84,6 +118,10 @@ class ClaudeSDKAgentConfig(Base):
     # Memory consolidation 策略："off"=禁用，"async"=异步后台，"sync"=同步阻塞
     # 默认禁用，避免异步任务阻塞和 ReMe 初始化超时问题。需要时可手动启用 "async"
     memory_consolidation_mode: Literal["off", "async", "sync"] = "off"
+    memory_integration: ClaudeSDKMemoryIntegrationConfig = Field(default_factory=ClaudeSDKMemoryIntegrationConfig)
+    system_prompt_strategy: ClaudeSDKSystemPromptStrategyConfig = Field(
+        default_factory=ClaudeSDKSystemPromptStrategyConfig
+    )
 
     # Client pool configuration
     max_clients: int = Field(default=100, description="Maximum number of concurrent SDK clients in the pool")

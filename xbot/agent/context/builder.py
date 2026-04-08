@@ -29,6 +29,7 @@ class ContextBuilder:
         workspace: Path,
         use_reme: bool = True,
         llm_config: dict[str, Any] | None = None,
+        embedding_config: dict[str, Any] | None = None,
         enable_vector_search: bool = False,
     ):
         """Initialize context builder.
@@ -37,6 +38,7 @@ class ContextBuilder:
             workspace: Workspace directory
             use_reme: Use ReMe memory backend if available
             llm_config: LLM configuration for memory summarization
+            embedding_config: Embedding configuration for memory vectorization
             enable_vector_search: Enable vector-based memory search
         """
         self.workspace = workspace
@@ -60,6 +62,7 @@ class ContextBuilder:
             self.memory: "ReMeMemoryStore | MemoryStore" = reme_store_cls(
                 workspace=workspace,
                 llm_config=llm_config,
+                embedding_config=embedding_config,
                 enable_vector_search=enable_vector_search,
             )
             self._using_reme = True

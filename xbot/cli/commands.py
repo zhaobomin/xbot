@@ -624,6 +624,7 @@ def _make_agent_service(
     session_manager,
     state_manager=None,
     permission_handler=None,
+    run_mode: str = "cli",
 ):
     """Create the unified agent service."""
     from xbot.agent.types import AgentConfig
@@ -642,6 +643,7 @@ def _make_agent_service(
         "session_manager": session_manager,
         "config": config,
         "tools_config": config.tools,
+        "run_mode": run_mode,
     }
     if state_manager is not None:
         shared_resources["state_manager"] = state_manager
@@ -726,6 +728,7 @@ def gateway(
         session_manager=session_manager,
         state_manager=state_manager,
         permission_handler=permission_handler,
+        run_mode="gateway",
     )
 
     # Set cron callback (needs agent)
@@ -964,6 +967,7 @@ def agent(
         session_manager=None,
         state_manager=state_manager,
         permission_handler=_permission_handler,
+        run_mode="cli",
     )
 
     # For interactive mode, set spinner reference on permission handler

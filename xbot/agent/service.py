@@ -7,6 +7,9 @@ combining the core logic from ClaudeSDKBackend and AgentRuntime.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
+import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
@@ -15,7 +18,9 @@ from xbot.agent.capabilities.catalog import CapabilityCatalog, canonical_tool_na
 from xbot.agent.capabilities.handoff import HandoffPolicy
 from xbot.agent.client_pool import ClientPool
 from xbot.agent.command_handlers import LocalCommandHandler
+from xbot.agent.context.builder import ContextBuilder
 from xbot.agent.interaction.event_formatter import format_rate_limit_event, format_task_notification
+from xbot.agent.memory.store import MemoryConsolidator
 from xbot.agent.protocol import AgentContext, AgentResponse, StructuredLLMResponse, ToolCall
 from xbot.agent.state.machine import SessionPhase
 from xbot.agent.types import AgentConfig
@@ -97,6 +102,10 @@ class AgentService:
         self._command_handler: LocalCommandHandler | None = None
         self._active_tasks: dict[str, asyncio.Task] = {}
         self._direct_progress_callbacks: dict[str, ProgressCallback] = {}
+        self._context_builder: ContextBuilder | None = None
+        self._memory_consolidator: MemoryConsolidator | None = None
+        self._sdk_settings_file: str | None = None
+        self._async_consolidation_tasks: set[asyncio.Task] = set()
 
         # For backward compatibility with AgentRuntime interface
         self._pending_config = config
@@ -139,6 +148,51 @@ class AgentService:
         # Initialize handoff policy for SDK subagent observability
         agents_config = getattr(self._config, "agents", None)
         self._handoff_policy = HandoffPolicy(agents_config)
+
+        runtime_config = self._shared_resources.get("config")
+        workspace_path = Path(self._shared_resources.get("workspace", ".")).expanduser().resolve()
+        sessions = self._shared_resources.get("session_manager")
+        if sessions is None:
+            from xbot.session.manager import SessionManager
+
+            sessions = SessionManager(workspace_path)
+            self._shared_resources["session_manager"] = sessions
+
+        # Restore ReMe main chain wiring (v0.3.37 behavior): ContextBuilder + MemoryConsolidator
+        if runtime_config:
+            memory_cfg = getattr(getattr(runtime_config, "tools", None), "memory", None)
+            memory_provider = getattr(memory_cfg, "provider", "file")
+            use_reme = memory_provider == "reme"
+            enable_vector_search = bool(getattr(memory_cfg, "enable_vector_search", False))
+
+            llm_model = getattr(memory_cfg, "llm_model", None)
+            embedding_model = getattr(memory_cfg, "embedding_model", None)
+            llm_config = {"model_name": llm_model} if llm_model else None
+            embedding_config = {"model_name": embedding_model} if embedding_model else None
+
+            self._context_builder = ContextBuilder(
+                workspace=workspace_path,
+                use_reme=use_reme,
+                llm_config=llm_config,
+                embedding_config=embedding_config,
+                enable_vector_search=enable_vector_search,
+            )
+
+            # Ensure MemoryTool shares the same memory store as ContextBuilder.
+            self._shared_resources["memory_store"] = self._context_builder.memory
+
+            if sessions is not None:
+                self._memory_consolidator = MemoryConsolidator(
+                    workspace=workspace_path,
+                    backend=self,
+                    sessions=sessions,
+                    context_window_tokens=getattr(runtime_config.agents.defaults, "context_window_tokens", 65_536),
+                    build_messages=self._context_builder.build_messages,
+                    get_tool_definitions=self._get_tool_definitions,
+                    memory_store=self._context_builder.memory,
+                )
+
+            self._log_memory_runtime_config(runtime_config)
 
         # Initialize tool adapter for built-in tools (cron, message, etc.)
         self._init_tool_adapter()
@@ -248,6 +302,13 @@ class AgentService:
             return
 
         logger.info("AgentService shutting down...")
+
+        # Cancel background consolidation tasks.
+        if self._async_consolidation_tasks:
+            for task in list(self._async_consolidation_tasks):
+                task.cancel()
+            await asyncio.gather(*self._async_consolidation_tasks, return_exceptions=True)
+            self._async_consolidation_tasks.clear()
 
         # Disconnect all clients
         await self._client_pool.disconnect_all()
@@ -507,6 +568,11 @@ class AgentService:
 
         return await self._client_pool.get_or_create(session_key, options=options)
 
+    @staticmethod
+    def _get_tool_definitions() -> list[dict[str, Any]]:
+        """Return tool definitions for memory token estimation."""
+        return []
+
     def _build_sdk_options(self) -> Any:
         """Build ClaudeAgentOptions from configuration."""
         from claude_agent_sdk import ClaudeAgentOptions
@@ -527,6 +593,7 @@ class AgentService:
         # Read SDK-specific config for additional parameters
         config = self._shared_resources.get("config")
         sdk_config = getattr(getattr(config, "agents", None), "claude_sdk", None) if config else None
+        run_mode = str(self._shared_resources.get("run_mode", "cli")).lower()
 
         # Build hooks (compact notification, etc.)
         hooks = self._build_hooks(sdk_config)
@@ -539,17 +606,22 @@ class AgentService:
         max_turns = getattr(sdk_config, "max_turns", 40) if sdk_config else 40
         permission_mode = getattr(sdk_config, "permission_mode", "acceptEdits") if sdk_config else "acceptEdits"
         disallowed_tools = getattr(sdk_config, "disallowed_tools", ["WebFetch", "WebSearch"]) if sdk_config else ["WebFetch", "WebSearch"]
+        setting_sources = self._resolve_setting_sources(sdk_config, run_mode)
+        settings_file = self._build_sdk_settings_file(sdk_config, workspace_expanded)
+        system_prompt = self._resolve_system_prompt(sdk_config)
 
         options = ClaudeAgentOptions(
             cwd=workspace_expanded,
             model=self._config.model,
-            system_prompt=self._config.system_prompt,
+            system_prompt=system_prompt,
             mcp_servers=mcp_servers if mcp_servers else None,
             agents=agents,
             env=env,
             max_turns=max_turns,
             permission_mode=permission_mode,
             disallowed_tools=disallowed_tools,
+            setting_sources=setting_sources,
+            settings=settings_file,
             hooks=hooks,
             # Capture CLI stderr for debugging
             stderr=lambda line: logger.warning(f"[CLI stderr] {line}"),
@@ -557,9 +629,140 @@ class AgentService:
         logger.info(
             f"[AgentService] SDK options: model={options.model}, cwd={workspace_expanded}, "
             f"max_turns={max_turns}, permission_mode={permission_mode}, "
+            f"run_mode={run_mode}, setting_sources={setting_sources}, "
             f"env keys={list(options.env.keys()) if options.env else 'None'}"
         )
         return options
+
+    def _resolve_setting_sources(self, sdk_config: Any, run_mode: str) -> list[str] | None:
+        """Resolve SDK setting_sources based on memory integration mode and run mode."""
+        memory_integration = getattr(sdk_config, "memory_integration", None) if sdk_config else None
+        if isinstance(memory_integration, dict):
+            mode = memory_integration.get("mode", "auto")
+            sources_cfg = memory_integration.get("setting_sources", {})
+            key = "gateway" if run_mode == "gateway" else "cli"
+            if mode == "off":
+                return None
+            return list(sources_cfg.get(key, ["user", "project", "local"]))
+
+        mode = getattr(memory_integration, "mode", "auto")
+        if not isinstance(mode, str):
+            mode = "auto"
+        if mode == "off":
+            return None
+
+        sources_cfg = getattr(memory_integration, "setting_sources", None)
+        if sources_cfg is None:
+            return ["user", "project", "local"]
+
+        source_list = (
+            getattr(sources_cfg, "gateway", ["user", "project", "local"])
+            if run_mode == "gateway"
+            else getattr(sources_cfg, "cli", ["user", "project", "local"])
+        )
+        return list(source_list) if isinstance(source_list, (list, tuple)) else ["user", "project", "local"]
+
+    def _resolve_system_prompt(self, sdk_config: Any) -> Any:
+        """Resolve SDK system_prompt using xbot or claude_code preset strategy."""
+        strategy = getattr(sdk_config, "system_prompt_strategy", None) if sdk_config else None
+        if isinstance(strategy, dict):
+            preset = strategy.get("preset", "xbot")
+            append_xbot_prompt = bool(strategy.get("append_xbot_prompt", True))
+        else:
+            preset = getattr(strategy, "preset", "xbot")
+            append_xbot_prompt = bool(getattr(strategy, "append_xbot_prompt", True))
+        xbot_prompt = self._config.system_prompt if self._config else ""
+        if not xbot_prompt and self._context_builder is not None:
+            xbot_prompt = self._context_builder.build_system_prompt()
+
+        if preset == "claude_code":
+            payload: dict[str, Any] = {"type": "preset", "preset": "claude_code"}
+            if append_xbot_prompt and xbot_prompt:
+                payload["append"] = xbot_prompt
+            return payload
+
+        return xbot_prompt
+
+    def _build_sdk_settings_file(self, sdk_config: Any, workspace: str) -> str | None:
+        """Generate temp SDK settings file for memory integration settings."""
+        memory_integration = getattr(sdk_config, "memory_integration", None) if sdk_config else None
+        if isinstance(memory_integration, dict):
+            mode = memory_integration.get("mode", "auto")
+            sdk_settings = memory_integration.get("sdk_settings")
+        else:
+            mode = getattr(memory_integration, "mode", "auto")
+            sdk_settings = getattr(memory_integration, "sdk_settings", None)
+        if not isinstance(mode, str):
+            mode = "auto"
+
+        if mode == "off":
+            if sdk_settings and any(
+                (
+                    getattr(sdk_settings, "auto_memory_enabled", None) is not None,
+                    bool(getattr(sdk_settings, "auto_memory_directory", None)),
+                    bool(getattr(sdk_settings, "claude_md_excludes", None)),
+                )
+            ):
+                logger.warning(
+                    "Claude SDK memory settings are configured but ignored because memory_integration.mode=off"
+                )
+            return None
+
+        if sdk_settings is None:
+            return None
+
+        settings_payload: dict[str, Any] | Any
+        if hasattr(sdk_settings, "model_dump"):
+            try:
+                settings_payload = sdk_settings.model_dump(by_alias=True, exclude_none=True)
+            except Exception:
+                settings_payload = {}
+        else:
+            settings_payload = {
+                "autoMemoryEnabled": getattr(sdk_settings, "auto_memory_enabled", None),
+                "autoMemoryDirectory": getattr(sdk_settings, "auto_memory_directory", None),
+                "claudeMdExcludes": getattr(sdk_settings, "claude_md_excludes", None),
+            }
+            settings_payload = {k: v for k, v in settings_payload.items() if v is not None}
+        if not isinstance(settings_payload, dict):
+            return None
+        if not settings_payload:
+            return None
+
+        # Use a deterministic temp file path under workspace-scoped temp dir.
+        root = Path(tempfile.gettempdir()) / "xbot" / "claude-sdk-settings"
+        root.mkdir(parents=True, exist_ok=True)
+        digest = hashlib.sha1(workspace.encode("utf-8")).hexdigest()[:16]
+        path = root / f"{digest}.json"
+        path.write_text(json.dumps(settings_payload, ensure_ascii=False), encoding="utf-8")
+        self._sdk_settings_file = str(path)
+        return self._sdk_settings_file
+
+    def _log_memory_runtime_config(self, runtime_config: Any) -> None:
+        """Log memory wiring details for observability."""
+        sdk_cfg = getattr(getattr(runtime_config, "agents", None), "claude_sdk", None)
+        memory_cfg = getattr(getattr(runtime_config, "tools", None), "memory", None)
+        memory_provider = getattr(memory_cfg, "provider", "file")
+        consolidation_mode = getattr(sdk_cfg, "memory_consolidation_mode", "off")
+        run_mode = str(self._shared_resources.get("run_mode", "cli")).lower()
+        setting_sources = self._resolve_setting_sources(sdk_cfg, run_mode)
+        strategy = getattr(sdk_cfg, "system_prompt_strategy", None)
+        if isinstance(strategy, dict):
+            preset = strategy.get("preset", "xbot")
+            append_xbot_prompt = strategy.get("append_xbot_prompt", True)
+        else:
+            preset = getattr(strategy, "preset", "xbot")
+            append_xbot_prompt = getattr(strategy, "append_xbot_prompt", True)
+        logger.info(
+            "[AgentService] Memory runtime: run_mode=%s, memory_provider=%s, "
+            "memory_consolidation_mode=%s, setting_sources=%s, system_prompt_strategy=%s/%s",
+            run_mode,
+            memory_provider,
+            consolidation_mode,
+            setting_sources,
+            preset,
+            append_xbot_prompt,
+        )
 
     def _build_env_config(self) -> dict[str, str]:
         """Build environment configuration for SDK.
@@ -1330,6 +1533,7 @@ class AgentService:
                     if response_text:
                         session.add_message("assistant", "".join(response_text))
                     sess_mgr.save(session)
+                    await self._trigger_memory_consolidation(session_key, session)
                 except Exception as e:
                     logger.warning("Failed to persist session: %s", e)
 
@@ -1372,6 +1576,35 @@ class AgentService:
                     reason = "dispatch_end"
                 sm.force_transition(session_key, target, reason=reason)
             self._active_tasks.pop(session_key, None)
+
+    async def _trigger_memory_consolidation(self, session_key: str, session: Any) -> None:
+        """Trigger memory consolidation according to configured mode."""
+        if self._memory_consolidator is None:
+            return
+
+        runtime_config = self._shared_resources.get("config")
+        sdk_cfg = getattr(getattr(runtime_config, "agents", None), "claude_sdk", None)
+        mode = getattr(sdk_cfg, "memory_consolidation_mode", "off")
+        if mode == "off":
+            return
+
+        if mode == "sync":
+            await self._memory_consolidator.maybe_consolidate_by_tokens(session)
+            return
+
+        if mode == "async":
+            async def _safe_consolidate() -> None:
+                try:
+                    await self._memory_consolidator.maybe_consolidate_by_tokens(session)
+                except asyncio.CancelledError:
+                    logger.debug("Memory consolidation cancelled for session %s", session_key)
+                    raise
+                except Exception as e:
+                    logger.warning("Async memory consolidation failed for %s: %s", session_key, e)
+
+            task = asyncio.create_task(_safe_consolidate(), name=f"memory-consolidation:{session_key}")
+            self._async_consolidation_tasks.add(task)
+            task.add_done_callback(lambda t: self._async_consolidation_tasks.discard(t))
 
     @staticmethod
     def _is_valid_compact_target(resolved_target: Any) -> bool:

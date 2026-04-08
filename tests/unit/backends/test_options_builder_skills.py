@@ -9,6 +9,7 @@ import pytest
 
 from xbot.agent.service import AgentService
 from xbot.agent.types import AgentConfig
+from xbot.config.schema import Config
 
 
 def _make_config_mock(*, provider: str | None = None, api_key: str | None = None, claude_sdk=None):
@@ -81,3 +82,102 @@ async def test_build_sdk_options_sets_provider_env(agent_config: AgentConfig, tm
 
     assert options.env is not None
     assert options.env.get("ANTHROPIC_API_KEY") == "test-key"
+
+
+@pytest.mark.asyncio
+async def test_build_sdk_options_memory_integration_auto_cli(agent_config: AgentConfig, tmp_path: Path) -> None:
+    service = AgentService()
+    config = Config()
+
+    resources = {
+        "workspace": str(tmp_path),
+        "config": config,
+        "run_mode": "cli",
+    }
+    await service.initialize(agent_config, resources)
+
+    options = service._build_sdk_options()
+
+    assert options.setting_sources == ["user", "project", "local"]
+
+
+@pytest.mark.asyncio
+async def test_build_sdk_options_memory_integration_auto_gateway(agent_config: AgentConfig, tmp_path: Path) -> None:
+    service = AgentService()
+    config = Config()
+
+    resources = {
+        "workspace": str(tmp_path),
+        "config": config,
+        "run_mode": "gateway",
+    }
+    await service.initialize(agent_config, resources)
+
+    options = service._build_sdk_options()
+
+    assert options.setting_sources == ["user", "project", "local"]
+
+
+@pytest.mark.asyncio
+async def test_build_sdk_options_memory_integration_off_disables_sources_and_settings(
+    agent_config: AgentConfig, tmp_path: Path
+) -> None:
+    service = AgentService()
+    config = Config()
+    config.agents.claude_sdk.memory_integration.mode = "off"
+    config.agents.claude_sdk.memory_integration.sdk_settings.auto_memory_enabled = True
+
+    resources = {
+        "workspace": str(tmp_path),
+        "config": config,
+        "run_mode": "gateway",
+    }
+    await service.initialize(agent_config, resources)
+
+    options = service._build_sdk_options()
+
+    assert options.setting_sources is None
+    assert options.settings is None
+
+
+@pytest.mark.asyncio
+async def test_build_sdk_options_claude_code_preset_with_append(
+    agent_config: AgentConfig, tmp_path: Path
+) -> None:
+    service = AgentService()
+    config = Config()
+    config.agents.claude_sdk.system_prompt_strategy.preset = "claude_code"
+    config.agents.claude_sdk.system_prompt_strategy.append_xbot_prompt = True
+
+    resources = {
+        "workspace": str(tmp_path),
+        "config": config,
+    }
+    await service.initialize(agent_config, resources)
+
+    options = service._build_sdk_options()
+
+    assert isinstance(options.system_prompt, dict)
+    assert options.system_prompt["type"] == "preset"
+    assert options.system_prompt["preset"] == "claude_code"
+    assert options.system_prompt.get("append") == "You are a test assistant."
+
+
+@pytest.mark.asyncio
+async def test_build_sdk_options_writes_sdk_settings_file(agent_config: AgentConfig, tmp_path: Path) -> None:
+    service = AgentService()
+    config = Config()
+    config.agents.claude_sdk.memory_integration.mode = "on"
+    config.agents.claude_sdk.memory_integration.sdk_settings.auto_memory_enabled = True
+    config.agents.claude_sdk.memory_integration.sdk_settings.auto_memory_directory = str(tmp_path / ".memory")
+
+    resources = {
+        "workspace": str(tmp_path),
+        "config": config,
+    }
+    await service.initialize(agent_config, resources)
+
+    options = service._build_sdk_options()
+
+    assert options.settings is not None
+    assert Path(options.settings).exists()

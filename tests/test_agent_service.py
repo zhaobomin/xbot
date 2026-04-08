@@ -13,6 +13,7 @@ from xbot.agent.state import SessionManager as StateManager
 from xbot.agent.state.machine import SessionPhase
 from xbot.agent.types import AgentConfig
 from xbot.bus.events import InboundMessage
+from xbot.config.schema import Config
 
 
 class TestAgentService:
@@ -716,3 +717,65 @@ class TestRunDispatch:
         result = service._convert_result_message(msg)
         assert result is not None
         assert result.usage == {"input_tokens": 123, "output_tokens": 45}
+
+    # --- Test 21: memory consolidation mode=off skips consolidation ---
+
+    @pytest.mark.asyncio
+    async def test_dispatch_memory_consolidation_off(self, config, shared_resources, bus):
+        shared_resources["config"] = Config()
+        shared_resources["config"].agents.claude_sdk.memory_consolidation_mode = "off"
+        service = await self._make_service(config, shared_resources)
+
+        if service._memory_consolidator is not None:
+            service._memory_consolidator.maybe_consolidate_by_tokens = AsyncMock()
+
+        async def fake_process(_context):
+            yield AgentResponse(content="ok")
+
+        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="run")
+        with patch.object(service, "process", side_effect=fake_process):
+            await service._dispatch(msg, bus)
+
+        if service._memory_consolidator is not None:
+            service._memory_consolidator.maybe_consolidate_by_tokens.assert_not_called()
+
+    # --- Test 22: memory consolidation mode=sync runs inline ---
+
+    @pytest.mark.asyncio
+    async def test_dispatch_memory_consolidation_sync(self, config, shared_resources, bus):
+        shared_resources["config"] = Config()
+        shared_resources["config"].agents.claude_sdk.memory_consolidation_mode = "sync"
+        service = await self._make_service(config, shared_resources)
+
+        assert service._memory_consolidator is not None
+        service._memory_consolidator.maybe_consolidate_by_tokens = AsyncMock()
+
+        async def fake_process(_context):
+            yield AgentResponse(content="ok")
+
+        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="run")
+        with patch.object(service, "process", side_effect=fake_process):
+            await service._dispatch(msg, bus)
+
+        service._memory_consolidator.maybe_consolidate_by_tokens.assert_awaited()
+
+    # --- Test 23: memory consolidation mode=async schedules task ---
+
+    @pytest.mark.asyncio
+    async def test_dispatch_memory_consolidation_async(self, config, shared_resources, bus):
+        shared_resources["config"] = Config()
+        shared_resources["config"].agents.claude_sdk.memory_consolidation_mode = "async"
+        service = await self._make_service(config, shared_resources)
+
+        assert service._memory_consolidator is not None
+        service._memory_consolidator.maybe_consolidate_by_tokens = AsyncMock()
+
+        async def fake_process(_context):
+            yield AgentResponse(content="ok")
+
+        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="run")
+        with patch.object(service, "process", side_effect=fake_process):
+            await service._dispatch(msg, bus)
+
+        await asyncio.sleep(0)
+        service._memory_consolidator.maybe_consolidate_by_tokens.assert_awaited()
