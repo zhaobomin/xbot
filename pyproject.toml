@@ -92,10 +92,9 @@ include = [
     "xbot/**/*.py",
     "xbot/webui/frontend/dist/**",
     "xbot/webui/frontend/public/**",
-    "xbot/templates/**/*.md",
+    "xbot/templates/**",
     "xbot/skills/**/*.md",
     "xbot/skills/**/*.sh",
-    "xbot/init_templates/**",
 ]
 
 [tool.hatch.build.targets.wheel]

@@ -272,15 +272,15 @@ def estimate_prompt_tokens_chain(
 def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]:
     """Sync bundled templates to workspace. Only creates missing files."""
     try:
-        init_root = pkg_files("xbot") / "init_templates" / "workspace"
+        workspace_root = pkg_files("xbot") / "templates" / "workspace"
     except Exception:
-        init_root = None
+        workspace_root = None
     try:
         legacy_root = pkg_files("xbot") / "templates"
     except Exception:
         legacy_root = None
 
-    source_root = init_root if init_root and init_root.is_dir() else legacy_root
+    source_root = workspace_root if workspace_root and workspace_root.is_dir() else legacy_root
     if not source_root or not source_root.is_dir():
         return []
 
@@ -324,10 +324,10 @@ def _copy_traversable_dir(src_dir, dest_dir: Path) -> None:
 
 
 def load_init_pack(pack_name: str = "default") -> dict[str, Any]:
-    """Load init pack manifest from bundled init templates."""
-    manifest = pkg_files("xbot") / "init_templates" / "packs" / f"{pack_name}.json"
+    """Load workspace bootstrap pack manifest from bundled templates."""
+    manifest = pkg_files("xbot") / "templates" / "packs" / f"{pack_name}.json"
     if not manifest.is_file():
-        raise FileNotFoundError(f"Init pack not found: {pack_name}")
+        raise FileNotFoundError(f"Template pack not found: {pack_name}")
     return json.loads(manifest.read_text(encoding="utf-8"))
 
 
@@ -341,14 +341,14 @@ def sync_workspace_skill_pack(workspace: Path, pack_name: str = "default") -> li
     skills_dir = workspace / "skills"
     skills_dir.mkdir(parents=True, exist_ok=True)
 
-    init_skills = pkg_files("xbot") / "init_templates" / "skills"
+    template_skills = pkg_files("xbot") / "templates" / "skills"
     builtin_skills = pkg_files("xbot") / "skills"
 
     added: list[str] = []
     for name in names:
         if not isinstance(name, str) or not name:
             continue
-        src = init_skills / name
+        src = template_skills / name
         if not src.is_dir():
             src = builtin_skills / name
         if not src.is_dir():
@@ -370,7 +370,7 @@ def sync_workspace_command_pack(workspace: Path, pack_name: str = "default") -> 
 
     commands_dir = workspace / "commands"
     commands_dir.mkdir(parents=True, exist_ok=True)
-    init_commands = pkg_files("xbot") / "init_templates" / "commands"
+    init_commands = pkg_files("xbot") / "templates" / "commands"
 
     added: list[str] = []
     for name in names:
