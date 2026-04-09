@@ -26,8 +26,8 @@ def test_list_skills_returns_empty_when_workspace_skills_missing(tmp_path: Path)
 
 
 def test_list_skills_discovers_workspace_skill_markdown_files(tmp_path: Path) -> None:
-    (tmp_path / "skills" / "demo-skill").mkdir(parents=True)
-    (tmp_path / "skills" / "demo-skill" / "SKILL.md").write_text("# Demo", encoding="utf-8")
+    (tmp_path / ".claude" / "skills" / "demo-skill").mkdir(parents=True)
+    (tmp_path / ".claude" / "skills" / "demo-skill" / "SKILL.md").write_text("# Demo", encoding="utf-8")
 
     container = _make_container(tmp_path)
     skills = container.list_skills()
@@ -36,14 +36,14 @@ def test_list_skills_discovers_workspace_skill_markdown_files(tmp_path: Path) ->
     assert skills[0]["name"] == "demo-skill"
     assert skills[0]["source"] == "workspace"
     assert skills[0]["type"] == "skill"
-    assert skills[0]["path"].endswith("skills/demo-skill/SKILL.md")
+    assert skills[0]["path"].endswith(".claude/skills/demo-skill/SKILL.md")
 
 
 def test_list_skills_ignores_non_skill_files(tmp_path: Path) -> None:
-    (tmp_path / "skills" / "a").mkdir(parents=True)
-    (tmp_path / "skills" / "a" / "README.md").write_text("not a skill", encoding="utf-8")
-    (tmp_path / "skills" / "b").mkdir(parents=True)
-    (tmp_path / "skills" / "b" / "SKILL.md").write_text("# Skill B", encoding="utf-8")
+    (tmp_path / ".claude" / "skills" / "a").mkdir(parents=True)
+    (tmp_path / ".claude" / "skills" / "a" / "README.md").write_text("not a skill", encoding="utf-8")
+    (tmp_path / ".claude" / "skills" / "b").mkdir(parents=True)
+    (tmp_path / ".claude" / "skills" / "b" / "SKILL.md").write_text("# Skill B", encoding="utf-8")
 
     container = _make_container(tmp_path)
     skills = container.list_skills()

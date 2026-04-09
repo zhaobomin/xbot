@@ -1118,7 +1118,7 @@ def create_app(
         _get_user_from_auth_header(authorization)
         # Security: Validate skill name to prevent path traversal
         safe_name = validate_safe_name(body.name, "skill name")
-        skill_file = container.config.workspace_path / "skills" / safe_name / "SKILL.md"
+        skill_file = container.primary_skill_root() / safe_name / "SKILL.md"
         skill_file.parent.mkdir(parents=True, exist_ok=True)
         skill_file.write_text(body.content, encoding="utf-8")
         return {"name": safe_name, "content": body.content}
@@ -1150,7 +1150,7 @@ def create_app(
     ) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
         skill_name = validate_safe_name(skill_name, "skill name")
-        skill_file = container.config.workspace_path / "skills" / skill_name / "SKILL.md"
+        skill_file = container.primary_skill_root() / skill_name / "SKILL.md"
         if not skill_file.exists():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
         skill_file.write_text(body.content, encoding="utf-8")
@@ -1165,7 +1165,7 @@ def create_app(
 
         _get_user_from_auth_header(authorization)
         skill_name = validate_safe_name(skill_name, "skill name")
-        skill_dir = container.config.workspace_path / "skills" / skill_name
+        skill_dir = container.primary_skill_root() / skill_name
         if skill_dir.exists():
             shutil.rmtree(skill_dir)
         return {"ok": True}

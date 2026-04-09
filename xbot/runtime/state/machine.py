@@ -173,6 +173,11 @@ class SessionState:
     # Backend metadata (TODO: Remove in next major version - SDK manages these internally)
     model: str | None = None  # Model name for this session
     commands: list[str] = field(default_factory=list, compare=False)  # Commands for this session
+    sdk_skills: list[str] = field(default_factory=list, compare=False)  # SDK init skills snapshot
+    sdk_tools: list[str] = field(default_factory=list, compare=False)  # SDK init tools snapshot
+    sdk_slash_commands: list[str] = field(default_factory=list, compare=False)  # SDK init slash commands snapshot
+    skill_source: str = "sdk_only"  # Skill source marker for observability
+    allow_exec_skill_fallback: bool = field(default=False, compare=False)  # per-turn guard override
     task_id: str | None = None  # Active task ID
     request_id: str | None = None  # Current request ID
 

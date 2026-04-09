@@ -478,6 +478,52 @@ class RuntimeSessionRegistry:
         state = self.get_or_create(session_key)
         state.commands = list(commands)
 
+    def get_sdk_capabilities(self, session_key: str) -> dict[str, Any]:
+        """Get SDK capability snapshot for session."""
+        state = self.get(session_key)
+        if not state:
+            return {
+                "skills": [],
+                "tools": [],
+                "slash_commands": [],
+                "skill_source": "sdk_only",
+            }
+        return {
+            "skills": list(state.sdk_skills),
+            "tools": list(state.sdk_tools),
+            "slash_commands": list(state.sdk_slash_commands),
+            "skill_source": state.skill_source or "sdk_only",
+        }
+
+    def set_sdk_capabilities(
+        self,
+        session_key: str,
+        *,
+        skills: list[str] | None = None,
+        tools: list[str] | None = None,
+        slash_commands: list[str] | None = None,
+        skill_source: str = "sdk_only",
+    ) -> None:
+        """Set SDK capability snapshot for session."""
+        state = self.get_or_create(session_key)
+        if skills is not None:
+            state.sdk_skills = list(skills)
+        if tools is not None:
+            state.sdk_tools = list(tools)
+        if slash_commands is not None:
+            state.sdk_slash_commands = list(slash_commands)
+        state.skill_source = skill_source
+
+    def set_allow_exec_skill_fallback(self, session_key: str, allow: bool) -> None:
+        """Set whether exec fallback is allowed for current turn/session."""
+        state = self.get_or_create(session_key)
+        state.allow_exec_skill_fallback = bool(allow)
+
+    def allow_exec_skill_fallback(self, session_key: str) -> bool:
+        """Check whether exec fallback is allowed for current turn/session."""
+        state = self.get(session_key)
+        return bool(state.allow_exec_skill_fallback) if state else False
+
     def get_last_used(self, session_key: str) -> float | None:
         """Get last used timestamp for session."""
         state = self.get(session_key)

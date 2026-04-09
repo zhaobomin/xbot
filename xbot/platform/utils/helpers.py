@@ -301,7 +301,7 @@ def sync_workspace_templates(workspace: Path, silent: bool = False) -> list[str]
             added.append(str(dst.relative_to(workspace)))
 
     _copy_tree(source_root, workspace)
-    (workspace / "skills").mkdir(exist_ok=True)
+    (workspace / ".claude" / "skills").mkdir(parents=True, exist_ok=True)
     (workspace / "commands").mkdir(exist_ok=True)
 
     if added and not silent:
@@ -332,13 +332,13 @@ def load_init_pack(pack_name: str = "default") -> dict[str, Any]:
 
 
 def sync_workspace_skill_pack(workspace: Path, pack_name: str = "default") -> list[str]:
-    """Install skills from pack into workspace/skills (create-if-missing only)."""
+    """Install skills from pack into workspace/.claude/skills (create-if-missing only)."""
     pack = load_init_pack(pack_name)
     names = pack.get("skills", [])
     if not isinstance(names, list):
         return []
 
-    skills_dir = workspace / "skills"
+    skills_dir = workspace / ".claude" / "skills"
     skills_dir.mkdir(parents=True, exist_ok=True)
 
     template_skills = pkg_files("xbot") / "templates" / "skills"

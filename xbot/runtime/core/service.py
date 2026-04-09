@@ -7,6 +7,7 @@ combining the core logic from ClaudeSDKBackend and AgentRuntime.
 from __future__ import annotations
 
 import asyncio
+import re
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
@@ -89,6 +90,29 @@ _SDK_NATIVE_TOOL_NAMES = {
     "NotebookEdit",
     "AskUserQuestion",
 }
+
+_EXEC_TOOL_NAMES = {"Bash", "exec", "shell", "mcp__xbot__exec"}
+_SKILL_FALLBACK_EXEC_MARKERS = (
+    "clawhub",
+    "add-skill",
+    "install skill",
+    "install-skill",
+    "skill install",
+    "npx clawhub",
+    "npx add-skill",
+    "lark-cli clawhub",
+)
+_EXPLICIT_SHELL_REQUEST_MARKERS = (
+    "命令行",
+    "终端",
+    "shell",
+    "bash",
+    "cli",
+    "run command",
+    "execute command",
+    "执行命令",
+    "运行命令",
+)
 
 
 def _progress_kind_from_event_type(event_type: str, *, tool_hint: bool = False) -> str:
@@ -283,6 +307,7 @@ class AgentService:
 
         # Keep routing info fresh so compact hooks can always resolve targets.
         self._set_session_routing(context.session_key, context.channel, context.chat_id)
+        self._set_exec_skill_fallback_policy(context.session_key, context.prompt)
         self._set_runtime_tool_and_permission_context(context)
 
         # Get or create client
@@ -516,6 +541,108 @@ class AgentService:
                         result.add(raw if raw.startswith("/") else f"/{raw}")
 
         return sorted(result)
+
+    @staticmethod
+    def _extract_sdk_capabilities(info: Any) -> dict[str, list[str]]:
+        """Extract skills/tools/slash_commands from SDK init payload."""
+        if not isinstance(info, dict):
+            return {"skills": [], "tools": [], "slash_commands": []}
+
+        def _as_str_list(raw: Any) -> list[str]:
+            if not isinstance(raw, list):
+                return []
+            result: list[str] = []
+            for item in raw:
+                if isinstance(item, str):
+                    text = item.strip()
+                    if text and text not in result:
+                        result.append(text)
+            return result
+
+        slash = AgentService._extract_slash_commands(info)
+        return {
+            "skills": _as_str_list(info.get("skills")),
+            "tools": _as_str_list(info.get("tools")),
+            "slash_commands": slash,
+        }
+
+    @staticmethod
+    def _is_exec_tool_name(tool_name: str) -> bool:
+        normalized = canonical_tool_name(tool_name)
+        return tool_name in _EXEC_TOOL_NAMES or normalized in _EXEC_TOOL_NAMES
+
+    @staticmethod
+    def _extract_exec_command(tool_input: dict[str, Any]) -> str:
+        if not isinstance(tool_input, dict):
+            return ""
+        for key in ("cmd", "command", "text", "input"):
+            value = tool_input.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+        return ""
+
+    @staticmethod
+    def _looks_like_skill_fallback_exec(command: str) -> bool:
+        lowered = command.lower()
+        return any(marker in lowered for marker in _SKILL_FALLBACK_EXEC_MARKERS)
+
+    @staticmethod
+    def _extract_referenced_skill_name(command: str) -> str | None:
+        lowered = command.lower()
+        if "clawhub" in lowered:
+            return "clawhub"
+        m = re.search(r"(?:add-skill|install)\s+([a-z0-9_.:/-]+)", lowered)
+        if not m:
+            return None
+        slug = m.group(1).strip().strip("\"'")
+        if "/" in slug:
+            slug = slug.split("/")[-1]
+        return slug or None
+
+    def _resolve_permission_session_key(self, permission_handler: Any, context: Any) -> str | None:
+        if permission_handler and hasattr(permission_handler, "get_current_session_key"):
+            try:
+                current = permission_handler.get_current_session_key()
+                if isinstance(current, str) and current:
+                    return current
+            except Exception:
+                pass
+
+        sdk_session_id = getattr(context, "session_id", None) or getattr(context, "sessionId", None)
+        if not isinstance(sdk_session_id, str) or not sdk_session_id:
+            return None
+
+        sm = self._shared_resources.get("runtime_registry")
+        if not sm or not hasattr(sm, "get_by_sdk_id"):
+            return None
+        state = sm.get_by_sdk_id(sdk_session_id)
+        return state.session_key if state else None
+
+    def _is_explicit_shell_request(self, prompt: str) -> bool:
+        lowered = prompt.lower()
+        return any(marker in lowered for marker in _EXPLICIT_SHELL_REQUEST_MARKERS)
+
+    def _set_exec_skill_fallback_policy(self, session_key: str, prompt: str) -> None:
+        sm = self._shared_resources.get("runtime_registry")
+        if sm and hasattr(sm, "set_allow_exec_skill_fallback"):
+            sm.set_allow_exec_skill_fallback(session_key, self._is_explicit_shell_request(prompt))
+
+    def _is_exec_skill_fallback_allowed(self, session_key: str) -> bool:
+        sm = self._shared_resources.get("runtime_registry")
+        if sm and hasattr(sm, "allow_exec_skill_fallback"):
+            return bool(sm.allow_exec_skill_fallback(session_key))
+        return False
+
+    def _get_sdk_capabilities(self, session_key: str) -> dict[str, Any]:
+        sm = self._shared_resources.get("runtime_registry")
+        if sm and hasattr(sm, "get_sdk_capabilities"):
+            return sm.get_sdk_capabilities(session_key)
+        return {
+            "skills": [],
+            "tools": [],
+            "slash_commands": [],
+            "skill_source": "sdk_only",
+        }
 
     async def _refresh_session_commands_from_client(self, session_key: str, client: Any) -> None:
         """Refresh and cache SDK commands from an already-connected client."""
@@ -821,7 +948,8 @@ class AgentService:
         can_use_tool = None
         if permission_handler and hasattr(permission_handler, "build_can_use_tool_callback"):
             try:
-                can_use_tool = permission_handler.build_can_use_tool_callback()
+                base_callback = permission_handler.build_can_use_tool_callback()
+                can_use_tool = self._wrap_can_use_tool_callback(base_callback, permission_handler)
             except Exception as e:
                 logger.warning("Failed to build can_use_tool callback: %s", e)
 
@@ -856,6 +984,43 @@ class AgentService:
             f"mcp_servers={len(mcp_servers)}"
         )
         return options
+
+    def _wrap_can_use_tool_callback(self, base_callback: Any, permission_handler: Any) -> Any:
+        """Wrap permission callback with sdk-only skill fallback guard."""
+        try:
+            from claude_agent_sdk.types import PermissionResultDeny
+        except Exception:
+            return base_callback
+
+        async def guarded_callback(tool_name: str, tool_input: dict[str, Any], context: Any) -> Any:
+            session_key = self._resolve_permission_session_key(permission_handler, context)
+            if (
+                session_key
+                and self._is_exec_tool_name(tool_name)
+                and not self._is_exec_skill_fallback_allowed(session_key)
+            ):
+                cmd = self._extract_exec_command(tool_input)
+                if cmd and self._looks_like_skill_fallback_exec(cmd):
+                    capabilities = self._get_sdk_capabilities(session_key)
+                    skill_name = self._extract_referenced_skill_name(cmd)
+                    skills = capabilities.get("skills", [])
+                    if skill_name and skill_name not in skills:
+                        available = ", ".join(skills[:20]) if skills else "(none)"
+                        return PermissionResultDeny(
+                            message=(
+                                f"该 skill 不在当前 SDK 会话可用列表中：{skill_name}。"
+                                f"可用 skills: {available}"
+                            )
+                        )
+                    return PermissionResultDeny(
+                        message=(
+                            "该 skill 不在当前 SDK 会话可用列表中。"
+                            "默认不允许在 skill 失败后自动回退 exec，请显式要求命令行执行。"
+                        )
+                    )
+            return await base_callback(tool_name, tool_input, context)
+
+        return guarded_callback
 
     def _build_env_config(self) -> dict[str, str]:
         """Build environment configuration for SDK.
@@ -1899,9 +2064,25 @@ class AgentService:
             subtype = getattr(message, "subtype", None)
             data = getattr(message, "data", None)
             if subtype == "init" and isinstance(data, dict):
-                discovered = self._extract_slash_commands(data)
+                capabilities = self._extract_sdk_capabilities(data)
+                discovered = capabilities.get("slash_commands", [])
                 if discovered and hasattr(sm, "set_commands"):
                     sm.set_commands(session_key, discovered)
+                if hasattr(sm, "set_sdk_capabilities"):
+                    sm.set_sdk_capabilities(
+                        session_key,
+                        skills=capabilities.get("skills", []),
+                        tools=capabilities.get("tools", []),
+                        slash_commands=discovered,
+                        skill_source="sdk_only",
+                    )
+                logger.info(
+                    "[AgentService] sdk capabilities synced: session=%s skill_source=sdk_only "
+                    "sdk_skills_count=%d sdk_tools_count=%d",
+                    session_key,
+                    len(capabilities.get("skills", [])),
+                    len(capabilities.get("tools", [])),
+                )
         except Exception as e:
             logger.debug("Failed to sync init commands for %s: %s", session_key, e)
 

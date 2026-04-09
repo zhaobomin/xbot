@@ -30,7 +30,7 @@ npx --yes clawhub@latest search "web scraping" --limit 5
 npx --yes clawhub@latest install <slug> --workdir ~/.xbot/workspace
 ```
 
-Replace `<slug>` with the skill name from search results. This places the skill into `~/.xbot/workspace/skills/`, where xbot loads workspace skills from. Always include `--workdir`.
+Replace `<slug>` with the skill name from search results. This places the skill into `~/.xbot/workspace/.claude/skills/`, where xbot loads workspace skills from. Always include `--workdir`.
 
 ## Update
 

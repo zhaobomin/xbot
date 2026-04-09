@@ -461,7 +461,7 @@ def test_cron_and_skills_management_endpoints(tmp_path: Path) -> None:
         json={"name": "demo-skill", "content": "# Demo"},
     )
     assert skill_create.status_code == 201
-    assert (services.config.workspace_path / "skills" / "demo-skill" / "SKILL.md").exists()
+    assert (services.primary_skill_root() / "demo-skill" / "SKILL.md").exists()
 
     skill_list = client.get("/api/skills", headers=headers)
     assert skill_list.status_code == 200
@@ -646,11 +646,11 @@ def test_write_management_endpoints(tmp_path: Path) -> None:
         json={"content": "# v2"},
     )
     assert update_skill.status_code == 200
-    assert (services.config.workspace_path / "skills" / "editable-skill" / "SKILL.md").read_text(encoding="utf-8") == "# v2"
+    assert (services.primary_skill_root() / "editable-skill" / "SKILL.md").read_text(encoding="utf-8") == "# v2"
 
     delete_skill = client.delete("/api/skills/editable-skill", headers=headers)
     assert delete_skill.status_code == 200
-    assert not (services.config.workspace_path / "skills" / "editable-skill").exists()
+    assert not (services.primary_skill_root() / "editable-skill").exists()
 
 
 def test_websocket_chat_uses_internal_cli_session_mapping(tmp_path: Path) -> None:

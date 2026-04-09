@@ -15,8 +15,7 @@ def test_default_init_pack_includes_weather() -> None:
 def test_sync_workspace_skill_pack_copies_weather(tmp_path: Path) -> None:
     added = sync_workspace_skill_pack(tmp_path, "default")
 
-    weather_skill = tmp_path / "skills" / "weather" / "SKILL.md"
+    weather_skill = tmp_path / ".claude" / "skills" / "weather" / "SKILL.md"
     assert weather_skill.exists()
     # Added list may be empty if already exists, but on fresh tmp_path it should include weather
-    assert any(item.startswith("skills/weather") for item in added)
-
+    assert any(item.startswith(".claude/skills/weather") for item in added)

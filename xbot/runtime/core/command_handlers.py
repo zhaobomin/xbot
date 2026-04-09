@@ -19,9 +19,9 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 # Local runtime commands (handled without going through SDK)
-LOCAL_COMMANDS = {"!help", "!restart", "!stop", "!reset", "!state", "!coord", "!ver"}
+LOCAL_COMMANDS = {"!help", "!restart", "!stop", "!reset", "!state", "!coord", "!ver", "!skills"}
 LOCAL_COMMAND_PREFIXES = ("!model",)
-LOCAL_SLASH_COMMANDS = {"/help", "/clear", "/reset", "/restart", "/state"}
+LOCAL_SLASH_COMMANDS = {"/help", "/clear", "/reset", "/restart", "/state", "/skills"}
 
 
 class LocalCommandHandler:
@@ -55,6 +55,8 @@ class LocalCommandHandler:
                 cmd_lower = "!help"
             elif slash == "/state":
                 cmd_lower = "!state"
+            elif slash == "/skills":
+                cmd_lower = "!skills"
             elif slash == "/restart":
                 cmd_lower = "!restart"
             elif slash == "/reset":
@@ -80,6 +82,9 @@ class LocalCommandHandler:
 
         elif cmd_lower == "!state":
             response_text = self._session_diagnostics_text(session_key)
+
+        elif cmd_lower == "!skills":
+            response_text = self._skills_status_text(session_key)
 
         elif cmd_lower == "!coord":
             response_text = self._coord_status_text()
@@ -107,6 +112,7 @@ class LocalCommandHandler:
         lines.append("  !reset --soft — Reset session (preserves SDK context)")
         lines.append("  !restart — Restart session")
         lines.append("  !state — Show session diagnostics")
+        lines.append("  !skills — Show SDK skill snapshot for this session")
         lines.append("  !coord — Show global state overview")
         lines.append("  !ver — Show version info")
         lines.append("  !model — Show current model and available models")
@@ -117,6 +123,7 @@ class LocalCommandHandler:
         lines.append("  /clear — Clear context and start fresh")
         lines.append("  /reset [--soft] — Reset session (local alias)")
         lines.append("  /state — Show session diagnostics")
+        lines.append("  /skills — Show SDK skill snapshot for this session")
         lines.append("  /restart — Restart session")
         summary = self._service.get_workspace_commands_summary()
         if summary:
@@ -278,6 +285,30 @@ class LocalCommandHandler:
             f"SDK session id: {sdk_session_id or 'none'}",
             f"SDK client: {'connected' if has_client else 'none'}",
         ]
+        if sm and hasattr(sm, "get_sdk_capabilities"):
+            caps = sm.get_sdk_capabilities(session_key)
+            lines.append(f"Skill source: {caps.get('skill_source', 'sdk_only')}")
+            lines.append(f"SDK skills: {len(caps.get('skills', []))}")
+            lines.append(f"SDK tools: {len(caps.get('tools', []))}")
+        return "\n".join(lines)
+
+    def _skills_status_text(self, session_key: str) -> str:
+        """Show SDK skill snapshot for the current session."""
+        sm = self._service._shared_resources.get("runtime_registry")
+        if not sm or not hasattr(sm, "get_sdk_capabilities"):
+            return "SDK skill snapshot unavailable."
+
+        caps = sm.get_sdk_capabilities(session_key)
+        skills = caps.get("skills", [])
+        source = caps.get("skill_source", "sdk_only")
+        if not skills:
+            return f"Skill source: {source}\nSDK skills: (none cached yet)"
+
+        lines = [
+            f"Skill source: {source}",
+            f"SDK skills ({len(skills)}):",
+        ]
+        lines.extend(f"  - {name}" for name in skills)
         return "\n".join(lines)
 
     def _coord_status_text(self) -> str:

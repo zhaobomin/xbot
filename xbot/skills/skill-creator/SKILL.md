@@ -268,7 +268,7 @@ Skip this step only if the skill being developed already exists, and iteration o
 
 When creating a new skill from scratch, always run the `init_skill.py` script. The script conveniently generates a new template skill directory that automatically includes everything a skill requires, making the skill creation process much more efficient and reliable.
 
-For `xbot`, custom skills should live under the active workspace `skills/` directory so they can be discovered automatically at runtime (for example, `<workspace>/skills/my-skill/SKILL.md`).
+For `xbot`, custom skills should live under the active workspace `.claude/skills/` directory so they can be discovered automatically at runtime (for example, `<workspace>/.claude/skills/my-skill/SKILL.md`).
 
 Usage:
 
@@ -279,9 +279,9 @@ scripts/init_skill.py <skill-name> --path <output-directory> [--resources script
 Examples:
 
 ```bash
-scripts/init_skill.py my-skill --path ./workspace/skills
-scripts/init_skill.py my-skill --path ./workspace/skills --resources scripts,references
-scripts/init_skill.py my-skill --path ./workspace/skills --resources scripts --examples
+scripts/init_skill.py my-skill --path ./workspace/.claude/skills
+scripts/init_skill.py my-skill --path ./workspace/.claude/skills --resources scripts,references
+scripts/init_skill.py my-skill --path ./workspace/.claude/skills --resources scripts --examples
 ```
 
 The script:

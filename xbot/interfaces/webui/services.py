@@ -100,19 +100,55 @@ class ServiceContainer:
         return runtime
 
     def list_skills(self) -> list[dict[str, Any]]:
-        skills_root = Path(self.config.workspace_path) / "skills"
-        if not skills_root.exists():
-            return []
-
+        roots = self.skill_roots()
         results: list[dict[str, Any]] = []
-        for skill_file in sorted(skills_root.glob("*/SKILL.md")):
-            skill_dir = skill_file.parent
-            results.append(
-                {
-                    "name": skill_dir.name,
-                    "path": str(skill_file),
-                    "source": "workspace",
-                    "type": "skill",
-                }
-            )
+        seen_names: set[str] = set()
+        for root in roots:
+            if not root.exists():
+                continue
+            for skill_file in sorted(root.glob("*/SKILL.md")):
+                skill_dir = skill_file.parent
+                if skill_dir.name in seen_names:
+                    continue
+                seen_names.add(skill_dir.name)
+                results.append(
+                    {
+                        "name": skill_dir.name,
+                        "path": str(skill_file),
+                        "source": "workspace",
+                        "type": "skill",
+                    }
+                )
         return results
+
+    def primary_skill_root(self) -> Path:
+        roots = self.skill_roots()
+        if roots:
+            return roots[0]
+        return Path(self.config.workspace_path) / ".claude" / "skills"
+
+    def skill_roots(self) -> list[Path]:
+        workspace = Path(self.config.workspace_path).expanduser().resolve()
+        skills_cfg = getattr(self.config, "skills", None)
+        if not skills_cfg:
+            return [workspace / ".claude" / "skills"]
+
+        raw_values: list[str] = []
+        for field_name in ("dirs", "additional_dirs"):
+            values = getattr(skills_cfg, field_name, None)
+            if isinstance(values, list):
+                raw_values.extend(v for v in values if isinstance(v, str) and v.strip())
+
+        if not raw_values:
+            return [workspace / ".claude" / "skills"]
+
+        resolved: list[Path] = []
+        for raw in raw_values:
+            value = raw.replace("$workspace", str(workspace))
+            path = Path(value).expanduser()
+            if not path.is_absolute():
+                path = workspace / path
+            final = path.resolve()
+            if final not in resolved:
+                resolved.append(final)
+        return resolved
