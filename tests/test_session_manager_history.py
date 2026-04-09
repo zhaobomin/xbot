@@ -1,4 +1,4 @@
-from xbot.runtime.session.manager import Session
+from xbot.runtime.session.conversation_store import ConversationSession
 
 
 def _assert_no_orphans(history: list[dict]) -> None:
@@ -34,7 +34,7 @@ def _tool_turn(prefix: str, idx: int) -> list[dict]:
 # --- Original regression test (from PR 2075) ---
 
 def test_get_history_drops_orphan_tool_results_when_window_cuts_tool_calls():
-    session = Session(key="telegram:test")
+    session = ConversationSession(key="telegram:test")
     session.messages.append({"role": "user", "content": "old turn"})
     for i in range(20):
         session.messages.extend(_tool_turn("old", i))
@@ -51,7 +51,7 @@ def test_get_history_drops_orphan_tool_results_when_window_cuts_tool_calls():
 
 def test_legitimate_tool_pairs_preserved_after_trim():
     """Complete tool-call groups within the window must not be dropped."""
-    session = Session(key="test:positive")
+    session = ConversationSession(key="test:positive")
     session.messages.append({"role": "user", "content": "hello"})
     for i in range(5):
         session.messages.extend(_tool_turn("ok", i))
@@ -68,7 +68,7 @@ def test_legitimate_tool_pairs_preserved_after_trim():
 
 def test_orphan_trim_with_last_consolidated():
     """Orphan trimming works correctly when session is partially consolidated."""
-    session = Session(key="test:consolidated")
+    session = ConversationSession(key="test:consolidated")
     for i in range(10):
         session.messages.append({"role": "user", "content": f"old {i}"})
         session.messages.extend(_tool_turn("cons", i))
@@ -87,7 +87,7 @@ def test_orphan_trim_with_last_consolidated():
 # --- Edge: no tool messages at all ---
 
 def test_no_tool_messages_unchanged():
-    session = Session(key="test:plain")
+    session = ConversationSession(key="test:plain")
     for i in range(5):
         session.messages.append({"role": "user", "content": f"q{i}"})
         session.messages.append({"role": "assistant", "content": f"a{i}"})
@@ -101,7 +101,7 @@ def test_no_tool_messages_unchanged():
 
 def test_all_orphan_prefix_stripped():
     """If the window starts with orphan tool results and nothing else, they're all dropped."""
-    session = Session(key="test:all-orphan")
+    session = ConversationSession(key="test:all-orphan")
     session.messages.append({"role": "tool", "tool_call_id": "gone_1", "name": "x", "content": "ok"})
     session.messages.append({"role": "tool", "tool_call_id": "gone_2", "name": "y", "content": "ok"})
     session.messages.append({"role": "user", "content": "fresh start"})
@@ -116,7 +116,7 @@ def test_all_orphan_prefix_stripped():
 # --- Edge: empty session ---
 
 def test_empty_session_history():
-    session = Session(key="test:empty")
+    session = ConversationSession(key="test:empty")
     history = session.get_history(max_messages=500)
     assert history == []
 
@@ -125,7 +125,7 @@ def test_empty_session_history():
 
 def test_window_cuts_mid_tool_group():
     """If the window starts between an assistant's tool results, the partial group is trimmed."""
-    session = Session(key="test:mid-cut")
+    session = ConversationSession(key="test:mid-cut")
     session.messages.append({"role": "user", "content": "setup"})
     session.messages.append({
         "role": "assistant", "content": None,

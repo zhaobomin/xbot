@@ -77,7 +77,7 @@ def shared_resources(tmp_path: Path, bus: MessageBus, state_machine: SessionStat
         "workspace": str(tmp_path),
         "config": _make_config_mock(),
         "bus": bus,
-        "state_manager": state_machine,
+        "runtime_registry": state_machine,
     }
 
 
@@ -533,7 +533,7 @@ class TestRuntimeResponseHandlersDelegation:
     def test_state_coordinator_from_shared_resources(self) -> None:
         sm = MagicMock()
         runtime = MagicMock()
-        runtime._shared_resources = {"state_manager": sm}
+        runtime._shared_resources = {"runtime_registry": sm}
 
         handlers = RuntimeResponseHandlers(runtime)
         assert handlers._state_coordinator is sm
@@ -542,7 +542,7 @@ class TestRuntimeResponseHandlersDelegation:
         sm = MagicMock()
         runtime = MagicMock()
         runtime._shared_resources = {}
-        runtime.session_manager = sm
+        runtime.runtime_registry = sm
 
         handlers = RuntimeResponseHandlers(runtime)
         assert handlers._state_coordinator is sm
@@ -915,12 +915,12 @@ class TestCrossComponentIntegration:
             "workspace": str(tmp_path),
             "config": _make_config_mock(claude_sdk=None),
             "bus": bus,
-            "state_manager": state_machine,
+            "runtime_registry": state_machine,
         }
         await service.initialize(agent_config, resources)
 
         assert service._shared_resources["bus"] is bus
-        assert service._shared_resources["state_manager"] is state_machine
+        assert service._shared_resources["runtime_registry"] is state_machine
 
     @pytest.mark.asyncio
     async def test_response_handlers_integration_with_real_bus(
@@ -928,7 +928,7 @@ class TestCrossComponentIntegration:
     ) -> None:
         """RuntimeResponseHandlers can access bus and publish via it."""
         runtime = MagicMock()
-        runtime._shared_resources = {"bus": bus, "state_manager": MagicMock()}
+        runtime._shared_resources = {"bus": bus, "runtime_registry": MagicMock()}
 
         handlers = RuntimeResponseHandlers(runtime)
 

@@ -21,7 +21,7 @@ except ImportError:  # pragma: no cover
 
 
 @dataclass
-class Session:
+class ConversationSession:
     """
     A conversation session.
 
@@ -131,7 +131,7 @@ class Session:
         self._metadata_dirty = True
 
 
-class SessionManager:
+class ConversationStore:
     """
     Manages conversation sessions.
 
@@ -142,7 +142,7 @@ class SessionManager:
         self.workspace = workspace
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
         self.legacy_sessions_dir = get_legacy_sessions_dir()
-        self._cache: dict[str, Session] = {}
+        self._cache: dict[str, ConversationSession] = {}
 
     def _get_session_path(self, key: str) -> Path:
         """Get the file path for a session."""
@@ -188,7 +188,7 @@ class SessionManager:
                 except Exception:
                     pass
 
-    def get(self, key: str) -> Session | None:
+    def get(self, key: str) -> ConversationSession | None:
         """
         Get an existing session without creating a new one.
 
@@ -206,7 +206,7 @@ class SessionManager:
             self._cache[key] = session
         return session
 
-    def get_or_create(self, key: str) -> Session:
+    def get_or_create(self, key: str) -> ConversationSession:
         """
         Get an existing session or create a new one.
 
@@ -221,12 +221,12 @@ class SessionManager:
 
         session = self._load(key)
         if session is None:
-            session = Session(key=key)
+            session = ConversationSession(key=key)
 
         self._cache[key] = session
         return session
 
-    def _load(self, key: str) -> Session | None:
+    def _load(self, key: str) -> ConversationSession | None:
         """Load a session from disk."""
         path = self._get_session_path(key)
         if not path.exists():
@@ -264,7 +264,7 @@ class SessionManager:
                         else:
                             messages.append(data)
 
-            return Session(
+            return ConversationSession(
                 key=key,
                 messages=messages,
                 created_at=created_at or datetime.now(),
@@ -275,7 +275,7 @@ class SessionManager:
             logger.warning("Failed to load session %s: %s", key, e)
             return None
 
-    def save(self, session: Session) -> None:
+    def save(self, session: ConversationSession) -> None:
         """Save a session to disk.
 
         Uses append-only mode for new messages to improve performance.
@@ -311,7 +311,7 @@ class SessionManager:
 
         self._cache[session.key] = session
 
-    def _save_full(self, session: Session, path: Path) -> None:
+    def _save_full(self, session: ConversationSession, path: Path) -> None:
         """Perform an atomic full write of the session file."""
         tmp_path = path.with_suffix(".jsonl.tmp")
         try:
@@ -353,7 +353,7 @@ class SessionManager:
         lock_path.unlink(missing_ok=True)
         return True
 
-    def compact(self, session: Session) -> None:
+    def compact(self, session: ConversationSession) -> None:
         """Compact a session file by rewriting it to remove duplicates or old state.
 
         This method rewrites the entire session file, which can help reduce file size

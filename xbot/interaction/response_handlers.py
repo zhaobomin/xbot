@@ -53,15 +53,15 @@ class RuntimeResponseHandlers:
     def _state_coordinator(self):
         """Get state manager from shared resources.
 
-        In the new architecture, this returns the state SessionManager
+        In the new architecture, this returns the runtime session registry
         which provides get_phase() and transition() methods.
         """
         shared = getattr(self._runtime, "_shared_resources", None)
         if shared:
-            sm = shared.get("state_manager")
+            sm = shared.get("runtime_registry")
             if sm is not None:
                 return sm
-        return getattr(self._runtime, "session_manager", None)
+        return getattr(self._runtime, "runtime_registry", None)
 
     def _interaction_retry_key(self, session_key: str, request_id: str) -> str:
         """Build a request-scoped retry key."""

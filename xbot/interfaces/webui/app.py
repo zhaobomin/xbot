@@ -475,7 +475,7 @@ def create_app(
     @app.get("/api/dashboard")
     async def dashboard(authorization: str | None = Header(default=None)) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
-        sessions = container.session_manager.list_sessions()
+        sessions = container.conversation_store.list_sessions()
         skills = container.list_skills()
         channels = _channels_payload()
         cron_status = container.cron.status() if hasattr(container.cron, "status") else {"jobs": 0}
@@ -493,7 +493,7 @@ def create_app(
     @app.get("/api/sessions")
     async def list_sessions(authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
         _get_user_from_auth_header(authorization)
-        return container.session_manager.list_sessions()
+        return container.conversation_store.list_sessions()
 
     @app.get("/api/sessions/{session_key:path}/messages")
     async def get_session_messages(
@@ -501,7 +501,7 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> list[dict[str, Any]]:
         _get_user_from_auth_header(authorization)
-        session = container.session_manager.get_or_create(session_key)
+        session = container.conversation_store.get_or_create(session_key)
         return session.messages
 
     @app.get("/api/sessions/{session_key:path}/memory")
@@ -528,18 +528,18 @@ def create_app(
         from datetime import datetime
 
         _get_user_from_auth_header(authorization)
-        session = container.session_manager.get_or_create(session_key)
+        session = container.conversation_store.get_or_create(session_key)
         if index < 0 or index >= len(session.messages):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid message index")
         del session.messages[index]
         session.updated_at = datetime.now()
-        container.session_manager.save(session)
+        container.conversation_store.save(session)
         return {"removed": 1}
 
     @app.delete("/api/sessions/{session_key:path}")
     async def delete_session(session_key: str, authorization: str | None = Header(default=None)) -> dict[str, bool]:
         _get_user_from_auth_header(authorization)
-        return {"ok": container.session_manager.delete(session_key)}
+        return {"ok": container.conversation_store.delete(session_key)}
 
     @app.get("/api/providers")
     async def providers(authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:

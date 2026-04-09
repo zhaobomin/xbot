@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 logger = get_logger(__name__)
 
 
-class SessionManager:
+class RuntimeSessionRegistry:
     """Unified session state management.
 
     Replaces the 5-layer state management system:
@@ -400,7 +400,7 @@ class SessionManager:
     class _Transaction:
         """Transaction object for atomic state changes."""
 
-        def __init__(self, manager: "SessionManager", session_key: str, validate_on_commit: bool = True):
+        def __init__(self, manager: "RuntimeSessionRegistry", session_key: str, validate_on_commit: bool = True):
             self.manager = manager
             self.session_key = session_key
             self.validate_on_commit = validate_on_commit
@@ -620,10 +620,10 @@ class SessionManager:
     def enforce_legacy_context_limit(self, limit: int) -> None:
         """Enforce a limit on the number of sessions stored (for legacy compatibility).
 
-        This is a no-op in the new SessionManager since we don't enforce limits here.
+        This is a no-op in the new RuntimeSessionRegistry since we don't enforce limits here.
         The limit is managed by the backend's own scavenger process.
         """
-        # No-op - the new SessionManager doesn't enforce limits
+        # No-op - the new RuntimeSessionRegistry doesn't enforce limits
         pass
 
     def clear_context(self, session_key: str) -> None:

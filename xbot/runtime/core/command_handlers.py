@@ -178,7 +178,7 @@ class LocalCommandHandler:
             details.append("pending interaction")
 
         # Set phase to IDLE
-        sm = svc._shared_resources.get("state_manager")
+        sm = svc._shared_resources.get("runtime_registry")
         if sm:
             sm.force_transition(session_key, SessionPhase.IDLE, reason="user_stop")
 
@@ -218,7 +218,7 @@ class LocalCommandHandler:
         await svc._client_pool.disconnect(session_key)
 
         # Set phase to IDLE
-        sm = svc._shared_resources.get("state_manager")
+        sm = svc._shared_resources.get("runtime_registry")
         if sm:
             sm.force_transition(session_key, SessionPhase.IDLE, reason="user_reset")
 
@@ -244,7 +244,7 @@ class LocalCommandHandler:
     def _session_diagnostics_text(self, session_key: str) -> str:
         """Generate session diagnostics (matches v0.3.37 !state output)."""
         svc = self._service
-        sm = svc._shared_resources.get("state_manager")
+        sm = svc._shared_resources.get("runtime_registry")
         phase = sm.get_phase(session_key) if sm else "N/A"
 
         # Active tasks
@@ -283,7 +283,7 @@ class LocalCommandHandler:
     def _coord_status_text(self) -> str:
         """Generate coordinator status text (matches v0.3.37 !coord output)."""
         svc = self._service
-        sm = svc._shared_resources.get("state_manager")
+        sm = svc._shared_resources.get("runtime_registry")
         lines = ["\U0001f527 State Coordinator", ""]
 
         if sm and hasattr(sm, "_sessions"):

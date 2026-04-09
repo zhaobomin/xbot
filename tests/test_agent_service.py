@@ -11,7 +11,7 @@ from xbot.platform.bus.events import InboundMessage
 from xbot.runtime.core.protocol import AgentContext, AgentResponse
 from xbot.runtime.core.service import AgentService
 from xbot.runtime.core.types import AgentConfig
-from xbot.runtime.state import SessionManager as StateManager
+from xbot.runtime.state import RuntimeSessionRegistry
 from xbot.runtime.state.machine import SessionPhase
 
 
@@ -143,7 +143,7 @@ class TestAgentService:
         shared_resources: dict[str, Any],
     ) -> None:
         """get_session_commands should not create/connect client by default."""
-        shared_resources["state_manager"] = StateManager()
+        shared_resources["runtime_registry"] = RuntimeSessionRegistry()
         service = AgentService()
         await service.initialize(config, shared_resources)
 
@@ -160,7 +160,7 @@ class TestAgentService:
         shared_resources: dict[str, Any],
     ) -> None:
         """allow_connect=True should discover SDK slash commands and cache them."""
-        shared_resources["state_manager"] = StateManager()
+        shared_resources["runtime_registry"] = RuntimeSessionRegistry()
         service = AgentService()
         await service.initialize(config, shared_resources)
 
@@ -175,7 +175,7 @@ class TestAgentService:
         assert "/review" in commands
         assert "/schedule" in commands
 
-        cached = shared_resources["state_manager"].get_commands("test:c1")
+        cached = shared_resources["runtime_registry"].get_commands("test:c1")
         assert "/review" in cached
         assert "/schedule" in cached
 
@@ -184,8 +184,8 @@ class TestRunDispatch:
     """Tests for the run() message routing and _dispatch() processing chain."""
 
     @pytest.fixture
-    def state_manager(self) -> StateManager:
-        return StateManager()
+    def state_manager(self) -> RuntimeSessionRegistry:
+        return RuntimeSessionRegistry()
 
     @pytest.fixture
     def bus(self) -> MagicMock:
@@ -205,7 +205,7 @@ class TestRunDispatch:
             "workspace": str(tmp_path),
             "config": MagicMock(),
             "bus": bus,
-            "state_manager": state_manager,
+            "runtime_registry": state_manager,
         }
 
     async def _make_service(self, config, shared_resources) -> AgentService:

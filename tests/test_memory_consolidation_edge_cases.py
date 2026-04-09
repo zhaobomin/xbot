@@ -11,7 +11,7 @@ import pytest
 
 from xbot.memory.store import MemoryConsolidator, MemoryStore
 from xbot.platform.providers.base import LLMResponse, ToolCallRequest
-from xbot.runtime.session.manager import Session, SessionManager
+from xbot.runtime.session.conversation_store import ConversationSession, ConversationStore
 
 
 def _make_messages_with_turns(turn_count: int) -> list[dict]:
@@ -117,7 +117,7 @@ class TestForceConsolidateBoundary:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=backend,
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
@@ -125,7 +125,7 @@ class TestForceConsolidateBoundary:
 
         # 6 turns (12 messages), with MIN_RESERVE_TURNS=5
         # Should consolidate at most 1 turn (2 messages)
-        session = Session(key="test:force-reserve")
+        session = ConversationSession(key="test:force-reserve")
         session.messages = _make_messages_with_turns(6)
 
         result = await consolidator.force_consolidate(session)
@@ -144,14 +144,14 @@ class TestForceConsolidateBoundary:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=backend,
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
         # 10 turns (20 messages)
-        session = Session(key="test:custom-reserve")
+        session = ConversationSession(key="test:custom-reserve")
         session.messages = _make_messages_with_turns(10)
 
         # Reserve only 2 turns (4 messages)
@@ -171,14 +171,14 @@ class TestForceConsolidateBoundary:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=backend,
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
         # 5 turns (10 messages)
-        session = Session(key="test:zero-reserve")
+        session = ConversationSession(key="test:zero-reserve")
         session.messages = _make_messages_with_turns(5)
 
         # With reserve_last_n=0, consolidate all
@@ -199,7 +199,7 @@ class TestIncompleteMessagePairs:
             backend=_make_mock_backend_with_response(
                 _make_tool_response("[2026-01-01] Entry.", "# Memory\nTest.")
             ),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
@@ -213,7 +213,7 @@ class TestIncompleteMessagePairs:
             "timestamp": "2026-01-01T99:00:00",
         })
 
-        session = Session(key="test:incomplete")
+        session = ConversationSession(key="test:incomplete")
         session.messages = messages
 
         with patch.object(
@@ -237,14 +237,14 @@ class TestIncompleteMessagePairs:
             backend=_make_mock_backend_with_response(
                 _make_tool_response("[2026-01-01] Entry.", "# Memory\nTest.")
             ),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
         # Just one user message
-        session = Session(key="test:single-msg")
+        session = ConversationSession(key="test:single-msg")
         session.messages = [{"role": "user", "content": "Hello", "timestamp": "2026-01-01T00:00:00"}]
 
         with patch.object(
@@ -269,14 +269,14 @@ class TestBoundaryEdgeCases:
             backend=_make_mock_backend_with_response(
                 _make_tool_response("[2026-01-01] Entry.", "# Memory\nTest.")
             ),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
         # Exactly 5 turns (10 messages) = MIN_RESERVE_TURNS
-        session = Session(key="test:exact-reserve")
+        session = ConversationSession(key="test:exact-reserve")
         session.messages = _make_messages_with_turns(5)
 
         with patch.object(
@@ -297,14 +297,14 @@ class TestBoundaryEdgeCases:
             backend=_make_mock_backend_with_response(
                 _make_tool_response("[2026-01-01] Entry.", "# Memory\nTest.")
             ),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
         # 6 turns - can consolidate at most 1 turn
-        session = Session(key="test:partial")
+        session = ConversationSession(key="test:partial")
         session.messages = _make_messages_with_turns(6)
 
         with patch.object(
@@ -325,13 +325,13 @@ class TestBoundaryEdgeCases:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=MagicMock(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
-        session = Session(key="test:zero-remove")
+        session = ConversationSession(key="test:zero-remove")
         session.messages = _make_messages_with_turns(20)
 
         # Zero tokens to remove
@@ -343,13 +343,13 @@ class TestBoundaryEdgeCases:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=MagicMock(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
-        session = Session(key="test:negative-remove")
+        session = ConversationSession(key="test:negative-remove")
         session.messages = _make_messages_with_turns(20)
 
         result = consolidator.pick_consolidation_boundary(session, -100)
@@ -360,13 +360,13 @@ class TestBoundaryEdgeCases:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=MagicMock(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
-        session = Session(key="test:all-consolidated")
+        session = ConversationSession(key="test:all-consolidated")
         session.messages = _make_messages_with_turns(20)
         session.last_consolidated = len(session.messages)  # All consolidated
 
@@ -378,13 +378,13 @@ class TestBoundaryEdgeCases:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=MagicMock(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
-        session = Session(key="test:user-boundary")
+        session = ConversationSession(key="test:user-boundary")
         session.messages = _make_messages_with_turns(20)
 
         result = consolidator.pick_consolidation_boundary(session, 5000)
@@ -400,13 +400,13 @@ class TestBoundaryEdgeCases:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=MagicMock(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
-        session = Session(key="test:offset-start")
+        session = ConversationSession(key="test:offset-start")
         session.messages = _make_messages_with_turns(20)
         session.last_consolidated = 10  # Start from message 10
 
@@ -430,13 +430,13 @@ class TestConcurrentEdgeCases:
             backend=_make_mock_backend_with_response(
                 _make_tool_response("[2026-01-01] Entry.", "# Memory\nTest.")
             ),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
-        session = Session(key="test:reset-during")
+        session = ConversationSession(key="test:reset-during")
         session.messages = _make_messages_with_turns(20)
 
         # Simulate consolidation in progress
@@ -470,13 +470,13 @@ class TestConcurrentEdgeCases:
             backend=_make_mock_backend_with_response(
                 _make_tool_response("[2026-01-01] Entry.", "# Memory\nTest.")
             ),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
-        sessions = [Session(key=f"test:multi-{i}") for i in range(5)]
+        sessions = [ConversationSession(key=f"test:multi-{i}") for i in range(5)]
         for s in sessions:
             s.messages = _make_messages_with_turns(20)
 
@@ -555,13 +555,13 @@ class TestTokenEstimationEdgeCases:
             backend=_make_mock_backend_with_response(
                 _make_tool_response("[2026-01-01] Entry.", "# Memory\nTest.")
             ),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=0,  # Zero!
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
-        session = Session(key="test:zero-window")
+        session = ConversationSession(key="test:zero-window")
         session.messages = _make_messages_with_turns(20)
 
         await consolidator.maybe_consolidate_by_tokens(session)
@@ -577,13 +577,13 @@ class TestTokenEstimationEdgeCases:
             backend=_make_mock_backend_with_response(
                 _make_tool_response("[2026-01-01] Entry.", "# Memory\nTest.")
             ),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
-        session = Session(key="test:negative-tokens")
+        session = ConversationSession(key="test:negative-tokens")
         session.messages = _make_messages_with_turns(20)
 
         with patch.object(
@@ -798,7 +798,7 @@ class TestConsolidatorInit:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=MagicMock(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],

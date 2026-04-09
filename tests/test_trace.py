@@ -2,7 +2,7 @@
 
 from unittest.mock import MagicMock
 
-from xbot.runtime.session.manager import Session
+from xbot.runtime.session.conversation_store import ConversationSession
 from xbot.runtime.system.monitoring.trace import append_session_trace
 
 
@@ -16,7 +16,7 @@ class TestAppendSessionTrace:
 
     def test_appends_event(self) -> None:
         """Test that event is appended to trace."""
-        session = Session(key="test", metadata={})
+        session = ConversationSession(key="test", metadata={})
         sessions = MagicMock()
         sessions.get_or_create.return_value = session
 
@@ -31,7 +31,7 @@ class TestAppendSessionTrace:
 
     def test_appends_multiple_events(self) -> None:
         """Test that multiple events are appended."""
-        session = Session(key="test", metadata={})
+        session = ConversationSession(key="test", metadata={})
         sessions = MagicMock()
         sessions.get_or_create.return_value = session
 
@@ -45,7 +45,7 @@ class TestAppendSessionTrace:
 
     def test_respects_limit(self) -> None:
         """Test that trace is limited to specified size."""
-        session = Session(key="test", metadata={})
+        session = ConversationSession(key="test", metadata={})
         sessions = MagicMock()
         sessions.get_or_create.return_value = session
 
@@ -60,7 +60,7 @@ class TestAppendSessionTrace:
 
     def test_preserves_existing_trace(self) -> None:
         """Test that existing trace is preserved."""
-        session = Session(
+        session = ConversationSession(
             key="test",
             metadata={"runtime_trace": [{"event": "old", "timestamp": "2024-01-01"}]},
         )
@@ -74,7 +74,7 @@ class TestAppendSessionTrace:
         assert session.metadata["runtime_trace"][1]["event"] == "new"
 
     def test_updates_session_without_forcing_immediate_save(self) -> None:
-        session = Session(key="test", metadata={})
+        session = ConversationSession(key="test", metadata={})
         sessions = MagicMock()
         sessions.get_or_create.return_value = session
 

@@ -2,7 +2,7 @@ import time
 
 import pytest
 
-from xbot.runtime.session.manager import SessionManager
+from xbot.runtime.session.conversation_store import ConversationStore
 
 
 @pytest.mark.asyncio
@@ -11,8 +11,8 @@ async def test_session_save_performance(tmp_path):
     Test that session saving performance doesn't degrade linearly with history size.
     Current implementation (O(N)) will show increasing save times.
     """
-    # Create SessionManager with tmp_path
-    manager = SessionManager(tmp_path)
+    # Create ConversationStore with tmp_path
+    manager = ConversationStore(tmp_path)
     session_key = "perf_test_session"
 
     # Pre-fill with some messages

@@ -1,4 +1,4 @@
-"""Tests for SessionManager."""
+"""Tests for RuntimeSessionRegistry."""
 
 import asyncio
 import time
@@ -7,13 +7,13 @@ from unittest.mock import MagicMock
 import pytest
 
 from xbot.runtime.state.machine import SessionPhase
-from xbot.runtime.state.session_manager import SessionManager
+from xbot.runtime.state.runtime_registry import RuntimeSessionRegistry
 
 
 @pytest.mark.asyncio
 async def test_get_or_create_creates_new_session():
     """Test that get_or_create creates a new session when it doesn't exist."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     state = manager.get_or_create("slack:C12345")
 
     assert state.session_key == "slack:C12345"
@@ -25,7 +25,7 @@ async def test_get_or_create_creates_new_session():
 @pytest.mark.asyncio
 async def test_get_or_create_retrieves_existing_session():
     """Test that get_or_create retrieves existing session."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     state1 = manager.get_or_create("slack:C12345")
     state1.channel = "slack"
     state1.chat_id = "C12345"
@@ -39,7 +39,7 @@ async def test_get_or_create_retrieves_existing_session():
 @pytest.mark.asyncio
 async def test_set_sdk_session_id_creates_mapping():
     """Test that set_sdk_session_id creates bidirectional mapping."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     state = manager.get_or_create("slack:C12345")
 
     await manager.set_sdk_session_id("slack:C12345", "sdk-uuid-abc-123")
@@ -51,7 +51,7 @@ async def test_set_sdk_session_id_creates_mapping():
 @pytest.mark.asyncio
 async def test_set_sdk_session_id_updates_mapping():
     """Test that set_sdk_session_id updates existing mapping."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     state = manager.get_or_create("slack:C12345")
     await manager.set_sdk_session_id("slack:C12345", "sdk-uuid-old")
 
@@ -66,7 +66,7 @@ async def test_set_sdk_session_id_updates_mapping():
 @pytest.mark.asyncio
 async def test_set_routing():
     """Test that set_routing updates channel and chat_id."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
 
     manager.set_routing("slack:C12345", "slack", "C12345")
@@ -79,7 +79,7 @@ async def test_set_routing():
 @pytest.mark.asyncio
 async def test_get_routing():
     """Test that get_routing returns channel and chat_id."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
     manager.set_routing("slack:C12345", "slack", "C12345")
 
@@ -90,7 +90,7 @@ async def test_get_routing():
 @pytest.mark.asyncio
 async def test_get_routing_returns_none_for_unknown():
     """Test that get_routing returns None for unknown session."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     routing = manager.get_routing("unknown:session")
     assert routing is None
 
@@ -98,7 +98,7 @@ async def test_get_routing_returns_none_for_unknown():
 @pytest.mark.asyncio
 async def test_resolve_routing_by_session_key():
     """Test resolve_routing accepts session_key."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
     manager.set_routing("slack:C12345", "slack", "C12345")
 
@@ -109,7 +109,7 @@ async def test_resolve_routing_by_session_key():
 @pytest.mark.asyncio
 async def test_resolve_routing_by_sdk_session_id():
     """Test resolve_routing accepts sdk_session_id."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
     manager.set_routing("slack:C12345", "slack", "C12345")
     await manager.set_sdk_session_id("slack:C12345", "sdk-uuid-abc")
@@ -121,7 +121,7 @@ async def test_resolve_routing_by_sdk_session_id():
 @pytest.mark.asyncio
 async def test_resolve_routing_returns_none_for_unknown():
     """Test resolve_routing returns None for unknown identifier."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     result = manager.resolve_routing("unknown-id")
     assert result is None
 
@@ -129,7 +129,7 @@ async def test_resolve_routing_returns_none_for_unknown():
 @pytest.mark.asyncio
 async def test_can_start_request_returns_true_for_idle():
     """Test can_start_request returns True for IDLE phase."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
 
     assert manager.can_start_request("slack:C12345") is True
@@ -138,7 +138,7 @@ async def test_can_start_request_returns_true_for_idle():
 @pytest.mark.asyncio
 async def test_can_start_request_returns_false_for_running():
     """Test can_start_request returns False for RUNNING phase."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
     manager.start_request("slack:C12345")
 
@@ -148,7 +148,7 @@ async def test_can_start_request_returns_false_for_running():
 @pytest.mark.asyncio
 async def test_start_request_transitions_to_running():
     """Test start_request transitions phase to RUNNING."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
 
     result = manager.start_request("slack:C12345")
@@ -161,7 +161,7 @@ async def test_start_request_transitions_to_running():
 @pytest.mark.asyncio
 async def test_start_request_returns_false_when_not_idle():
     """Test start_request returns False when phase is not IDLE."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
     manager.start_request("slack:C12345")  # Phase = RUNNING
 
@@ -172,7 +172,7 @@ async def test_start_request_returns_false_when_not_idle():
 @pytest.mark.asyncio
 async def test_end_request_transitions_to_idle():
     """Test end_request transitions phase back to IDLE."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
     manager.start_request("slack:C12345")
 
@@ -185,7 +185,7 @@ async def test_end_request_transitions_to_idle():
 @pytest.mark.asyncio
 async def test_end_request_can_set_custom_phase():
     """Test end_request can set custom phase (e.g., ERROR)."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
     manager.start_request("slack:C12345")
 
@@ -198,7 +198,7 @@ async def test_end_request_can_set_custom_phase():
 @pytest.mark.asyncio
 async def test_set_client():
     """Test set_client stores client in session state."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
     mock_client = MagicMock()
     manager.set_client("slack:C12345", mock_client)
@@ -209,7 +209,7 @@ async def test_set_client():
 @pytest.mark.asyncio
 async def test_get_client():
     """Test get_client retrieves client."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
     mock_client = MagicMock()
     manager.set_client("slack:C12345", mock_client)
@@ -220,7 +220,7 @@ async def test_get_client():
 @pytest.mark.asyncio
 async def test_has_client():
     """Test has_client checks if session has client."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
     assert manager.has_client("slack:C12345") is False
     mock_client = MagicMock()
@@ -231,7 +231,7 @@ async def test_has_client():
 @pytest.mark.asyncio
 async def test_list_client_sessions():
     """Test list_client_sessions returns sessions with clients."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C1")
     manager.get_or_create("slack:C2")
     manager.get_or_create("slack:C3")
@@ -245,7 +245,7 @@ async def test_list_client_sessions():
 @pytest.mark.asyncio
 async def test_register_task():
     """Test register_task adds task to session."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
 
     async def dummy_task():
@@ -265,7 +265,7 @@ async def test_register_task():
 @pytest.mark.asyncio
 async def test_get_active_tasks():
     """Test get_active_tasks returns session tasks."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
 
     async def dummy_task():
@@ -289,7 +289,7 @@ async def test_get_active_tasks():
 @pytest.mark.asyncio
 async def test_cancel_all_tasks():
     """Test cancel_all_tasks cancels and clears session tasks."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
 
     async def dummy_task():
@@ -311,7 +311,7 @@ async def test_cancel_all_tasks():
 @pytest.mark.asyncio
 async def test_cleanup_session():
     """Test cleanup_session removes session and mappings."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
     await manager.set_sdk_session_id("slack:C12345", "sdk-uuid-abc")
 
@@ -324,7 +324,7 @@ async def test_cleanup_session():
 @pytest.mark.asyncio
 async def test_cleanup_session_cancels_tasks():
     """Test cleanup_session cancels active tasks."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
     manager.get_or_create("slack:C12345")
 
     async def dummy_task():
@@ -342,7 +342,7 @@ async def test_cleanup_session_cancels_tasks():
 @pytest.mark.asyncio
 async def test_list_stale_sessions():
     """Test list_stale_sessions returns sessions past TTL."""
-    manager = SessionManager()
+    manager = RuntimeSessionRegistry()
 
     state1 = manager.get_or_create("slack:C1")
     state2 = manager.get_or_create("slack:C2")

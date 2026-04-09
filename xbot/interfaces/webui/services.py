@@ -16,7 +16,7 @@ class ServiceContainer:
     config: Any
     bus: Any
     agent: Any
-    session_manager: Any
+    conversation_store: Any
     cron: Any
     heartbeat: Any
     save_config: Callable[[Any], None] | None = None

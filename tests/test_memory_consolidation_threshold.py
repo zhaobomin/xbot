@@ -13,7 +13,7 @@ import pytest
 
 from xbot.memory.store import MemoryConsolidator
 from xbot.platform.providers.base import LLMResponse, ToolCallRequest
-from xbot.runtime.session.manager import Session, SessionManager
+from xbot.runtime.session.conversation_store import ConversationSession, ConversationStore
 
 # === Phase 1.1: 新阈值测试 (TDD - 先写测试) ===
 
@@ -27,7 +27,7 @@ class TestConsolidationThresholdRatio:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=_make_mock_backend(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=context_window,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
@@ -39,7 +39,7 @@ class TestConsolidationThresholdRatio:
             'estimate_session_prompt_tokens',
             return_value=(75_000, 'mock')
         ):
-            session = Session(key="test:above-70-percent")
+            session = ConversationSession(key="test:above-70-percent")
             session.messages = _make_messages(100)
 
             await consolidator.maybe_consolidate_by_tokens(session)
@@ -55,7 +55,7 @@ class TestConsolidationThresholdRatio:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=_make_mock_backend(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=context_window,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
@@ -67,7 +67,7 @@ class TestConsolidationThresholdRatio:
             'estimate_session_prompt_tokens',
             return_value=(60_000, 'mock')
         ):
-            session = Session(key="test:below-70-percent")
+            session = ConversationSession(key="test:below-70-percent")
             session.messages = _make_messages(100)
 
             await consolidator.maybe_consolidate_by_tokens(session)
@@ -87,7 +87,7 @@ class TestConsolidationThresholdRatio:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=_make_mock_backend(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=context_window,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
@@ -103,7 +103,7 @@ class TestConsolidationThresholdRatio:
             'estimate_session_prompt_tokens',
             return_value=(70_000, 'mock')
         ):
-            session = Session(key="test:at-boundary")
+            session = ConversationSession(key="test:at-boundary")
             session.messages = _make_messages(100)
 
             await consolidator.maybe_consolidate_by_tokens(session)
@@ -120,7 +120,7 @@ class TestConsolidationThresholdRatio:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=_make_mock_backend(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=context_window,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
@@ -132,7 +132,7 @@ class TestConsolidationThresholdRatio:
             'estimate_session_prompt_tokens',
             return_value=(70_001, 'mock')
         ):
-            session = Session(key="test:just-above")
+            session = ConversationSession(key="test:just-above")
             session.messages = _make_messages(100)
 
             await consolidator.maybe_consolidate_by_tokens(session)
@@ -148,7 +148,7 @@ class TestConsolidationThresholdRatio:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=_make_mock_backend(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=context_window,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
@@ -160,7 +160,7 @@ class TestConsolidationThresholdRatio:
             'estimate_session_prompt_tokens',
             return_value=(8_000, 'mock')
         ):
-            session = Session(key="test:small-context")
+            session = ConversationSession(key="test:small-context")
             session.messages = _make_messages(50)
 
             await consolidator.maybe_consolidate_by_tokens(session)
@@ -176,7 +176,7 @@ class TestConsolidationThresholdRatio:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=backend,
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=context_window,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
@@ -196,7 +196,7 @@ class TestConsolidationThresholdRatio:
             'estimate_session_prompt_tokens',
             side_effect=mock_estimate
         ):
-            session = Session(key="test:multi-round-70")
+            session = ConversationSession(key="test:multi-round-70")
             session.messages = _make_messages(200)
 
             await consolidator.maybe_consolidate_by_tokens(session)
@@ -259,7 +259,7 @@ class TestMemoryConsolidationThreshold:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=_make_mock_backend(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=context_window,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
@@ -272,7 +272,7 @@ class TestMemoryConsolidationThreshold:
             'estimate_session_prompt_tokens',
             return_value=(6000, 'mock')
         ):
-            session = Session(key="test:threshold")
+            session = ConversationSession(key="test:threshold")
             session.messages = _make_messages(50)
 
             result = await consolidator.maybe_consolidate_by_tokens(session)
@@ -287,7 +287,7 @@ class TestMemoryConsolidationThreshold:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=_make_mock_backend(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=context_window,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
@@ -299,7 +299,7 @@ class TestMemoryConsolidationThreshold:
             'estimate_session_prompt_tokens',
             return_value=(3000, 'mock')
         ):
-            session = Session(key="test:below-threshold")
+            session = ConversationSession(key="test:below-threshold")
             session.messages = _make_messages(20)
 
             result = await consolidator.maybe_consolidate_by_tokens(session)
@@ -315,7 +315,7 @@ class TestMemoryConsolidationThreshold:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=backend,
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=context_window,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
@@ -335,7 +335,7 @@ class TestMemoryConsolidationThreshold:
             'estimate_session_prompt_tokens',
             side_effect=mock_estimate
         ):
-            session = Session(key="test:multi-round")
+            session = ConversationSession(key="test:multi-round")
             session.messages = _make_messages(100)
 
             await consolidator.maybe_consolidate_by_tokens(session)
@@ -350,13 +350,13 @@ class TestMemoryConsolidationThreshold:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=_make_mock_backend(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=0,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
-        session = Session(key="test:zero-window")
+        session = ConversationSession(key="test:zero-window")
         session.messages = _make_messages(10)
 
         # Should return early without error
@@ -369,13 +369,13 @@ class TestMemoryConsolidationThreshold:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=_make_mock_backend(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
-        session = Session(key="test:empty")
+        session = ConversationSession(key="test:empty")
         session.messages = []
 
         # Should return early without error
@@ -391,7 +391,7 @@ class TestMemoryConsolidationThreshold:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=_make_mock_backend(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
@@ -399,7 +399,7 @@ class TestMemoryConsolidationThreshold:
 
         # Only 10 messages (5 turns) - exactly MIN_RESERVE_TURNS
         # Should NOT consolidate any messages
-        session = Session(key="test:force")
+        session = ConversationSession(key="test:force")
         session.messages = _make_messages(10)
 
         result = await consolidator.force_consolidate(session)
@@ -414,13 +414,13 @@ class TestMemoryConsolidationThreshold:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=_make_mock_backend(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
-        session = Session(key="test:force-all")
+        session = ConversationSession(key="test:force-all")
         session.messages = _make_messages(10)
 
         # With reserve_last_n=0, consolidate all (no reserve)
@@ -439,13 +439,13 @@ class TestMemoryConsolidatorLocking:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=_make_mock_backend(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
-        session = Session(key="test:concurrent")
+        session = ConversationSession(key="test:concurrent")
         session.messages = _make_messages(50)  # Enough messages to allow consolidation with reserve
 
         # Track execution order
@@ -481,16 +481,16 @@ class TestMemoryConsolidatorLocking:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=_make_mock_backend(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=10000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
         )
 
-        session1 = Session(key="test:session1")
+        session1 = ConversationSession(key="test:session1")
         session1.messages = _make_messages(50)  # Enough messages to allow consolidation with reserve
 
-        session2 = Session(key="test:session2")
+        session2 = ConversationSession(key="test:session2")
         session2.messages = _make_messages(50)  # Enough messages to allow consolidation with reserve
 
         # Track concurrent execution

@@ -6,7 +6,7 @@ from xbot.channels.manager import ChannelManager
 from xbot.interfaces.webui.services import ServiceContainer
 from xbot.platform.bus.queue import MessageBus
 from xbot.platform.config.loader import save_config
-from xbot.runtime.session.manager import SessionManager
+from xbot.runtime.session.conversation_store import ConversationStore
 from xbot.runtime.system.cron.service import CronService
 from xbot.runtime.system.heartbeat.service import HeartbeatService
 
@@ -20,7 +20,7 @@ def build_services(config, *, make_runtime) -> ServiceContainer:
     workspace = config.workspace_path
     workspace.mkdir(parents=True, exist_ok=True)
     bus = MessageBus()
-    session_manager = SessionManager(workspace)
+    conversation_store = ConversationStore(workspace)
     cron = CronService(workspace / "cron" / "jobs.json")
     channel_manager = ChannelManager(config, bus)
     heartbeat = HeartbeatService(
@@ -35,14 +35,14 @@ def build_services(config, *, make_runtime) -> ServiceContainer:
         bus=bus,
         workspace=workspace,
         cron_service=cron,
-        session_manager=session_manager,
+        conversation_store=conversation_store,
         permission_handler=None,
     )
     return ServiceContainer(
         config=config,
         bus=bus,
         agent=agent,
-        session_manager=session_manager,
+        conversation_store=conversation_store,
         cron=cron,
         heartbeat=heartbeat,
         save_config=save_config,

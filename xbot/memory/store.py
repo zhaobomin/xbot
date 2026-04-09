@@ -18,7 +18,7 @@ from xbot.platform.utils.helpers import (
 logger = get_logger(__name__)
 if TYPE_CHECKING:
     from xbot.runtime.core.service import AgentService
-    from xbot.runtime.session.manager import Session, SessionManager
+    from xbot.runtime.session.conversation_store import ConversationSession, ConversationStore
 
 
 # === Consolidation Prompt Templates ===
@@ -302,7 +302,7 @@ class MemoryStore:
 class MemoryConsolidator:
     """Owns consolidation policy, locking, and session offset updates.
 
-    ## Design Note: Relationship with SDK Session History
+    ## Design Note: Relationship with SDK ConversationSession History
 
     Memory consolidation in xbot serves a different purpose than SDK context management:
 
@@ -314,7 +314,7 @@ class MemoryConsolidator:
       via the `resume` parameter. SDK handles context window optimization through
       its internal mechanisms (e.g., /compact command).
 
-    The `last_consolidated` offset in Session tracks which messages have been
+    The `last_consolidated` offset in ConversationSession tracks which messages have been
     archived to files, NOT which messages the SDK has in its context. This is
     intentional - the two systems manage different concerns:
 
@@ -333,7 +333,7 @@ class MemoryConsolidator:
         self,
         workspace: Path,
         backend: "AgentService",
-        sessions: SessionManager,
+        sessions: ConversationStore,
         context_window_tokens: int,
         build_messages: Callable[..., list[dict[str, Any]]],
         get_tool_definitions: Callable[[], list[dict[str, Any]]],
@@ -367,7 +367,7 @@ class MemoryConsolidator:
 
     def pick_consolidation_boundary(
         self,
-        session: Session,
+        session: ConversationSession,
         tokens_to_remove: int,
     ) -> tuple[int, int] | None:
         """Pick a user-turn boundary that removes enough old prompt tokens.
@@ -409,7 +409,7 @@ class MemoryConsolidator:
 
         return last_valid_boundary
 
-    def estimate_session_prompt_tokens(self, session: Session) -> tuple[int, str]:
+    def estimate_session_prompt_tokens(self, session: ConversationSession) -> tuple[int, str]:
         """Estimate current prompt size for the normal session history view."""
         history = session.get_history(max_messages=0)
         channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
@@ -435,7 +435,7 @@ class MemoryConsolidator:
                 return True
         return True
 
-    async def maybe_consolidate_by_tokens(self, session: Session) -> None:
+    async def maybe_consolidate_by_tokens(self, session: ConversationSession) -> None:
         """Loop: archive old messages until prompt fits within (1 - TRIGGER_RATIO) of context window."""
         if not session.messages or self.context_window_tokens <= 0:
             return
@@ -499,7 +499,7 @@ class MemoryConsolidator:
         finally:
             self._cleanup_lock_if_idle(session.key, lock)
 
-    async def force_consolidate(self, session: Session, reserve_last_n: int | None = None) -> dict[str, Any]:
+    async def force_consolidate(self, session: ConversationSession, reserve_last_n: int | None = None) -> dict[str, Any]:
         """Force consolidate unconsolidated messages in a session.
 
         This is triggered by the /compact command.

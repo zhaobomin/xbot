@@ -14,7 +14,7 @@ def _make_container(workspace_path: Path) -> ServiceContainer:
         config=config,
         bus=None,
         agent=None,
-        session_manager=None,
+        conversation_store=None,
         cron=None,
         heartbeat=None,
     )

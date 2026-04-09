@@ -1,13 +1,13 @@
 """Test session file locking behavior.
 
-Regression tests for file locking fix in SessionManager.
+Regression tests for file locking fix in ConversationStore.
 Tests that concurrent access to session files is properly synchronized.
 """
 
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from xbot.runtime.session.manager import Session, SessionManager
+from xbot.runtime.session.conversation_store import ConversationSession, ConversationStore
 
 
 class TestSessionFileLocking:
@@ -15,7 +15,7 @@ class TestSessionFileLocking:
 
     def test_save_and_load_are_thread_safe(self, tmp_path: Path) -> None:
         """Concurrent saves and loads should not corrupt session files."""
-        manager = SessionManager(tmp_path)
+        manager = ConversationStore(tmp_path)
         session_key = "test:concurrent"
 
         # Create initial session
@@ -46,8 +46,8 @@ class TestSessionFileLocking:
         assert loaded.key == session_key
 
     def test_save_writes_atomically(self, tmp_path: Path) -> None:
-        """Session save should use atomic write (temp file + rename)."""
-        manager = SessionManager(tmp_path)
+        """ConversationSession save should use atomic write (temp file + rename)."""
+        manager = ConversationStore(tmp_path)
         session_key = "test:atomic"
 
         session = manager.get_or_create(session_key)
@@ -59,11 +59,11 @@ class TestSessionFileLocking:
         tmp_path_file = session_path.with_suffix(".jsonl.tmp")
 
         assert not tmp_path_file.exists(), "Temp file should be cleaned up after save"
-        assert session_path.exists(), "Session file should exist"
+        assert session_path.exists(), "ConversationSession file should exist"
 
     def test_concurrent_sessions_dont_interfere(self, tmp_path: Path) -> None:
         """Concurrent operations on different sessions should not interfere."""
-        manager = SessionManager(tmp_path)
+        manager = ConversationStore(tmp_path)
         session_keys = [f"test:session{i}" for i in range(5)]
 
         errors = []
@@ -90,13 +90,13 @@ class TestSessionFileLocking:
 
     def test_load_handles_missing_file_gracefully(self, tmp_path: Path) -> None:
         """Loading a non-existent session should return None."""
-        manager = SessionManager(tmp_path)
+        manager = ConversationStore(tmp_path)
         result = manager._load("nonexistent:session")
         assert result is None
 
     def test_save_preserves_all_session_data(self, tmp_path: Path) -> None:
         """All session data should be preserved after save/load cycle."""
-        manager = SessionManager(tmp_path)
+        manager = ConversationStore(tmp_path)
         session_key = "test:preserve"
 
         # Create session with various data
@@ -118,7 +118,7 @@ class TestSessionFileLocking:
 
     def test_lock_file_is_created_and_cleaned(self, tmp_path: Path) -> None:
         """Lock files should be created during operations and cleaned up."""
-        manager = SessionManager(tmp_path)
+        manager = ConversationStore(tmp_path)
         session_key = "test:lockfile"
 
         session = manager.get_or_create(session_key)
@@ -139,7 +139,7 @@ class TestSessionFileLocking:
 
     def test_corrupt_session_file_handled_gracefully(self, tmp_path: Path) -> None:
         """Loading a corrupt session file should not crash."""
-        manager = SessionManager(tmp_path)
+        manager = ConversationStore(tmp_path)
         session_key = "test:corrupt"
 
         # Write corrupt data
@@ -153,7 +153,7 @@ class TestSessionFileLocking:
 
     def test_session_clear_resets_state(self, tmp_path: Path) -> None:
         """Clearing a session should reset all mutable state."""
-        manager = SessionManager(tmp_path)
+        manager = ConversationStore(tmp_path)
         session_key = "test:clear"
 
         session = manager.get_or_create(session_key)
@@ -184,7 +184,7 @@ class TestSessionHistoryBoundary:
 
     def test_get_history_with_large_offset(self, tmp_path: Path) -> None:
         """get_history should handle last_consolidated >= len(messages)."""
-        session = Session(key="test:offset")
+        session = ConversationSession(key="test:offset")
         session.add_message("user", "message 1")
         session.last_consolidated = 100  # Beyond message count
 
@@ -193,7 +193,7 @@ class TestSessionHistoryBoundary:
 
     def test_get_history_with_negative_consolidated(self, tmp_path: Path) -> None:
         """get_history should handle negative last_consolidated gracefully."""
-        session = Session(key="test:negative")
+        session = ConversationSession(key="test:negative")
         session.add_message("user", "message 1")
         # This shouldn't happen in practice, but let's be defensive
         session.last_consolidated = -1
@@ -205,7 +205,7 @@ class TestSessionHistoryBoundary:
 
     def test_get_history_preserves_tool_calls(self, tmp_path: Path) -> None:
         """get_history should preserve tool_calls in messages."""
-        session = Session(key="test:tools")
+        session = ConversationSession(key="test:tools")
         session.add_message(
             "assistant",
             None,
@@ -223,7 +223,7 @@ class TestSessionHistoryBoundary:
 
     def test_get_history_max_messages_respected(self, tmp_path: Path) -> None:
         """get_history should respect max_messages parameter."""
-        session = Session(key="test:max")
+        session = ConversationSession(key="test:max")
         for i in range(100):
             session.add_message("user", f"message {i}")
 

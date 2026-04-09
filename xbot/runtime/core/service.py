@@ -99,7 +99,7 @@ def _progress_kind_from_event_type(event_type: str, *, tool_hint: bool = False) 
 
 
 class _NoOpTransaction:
-    """No-op transaction for when state_manager is not available."""
+    """No-op transaction for when runtime_registry is not available."""
 
     def set_phase(self, phase: Any, reason: str = "") -> None:
         pass
@@ -197,14 +197,7 @@ class AgentService:
         # Initialize ReMe main chain: ContextBuilder + MemoryConsolidator
         runtime_config = self._shared_resources.get("config")
         workspace_path = Path(self._shared_resources.get("workspace", ".")).expanduser().resolve()
-        sessions = self._shared_resources.get("session_manager")
-        if sessions is None:
-            try:
-                from xbot.runtime.state.session_manager import SessionManager
-                sessions = SessionManager(workspace_path)
-                self._shared_resources["session_manager"] = sessions
-            except Exception as e:
-                logger.warning("Failed to initialize SessionManager: %s", e)
+        sessions = self._shared_resources.get("conversation_store")
 
         if runtime_config:
             memory_cfg = getattr(getattr(runtime_config, "tools", None), "memory", None)
@@ -438,8 +431,8 @@ class AgentService:
         commands: set[str] = {"/help", "/clear", "/compact"}
         sdk_discovered: set[str] = set()
 
-        # Commands discovered from state manager (if any).
-        sm = self._shared_resources.get("state_manager")
+        # Commands discovered from runtime registry (if any).
+        sm = self._shared_resources.get("runtime_registry")
         if sm and hasattr(sm, "get_commands"):
             try:
                 for cmd in sm.get_commands(session_key) or []:
@@ -526,7 +519,7 @@ class AgentService:
 
     async def _refresh_session_commands_from_client(self, session_key: str, client: Any) -> None:
         """Refresh and cache SDK commands from an already-connected client."""
-        sm = self._shared_resources.get("state_manager")
+        sm = self._shared_resources.get("runtime_registry")
         if not sm or not hasattr(sm, "set_commands"):
             return
         if hasattr(sm, "get_commands"):
@@ -553,7 +546,7 @@ class AgentService:
             interrupted = True
         await self._client_pool.disconnect(session_key)
         # Reset phase to IDLE
-        sm = self._shared_resources.get("state_manager")
+        sm = self._shared_resources.get("runtime_registry")
         if sm:
             sm.force_transition(session_key, SessionPhase.IDLE, reason="interrupted")
         return {"interrupted": interrupted, "usage": None}
@@ -561,16 +554,16 @@ class AgentService:
     # === State Delegation ===
 
     def get_phase(self, session_key: str) -> SessionPhase:
-        """Get current session phase (delegates to state_manager)."""
-        sm = self._shared_resources.get("state_manager")
+        """Get current session phase (delegates to runtime_registry)."""
+        sm = self._shared_resources.get("runtime_registry")
         if sm:
             return sm.get_phase(session_key)
         return SessionPhase.IDLE
 
     @asynccontextmanager
     async def transaction(self, session_key: str, validate_on_commit: bool = True):
-        """Async context manager for transactional state changes (delegates to state_manager)."""
-        sm = self._shared_resources.get("state_manager")
+        """Async context manager for transactional state changes (delegates to runtime_registry)."""
+        sm = self._shared_resources.get("runtime_registry")
         if sm:
             async with sm.transaction(session_key, validate_on_commit=validate_on_commit) as tx:
                 yield tx
@@ -980,8 +973,8 @@ class AgentService:
 
             def send_compact_notification(session_ref: str, message: str) -> None:
                 """Send compact notification to direct callback and/or bus."""
-                # Resolve target channel/chat_id from state_manager
-                sm = self._shared_resources.get("state_manager")
+                # Resolve target channel/chat_id from runtime_registry
+                sm = self._shared_resources.get("runtime_registry")
                 resolved_target = None
                 if sm and hasattr(sm, "resolve_compact_notification_target"):
                     try:
@@ -1703,7 +1696,7 @@ class AgentService:
             self._set_session_routing(session_key, msg.channel, msg.chat_id)
 
             # Transition to RUNNING
-            sm = self._shared_resources.get("state_manager")
+            sm = self._shared_resources.get("runtime_registry")
             if sm:
                 sm.force_transition(session_key, SessionPhase.RUNNING, reason="dispatch_start")
 
@@ -1798,7 +1791,7 @@ class AgentService:
                 ))
 
             # Session persistence
-            sess_mgr = self._shared_resources.get("session_manager")
+            sess_mgr = self._shared_resources.get("conversation_store")
             if sess_mgr and hasattr(sess_mgr, "get_or_create"):
                 try:
                     session = sess_mgr.get_or_create(session_key)
@@ -1824,7 +1817,7 @@ class AgentService:
                 pass
         finally:
             # Restore phase (matches v0.3.37 _dispatch finally logic)
-            sm = self._shared_resources.get("state_manager")
+            sm = self._shared_resources.get("runtime_registry")
             if sm:
                 bus_obj = self._shared_resources.get("bus")
                 has_pending_permission = False
@@ -1888,7 +1881,7 @@ class AgentService:
 
     def _set_session_routing(self, session_key: str, channel: str, chat_id: str) -> None:
         """Persist runtime routing for compact hook delivery."""
-        sm = self._shared_resources.get("state_manager")
+        sm = self._shared_resources.get("runtime_registry")
         if sm and hasattr(sm, "set_routing"):
             try:
                 sm.set_routing(session_key, channel, chat_id)
@@ -1897,7 +1890,7 @@ class AgentService:
 
     def _sync_sdk_session_mapping(self, session_key: str, message: Any) -> None:
         """Capture SDK session UUID from stream messages for hook routing."""
-        sm = self._shared_resources.get("state_manager")
+        sm = self._shared_resources.get("runtime_registry")
         if sm is None:
             return
 

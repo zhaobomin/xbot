@@ -10,7 +10,7 @@ import pytest
 
 from xbot.memory.store import MemoryConsolidator
 from xbot.platform.providers.base import LLMResponse, ToolCallRequest
-from xbot.runtime.session.manager import Session, SessionManager
+from xbot.runtime.session.conversation_store import ConversationSession, ConversationStore
 
 
 def _make_messages(count: int = 50) -> list[dict]:
@@ -67,7 +67,7 @@ class TestSingleTriggerPoint:
         consolidator = MemoryConsolidator(
             workspace=tmp_path,
             backend=_make_mock_backend(),
-            sessions=SessionManager(tmp_path),
+            sessions=ConversationStore(tmp_path),
             context_window_tokens=100_000,
             build_messages=lambda **kwargs: [],
             get_tool_definitions=lambda: [],
@@ -84,7 +84,7 @@ class TestSingleTriggerPoint:
 
         consolidator.maybe_consolidate_by_tokens = tracked_consolidate
 
-        session = Session(key="test:single-trigger")
+        session = ConversationSession(key="test:single-trigger")
         session.messages = _make_messages(50)
 
         with patch.object(

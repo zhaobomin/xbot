@@ -12,7 +12,7 @@ from xbot.interfaces.cli.commands import app
 from xbot.interfaces.webui.auth import set_password
 from xbot.platform.bus.queue import MessageBus
 from xbot.platform.config.schema import Config, MCPServerConfig
-from xbot.runtime.session.manager import SessionManager
+from xbot.runtime.session.conversation_store import ConversationStore
 from xbot.runtime.system.cron.types import CronJob, CronJobState, CronPayload, CronSchedule
 
 
@@ -165,7 +165,7 @@ class _Services:
     config: Config
     bus: MessageBus
     agent: _FakeRuntime
-    session_manager: SessionManager
+    conversation_store: ConversationStore
     cron: _FakeCronService
     heartbeat: _FakeHeartbeatService
 
@@ -193,13 +193,13 @@ def _build_client(tmp_path: Path) -> tuple[TestClient, _Services]:
 
     workspace = config.workspace_path
     workspace.mkdir(parents=True, exist_ok=True)
-    session_manager = SessionManager(workspace)
-    session = session_manager.get_or_create("cli:web-admin-1")
+    conversation_store = ConversationStore(workspace)
+    session = conversation_store.get_or_create("cli:web-admin-1")
     session.messages = [
         {"role": "user", "content": "hello"},
         {"role": "assistant", "content": "world"},
     ]
-    session_manager.save(session)
+    conversation_store.save(session)
 
     cron = _FakeCronService()
     heartbeat = _FakeHeartbeatService()
@@ -210,7 +210,7 @@ def _build_client(tmp_path: Path) -> tuple[TestClient, _Services]:
         config=config,
         bus=bus,
         agent=runtime,
-        session_manager=session_manager,
+        conversation_store=conversation_store,
         cron=cron,
         heartbeat=heartbeat,
         metadata={"channel_manager": channel_manager},
@@ -242,7 +242,7 @@ def test_webui_serves_frontend_dist_when_present(tmp_path: Path) -> None:
         config=config,
         bus=MessageBus(),
         agent=_FakeRuntime(),
-        session_manager=SessionManager(config.workspace_path),
+        conversation_store=ConversationStore(config.workspace_path),
         cron=_FakeCronService(),
         heartbeat=_FakeHeartbeatService(),
     )
@@ -268,7 +268,7 @@ def test_webui_spa_routes_fall_back_to_index(tmp_path: Path) -> None:
         config=config,
         bus=MessageBus(),
         agent=_FakeRuntime(),
-        session_manager=SessionManager(config.workspace_path),
+        conversation_store=ConversationStore(config.workspace_path),
         cron=_FakeCronService(),
         heartbeat=_FakeHeartbeatService(),
     )
@@ -532,12 +532,12 @@ def test_cron_management_crud_endpoints_with_real_service_shape(tmp_path: Path) 
 
     config = Config()
     config.agents.defaults.workspace = str(tmp_path / "workspace")
-    session_manager = SessionManager(config.workspace_path)
+    conversation_store = ConversationStore(config.workspace_path)
     services = ServiceContainer(
         config=config,
         bus=MessageBus(),
         agent=_FakeRuntime(),
-        session_manager=session_manager,
+        conversation_store=conversation_store,
         cron=_RealShapeCronService(),
         heartbeat=_FakeHeartbeatService(),
     )

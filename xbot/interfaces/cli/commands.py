@@ -69,7 +69,7 @@ def _resolve_heartbeat_target(
     *,
     config: Config,
     enabled_channels: list[str],
-    session_manager: Any,
+    conversation_store: Any,
 ) -> tuple[str, str] | None:
     """Resolve a stable heartbeat delivery target at gateway startup."""
     heartbeat_cfg = config.gateway.heartbeat
@@ -95,10 +95,10 @@ def _resolve_heartbeat_target(
             return None
         return explicit_channel, explicit_chat_id
 
-    if session_manager is None or not hasattr(session_manager, "list_sessions"):
+    if conversation_store is None or not hasattr(conversation_store, "list_sessions"):
         return None
 
-    for item in session_manager.list_sessions():
+    for item in conversation_store.list_sessions():
         key = item.get("key") or ""
         if ":" not in key:
             continue
@@ -626,8 +626,8 @@ def _make_agent_service(
     bus,
     workspace: Path,
     cron_service,
-    session_manager,
-    state_manager=None,
+    conversation_store,
+    runtime_registry=None,
     permission_handler=None,
     run_mode: str = "cli",
 ):
@@ -645,13 +645,13 @@ def _make_agent_service(
         "bus": bus,
         "workspace": workspace,
         "cron_service": cron_service,
-        "session_manager": session_manager,
+        "conversation_store": conversation_store,
         "config": config,
         "tools_config": config.tools,
         "run_mode": run_mode,
     }
-    if state_manager is not None:
-        shared_resources["state_manager"] = state_manager
+    if runtime_registry is not None:
+        shared_resources["runtime_registry"] = runtime_registry
     if permission_handler is not None:
         shared_resources["permission_handler"] = permission_handler
 
@@ -687,8 +687,8 @@ def gateway(
     from xbot.interaction.permission import PermissionRequestHandler
     from xbot.platform.bus.queue import MessageBus
     from xbot.platform.config.paths import get_cron_dir
-    from xbot.runtime.session.manager import SessionManager
-    from xbot.runtime.state import SessionManager as StateManager
+    from xbot.runtime.session.conversation_store import ConversationStore
+    from xbot.runtime.state import RuntimeSessionRegistry
     from xbot.runtime.system.cron.service import CronService
     from xbot.runtime.system.cron.types import CronJob
     from xbot.runtime.system.heartbeat.service import HeartbeatService
@@ -705,8 +705,8 @@ def gateway(
     console.print("[dim]Agent type: claude_sdk[/dim]")
     sync_workspace_templates(config.workspace_path)
     bus = MessageBus()
-    session_manager = SessionManager(config.workspace_path)
-    state_manager = StateManager()
+    conversation_store = ConversationStore(config.workspace_path)
+    runtime_registry = RuntimeSessionRegistry()
 
     # Create health check service
     health = HealthCheckService(port=health_port, host=config.gateway.host)
@@ -730,8 +730,8 @@ def gateway(
         bus=bus,
         workspace=config.workspace_path,
         cron_service=cron,
-        session_manager=session_manager,
-        state_manager=state_manager,
+        conversation_store=conversation_store,
+        runtime_registry=runtime_registry,
         permission_handler=permission_handler,
         run_mode="gateway",
     )
@@ -789,7 +789,7 @@ def gateway(
     heartbeat_target = _resolve_heartbeat_target(
         config=config,
         enabled_channels=channels.enabled_channels,
-        session_manager=session_manager,
+        conversation_store=conversation_store,
     )
     if heartbeat_target is None:
         logger.info("Heartbeat target unresolved at startup; execute-only mode enabled")
@@ -918,7 +918,7 @@ def gateway(
 @app.command()
 def agent(
     message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
-    session_id: str = typer.Option("cli:direct", "--session", "-s", help="Session ID"),
+    session_id: str = typer.Option("cli:direct", "--session", "-s", help="ConversationSession ID"),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
     markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
@@ -927,7 +927,7 @@ def agent(
     """Interact with the agent directly."""
     from xbot.platform.bus.queue import MessageBus
     from xbot.platform.config.paths import get_cron_dir
-    from xbot.runtime.state import SessionManager as StateManager
+    from xbot.runtime.state import RuntimeSessionRegistry
     from xbot.runtime.system.cron.service import CronService
 
     config = _load_runtime_config(config, workspace)
@@ -935,7 +935,7 @@ def agent(
     sync_workspace_templates(config.workspace_path)
 
     bus = MessageBus()
-    state_manager = StateManager()
+    runtime_registry = RuntimeSessionRegistry()
 
     # Create cron service for tool usage (no callback needed for CLI unless running)
     cron_store_path = get_cron_dir() / "jobs.json"
@@ -969,8 +969,8 @@ def agent(
         bus=bus,
         workspace=config.workspace_path,
         cron_service=cron,
-        session_manager=None,
-        state_manager=state_manager,
+        conversation_store=None,
+        runtime_registry=runtime_registry,
         permission_handler=_permission_handler,
         run_mode="cli",
     )

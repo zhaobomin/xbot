@@ -369,7 +369,7 @@ def test_gateway_uses_config_directory_for_cron_store(monkeypatch, tmp_path: Pat
     monkeypatch.setattr("xbot.platform.config.paths.get_cron_dir", lambda: config_file.parent / "cron")
     monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_templates", lambda _path: None)
     monkeypatch.setattr("xbot.platform.bus.queue.MessageBus", lambda: object())
-    monkeypatch.setattr("xbot.runtime.session.manager.SessionManager", lambda _workspace: object())
+    monkeypatch.setattr("xbot.runtime.session.conversation_store.ConversationStore", lambda _workspace: object())
 
     class _StopCron:
         def __init__(self, store_path: Path) -> None:
@@ -393,14 +393,14 @@ def test_resolve_heartbeat_target_prefers_explicit_configured_target(tmp_path: P
     config.gateway.heartbeat.channel = "telegram"
     config.gateway.heartbeat.chat_id = "chat-123"
 
-    session_manager = MagicMock(list_sessions=lambda: [
+    conversation_store = MagicMock(list_sessions=lambda: [
         {"key": "slack:older", "updated_at": "2026-01-01T00:00:00"},
     ])
 
     assert _resolve_heartbeat_target(
         config=config,
         enabled_channels=["telegram", "slack"],
-        session_manager=session_manager,
+        conversation_store=conversation_store,
     ) == ("telegram", "chat-123")
 
 
@@ -408,7 +408,7 @@ def test_resolve_heartbeat_target_falls_back_to_startup_session_snapshot() -> No
     from xbot.interfaces.cli.commands import _resolve_heartbeat_target
 
     config = Config()
-    session_manager = MagicMock(list_sessions=lambda: [
+    conversation_store = MagicMock(list_sessions=lambda: [
         {"key": "cli:direct", "updated_at": "2026-01-03T00:00:00"},
         {"key": "telegram:newer", "updated_at": "2026-01-02T00:00:00"},
         {"key": "slack:older", "updated_at": "2026-01-01T00:00:00"},
@@ -417,7 +417,7 @@ def test_resolve_heartbeat_target_falls_back_to_startup_session_snapshot() -> No
     assert _resolve_heartbeat_target(
         config=config,
         enabled_channels=["telegram", "slack"],
-        session_manager=session_manager,
+        conversation_store=conversation_store,
     ) == ("telegram", "newer")
 
 
@@ -428,14 +428,14 @@ def test_resolve_heartbeat_target_returns_none_for_invalid_explicit_target() -> 
     config.gateway.heartbeat.channel = "telegram"
     config.gateway.heartbeat.chat_id = "chat-123"
 
-    session_manager = MagicMock(list_sessions=lambda: [
+    conversation_store = MagicMock(list_sessions=lambda: [
         {"key": "telegram:newer", "updated_at": "2026-01-02T00:00:00"},
     ])
 
     assert _resolve_heartbeat_target(
         config=config,
         enabled_channels=["slack"],
-        session_manager=session_manager,
+        conversation_store=conversation_store,
     ) is None
 
 

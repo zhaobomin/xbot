@@ -1,15 +1,15 @@
-"""Session-scoped runtime trace helpers."""
+"""ConversationSession-scoped runtime trace helpers."""
 
 from __future__ import annotations
 
 from datetime import datetime
 from typing import Any
 
-from xbot.runtime.session.manager import SessionManager
+from xbot.runtime.session.conversation_store import ConversationStore
 
 
 def append_session_trace(
-    sessions: SessionManager | None,
+    sessions: ConversationStore | None,
     session_key: str,
     event: str,
     data: dict[str, Any],
