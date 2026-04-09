@@ -179,6 +179,26 @@ class TestAgentService:
         assert "/review" in cached
         assert "/schedule" in cached
 
+    @pytest.mark.asyncio
+    async def test_process_direct_ignores_final_content_after_deltas(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """process_direct should not duplicate text when both deltas and final content exist."""
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        async def fake_process(context):
+            yield AgentResponse(content="", is_delta=True, delta_content="Hello")
+            yield AgentResponse(content="", is_delta=True, delta_content=" world")
+            yield AgentResponse(content="Hello world")
+
+        with patch.object(service, "process", side_effect=fake_process):
+            text = await service.process_direct("hi", session_key="test:dup")
+
+        assert text == "Hello world"
+
 
 class TestRunDispatch:
     """Tests for the run() message routing and _dispatch() processing chain."""
@@ -290,6 +310,30 @@ class TestRunDispatch:
         assert len(usage_calls) == 1
         assert "100" in usage_calls[0].args[0].content
         assert "50" in usage_calls[0].args[0].content
+
+    @pytest.mark.asyncio
+    async def test_dispatch_ignores_final_content_after_deltas(self, config, shared_resources, bus):
+        """_dispatch should avoid duplicating final content after streamed deltas."""
+        service = await self._make_service(config, shared_resources)
+
+        async def fake_process(context):
+            yield AgentResponse(content="", is_delta=True, delta_content="A")
+            yield AgentResponse(content="", is_delta=True, delta_content="B")
+            yield AgentResponse(content="AB")
+
+        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="dup")
+
+        with patch.object(service, "process", side_effect=fake_process):
+            await service._dispatch(msg, bus)
+
+        final_messages = [
+            c.args[0]
+            for c in bus.publish_outbound.call_args_list
+            if not c.args[0].metadata.get("_progress")
+            and not c.args[0].metadata.get("_tool_hint")
+        ]
+        assert final_messages
+        assert final_messages[-1].content == "AB"
 
     # --- Test 4: Local command !help ---
 

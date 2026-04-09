@@ -1626,6 +1626,7 @@ class AgentService:
 
         try:
             result = []
+            saw_delta_content = False
             async for response in self.process(context):
                 if on_progress and response.progress_texts:
                     for text in response.progress_texts:
@@ -1660,7 +1661,9 @@ class AgentService:
                     )
                 if response.is_delta:
                     result.append(response.delta_content)
-                elif response.content:
+                    if response.delta_content:
+                        saw_delta_content = True
+                elif response.content and not saw_delta_content:
                     result.append(response.content)
 
             return "".join(result)
@@ -1764,6 +1767,7 @@ class AgentService:
             )
 
             response_text: list[str] = []
+            saw_delta_content = False
             last_usage: dict[str, Any] | None = None
 
             async for response in self.process(context):
@@ -1810,7 +1814,9 @@ class AgentService:
                 # Accumulate final content
                 if response.is_delta:
                     response_text.append(response.delta_content)
-                elif response.content:
+                    if response.delta_content:
+                        saw_delta_content = True
+                elif response.content and not saw_delta_content:
                     response_text.append(response.content)
 
                 # Track usage
