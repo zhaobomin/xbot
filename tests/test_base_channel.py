@@ -3,9 +3,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from xbot.channels.base import BaseChannel
 from xbot.platform.bus.events import OutboundMessage
 from xbot.platform.bus.queue import MessageBus
-from xbot.channels.base import BaseChannel
 
 
 class _DummyChannel(BaseChannel):

@@ -11,9 +11,9 @@ from slack_sdk.socket_mode.websockets import SocketModeClient
 from slack_sdk.web.async_client import AsyncWebClient
 from slackify_markdown import slackify_markdown
 
+from xbot.channels.base import BaseChannel
 from xbot.platform.bus.events import OutboundMessage
 from xbot.platform.bus.queue import MessageBus
-from xbot.channels.base import BaseChannel
 from xbot.platform.config.schema import Base
 from xbot.platform.logging.core import get_logger
 

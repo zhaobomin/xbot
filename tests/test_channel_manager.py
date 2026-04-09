@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from xbot.platform.bus.queue import MessageBus
 from xbot.channels.base import BaseChannel
 from xbot.channels.manager import ChannelManager
+from xbot.platform.bus.queue import MessageBus
 
 
 class MockChannel(BaseChannel):

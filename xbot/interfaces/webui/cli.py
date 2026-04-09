@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import typer
 
-from xbot.platform.logging.core import configure_logging
 from xbot.interfaces.webui.app import create_app
 from xbot.interfaces.webui.auth import (
     print_reset_password_banner,
@@ -12,6 +11,7 @@ from xbot.interfaces.webui.auth import (
     set_password,
 )
 from xbot.interfaces.webui.bootstrap import build_services
+from xbot.platform.logging.core import configure_logging
 
 webui_app = typer.Typer(help="Run the standalone WebUI adapter")
 
@@ -27,23 +27,26 @@ def serve(
     """Start the standalone WebUI adapter."""
     import uvicorn
 
-    from xbot.interfaces.cli.commands import _load_runtime_config, _make_agent_runtime
+    from xbot.interfaces.cli.commands import _load_runtime_config, _make_agent_service
 
     configure_logging(level="DEBUG" if verbose else "INFO")
     loaded = _load_runtime_config(config, workspace)
-    services = build_services(loaded, make_runtime=_make_agent_runtime)
+    services = build_services(loaded, make_runtime=_make_agent_service)
     app = create_app(services)
     uvicorn.run(app, host=host, port=port)
 
 
 @webui_app.command("set-password")
 def set_password_cmd(
-    password: str = typer.Argument(..., help="New password for WebUI admin user"),
+    password: str = typer.Option(
+        ..., "--password", "-p", prompt="New password", hide_input=True,
+        help="New password for WebUI admin user",
+    ),
 ) -> None:
     """Set a new password for the WebUI admin user.
 
     Example:
-        xbot webui set-password my-new-secure-password
+        xbot webui set-password -p my-new-secure-password
     """
     set_password(password)
     print("Password updated successfully.")

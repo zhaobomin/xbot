@@ -2,8 +2,8 @@
 
 from unittest.mock import MagicMock
 
-from xbot.runtime.system.monitoring.trace import append_session_trace
 from xbot.runtime.session.manager import Session
+from xbot.runtime.system.monitoring.trace import append_session_trace
 
 
 class TestAppendSessionTrace:

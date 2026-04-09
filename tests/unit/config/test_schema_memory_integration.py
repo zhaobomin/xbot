@@ -1,6 +1,6 @@
 """Tests for Claude SDK memory integration schema."""
 
-from xbot.config.schema import Config
+from xbot.platform.config.schema import Config
 
 
 def test_claude_sdk_memory_integration_defaults() -> None:
@@ -50,4 +50,3 @@ def test_claude_sdk_memory_integration_accepts_camel_case() -> None:
     assert mi.sdk_settings.claude_md_excludes == ["**/node_modules/**"]
     assert config.agents.claude_sdk.system_prompt_strategy.preset == "claude_code"
     assert config.agents.claude_sdk.system_prompt_strategy.append_xbot_prompt is False
-

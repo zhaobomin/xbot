@@ -112,6 +112,7 @@ class ClientPool:
             except Exception as e:
                 logger.warning(f"Failed to disconnect client for {session_key}: {e}")
                 record.state = "error"
+                del self._clients[session_key]
                 return False
 
     async def disconnect_all(self) -> int:

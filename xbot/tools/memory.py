@@ -10,8 +10,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from xbot.tools.base import Tool
 from xbot.platform.logging.core import get_logger
+from xbot.tools.base import Tool
 
 logger = get_logger(__name__)
 

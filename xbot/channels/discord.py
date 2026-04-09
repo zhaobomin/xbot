@@ -11,9 +11,9 @@ import httpx
 import websockets
 from pydantic import Field
 
+from xbot.channels.base import BaseChannel
 from xbot.platform.bus.events import OutboundMessage
 from xbot.platform.bus.queue import MessageBus
-from xbot.channels.base import BaseChannel
 from xbot.platform.config.paths import get_media_dir
 from xbot.platform.config.schema import Base
 from xbot.platform.logging.core import get_logger
@@ -388,11 +388,18 @@ class DiscordChannel(BaseChannel):
                 content_parts.append(f"[attachment: {filename} - too large]")
                 continue
             try:
+                from xbot.platform.security.network import validate_url_target
+
+                safe, err = validate_url_target(url)
+                if not safe:
+                    logger.warning("Discord attachment URL blocked by SSRF check: %s (%s)", url, err)
+                    content_parts.append(f"[attachment: {filename} - blocked]")
+                    continue
                 media_dir.mkdir(parents=True, exist_ok=True)
                 file_path = media_dir / f"{attachment.get('id', 'file')}_{filename.replace('/', '_')}"
                 resp = await self._http.get(url)
                 resp.raise_for_status()
-                file_path.write_bytes(resp.content)
+                await asyncio.to_thread(file_path.write_bytes, resp.content)
                 media_paths.append(str(file_path))
                 content_parts.append(f"[attachment: {file_path}]")
             except Exception as e:

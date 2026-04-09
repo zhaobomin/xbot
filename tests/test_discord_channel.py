@@ -5,9 +5,9 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+from xbot.channels.discord import DiscordChannel, DiscordConfig
 from xbot.platform.bus.events import OutboundMessage
 from xbot.platform.bus.queue import MessageBus
-from xbot.channels.discord import DiscordChannel, DiscordConfig
 
 
 class TestDiscordConfig:

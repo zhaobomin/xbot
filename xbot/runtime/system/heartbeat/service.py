@@ -6,8 +6,8 @@ import asyncio
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Coroutine
 
-from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
 from xbot.platform.logging.core import get_logger
+from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
 
 logger = get_logger(__name__)
 _HEARTBEAT_TOOL = [

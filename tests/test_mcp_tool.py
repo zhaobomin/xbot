@@ -7,9 +7,9 @@ from types import ModuleType, SimpleNamespace
 
 import pytest
 
+from xbot.platform.config.schema import MCPServerConfig
 from xbot.tools.mcp import MCPToolWrapper, connect_mcp_servers
 from xbot.tools.registry import ToolRegistry
-from xbot.platform.config.schema import MCPServerConfig
 
 
 class _FakeTextContent:

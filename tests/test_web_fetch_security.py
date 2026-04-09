@@ -8,8 +8,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from xbot.tools.web import WebFetchTool
 from xbot.platform.config.schema import WebToolsConfig
+from xbot.tools.web import WebFetchTool
 
 
 def _fake_resolve_private(hostname, port, family=0, type_=0):

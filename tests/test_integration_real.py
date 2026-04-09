@@ -14,16 +14,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from xbot.runtime.core.client_pool import ClientPool
 from xbot.interaction.response_handlers import RuntimeResponseHandlers
-from xbot.runtime.core.protocol import (
-    AgentContext,
-    AgentResponse,
-    StructuredLLMResponse,
-)
-from xbot.runtime.core.service import AgentService
-from xbot.runtime.state.machine import SessionPhase, SessionStateMachine
-from xbot.runtime.core.types import AgentConfig
 from xbot.platform.bus.events import InboundMessage, OutboundMessage
 from xbot.platform.bus.queue import (
     InteractionRequest,
@@ -32,6 +23,15 @@ from xbot.platform.bus.queue import (
     PermissionRequest,
     PermissionResponse,
 )
+from xbot.runtime.core.client_pool import ClientPool
+from xbot.runtime.core.protocol import (
+    AgentContext,
+    AgentResponse,
+    StructuredLLMResponse,
+)
+from xbot.runtime.core.service import AgentService
+from xbot.runtime.core.types import AgentConfig
+from xbot.runtime.state.machine import SessionPhase, SessionStateMachine
 
 # ---------------------------------------------------------------------------
 # Fixtures

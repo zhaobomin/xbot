@@ -29,8 +29,6 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, SecretStr
 
-from xbot.platform.config.schema import MCPServerConfig
-from xbot.runtime.system.cron.types import CronPayload, CronSchedule
 from xbot.interfaces.webui.auth import (
     AuthManager,
     UserStore,
@@ -40,6 +38,8 @@ from xbot.interfaces.webui.auth import (
 )
 from xbot.interfaces.webui.services import ServiceContainer
 from xbot.interfaces.webui.session_keys import to_internal_session_key
+from xbot.platform.config.schema import MCPServerConfig
+from xbot.runtime.system.cron.types import CronPayload, CronSchedule
 
 # ---------------------------------------------------------------------------
 # Security: Name validation for skills and MCP servers
@@ -50,7 +50,7 @@ from xbot.interfaces.webui.session_keys import to_internal_session_key
 _VALID_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 
 
-def validate_safe_name(name: str, field_name: str = "name") -> str:
+def validate_safe_name(name: str, field_name: str = "name", *, allow_dots: bool = False) -> str:
     """Validate that a name is safe for filesystem use.
 
     Security: Prevents path traversal attacks via:
@@ -87,11 +87,15 @@ def validate_safe_name(name: str, field_name: str = "name") -> str:
         )
 
     # Check against pattern
-    if not _VALID_NAME_PATTERN.match(normalized):
+    pattern = _VALID_NAME_PATTERN if not allow_dots else re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,63}$")
+    if not pattern.match(normalized):
+        allowed = "letters, numbers, dashes, and underscores"
+        if allow_dots:
+            allowed = "letters, numbers, dots, dashes, and underscores"
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                f"Invalid {field_name}: use only letters, numbers, dashes, and underscores. "
+                f"Invalid {field_name}: use only {allowed}. "
                 f"Must start with a letter or number. Max 64 characters. "
                 f"Example: my-skill-name"
             ),
@@ -745,6 +749,7 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
+        server_name = validate_safe_name(server_name, "server name")
         existing = _mcp_config_dict(container.config.tools.mcp_servers.get(server_name, {}))
         existing["enabled"] = body.enabled
         container.config.tools.mcp_servers[server_name] = MCPServerConfig.model_validate(existing)
@@ -758,6 +763,7 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
+        server_name = validate_safe_name(server_name, "server name")
         container.config.tools.mcp_servers[server_name] = MCPServerConfig.model_validate(body.model_dump())
         container.persist_config()
         server = container.config.tools.mcp_servers[server_name]
@@ -778,6 +784,11 @@ def create_app(
             container.config.gateway.heartbeat.enabled = body.enabled
             container.heartbeat.enabled = body.enabled
         if body.interval_s is not None:
+            if body.interval_s < 1:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="heartbeat interval_s must be >= 1",
+                )
             container.config.gateway.heartbeat.interval_s = body.interval_s
             container.heartbeat.interval_s = body.interval_s
         container.persist_config()
@@ -854,6 +865,7 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, str]:
         _get_user_from_auth_header(authorization)
+        name = validate_safe_name(name, "workspace file name", allow_dots=True)
         path = container.config.workspace_path / name
         return {"name": name, "content": path.read_text(encoding="utf-8") if path.exists() else ""}
 
@@ -864,6 +876,7 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, str]:
         _get_user_from_auth_header(authorization)
+        name = validate_safe_name(name, "workspace file name", allow_dots=True)
         path = container.config.workspace_path / name
         path.parent.mkdir(parents=True, exist_ok=True)
         content = str(body.get("content", ""))
@@ -1136,6 +1149,7 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
+        skill_name = validate_safe_name(skill_name, "skill name")
         skill_file = container.config.workspace_path / "skills" / skill_name / "SKILL.md"
         if not skill_file.exists():
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
@@ -1150,6 +1164,7 @@ def create_app(
         import shutil
 
         _get_user_from_auth_header(authorization)
+        skill_name = validate_safe_name(skill_name, "skill name")
         skill_dir = container.config.workspace_path / "skills" / skill_name
         if skill_dir.exists():
             shutil.rmtree(skill_dir)

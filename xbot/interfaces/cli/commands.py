@@ -36,12 +36,11 @@ from rich.table import Table
 from rich.text import Text
 
 from xbot import __logo__, __version__
-from xbot.runtime.core.service import AgentService
 from xbot.crew.cli.plan_cmd import crew_plan, crew_run_dynamic
 from xbot.crew.cli.role_cmd import app as roles_app
 from xbot.interaction.permission import CLIPermissionHandler, InteractivePermissionHandler
 from xbot.interaction.progress_coalescer import ProgressCoalescer
-from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
+from xbot.interfaces.webui.cli import webui_app
 from xbot.platform.config.paths import get_data_dir, get_workspace_path
 from xbot.platform.config.schema import Config
 from xbot.platform.logging.core import configure_logging, get_logger, set_package_logging_enabled
@@ -50,7 +49,8 @@ from xbot.platform.utils.helpers import (
     sync_workspace_skill_pack,
     sync_workspace_templates,
 )
-from xbot.interfaces.webui.cli import webui_app
+from xbot.runtime.core.service import AgentService
+from xbot.runtime.core.task_supervisor import ServiceTaskRegistry
 
 # Force UTF-8 encoding for Windows console
 logger = get_logger(__name__)
@@ -436,7 +436,12 @@ def _run_init(
     install_command_pack: bool = False,
 ) -> None:
     """Initialize xbot configuration and workspace."""
-    from xbot.platform.config.loader import get_config_path, load_config, save_config, set_config_path
+    from xbot.platform.config.loader import (
+        get_config_path,
+        load_config,
+        save_config,
+        set_config_path,
+    )
     from xbot.platform.config.schema import Config
 
     config_arg = config
@@ -678,16 +683,16 @@ def gateway(
     health_port: int | None = typer.Option(None, "--health-port", help="Health check HTTP port (default: gateway_port - 710)"),
 ):
     """Start the xbot gateway."""
-    from xbot.interaction.permission import PermissionRequestHandler
-    from xbot.runtime.system.monitoring.health import HealthCheckService
-    from xbot.runtime.state import SessionManager as StateManager
-    from xbot.platform.bus.queue import MessageBus
     from xbot.channels.manager import ChannelManager
+    from xbot.interaction.permission import PermissionRequestHandler
+    from xbot.platform.bus.queue import MessageBus
     from xbot.platform.config.paths import get_cron_dir
+    from xbot.runtime.session.manager import SessionManager
+    from xbot.runtime.state import SessionManager as StateManager
     from xbot.runtime.system.cron.service import CronService
     from xbot.runtime.system.cron.types import CronJob
     from xbot.runtime.system.heartbeat.service import HeartbeatService
-    from xbot.runtime.session.manager import SessionManager
+    from xbot.runtime.system.monitoring.health import HealthCheckService
 
     configure_logging(level="DEBUG" if verbose else "INFO")
 
@@ -734,9 +739,9 @@ def gateway(
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
+        from xbot.platform.utils.evaluator import evaluate_response
         from xbot.tools.cron import CronTool
         from xbot.tools.message import MessageTool
-        from xbot.platform.utils.evaluator import evaluate_response
 
         reminder_note = (
             "[Scheduled Task] Timer finished.\n\n"
@@ -920,9 +925,9 @@ def agent(
     logs: bool = typer.Option(False, "--logs/--no-logs", help="Show xbot runtime logs during chat"),
 ):
     """Interact with the agent directly."""
-    from xbot.runtime.state import SessionManager as StateManager
     from xbot.platform.bus.queue import MessageBus
     from xbot.platform.config.paths import get_cron_dir
+    from xbot.runtime.state import SessionManager as StateManager
     from xbot.runtime.system.cron.service import CronService
 
     config = _load_runtime_config(config, workspace)

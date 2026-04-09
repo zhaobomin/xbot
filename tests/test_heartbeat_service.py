@@ -2,8 +2,8 @@ import asyncio
 
 import pytest
 
-from xbot.runtime.system.heartbeat.service import HeartbeatService
 from xbot.platform.providers.base import LLMResponse, ToolCallRequest
+from xbot.runtime.system.heartbeat.service import HeartbeatService
 
 
 class DummyCaller:

@@ -6,9 +6,9 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from xbot.channels.whatsapp import WhatsAppChannel, WhatsAppConfig
 from xbot.platform.bus.events import OutboundMessage
 from xbot.platform.bus.queue import MessageBus
-from xbot.channels.whatsapp import WhatsAppChannel, WhatsAppConfig
 
 
 class TestWhatsAppConfig:

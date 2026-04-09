@@ -3,8 +3,8 @@
 import httpx
 import pytest
 
-from xbot.tools.web import WebSearchTool
 from xbot.platform.config.schema import WebSearchConfig
+from xbot.tools.web import WebSearchTool
 
 
 def _tool(provider: str = "brave", api_key: str = "", base_url: str = "") -> WebSearchTool:

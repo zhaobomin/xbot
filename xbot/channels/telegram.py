@@ -14,9 +14,9 @@ from telegram.error import Conflict, TimedOut
 from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
 from telegram.request import HTTPXRequest
 
+from xbot.channels.base import BaseChannel
 from xbot.platform.bus.events import OutboundMessage
 from xbot.platform.bus.queue import MessageBus
-from xbot.channels.base import BaseChannel
 from xbot.platform.config.paths import get_media_dir
 from xbot.platform.config.schema import Base
 from xbot.platform.logging.core import get_logger

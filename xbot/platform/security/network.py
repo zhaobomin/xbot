@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import re
 import socket
@@ -36,6 +37,47 @@ def _resolve_host_ips(hostname: str) -> list[ipaddress.IPv4Address | ipaddress.I
         except ValueError:
             continue
     return resolved
+
+
+async def _async_resolve_host_ips(hostname: str) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """Non-blocking DNS resolution — safe for use on the asyncio event loop."""
+    loop = asyncio.get_running_loop()
+    infos = await loop.getaddrinfo(hostname, None, family=socket.AF_UNSPEC, type=socket.SOCK_STREAM)
+    resolved: list[ipaddress.IPv4Address | ipaddress.IPv6Address] = []
+    for info in infos:
+        try:
+            resolved.append(ipaddress.ip_address(info[4][0]))
+        except ValueError:
+            continue
+    return resolved
+
+
+async def async_validate_url_target(url: str) -> tuple[bool, str]:
+    """Async version of validate_url_target — does not block the event loop."""
+    try:
+        p = urlparse(url)
+    except Exception as e:
+        return False, str(e)
+
+    if p.scheme not in ("http", "https"):
+        return False, f"Only http/https allowed, got '{p.scheme or 'none'}'"
+    if not p.netloc:
+        return False, "Missing domain"
+
+    hostname = p.hostname
+    if not hostname:
+        return False, "Missing hostname"
+
+    try:
+        resolved = await _async_resolve_host_ips(hostname)
+    except socket.gaierror:
+        return False, f"Cannot resolve hostname: {hostname}"
+
+    for addr in resolved:
+        if _is_private(addr):
+            return False, f"Blocked: {hostname} resolves to private/internal address {addr}"
+
+    return True, ""
 
 
 def validate_url_target(url: str) -> tuple[bool, str]:

@@ -4,9 +4,9 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from xbot.channels.telegram import TELEGRAM_REPLY_CONTEXT_MAX_LEN, TelegramChannel, TelegramConfig
 from xbot.platform.bus.events import OutboundMessage
 from xbot.platform.bus.queue import MessageBus
-from xbot.channels.telegram import TELEGRAM_REPLY_CONTEXT_MAX_LEN, TelegramChannel, TelegramConfig
 
 
 class _FakeHTTPXRequest:

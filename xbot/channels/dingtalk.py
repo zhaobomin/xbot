@@ -12,9 +12,9 @@ from urllib.parse import unquote, urlparse
 import httpx
 from pydantic import Field
 
+from xbot.channels.base import BaseChannel
 from xbot.platform.bus.events import OutboundMessage
 from xbot.platform.bus.queue import MessageBus
-from xbot.channels.base import BaseChannel
 from xbot.platform.config.schema import Base
 from xbot.platform.logging.core import get_logger
 from xbot.platform.utils.helpers import sanitize_download_filename

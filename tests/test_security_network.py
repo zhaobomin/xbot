@@ -7,7 +7,11 @@ from unittest.mock import patch
 
 import pytest
 
-from xbot.platform.security.network import contains_internal_url, validate_resolved_url, validate_url_target
+from xbot.platform.security.network import (
+    contains_internal_url,
+    validate_resolved_url,
+    validate_url_target,
+)
 
 
 def _fake_resolve(host: str, results: list[str]):

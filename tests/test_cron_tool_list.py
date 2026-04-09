@@ -1,8 +1,8 @@
 """Tests for CronTool._list_jobs() output formatting."""
 
-from xbot.tools.cron import CronTool
 from xbot.runtime.system.cron.service import CronService
 from xbot.runtime.system.cron.types import CronJobState, CronSchedule
+from xbot.tools.cron import CronTool
 
 
 def _make_tool(tmp_path) -> CronTool:

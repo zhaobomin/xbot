@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 import pytest
 from pytest import mark
 
-from xbot.platform.bus.events import OutboundMessage
 from xbot.channels.feishu import FeishuChannel
+from xbot.platform.bus.events import OutboundMessage
 
 
 @pytest.fixture

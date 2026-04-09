@@ -6,17 +6,12 @@ Validates configuration including:
 - Provider existence
 """
 
+from xbot.exceptions import ConfigurationError
 from xbot.platform.config.provider_registry import (
     get_provider_spec,
     get_sdk_compatible_providers,
 )
 from xbot.platform.config.schema import Config
-
-
-class ConfigurationError(Exception):
-    """Configuration validation error."""
-
-    pass
 
 
 def validate_config(config: Config) -> None:

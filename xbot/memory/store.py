@@ -9,7 +9,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
 from xbot.platform.logging.core import get_logger
-from xbot.platform.utils.helpers import ensure_dir, estimate_message_tokens, estimate_prompt_tokens_chain
+from xbot.platform.utils.helpers import (
+    ensure_dir,
+    estimate_message_tokens,
+    estimate_prompt_tokens_chain,
+)
 
 logger = get_logger(__name__)
 if TYPE_CHECKING:

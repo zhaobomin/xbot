@@ -7,12 +7,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
+from xbot.platform.bus.events import InboundMessage
 from xbot.runtime.core.protocol import AgentContext, AgentResponse
 from xbot.runtime.core.service import AgentService
+from xbot.runtime.core.types import AgentConfig
 from xbot.runtime.state import SessionManager as StateManager
 from xbot.runtime.state.machine import SessionPhase
-from xbot.runtime.core.types import AgentConfig
-from xbot.platform.bus.events import InboundMessage
 
 
 class TestAgentService:
@@ -775,18 +775,18 @@ class TestRunDispatch:
     async def test_dispatch_memory_consolidation_off(self, config, shared_resources, bus):
         """Mode 'off' should skip memory consolidation."""
         from xbot.platform.config.schema import Config
-        
+
         runtime_config = Config()
         runtime_config.agents.claude_sdk.memory_consolidation_mode = "off"
         shared_resources["config"] = runtime_config
-        
+
         service = await self._make_service(config, shared_resources)
         service._memory_consolidator = AsyncMock()
-        
+
         # Trigger consolidation
         session = MagicMock()
         await service._trigger_memory_consolidation("test-session", session)
-        
+
         # Should not call consolidator
         service._memory_consolidator.maybe_consolidate_by_tokens.assert_not_called()
 
@@ -796,18 +796,18 @@ class TestRunDispatch:
     async def test_dispatch_memory_consolidation_sync(self, config, shared_resources, bus):
         """Mode 'sync' should run consolidation inline."""
         from xbot.platform.config.schema import Config
-        
+
         runtime_config = Config()
         runtime_config.agents.claude_sdk.memory_consolidation_mode = "sync"
         shared_resources["config"] = runtime_config
-        
+
         service = await self._make_service(config, shared_resources)
         service._memory_consolidator = AsyncMock()
-        
+
         # Trigger consolidation
         session = MagicMock()
         await service._trigger_memory_consolidation("test-session", session)
-        
+
         # Should call consolidator once
         service._memory_consolidator.maybe_consolidate_by_tokens.assert_called_once_with(session)
 
@@ -817,23 +817,23 @@ class TestRunDispatch:
     async def test_dispatch_memory_consolidation_async(self, config, shared_resources, bus):
         """Mode 'async' should schedule background task."""
         from xbot.platform.config.schema import Config
-        
+
         runtime_config = Config()
         runtime_config.agents.claude_sdk.memory_consolidation_mode = "async"
         shared_resources["config"] = runtime_config
-        
+
         service = await self._make_service(config, shared_resources)
         service._memory_consolidator = AsyncMock()
-        
+
         # Trigger consolidation
         session = MagicMock()
         await service._trigger_memory_consolidation("test-session", session)
-        
+
         # Should have scheduled a task
         assert len(service._async_consolidation_tasks) == 1
-        
+
         # Wait for task to complete
         await asyncio.sleep(0.1)
-        
+
         # Should call consolidator once
         service._memory_consolidator.maybe_consolidate_by_tokens.assert_called_once_with(session)

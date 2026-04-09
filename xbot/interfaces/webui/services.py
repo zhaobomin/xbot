@@ -100,6 +100,19 @@ class ServiceContainer:
         return runtime
 
     def list_skills(self) -> list[dict[str, Any]]:
-        # Skills are now managed by Claude Code SDK natively via add_dirs
-        # Return empty list as skills are not tracked by xbot anymore
-        return []
+        skills_root = Path(self.config.workspace_path) / "skills"
+        if not skills_root.exists():
+            return []
+
+        results: list[dict[str, Any]] = []
+        for skill_file in sorted(skills_root.glob("*/SKILL.md")):
+            skill_dir = skill_file.parent
+            results.append(
+                {
+                    "name": skill_dir.name,
+                    "path": str(skill_file),
+                    "source": "workspace",
+                    "type": "skill",
+                }
+            )
+        return results

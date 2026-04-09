@@ -5,8 +5,8 @@ from types import SimpleNamespace
 import pytest
 
 import xbot.channels.dingtalk as dingtalk_module
-from xbot.platform.bus.queue import MessageBus
 from xbot.channels.dingtalk import DingTalkChannel, DingTalkConfig, NanobotDingTalkHandler
+from xbot.platform.bus.queue import MessageBus
 
 
 class _FakeResponse:

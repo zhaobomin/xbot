@@ -14,10 +14,10 @@ from xbot.interaction.response_parser import (
     is_response_keyword,
     parse_permission_response,
 )
-from xbot.runtime.state.machine import SessionPhase
 from xbot.platform.bus.events import InboundMessage, OutboundMessage
 from xbot.platform.bus.queue import InteractionResponse, PermissionResponse
 from xbot.platform.logging.core import get_logger
+from xbot.runtime.state.machine import SessionPhase
 
 logger = get_logger(__name__)
 

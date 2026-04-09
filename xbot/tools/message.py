@@ -3,8 +3,8 @@
 from contextvars import ContextVar
 from typing import Any, Awaitable, Callable
 
-from xbot.tools.base import Tool
 from xbot.platform.bus.events import OutboundMessage
+from xbot.tools.base import Tool
 
 
 class MessageTool(Tool):

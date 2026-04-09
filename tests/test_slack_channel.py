@@ -2,9 +2,9 @@ from __future__ import annotations
 
 import pytest
 
+from xbot.channels.slack import SlackChannel, SlackConfig
 from xbot.platform.bus.events import OutboundMessage
 from xbot.platform.bus.queue import MessageBus
-from xbot.channels.slack import SlackChannel, SlackConfig
 
 
 class _FakeAsyncWebClient:

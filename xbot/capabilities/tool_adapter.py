@@ -9,11 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from xbot.capabilities.catalog import canonical_tool_name
+from xbot.platform.logging.core import get_logger
 from xbot.tools.cron import CronTool
 from xbot.tools.memory import MemoryTool
 from xbot.tools.message import MessageTool
 from xbot.tools.web import WebFetchTool, WebSearchTool
-from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 

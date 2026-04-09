@@ -8,12 +8,12 @@ import pytest
 from fastapi.testclient import TestClient
 from typer.testing import CliRunner
 
-from xbot.platform.bus.queue import MessageBus
 from xbot.interfaces.cli.commands import app
-from xbot.platform.config.schema import Config, MCPServerConfig
-from xbot.runtime.system.cron.types import CronJob, CronJobState, CronPayload, CronSchedule
-from xbot.runtime.session.manager import SessionManager
 from xbot.interfaces.webui.auth import set_password
+from xbot.platform.bus.queue import MessageBus
+from xbot.platform.config.schema import Config, MCPServerConfig
+from xbot.runtime.session.manager import SessionManager
+from xbot.runtime.system.cron.types import CronJob, CronJobState, CronPayload, CronSchedule
 
 
 class _FakeRuntime:

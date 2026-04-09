@@ -15,8 +15,8 @@ from httpx._config import DEFAULT_LIMITS, Proxy, create_ssl_context
 from httpx._transports.base import AsyncBaseTransport
 from httpx._transports.default import AsyncResponseStream, map_httpcore_exceptions
 
-from xbot.tools.base import Tool
 from xbot.platform.logging.core import get_logger
+from xbot.tools.base import Tool
 
 logger = get_logger(__name__)
 if TYPE_CHECKING:
@@ -61,6 +61,46 @@ def _validate_url_safe(url: str) -> tuple[bool, str]:
     """Validate URL with SSRF protection: scheme, domain, and resolved IP check."""
     from xbot.platform.security.network import validate_url_target
     return validate_url_target(url)
+
+
+def _validate_and_pin_url(url: str) -> tuple[bool, str, dict[str, str]]:
+    """Validate URL safety and return pinned host mapping in a single DNS resolution.
+
+    Returns (ok, error_message, pinned_hosts).
+    Eliminates TOCTOU DNS rebinding by reusing the same resolved IPs for both
+    validation and connection pinning.
+    """
+    from urllib.parse import urlparse as _urlparse
+
+    from xbot.platform.security.network import _is_private, _resolve_host_ips
+
+    try:
+        p = _urlparse(url)
+    except Exception as e:
+        return False, str(e), {}
+
+    if p.scheme not in ("http", "https"):
+        return False, f"Only http/https allowed, got '{p.scheme or 'none'}'", {}
+    if not p.netloc:
+        return False, "Missing domain", {}
+
+    hostname = p.hostname
+    if not hostname:
+        return False, "Missing hostname", {}
+
+    try:
+        resolved = _resolve_host_ips(hostname)
+    except Exception:
+        return False, f"Cannot resolve hostname: {hostname}", {}
+
+    if not resolved:
+        return False, f"Cannot resolve hostname: {hostname}", {}
+
+    for addr in resolved:
+        if _is_private(addr):
+            return False, f"Blocked: {hostname} resolves to private/internal address {addr}", {}
+
+    return True, "", {hostname: str(resolved[0])}
 
 
 class _PinnedAsyncNetworkBackend:
@@ -489,15 +529,13 @@ class WebFetchTool(Tool):
             current_url = url
             redirects = 0
             while True:
-                if not self.disable_security_checks:
-                    allowed, error = _validate_url_safe(current_url)
-                    if not allowed:
-                        return json.dumps({"error": f"URL validation failed: {error}", "url": current_url}, ensure_ascii=False)
-
                 transport = None
                 if not self.disable_security_checks:
+                    allowed, error, pinned = _validate_and_pin_url(current_url)
+                    if not allowed:
+                        return json.dumps({"error": f"URL validation failed: {error}", "url": current_url}, ensure_ascii=False)
                     transport = _PinnedAsyncHTTPTransport(
-                        _resolve_pinned_host(current_url),
+                        pinned,
                         proxy=self.proxy,
                     )
 

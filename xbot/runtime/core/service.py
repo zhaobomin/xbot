@@ -16,15 +16,15 @@ from xbot.capabilities.handoff import HandoffPolicy
 from xbot.capabilities.policy import CapabilityPolicy
 from xbot.interaction.event_formatter import format_rate_limit_event, format_task_notification
 from xbot.memory.store import MemoryConsolidator
+from xbot.platform.bus.events import InboundMessage, OutboundMessage
+from xbot.platform.logging.core import get_logger
+from xbot.platform.utils.file_reader import FileType, classify_file, format_file_reference
 from xbot.runtime.core.client_pool import ClientPool
 from xbot.runtime.core.command_handlers import LocalCommandHandler
 from xbot.runtime.core.context.builder import ContextBuilder
 from xbot.runtime.core.protocol import AgentContext, AgentResponse, StructuredLLMResponse, ToolCall
 from xbot.runtime.core.types import AgentConfig
 from xbot.runtime.state.machine import SessionPhase
-from xbot.platform.bus.events import InboundMessage, OutboundMessage
-from xbot.platform.logging.core import get_logger
-from xbot.platform.utils.file_reader import FileType, classify_file, format_file_reference
 
 if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeSDKClient
@@ -2070,142 +2070,6 @@ class AgentService:
             chat_id=chat_id,
             on_progress=on_progress,
             media=media,
-        )
-
-    async def call_for_structured(
-        self,
-        *,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: Any = None,
-        max_tokens: int | None = None,
-        temperature: float | None = None,
-    ) -> StructuredLLMResponse:
-        """Execute a structured LLM call with messages and tools.
-
-        Used by heartbeat, evaluator, and memory consolidation for
-        single-turn tool-use calls that bypass the interactive SDK session.
-
-        Args:
-            messages: Chat messages (system/user/assistant roles)
-            tools: Tool definitions (OpenAI-style or Anthropic-style)
-            tool_choice: Tool choice strategy
-            max_tokens: Max output tokens
-            temperature: Sampling temperature
-
-        Returns:
-            StructuredLLMResponse with content and optional tool calls
-        """
-        import httpx
-
-        env = self._build_env_config()
-        api_key = env.get("ANTHROPIC_API_KEY")
-        base_url = env.get("ANTHROPIC_BASE_URL")
-
-        if not api_key:
-            return StructuredLLMResponse(
-                content="Error: No API key configured",
-                finish_reason="error",
-            )
-
-        # Separate system messages from conversation messages
-        system_parts: list[str] = []
-        non_system: list[dict[str, Any]] = []
-        for msg in messages:
-            if msg.get("role") == "system":
-                system_parts.append(msg.get("content", ""))
-            else:
-                non_system.append(msg)
-
-        # Build request payload
-        payload: dict[str, Any] = {
-            "model": self._config.model if self._config else "claude-sonnet-4-5",
-            "messages": non_system,
-            "max_tokens": max_tokens or 4096,
-        }
-
-        if system_parts:
-            payload["system"] = "\n".join(system_parts)
-
-        if tools:
-            payload["tools"] = tools
-
-        if tool_choice:
-            payload["tool_choice"] = tool_choice
-
-        if temperature is not None:
-            payload["temperature"] = temperature
-
-        # Build headers
-        headers = {
-            "x-api-key": api_key,
-            "anthropic-version": "2023-06-01",
-            "content-type": "application/json",
-        }
-
-        # Build URL
-        api_base = base_url or "https://api.anthropic.com"
-        url = f"{api_base.rstrip('/')}/v1/messages"
-
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                response = await client.post(url, json=payload, headers=headers)
-                response.raise_for_status()
-                data = response.json()
-
-            # Parse response
-            content_blocks = data.get("content", [])
-            text_parts: list[str] = []
-            tool_calls = []
-
-            for block in content_blocks:
-                block_type = block.get("type")
-                if block_type == "text":
-                    text_parts.append(block.get("text", ""))
-                elif block_type == "tool_use":
-                    tool_calls.append({
-                        "id": block.get("id", ""),
-                        "name": block.get("name", ""),
-                        "input": block.get("input", {}),
-                    })
-
-            return StructuredLLMResponse(
-                content="\n".join(text_parts) if text_parts else "",
-                tool_calls=tool_calls if tool_calls else None,
-                finish_reason=data.get("stop_reason", "end_turn"),
-            )
-        except Exception as e:
-            logger.error("Structured LLM call failed: %s", e)
-            return StructuredLLMResponse(
-                content=f"Error: {e}",
-                finish_reason="error",
-            )
-
-    async def call_for_consolidation(
-        self,
-        *,
-        messages: list[dict[str, Any]],
-        tools: list[dict[str, Any]] | None = None,
-        tool_choice: Any = None,
-    ) -> StructuredLLMResponse:
-        """Execute a structured LLM call for memory consolidation.
-
-        Delegates to call_for_structured with consolidation defaults.
-
-        Args:
-            messages: Chat messages
-            tools: Tool definitions
-            tool_choice: Tool choice strategy
-
-        Returns:
-            StructuredLLMResponse with content and optional tool calls
-        """
-        return await self.call_for_structured(
-            messages=messages,
-            tools=tools,
-            tool_choice=tool_choice,
-            max_tokens=2048,
-            temperature=0.0,
         )
 
     async def call_for_auxiliary(

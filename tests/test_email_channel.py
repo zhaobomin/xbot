@@ -3,9 +3,9 @@ from email.message import EmailMessage
 
 import pytest
 
+from xbot.channels.email import EmailChannel, EmailConfig
 from xbot.platform.bus.events import OutboundMessage
 from xbot.platform.bus.queue import MessageBus
-from xbot.channels.email import EmailChannel, EmailConfig
 
 
 def _make_config() -> EmailConfig:

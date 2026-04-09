@@ -2,9 +2,9 @@ from types import SimpleNamespace
 
 import pytest
 
+from xbot.channels.qq import QQChannel, QQConfig
 from xbot.platform.bus.events import OutboundMessage
 from xbot.platform.bus.queue import MessageBus
-from xbot.channels.qq import QQChannel, QQConfig
 
 
 class _FakeApi:

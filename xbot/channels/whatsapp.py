@@ -8,9 +8,9 @@ from typing import Any
 
 from pydantic import Field
 
+from xbot.channels.base import BaseChannel
 from xbot.platform.bus.events import OutboundMessage
 from xbot.platform.bus.queue import MessageBus
-from xbot.channels.base import BaseChannel
 from xbot.platform.config.schema import Base
 from xbot.platform.logging.core import get_logger
 

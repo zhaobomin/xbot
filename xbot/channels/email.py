@@ -17,9 +17,9 @@ from typing import Any
 
 from pydantic import Field
 
+from xbot.channels.base import BaseChannel
 from xbot.platform.bus.events import OutboundMessage
 from xbot.platform.bus.queue import MessageBus
-from xbot.channels.base import BaseChannel
 from xbot.platform.config.schema import Base
 from xbot.platform.logging.core import get_logger
 
@@ -246,6 +246,9 @@ class EmailChannel(BaseChannel):
 
         This is used for historical summarization tasks (e.g. "yesterday").
         """
+        if not self.config.consent_granted:
+            logger.warning("Email fetch_messages_between_dates blocked: consent_granted is false.")
+            return []
         if end_date <= start_date:
             return []
 

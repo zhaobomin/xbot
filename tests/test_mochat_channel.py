@@ -5,8 +5,6 @@ from unittest.mock import patch
 
 import pytest
 
-from xbot.platform.bus.events import OutboundMessage
-from xbot.platform.bus.queue import MessageBus
 from xbot.channels.mochat import (
     DelayState,
     MochatBufferedEntry,
@@ -16,6 +14,8 @@ from xbot.channels.mochat import (
     _safe_dict,
     _str_field,
 )
+from xbot.platform.bus.events import OutboundMessage
+from xbot.platform.bus.queue import MessageBus
 
 
 class TestMochatHelpers:

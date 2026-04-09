@@ -8,9 +8,9 @@ from pathlib import Path
 from typing import Any, AsyncIterator
 
 from xbot.crew.models import AgentRole, CrewConfig
-from xbot.runtime.core.protocol import AgentContext
 from xbot.platform.config.schema import AgentsConfig, Config
 from xbot.platform.logging.core import get_logger
+from xbot.runtime.core.protocol import AgentContext
 
 logger = get_logger(__name__)
 @dataclass
