@@ -184,15 +184,6 @@ class CronJobCreate(BaseModel):
     delete_after_run: bool = False
 
 
-class SkillCreate(BaseModel):
-    name: str
-    content: str
-
-
-class SkillUpdate(BaseModel):
-    content: str
-
-
 class GatewayConfigPatch(BaseModel):
     host: str | None = None
     port: int | None = None
@@ -274,28 +265,6 @@ def _serialize_cron_job(job: Any) -> dict[str, Any]:
             "last_status": job.state.last_status,
             "last_error": job.state.last_error,
         },
-    }
-
-
-def _serialize_skill(item: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "name": item["name"],
-        "path": item["path"],
-        "source": item["source"],
-        "type": item["type"],
-    }
-
-
-def _serialize_skill_info(container: ServiceContainer, item: dict[str, Any]) -> dict[str, Any]:
-    return {
-        "name": item["name"],
-        "source": item["source"],
-        "path": item["path"],
-        "description": item["name"],
-        "available": True,
-        "enabled": True,
-        "unavailable_reason": None,
-        "type": item["type"],
     }
 
 
@@ -476,14 +445,12 @@ def create_app(
     async def dashboard(authorization: str | None = Header(default=None)) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
         sessions = container.conversation_store.list_sessions()
-        skills = container.list_skills()
         channels = _channels_payload()
         cron_status = container.cron.status() if hasattr(container.cron, "status") else {"jobs": 0}
         return {
             "runtime": container.runtime_status(),
             "counts": {
                 "sessions": len(sessions),
-                "skills": len(skills),
                 "channels": len(channels["channels"]),
                 "cron_jobs": int(cron_status.get("jobs", 0)),
             },
@@ -1105,70 +1072,27 @@ def create_app(
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
         return _serialize_cron_job(job)
 
-    @app.get("/api/skills")
-    async def list_skills(authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
+    @app.api_route(
+        "/api/skills",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        include_in_schema=False,
+    )
+    async def skills_removed_root(authorization: str | None = Header(default=None)) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
-        return [_serialize_skill_info(container, item) for item in container.list_skills()]
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill management API removed")
 
-    @app.post("/api/skills", status_code=201)
-    async def create_skill(
-        body: SkillCreate,
+    @app.api_route(
+        "/api/skills/{skill_name}",
+        methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+        include_in_schema=False,
+    )
+    async def skills_removed_item(
+        skill_name: str,
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
-        # Security: Validate skill name to prevent path traversal
-        safe_name = validate_safe_name(body.name, "skill name")
-        skill_file = container.primary_skill_root() / safe_name / "SKILL.md"
-        skill_file.parent.mkdir(parents=True, exist_ok=True)
-        skill_file.write_text(body.content, encoding="utf-8")
-        return {"name": safe_name, "content": body.content}
-
-    @app.get("/api/skills/{skill_name}")
-    async def get_skill(skill_name: str, authorization: str | None = Header(default=None)) -> dict[str, Any]:
-        _get_user_from_auth_header(authorization)
-        loader = container.list_skills()
-        item = next((entry for entry in loader if entry["name"] == skill_name), None)
-        if item is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
-        skill_file = Path(item["path"])
-        return {"name": skill_name, "content": skill_file.read_text(encoding="utf-8")}
-
-    @app.post("/api/skills/{skill_name}/toggle")
-    async def toggle_skill(
-        skill_name: str,
-        body: EnabledPatch,
-        authorization: str | None = Header(default=None),
-    ) -> dict[str, Any]:
-        _get_user_from_auth_header(authorization)
-        return {"name": skill_name, "enabled": body.enabled}
-
-    @app.put("/api/skills/{skill_name}")
-    async def update_skill(
-        skill_name: str,
-        body: SkillUpdate,
-        authorization: str | None = Header(default=None),
-    ) -> dict[str, Any]:
-        _get_user_from_auth_header(authorization)
-        skill_name = validate_safe_name(skill_name, "skill name")
-        skill_file = container.primary_skill_root() / skill_name / "SKILL.md"
-        if not skill_file.exists():
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
-        skill_file.write_text(body.content, encoding="utf-8")
-        return {"name": skill_name, "content": body.content}
-
-    @app.delete("/api/skills/{skill_name}")
-    async def delete_skill(
-        skill_name: str,
-        authorization: str | None = Header(default=None),
-    ) -> dict[str, bool]:
-        import shutil
-
-        _get_user_from_auth_header(authorization)
-        skill_name = validate_safe_name(skill_name, "skill name")
-        skill_dir = container.primary_skill_root() / skill_name
-        if skill_dir.exists():
-            shutil.rmtree(skill_dir)
-        return {"ok": True}
+        del skill_name
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill management API removed")
 
     @app.get("/api/users")
     async def list_users(authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:

@@ -46,7 +46,6 @@ from xbot.platform.config.schema import Config
 from xbot.platform.logging.core import configure_logging, get_logger, set_package_logging_enabled
 from xbot.platform.utils.helpers import (
     sync_workspace_command_pack,
-    sync_workspace_skill_pack,
     sync_workspace_templates,
 )
 from xbot.runtime.core.service import AgentService
@@ -430,9 +429,7 @@ def _run_init(
     *,
     workspace: str | None = None,
     config: str | None = None,
-    skill_pack: str = "default",
     command_pack: str = "default",
-    install_skill_pack: bool = False,
     install_command_pack: bool = False,
 ) -> None:
     """Initialize xbot configuration and workspace."""
@@ -487,18 +484,6 @@ def _run_init(
 
     sync_workspace_templates(workspace_path)
 
-    if install_skill_pack:
-        try:
-            installed_skills = sync_workspace_skill_pack(workspace_path, skill_pack)
-        except FileNotFoundError:
-            console.print(f"[red]Error: skill pack not found: {skill_pack}[/red]")
-            raise typer.Exit(1)
-        if installed_skills:
-            console.print(
-                f"[green]✓[/green] Installed skill pack '{skill_pack}' "
-                f"({len(installed_skills)} item(s))"
-            )
-
     if install_command_pack:
         try:
             installed_commands = sync_workspace_command_pack(workspace_path, command_pack)
@@ -532,7 +517,6 @@ def onboard(
     _run_init(
         workspace=workspace,
         config=config,
-        install_skill_pack=True,
         install_command_pack=True,
     )
 
@@ -541,18 +525,14 @@ def onboard(
 def init_cmd(
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
-    skill_pack: str = typer.Option("default", "--skill-pack", help="Skill pack to install"),
     command_pack: str = typer.Option("default", "--command-pack", help="Command pack to install"),
-    no_skill_pack: bool = typer.Option(False, "--no-skill-pack", help="Skip skill pack installation"),
     no_command_pack: bool = typer.Option(False, "--no-command-pack", help="Skip command pack installation"),
 ):
     """Initialize xbot environment (config, workspace, default packs)."""
     _run_init(
         workspace=workspace,
         config=config,
-        skill_pack=skill_pack,
         command_pack=command_pack,
-        install_skill_pack=not no_skill_pack,
         install_command_pack=not no_command_pack,
     )
 

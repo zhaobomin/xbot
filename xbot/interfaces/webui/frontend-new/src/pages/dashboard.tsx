@@ -1,7 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { useChannels } from "../hooks/use-channels";
-import { useSkills } from "../hooks/use-skills";
 import { useCronJobs } from "../hooks/use-cron";
 import { useSessions } from "../hooks/use-sessions";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
@@ -9,7 +8,6 @@ import { Skeleton } from "../components/ui/skeleton";
 import { Badge } from "../components/ui/badge";
 import {
     Radio,
-    Wrench,
     Clock,
     MessageSquare,
     AlertCircle,
@@ -24,14 +22,11 @@ import { Inbox } from "lucide-react";
 export default function Dashboard() {
     const { t } = useTranslation();
     const { data: channels, isLoading: loadingChannels } = useChannels();
-    const { data: skills, isLoading: loadingSkills } = useSkills();
     const { data: cron, isLoading: loadingCron } = useCronJobs();
     const { data: sessions, isLoading: loadingSessions } = useSessions();
 
     const runningChannels = channels?.filter((c) => c.running).length ?? 0;
     const totalChannels = channels?.length ?? 0;
-    const activeSkills =
-        skills?.filter((s) => s.available && s.enabled).length ?? 0;
     const enabledCron = cron?.filter((j) => j.enabled).length ?? 0;
     const totalSessions = sessions?.length ?? 0;
 
@@ -44,15 +39,6 @@ export default function Dashboard() {
             iconColor: "text-violet-500",
             iconBg: "bg-violet-50 dark:bg-violet-950/50",
             topBorder: "border-t-violet-400/60",
-        },
-        {
-            label: t("dashboard.skills"),
-            value: loadingSkills ? null : `${activeSkills}`,
-            icon: Wrench,
-            sub: t("dashboard.active"),
-            iconColor: "text-sky-500",
-            iconBg: "bg-sky-50 dark:bg-sky-950/50",
-            topBorder: "border-t-sky-400/60",
         },
         {
             label: t("dashboard.cronJobs"),

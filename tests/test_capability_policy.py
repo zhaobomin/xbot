@@ -32,7 +32,6 @@ class TestCapabilityPolicy:
         """Create a mock capability catalog."""
         catalog = MagicMock(spec=CapabilityCatalog)
         catalog.builtin_tool_names.return_value = {"exec", "read", "write", "web_search"}
-        catalog.skill_tool_names.return_value = {"weather", "cron"}
         return catalog
 
     def test_init(self, mock_catalog: CapabilityCatalog) -> None:
@@ -61,7 +60,7 @@ class TestCapabilityPolicy:
         policy = CapabilityPolicy(mock_catalog)
         names = policy.available_tool_names("claude_sdk")
         assert "exec" in names
-        assert "weather" in names  # Skills included for claude_sdk
+        assert "weather" not in names
 
     def test_resolve_agent_tools_all_allowed(self, mock_catalog: CapabilityCatalog) -> None:
         """Test resolving all valid tools."""
@@ -107,7 +106,6 @@ class TestCapabilityPolicy:
         policy = CapabilityPolicy(mock_catalog)
         trace = policy.build_backend_trace("custom")
         assert "builtin_tools=4" in trace
-        assert "skill_tools=0" in trace
         assert "mcp_servers=0" in trace
 
     def test_build_backend_trace_claude_sdk(self, mock_catalog: CapabilityCatalog) -> None:
@@ -115,7 +113,7 @@ class TestCapabilityPolicy:
         policy = CapabilityPolicy(mock_catalog)
         trace = policy.build_backend_trace("claude_sdk")
         assert "builtin_tools=4" in trace
-        assert "skill_tools=2" in trace  # Skills counted for claude_sdk
+        assert "mcp_servers=0" in trace
 
     def test_build_backend_trace_with_mcp(self, mock_catalog: CapabilityCatalog) -> None:
         """Test building trace with MCP servers."""

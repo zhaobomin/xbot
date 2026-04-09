@@ -620,26 +620,20 @@ class TestCapabilityCatalogPolicyIntegration:
         assert "mcp_docs_search" in resolution.allowed
         assert "mcp_github_issues" in resolution.allowed
 
-    def test_policy_allows_skill_tools(self) -> None:
-        # Skills are now loaded natively by Claude Code SDK
-        # This test validates that skill_ prefixed tools are recognized
+    def test_policy_drops_unknown_skill_prefixed_tools(self) -> None:
         from xbot.capabilities.catalog import CapabilityCatalog
         from xbot.capabilities.policy import CapabilityPolicy
 
         catalog = CapabilityCatalog(Path("/tmp/nonexistent"))
         policy = CapabilityPolicy(catalog)
 
-        # SDK-native skills are managed by Claude Code, not xbot
-        # skill_ tools should be skipped/passed through
         resolution = policy.resolve_agent_tools(
             ["skill_weather", "read_file"],
             backend="claude_sdk",
         )
 
-        # Skills are managed by SDK, so skill_weather is not in allowed list
-        # but read_file (builtin) should be allowed
         assert "read_file" in resolution.allowed
-        assert "skill_weather" not in resolution.allowed  # SDK manages this
+        assert "skill_weather" in resolution.dropped
 
 
 # ---------------------------------------------------------------------------
@@ -944,9 +938,6 @@ class TestCrossComponentIntegration:
 
         skill_caps = catalog.list_skills(include_unavailable=True)
         assert len(skill_caps) == 0  # Skills managed by SDK
-
-        tool_names = catalog.skill_tool_names(include_unavailable=True)
-        assert len(tool_names) == 0  # No xbot-managed skills
 
     @pytest.mark.asyncio
     async def test_multiple_sessions_independent_state(

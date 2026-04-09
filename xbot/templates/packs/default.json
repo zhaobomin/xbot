@@ -1,12 +1,4 @@
 {
   "name": "default",
-  "skills": [
-    "cron",
-    "github",
-    "memory",
-    "summarize",
-    "tmux",
-    "weather"
-  ],
   "commands": []
 }

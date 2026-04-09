@@ -12,4 +12,4 @@ This file documents non-obvious constraints and usage patterns.
 
 ## cron — Scheduled Reminders
 
-- Please refer to cron skill for usage.
+- Use the built-in `cron` tool directly.

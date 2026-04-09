@@ -27,10 +27,7 @@ class CapabilityPolicy:
         self.mcp_servers = mcp_servers or {}
 
     def available_tool_names(self, backend: str) -> set[str]:
-        names = set(self.catalog.builtin_tool_names())
-        if backend == "claude_sdk":
-            names.update(self.catalog.skill_tool_names(include_unavailable=True))
-        return names
+        return set(self.catalog.builtin_tool_names())
 
     def resolve_agent_tools(self, names: list[str] | None, *, backend: str) -> CapabilityResolution:
         normalized = CapabilityCatalog.normalize_tool_names(names) or []
@@ -52,9 +49,7 @@ class CapabilityPolicy:
         return CapabilityResolution(allowed=allowed, dropped=dropped)
 
     def build_backend_trace(self, backend: str) -> str:
-        skill_tools = self.catalog.skill_tool_names(include_unavailable=True) if backend == "claude_sdk" else set()
         return (
             f"builtin_tools={len(self.catalog.builtin_tool_names())} | "
-            f"skill_tools={len(skill_tools)} | "
             f"mcp_servers={len(self.mcp_servers)}"
         )

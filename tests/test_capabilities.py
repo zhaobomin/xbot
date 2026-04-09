@@ -61,8 +61,6 @@ def test_capability_catalog_build_summary_includes_mcp(tmp_path) -> None:
     )
 
     assert "builtin_tools=" in summary
-    assert "skills=0" in summary  # Skills managed by SDK
-    assert "tool_exposable_skills=0" in summary
     assert "mcp_servers=1" in summary
     assert "docs[streamableHttp]" in summary
 

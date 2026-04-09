@@ -41,8 +41,6 @@ class ToolAdapter:
         workspace: str,
         tools_config: Any = None,
         shared_resources: dict[str, Any] | None = None,
-        skills_loader: Any = None,  # Deprecated: Skills are now loaded by SDK natively
-        skill_progress_callback: Any = None,  # Deprecated
     ):
         """Initialize the tool adapter.
 
@@ -50,19 +48,14 @@ class ToolAdapter:
             workspace: Workspace path
             tools_config: Tools configuration
             shared_resources: Shared resources for tools that need them
-            skills_loader: Deprecated - Skills are now loaded by Claude Code SDK natively
-            skill_progress_callback: Deprecated
         """
         self.workspace = Path(workspace)
         self.tools_config = tools_config
         self.shared_resources = shared_resources or {}
-        self.skills_loader = skills_loader
-        self.skill_progress_callback = skill_progress_callback
         self._tools: dict[str, Any] = {}
         self._tool_context: dict[str, Any] = {}
-        self._python_skill_tool_names: set[str] = set()
-        # These locks protect synchronous registry/context mutations triggered by
-        # MCP and skill plumbing. They must never be held across an await.
+        # These locks protect synchronous registry/context mutations triggered by MCP plumbing.
+        # They must never be held across an await.
         self._tools_lock = threading.Lock()
         self._context_lock = threading.Lock()
         # Flag to track if core tools are registered (for idempotency)
@@ -79,8 +72,7 @@ class ToolAdapter:
             logger.debug("SDK not available, returning empty tools")
             return {}
 
-        # Ensure xbot core tools are always registered (not just Python skill tools)
-        # This handles the case where Python skills were synced before create_mcp_server
+        # Ensure xbot core tools are always registered.
         self._ensure_core_tools_registered()
 
         # Convert to MCP tools
@@ -154,12 +146,7 @@ class ToolAdapter:
         # Skills are now loaded natively by Claude Code SDK via add_dirs parameter
 
     def _ensure_core_tools_registered(self) -> None:
-        """Ensure core xbot tools are registered even if Python skills were synced first.
-
-        This handles the initialization order issue where sync_tools_to_adapter
-        may be called before create_mcp_server, causing _tools to be non-empty
-        but missing core tools like web_search/web_fetch.
-        """
+        """Ensure core xbot tools are registered."""
         if self._core_tools_registered:
             logger.debug("[ToolAdapter] Core tools already registered")
             return
@@ -274,33 +261,6 @@ class ToolAdapter:
     def get(self, name: str) -> Any | None:
         """Registry-compatible alias used by gateway/runtime integrations."""
         return self.get_tool(name)
-
-    def register_python_skill_tools(self, tools: list[Any]) -> None:
-        """Register (or replace) Python skill tools.
-
-        Removes any previously registered Python skill tools first, then
-        adds the new set.  Called by :class:`SkillManager.sync_tools_to_adapter`
-        whenever Python skills change on disk.
-
-        Thread-safe: uses lock to protect against concurrent modifications.
-        """
-        with self._tools_lock:
-            # Remove old Python skill tools
-            for name in self._python_skill_tool_names:
-                self._tools.pop(name, None)
-            self._python_skill_tool_names.clear()
-
-            # Register new ones
-            for t in tools:
-                self._tools[t.name] = t
-                self._python_skill_tool_names.add(t.name)
-
-            if tools:
-                logger.info(
-                    "[ToolAdapter] Registered %d Python skill tool(s): %s",
-                    len(tools),
-                    [t.name for t in tools],
-                )
 
     def clear_context(self, session_key: str) -> None:
         """Clear per-session context for tools that keep session-local state."""

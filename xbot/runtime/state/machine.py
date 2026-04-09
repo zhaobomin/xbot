@@ -177,7 +177,6 @@ class SessionState:
     sdk_tools: list[str] = field(default_factory=list, compare=False)  # SDK init tools snapshot
     sdk_slash_commands: list[str] = field(default_factory=list, compare=False)  # SDK init slash commands snapshot
     skill_source: str = "sdk_only"  # Skill source marker for observability
-    allow_exec_skill_fallback: bool = field(default=False, compare=False)  # per-turn guard override
     task_id: str | None = None  # Active task ID
     request_id: str | None = None  # Current request ID
 

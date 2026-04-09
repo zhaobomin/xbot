@@ -331,36 +331,6 @@ def load_init_pack(pack_name: str = "default") -> dict[str, Any]:
     return json.loads(manifest.read_text(encoding="utf-8"))
 
 
-def sync_workspace_skill_pack(workspace: Path, pack_name: str = "default") -> list[str]:
-    """Install skills from pack into workspace/.claude/skills (create-if-missing only)."""
-    pack = load_init_pack(pack_name)
-    names = pack.get("skills", [])
-    if not isinstance(names, list):
-        return []
-
-    skills_dir = workspace / ".claude" / "skills"
-    skills_dir.mkdir(parents=True, exist_ok=True)
-
-    template_skills = pkg_files("xbot") / "templates" / "skills"
-    builtin_skills = pkg_files("xbot") / "skills"
-
-    added: list[str] = []
-    for name in names:
-        if not isinstance(name, str) or not name:
-            continue
-        src = template_skills / name
-        if not src.is_dir():
-            src = builtin_skills / name
-        if not src.is_dir():
-            continue
-        dest = skills_dir / name
-        if dest.exists():
-            continue
-        _copy_traversable_dir(src, dest)
-        added.append(str(dest.relative_to(workspace)))
-    return added
-
-
 def sync_workspace_command_pack(workspace: Path, pack_name: str = "default") -> list[str]:
     """Install command templates from pack into workspace/commands."""
     pack = load_init_pack(pack_name)

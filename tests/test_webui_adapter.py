@@ -433,7 +433,7 @@ def test_patch_agent_config_persists_and_reloads(tmp_path: Path) -> None:
     assert services.config.channels.send_progress is False
 
 
-def test_cron_and_skills_management_endpoints(tmp_path: Path) -> None:
+def test_cron_management_endpoints(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
     token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
@@ -454,19 +454,6 @@ def test_cron_and_skills_management_endpoints(tmp_path: Path) -> None:
     listed = client.get("/api/cron/jobs", headers=headers)
     assert listed.status_code == 200
     assert listed.json()[0]["id"] == job_id
-
-    skill_create = client.post(
-        "/api/skills",
-        headers=headers,
-        json={"name": "demo-skill", "content": "# Demo"},
-    )
-    assert skill_create.status_code == 201
-    assert (services.primary_skill_root() / "demo-skill" / "SKILL.md").exists()
-
-    skill_list = client.get("/api/skills", headers=headers)
-    assert skill_list.status_code == 200
-    assert any(item["name"] == "demo-skill" for item in skill_list.json())
-
 
 def test_cron_management_crud_endpoints_with_real_service_shape(tmp_path: Path) -> None:
     from xbot.interfaces.webui.app import create_app
@@ -633,26 +620,6 @@ def test_write_management_endpoints(tmp_path: Path) -> None:
     assert services.heartbeat.enabled is True
     assert services.heartbeat.interval_s == 120
 
-    create_skill = client.post(
-        "/api/skills",
-        headers=headers,
-        json={"name": "editable-skill", "content": "# v1"},
-    )
-    assert create_skill.status_code == 201
-
-    update_skill = client.put(
-        "/api/skills/editable-skill",
-        headers=headers,
-        json={"content": "# v2"},
-    )
-    assert update_skill.status_code == 200
-    assert (services.primary_skill_root() / "editable-skill" / "SKILL.md").read_text(encoding="utf-8") == "# v2"
-
-    delete_skill = client.delete("/api/skills/editable-skill", headers=headers)
-    assert delete_skill.status_code == 200
-    assert not (services.primary_skill_root() / "editable-skill").exists()
-
-
 def test_websocket_chat_uses_internal_cli_session_mapping(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
     token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
@@ -739,8 +706,6 @@ def test_frontend_compatibility_endpoints(tmp_path: Path) -> None:
     providers = client.get("/api/providers", headers=headers)
     mcp_servers = client.get("/api/mcp/servers", headers=headers)
     mcp_runtime = client.get("/api/mcp/servers/runtime", headers=headers)
-    skill = client.get("/api/skills/demo-skill", headers=headers)
-
     assert channels.status_code == 200
     assert isinstance(channels.json(), list)
     assert channels.json()[0]["name"] == "telegram"
@@ -759,9 +724,6 @@ def test_frontend_compatibility_endpoints(tmp_path: Path) -> None:
     assert mcp_runtime.json()[0]["running"] is True
     assert mcp_runtime.json()[0]["tool_count"] == 2
     assert mcp_runtime.json()[0]["tools"] == ["mcp_demo_fetch", "mcp_demo_search"]
-
-    assert skill.status_code == 404
-
 
 def test_channel_runtime_prefers_live_manager_status(tmp_path: Path) -> None:
     client, _services = _build_client(tmp_path)
@@ -993,47 +955,13 @@ def test_login_rate_limit_isolated_per_ip(tmp_path: Path, monkeypatch) -> None:
     assert response.status_code == 429  # Same IP should still be blocked
 
 
-def test_skill_name_validation_prevents_path_traversal(tmp_path: Path) -> None:
-    """Test that skill name validation prevents path traversal attacks."""
+def test_api_skills_endpoints_removed(tmp_path: Path) -> None:
     client, _services = _build_client(tmp_path)
     token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
-    # Try to create a skill with path traversal
-    malicious_names = [
-        "../../../etc/passwd",
-        "..%2f..%2f..%2fetc%2fpasswd",
-        "skill/../../../etc/passwd",
-        "skill\\..\\..\\..\\etc\\passwd",
-    ]
-
-    for name in malicious_names:
-        response = client.post(
-            "/api/skills",
-            headers=headers,
-            json={"name": name, "content": "# malicious"},
-        )
-        # Should reject with 400
-        assert response.status_code == 400, f"Should reject malicious name: {name}"
-
-
-def test_skill_name_validation_rejects_unicode_attacks(tmp_path: Path) -> None:
-    """Test that skill name validation normalizes Unicode to prevent encoding attacks."""
-    client, _services = _build_client(tmp_path)
-    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
-
-    # Try Unicode fullwidth slash (／) which normalizes to /
-    unicode_slash_names = [
-        "skill／../../../etc/passwd",  # Fullwidth slash
-        "skill\uFF0F..",  # Another Unicode slash variant
-    ]
-
-    for name in unicode_slash_names:
-        response = client.post(
-            "/api/skills",
-            headers=headers,
-            json={"name": name, "content": "# unicode"},
-        )
-        # Should reject with 400
-        assert response.status_code == 400, f"Should reject Unicode attack: {repr(name)}"
+    assert client.get("/api/skills", headers=headers).status_code == 404
+    assert client.post("/api/skills", headers=headers, json={"name": "demo", "content": "# Demo"}).status_code == 404
+    assert client.get("/api/skills/demo", headers=headers).status_code == 404
+    assert client.put("/api/skills/demo", headers=headers, json={"content": "# Demo"}).status_code == 404
+    assert client.delete("/api/skills/demo", headers=headers).status_code == 404

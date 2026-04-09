@@ -115,35 +115,18 @@ class CapabilityCatalog:
             return "mcp"
         if normalized in self.builtin_tool_names():
             return "tool"
-        # SDK 原生不支持从 skill body 提取工具名，使用 skill_ 前缀判断
-        if normalized.startswith("skill_"):
-            return "skill"
         if assume_unknown_mcp:
             return "mcp"
         return "tool"
 
-    def skill_tool_names(self, *, include_unavailable: bool = False) -> set[str]:
-        """Return tool names for tool_exposable skills (prefixed with ``skill_``)."""
-        return {
-            f"skill_{cap.name}"
-            for cap in self.list_skills(include_unavailable=include_unavailable)
-            if cap.tool_exposable
-        }
-
     def build_summary(self, *, mcp_servers: dict[str, Any] | None = None) -> str:
-        skills = self.list_skills(include_unavailable=True)
-        tool_skills = sorted(self.skill_tool_names(include_unavailable=True))
         builtin = sorted(self.builtin_tool_names())
         mcp = self.list_external_mcp_servers(mcp_servers)
 
         lines = [
             f"builtin_tools={len(builtin)}",
-            f"skills={len(skills)}",
-            f"tool_exposable_skills={len(tool_skills)}",
             f"mcp_servers={len(mcp)}",
         ]
-        if tool_skills:
-            lines.append("skill_tools=" + ", ".join(tool_skills))
         if mcp:
             lines.append(
                 "mcp=" + ", ".join(

@@ -59,10 +59,6 @@ export default function App() {
           element={<Navigate to="/tools?tab=mcp" replace />}
         />
         <Route
-          path="skills"
-          element={<Navigate to="/tools?tab=skills" replace />}
-        />
-        <Route
           path="tools"
           element={
             <AdminRoute>

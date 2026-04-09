@@ -1,7 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 import { useChannels } from "../hooks/useChannels";
-import { useSkills } from "../hooks/useSkills";
 import { useCronJobs } from "../hooks/useCron";
 import { useSessions } from "../hooks/useSessions";
 import {
@@ -12,19 +11,17 @@ import {
 } from "../components/ui/card";
 import { Skeleton } from "../components/ui/skeleton";
 import { Badge } from "../components/ui/badge";
-import { Radio, Wrench, Clock, MessageSquare, AlertCircle, CheckCircle2, XCircle } from "lucide-react";
+import { Radio, Clock, MessageSquare, AlertCircle, CheckCircle2, XCircle } from "lucide-react";
 import { cn } from "../lib/utils";
 
 export default function Dashboard() {
   const { t } = useTranslation();
   const { data: channels, isLoading: loadingChannels } = useChannels();
-  const { data: skills, isLoading: loadingSkills } = useSkills();
   const { data: cron, isLoading: loadingCron } = useCronJobs();
   const { data: sessions, isLoading: loadingSessions } = useSessions();
 
   const runningChannels = channels?.filter((c) => c.running).length ?? 0;
   const totalChannels = channels?.length ?? 0;
-  const activeSkills = skills?.filter((s) => s.available && s.enabled).length ?? 0;
   const enabledCron = cron?.filter((j) => j.enabled).length ?? 0;
   const totalSessions = sessions?.length ?? 0;
 
@@ -36,14 +33,6 @@ export default function Dashboard() {
       sub: t("dashboard.running"),
       iconColor: "text-blue-500",
       iconBg: "bg-blue-50 dark:bg-blue-950/50",
-    },
-    {
-      label: t("dashboard.skills"),
-      value: loadingSkills ? null : `${activeSkills}`,
-      icon: Wrench,
-      sub: t("dashboard.active"),
-      iconColor: "text-sky-500",
-      iconBg: "bg-sky-50 dark:bg-sky-950/50",
     },
     {
       label: t("dashboard.cronJobs"),

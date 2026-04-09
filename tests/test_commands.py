@@ -146,59 +146,42 @@ def test_init_help_shows_pack_options():
     stripped_output = _strip_ansi(result.stdout)
     assert "--workspace" in stripped_output
     assert "--config" in stripped_output
-    assert "--skill-pack" in stripped_output
     assert "--command-pack" in stripped_output
-    assert "--no-skill-pack" in stripped_output
     assert "--no-command-pack" in stripped_output
 
 
-def test_init_installs_default_packs(mock_paths, monkeypatch):
+def test_init_installs_default_command_pack(mock_paths, monkeypatch):
     monkeypatch.setattr("xbot.channels.registry.discover_all", lambda: {})
-    calls: dict[str, tuple[Path, str] | None] = {"skills": None, "commands": None}
-
-    def _fake_skills(workspace: Path, pack_name: str = "default") -> list[str]:
-        calls["skills"] = (workspace, pack_name)
-        return ["skills/memory"]
+    calls: dict[str, tuple[Path, str] | None] = {"commands": None}
 
     def _fake_commands(workspace: Path, pack_name: str = "default") -> list[str]:
         calls["commands"] = (workspace, pack_name)
         return ["commands/review.md"]
 
-    monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_skill_pack", _fake_skills)
     monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_command_pack", _fake_commands)
 
     _config_file, workspace_dir, _mock_ws = mock_paths
     result = runner.invoke(app, ["init"])
 
     assert result.exit_code == 0
-    assert calls["skills"] == (workspace_dir, "default")
     assert calls["commands"] == (workspace_dir, "default")
-    assert "Installed skill pack 'default'" in result.stdout
     assert "Installed command pack 'default'" in result.stdout
 
 
-def test_init_can_skip_pack_installation(mock_paths, monkeypatch):
+def test_init_can_skip_command_pack_installation(mock_paths, monkeypatch):
     monkeypatch.setattr("xbot.channels.registry.discover_all", lambda: {})
-    skill_called = False
     command_called = False
-
-    def _fake_skills(_workspace: Path, pack_name: str = "default") -> list[str]:
-        nonlocal skill_called
-        skill_called = True
-        return []
 
     def _fake_commands(_workspace: Path, pack_name: str = "default") -> list[str]:
         nonlocal command_called
         command_called = True
         return []
 
-    monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_skill_pack", _fake_skills)
     monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_command_pack", _fake_commands)
 
-    result = runner.invoke(app, ["init", "--no-skill-pack", "--no-command-pack"])
+    result = runner.invoke(app, ["init", "--no-command-pack"])
 
     assert result.exit_code == 0
-    assert not skill_called
     assert not command_called
 
 

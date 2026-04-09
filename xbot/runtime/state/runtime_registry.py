@@ -514,16 +514,6 @@ class RuntimeSessionRegistry:
             state.sdk_slash_commands = list(slash_commands)
         state.skill_source = skill_source
 
-    def set_allow_exec_skill_fallback(self, session_key: str, allow: bool) -> None:
-        """Set whether exec fallback is allowed for current turn/session."""
-        state = self.get_or_create(session_key)
-        state.allow_exec_skill_fallback = bool(allow)
-
-    def allow_exec_skill_fallback(self, session_key: str) -> bool:
-        """Check whether exec fallback is allowed for current turn/session."""
-        state = self.get(session_key)
-        return bool(state.allow_exec_skill_fallback) if state else False
-
     def get_last_used(self, session_key: str) -> float | None:
         """Get last used timestamp for session."""
         state = self.get(session_key)

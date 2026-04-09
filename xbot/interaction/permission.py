@@ -68,7 +68,6 @@ class BasePermissionHandler:
             "mcp__xbot__message",
             "mcp__xbot__cron",
             "mcp__xbot__memory",
-            "mcp__xbot__load_skill_content",
         }
 
     def is_safe_tool(self, tool_name: str) -> bool:
