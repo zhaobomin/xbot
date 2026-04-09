@@ -84,7 +84,7 @@ class LocalCommandHandler:
             response_text = self._session_diagnostics_text(session_key)
 
         elif cmd_lower == "!skills":
-            response_text = self._skills_status_text(session_key)
+            response_text = await self._skills_status_text(session_key)
 
         elif cmd_lower == "!coord":
             response_text = self._coord_status_text()
@@ -292,11 +292,27 @@ class LocalCommandHandler:
             lines.append(f"SDK tools: {len(caps.get('tools', []))}")
         return "\n".join(lines)
 
-    def _skills_status_text(self, session_key: str) -> str:
+    async def _skills_status_text(self, session_key: str) -> str:
         """Show SDK skill snapshot for the current session."""
         sm = self._service._shared_resources.get("runtime_registry")
         if not sm or not hasattr(sm, "get_sdk_capabilities"):
             return "SDK skill snapshot unavailable."
+
+        # If this is a fresh session with no cached init payload yet, try a live
+        # SDK metadata refresh so !skills can work on first query.
+        caps = sm.get_sdk_capabilities(session_key)
+        if not caps.get("skills"):
+            try:
+                await asyncio.wait_for(
+                    self._service.get_session_commands(
+                        session_key,
+                        include_live_connected=True,
+                        allow_connect=True,
+                    ),
+                    timeout=6.0,
+                )
+            except Exception as e:
+                logger.debug("Failed to refresh SDK capabilities for !skills: %s", e)
 
         caps = sm.get_sdk_capabilities(session_key)
         skills = caps.get("skills", [])

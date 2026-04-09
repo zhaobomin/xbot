@@ -453,6 +453,7 @@ class AgentService:
                 try:
                     info = await record.client.get_server_info()
                     discovered = set(self._extract_slash_commands(info))
+                    self._cache_sdk_capabilities_from_info(session_key, info)
                     commands.update(discovered)
                     sdk_discovered.update(discovered)
                 except Exception as e:
@@ -464,6 +465,7 @@ class AgentService:
                 client = await self._get_or_create_client(session_key)
                 info = await client.get_server_info()
                 discovered = set(self._extract_slash_commands(info))
+                self._cache_sdk_capabilities_from_info(session_key, info)
                 commands.update(discovered)
                 sdk_discovered.update(discovered)
             except Exception as e:
@@ -529,8 +531,13 @@ class AgentService:
             for item in raw:
                 if isinstance(item, str):
                     text = item.strip()
-                    if text and text not in result:
-                        result.append(text)
+                elif isinstance(item, dict):
+                    candidate = item.get("name") or item.get("id")
+                    text = candidate.strip() if isinstance(candidate, str) else ""
+                else:
+                    text = ""
+                if text and text not in result:
+                    result.append(text)
             return result
 
         slash = AgentService._extract_slash_commands(info)
@@ -539,6 +546,24 @@ class AgentService:
             "tools": _as_str_list(info.get("tools")),
             "slash_commands": slash,
         }
+
+    def _cache_sdk_capabilities_from_info(self, session_key: str, info: Any) -> dict[str, list[str]]:
+        """Persist SDK skills/tools/slash commands extracted from server metadata."""
+        capabilities = self._extract_sdk_capabilities(info)
+        sm = self._shared_resources.get("runtime_registry")
+        if sm:
+            discovered = capabilities.get("slash_commands", [])
+            if discovered and hasattr(sm, "set_commands"):
+                sm.set_commands(session_key, discovered)
+            if hasattr(sm, "set_sdk_capabilities"):
+                sm.set_sdk_capabilities(
+                    session_key,
+                    skills=capabilities.get("skills", []),
+                    tools=capabilities.get("tools", []),
+                    slash_commands=discovered,
+                    skill_source="sdk_only",
+                )
+        return capabilities
 
     async def _refresh_session_commands_from_client(self, session_key: str, client: Any) -> None:
         """Refresh and cache SDK commands from an already-connected client."""
