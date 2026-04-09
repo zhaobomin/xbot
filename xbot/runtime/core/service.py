@@ -1625,8 +1625,7 @@ class AgentService:
         )
 
         try:
-            result = []
-            saw_delta_content = False
+            final_result_text = ""
             async for response in self.process(context):
                 if on_progress and response.progress_texts:
                     for text in response.progress_texts:
@@ -1659,14 +1658,10 @@ class AgentService:
                         event_type=response.event_type or "content_delta",
                         event_data=response.event_data,
                     )
-                if response.is_delta:
-                    result.append(response.delta_content)
-                    if response.delta_content:
-                        saw_delta_content = True
-                elif response.content and not saw_delta_content:
-                    result.append(response.content)
+                if response.event_type == "result" and response.content:
+                    final_result_text = response.content
 
-            return "".join(result)
+            return final_result_text
         finally:
             self._unregister_direct_progress_callback(session_key, on_progress)
 
@@ -1766,8 +1761,7 @@ class AgentService:
                 media=msg.media or [],
             )
 
-            response_text: list[str] = []
-            saw_delta_content = False
+            final_result_text = ""
             last_usage: dict[str, Any] | None = None
 
             async for response in self.process(context):
@@ -1811,13 +1805,9 @@ class AgentService:
                         _event_type=response.event_type or "content_delta",
                     )
 
-                # Accumulate final content
-                if response.is_delta:
-                    response_text.append(response.delta_content)
-                    if response.delta_content:
-                        saw_delta_content = True
-                elif response.content and not saw_delta_content:
-                    response_text.append(response.content)
+                # Final outbound content comes only from ResultMessage.result
+                if response.event_type == "result" and response.content:
+                    final_result_text = response.content
 
                 # Track usage
                 if response.usage:
@@ -1835,11 +1825,11 @@ class AgentService:
                     )
 
             # Send final response
-            if response_text:
+            if final_result_text:
                 await bus.publish_outbound(OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
-                    content="".join(response_text),
+                    content=final_result_text,
                 ))
 
             # Session persistence
@@ -1848,8 +1838,8 @@ class AgentService:
                 try:
                     session = sess_mgr.get_or_create(session_key)
                     session.add_message("user", msg.content)
-                    if response_text:
-                        session.add_message("assistant", "".join(response_text))
+                    if final_result_text:
+                        session.add_message("assistant", final_result_text)
                     sess_mgr.save(session)
                 except Exception as e:
                     logger.warning("Failed to persist session: %s", e)

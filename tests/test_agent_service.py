@@ -192,7 +192,7 @@ class TestAgentService:
         async def fake_process(context):
             yield AgentResponse(content="", is_delta=True, delta_content="Hello")
             yield AgentResponse(content="", is_delta=True, delta_content=" world")
-            yield AgentResponse(content="Hello world")
+            yield AgentResponse(content="Hello world", event_type="result")
 
         with patch.object(service, "process", side_effect=fake_process):
             text = await service.process_direct("hi", session_key="test:dup")
@@ -319,7 +319,7 @@ class TestRunDispatch:
         async def fake_process(context):
             yield AgentResponse(content="", is_delta=True, delta_content="A")
             yield AgentResponse(content="", is_delta=True, delta_content="B")
-            yield AgentResponse(content="AB")
+            yield AgentResponse(content="AB", event_type="result")
 
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="dup")
 
@@ -454,7 +454,7 @@ class TestRunDispatch:
         async def fake_process(context):
             # Verify the prompt was injected
             assert context.prompt == "Say hello in a friendly way"
-            yield AgentResponse(content="Hello there!")
+            yield AgentResponse(content="Hello there!", event_type="result")
 
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/greet")
 
