@@ -1,5 +1,13 @@
 # Changelog
 
+## v0.3.47 (2026-04-10)
+
+- 修复 Claude SDK 持久流串轮残留：引入 Result 后 `quiet_window + drain_cap` 收口机制，并用 task ledger 吸收晚到的 `TaskNotification`，降低下一轮污染。
+- 最终用户回复严格只使用 `ResultMessage.result`，不再拼接 task/progress 文本。
+- 新增配置项：`post_result_quiet_window_ms`、`post_result_drain_cap_ms`、`task_terminal_statuses`。
+- 增强会话与客户端清理：新增 idle client prune、disconnect 失败 force-kill fallback、`!stop` 主动断开会话 client。
+- WebUI 删除会话时同步触发 runtime reset，避免残留会话状态。
+
 ## v0.3.46 (2026-04-09)
 
 - 全面清理 xbot 对 Skill 调用语义的定制逻辑，恢复为 Claude Code SDK 原生机制（仅保留 SDK init 能力快照用于观测）。

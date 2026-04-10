@@ -13,6 +13,7 @@ from xbot.runtime.core.service import AgentService
 from xbot.runtime.core.types import AgentConfig
 from xbot.runtime.state import RuntimeSessionRegistry
 from xbot.runtime.state.machine import SessionPhase
+from xbot.runtime.core.client_pool import ClientPool, ClientRecord
 
 
 class TestAgentService:
@@ -179,6 +180,208 @@ class TestAgentService:
         assert "/review" in cached
         assert "/schedule" in cached
 
+    @pytest.mark.asyncio
+    async def test_process_managed_direct_releases_ephemeral_client(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """heartbeat/cron/auxiliary sessions should release client after one managed turn."""
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+        service._client_pool.disconnect = AsyncMock(return_value=True)
+
+        async def fake_process(_context):
+            yield AgentResponse(content="ok", event_type="result")
+
+        with patch.object(service, "process", side_effect=fake_process):
+            result = await service.process_managed_direct(
+                content="tick",
+                session_key="heartbeat",
+            )
+
+        assert result == "ok"
+        service._client_pool.disconnect.assert_awaited_once_with("heartbeat")
+
+    @pytest.mark.asyncio
+    async def test_process_managed_direct_respects_ephemeral_release_flag(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """ephemeral client release can be disabled via config."""
+        from xbot.platform.config.schema import Config
+
+        runtime_config = Config()
+        runtime_config.agents.claude_sdk.ephemeral_immediate_release_enabled = False
+        shared_resources["config"] = runtime_config
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+        service._client_pool.disconnect = AsyncMock(return_value=True)
+
+        async def fake_process(_context):
+            yield AgentResponse(content="ok", event_type="result")
+
+        with patch.object(service, "process", side_effect=fake_process):
+            result = await service.process_managed_direct(
+                content="tick",
+                session_key="heartbeat",
+            )
+
+        assert result == "ok"
+        service._client_pool.disconnect.assert_not_called()
+
+
+class TestClientPoolLifecycle:
+    """Tests for ClientPool cleanup behavior."""
+
+    @pytest.mark.asyncio
+    async def test_prune_idle_disconnects_stale_clients(self) -> None:
+        """prune_idle should disconnect stale connected clients."""
+        pool = ClientPool()
+
+        c1 = MagicMock()
+        c1.disconnect = AsyncMock(return_value=None)
+        c2 = MagicMock()
+        c2.disconnect = AsyncMock(return_value=None)
+
+        pool._clients["s1"] = ClientRecord(session_key="s1", client=c1)
+        pool._clients["s1"].last_used_at = 0.0
+
+        pool._clients["s2"] = ClientRecord(session_key="s2", client=c2)
+        pool._clients["s2"].last_used_at = 0.0
+
+        removed = await pool.prune_idle(1.0, exclude_keys={"s2"})
+
+        assert removed == 1
+        assert "s1" not in pool._clients
+        assert "s2" in pool._clients
+
+
+class TestResultDrainBehavior:
+    """Tests for result return + post-result drain behavior."""
+
+    @pytest.mark.asyncio
+    async def test_process_returns_result_immediately_when_no_pending_tasks(self, tmp_path: Path) -> None:
+        from xbot.platform.config.schema import Config
+
+        config = AgentConfig(model="claude-sonnet-4-6", system_prompt="Test")
+        runtime_config = Config()
+        runtime_config.agents.claude_sdk.post_result_quiet_window_ms = 30
+        runtime_config.agents.claude_sdk.post_result_drain_cap_ms = 100
+        service = AgentService()
+        await service.initialize(config, {"workspace": str(tmp_path), "config": runtime_config})
+
+        class ResultMessage:
+            def __init__(self, text: str) -> None:
+                self.result = text
+                self.usage = None
+                self.stop_reason = "end_turn"
+                self.num_turns = 1
+                self.total_cost_usd = None
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
+
+        async def receive_messages():
+            yield ResultMessage("done")
+
+        mock_client.receive_messages = receive_messages
+
+        context = AgentContext(session_key="test:drain1", prompt="hello", channel="test", chat_id="c1")
+        start = asyncio.get_event_loop().time()
+        with patch.object(service, "_get_or_create_client", AsyncMock(return_value=mock_client)):
+            responses = [r async for r in service.process(context)]
+        elapsed = asyncio.get_event_loop().time() - start
+
+        assert [r.event_type for r in responses] == ["result"]
+        assert responses[0].content == "done"
+        # pending=0 should not wait quiet window
+        assert elapsed < 0.03
+
+    @pytest.mark.asyncio
+    async def test_process_drains_late_task_notification_without_polluting_next_turn(self, tmp_path: Path) -> None:
+        from xbot.platform.config.schema import Config
+
+        config = AgentConfig(model="claude-sonnet-4-6", system_prompt="Test")
+        runtime_config = Config()
+        runtime_config.agents.claude_sdk.post_result_quiet_window_ms = 15
+        runtime_config.agents.claude_sdk.post_result_drain_cap_ms = 120
+        service = AgentService()
+        await service.initialize(config, {"workspace": str(tmp_path), "config": runtime_config})
+
+        class ResultMessage:
+            def __init__(self, text: str) -> None:
+                self.result = text
+                self.usage = None
+                self.stop_reason = "end_turn"
+                self.num_turns = 1
+                self.total_cost_usd = None
+
+        class TaskStartedMessage:
+            def __init__(self, task_id: str) -> None:
+                self.task_id = task_id
+                self.description = "Run worker"
+                self.task_type = "agent"
+
+        class TaskNotificationMessage:
+            def __init__(self, task_id: str, status: str) -> None:
+                self.task_id = task_id
+                self.status = status
+                self.summary = 'Agent "Query Hangzhou weather" completed'
+                self.output_file = None
+
+        class FakeClient:
+            def __init__(self) -> None:
+                self._queue: list[Any] = []
+
+            async def query(self, prompt: str) -> None:
+                if "并行查询上海" in prompt:
+                    self._queue.append(TaskStartedMessage("t1"))
+                    self._queue.append(ResultMessage("R1"))
+
+                    async def _late_task_complete() -> None:
+                        await asyncio.sleep(0.03)
+                        self._queue.append(TaskNotificationMessage("t1", "completed"))
+
+                    asyncio.create_task(_late_task_complete())
+                else:
+                    self._queue.append(ResultMessage("R2"))
+
+            async def receive_messages(self):
+                while True:
+                    if self._queue:
+                        yield self._queue.pop(0)
+                        continue
+                    await asyncio.sleep(0.001)
+
+        client = FakeClient()
+        with patch.object(service, "_get_or_create_client", AsyncMock(return_value=client)):
+            heavy_ctx = AgentContext(
+                session_key="test:drain2",
+                prompt="启动多个subagent 最多3个，并行查询上海，杭州，北京的天气，并汇总",
+                channel="test",
+                chat_id="c1",
+            )
+            heavy_responses = [r async for r in service.process(heavy_ctx)]
+
+            follow_ctx = AgentContext(
+                session_key="test:drain2",
+                prompt="今天美国跟伊朗打得怎么样？",
+                channel="test",
+                chat_id="c1",
+            )
+            follow_responses = [r async for r in service.process(follow_ctx)]
+
+        # heavy turn should return task-started progress + final result;
+        # late task completion is consumed in background drain and not yielded.
+        assert [r.event_type for r in heavy_responses] == ["task", "result"]
+        assert heavy_responses[-1].content == "R1"
+        # next turn should not be polluted by previous turn late task completion.
+        assert [r.event_type for r in follow_responses] == ["result"]
+        assert follow_responses[0].content == "R2"
+
 
 class TestRunDispatch:
     """Tests for the run() message routing and _dispatch() processing chain."""
@@ -222,7 +425,7 @@ class TestRunDispatch:
 
         async def fake_process(context):
             yield AgentResponse(content="", progress_texts=["Thinking about it..."])
-            yield AgentResponse(content="Hello!")
+            yield AgentResponse(content="Hello!", event_type="result")
 
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="Hi")
 
@@ -251,7 +454,7 @@ class TestRunDispatch:
                 content="",
                 tool_calls=[{"name": "bash", "input": {"cmd": "ls"}}],
             )
-            yield AgentResponse(content="Done!")
+            yield AgentResponse(content="Done!", event_type="result")
 
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="list files")
 
@@ -276,6 +479,7 @@ class TestRunDispatch:
             yield AgentResponse(
                 content="Answer",
                 usage={"input_tokens": 100, "output_tokens": 50},
+                event_type="result",
             )
 
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="Hi")
@@ -410,7 +614,7 @@ class TestRunDispatch:
         async def fake_process(context):
             # Verify the prompt was injected
             assert context.prompt == "Say hello in a friendly way"
-            yield AgentResponse(content="Hello there!")
+            yield AgentResponse(content="Hello there!", event_type="result")
 
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/greet")
 
@@ -467,7 +671,7 @@ class TestRunDispatch:
         async def tracking_process(context):
             # Capture phase during processing
             phases_seen.append(state_manager.get_phase(session_key))
-            yield AgentResponse(content="Done")
+            yield AgentResponse(content="Done", event_type="result")
 
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="Hi")
 
@@ -498,7 +702,7 @@ class TestRunDispatch:
                 event_type="system",
                 event_data={"subtype": "pre_compact"},
             )
-            yield AgentResponse(content="Done after compact")
+            yield AgentResponse(content="Done after compact", event_type="result")
 
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="Hi")
 
@@ -582,7 +786,7 @@ class TestRunDispatch:
         service = await self._make_service(config, shared_resources)
 
         async def fake_process(_context):
-            yield AgentResponse(content="ok")
+            yield AgentResponse(content="ok", event_type="result")
 
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="Hi")
 
@@ -718,7 +922,7 @@ class TestRunDispatch:
 
         async def fake_process(_context):
             yield AgentResponse(content="", tool_calls=tool_calls)
-            yield AgentResponse(content="done")
+            yield AgentResponse(content="done", event_type="result")
 
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="run")
         with patch.object(service, "process", side_effect=fake_process):
@@ -739,7 +943,11 @@ class TestRunDispatch:
         service = await self._make_service(config, shared_resources)
 
         async def fake_process(_context):
-            yield AgentResponse(content="ok", usage={"input_tokens": 0, "output_tokens": 0})
+            yield AgentResponse(
+                content="ok",
+                usage={"input_tokens": 0, "output_tokens": 0},
+                event_type="result",
+            )
 
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="run")
         with patch.object(service, "process", side_effect=fake_process):

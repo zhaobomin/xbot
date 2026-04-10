@@ -506,7 +506,18 @@ def create_app(
     @app.delete("/api/sessions/{session_key:path}")
     async def delete_session(session_key: str, authorization: str | None = Header(default=None)) -> dict[str, bool]:
         _get_user_from_auth_header(authorization)
-        return {"ok": container.conversation_store.delete(session_key)}
+        internal_session_key = to_internal_session_key(session_key)
+        removed = container.conversation_store.delete(session_key)
+        if internal_session_key != session_key:
+            removed = container.conversation_store.delete(internal_session_key) or removed
+        try:
+            await container.agent.reset_session(internal_session_key)
+            if internal_session_key != session_key:
+                await container.agent.reset_session(session_key)
+        except Exception:
+            # Keep delete API best-effort for runtime cleanup.
+            pass
+        return {"ok": removed}
 
     @app.get("/api/providers")
     async def providers(authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:

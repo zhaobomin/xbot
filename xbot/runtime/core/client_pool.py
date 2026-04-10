@@ -7,6 +7,7 @@ without TTL/Scavenger/LRU complexity.
 from __future__ import annotations
 
 import asyncio
+import inspect
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -111,9 +112,60 @@ class ClientPool:
                 return True
             except Exception as e:
                 logger.warning(f"Failed to disconnect client for {session_key}: {e}")
+                await self._best_effort_force_disconnect(record.client, session_key)
                 record.state = "error"
                 del self._clients[session_key]
                 return False
+
+    async def _best_effort_force_disconnect(self, client: Any, session_key: str) -> None:
+        """Best-effort fallback when graceful disconnect fails."""
+        async def _maybe_call(target: Any) -> bool:
+            if not callable(target):
+                return False
+            try:
+                result = target()
+                if inspect.isawaitable(result):
+                    await result
+                return True
+            except Exception as e:
+                logger.debug("Force-disconnect call failed for %s: %s", session_key, e)
+                return False
+
+        # Try common client-level shutdown methods first.
+        for name in ("terminate", "kill", "close"):
+            if await _maybe_call(getattr(client, name, None)):
+                logger.warning("Force-disconnect fallback used: %s.%s()", session_key, name)
+                return
+
+        # Then try nested process handles if SDK exposes them.
+        proc = getattr(client, "_process", None) or getattr(client, "process", None)
+        if proc is not None:
+            for name in ("terminate", "kill", "close"):
+                if await _maybe_call(getattr(proc, name, None)):
+                    logger.warning("Force-disconnect fallback used: %s.process.%s()", session_key, name)
+                    return
+
+    async def prune_idle(self, idle_ttl_seconds: float, *, exclude_keys: set[str] | None = None) -> int:
+        """Disconnect clients idle for longer than idle_ttl_seconds."""
+        if idle_ttl_seconds <= 0:
+            return 0
+        excluded = exclude_keys or set()
+        now = time.time()
+        async with self._lock:
+            stale_keys = [
+                key
+                for key, record in self._clients.items()
+                if key not in excluded
+                and record.state == "connected"
+                and (now - record.last_used_at) > idle_ttl_seconds
+            ]
+        removed = 0
+        for key in stale_keys:
+            if await self.disconnect(key):
+                removed += 1
+        if removed:
+            logger.info("Pruned %s idle Claude clients (ttl=%ss)", removed, idle_ttl_seconds)
+        return removed
 
     async def disconnect_all(self) -> int:
         """Disconnect all clients.

@@ -164,6 +164,12 @@ class LocalCommandHandler:
             task.cancel()
             cancelled += 1
 
+        # Release SDK client for this session to avoid idle client accumulation.
+        try:
+            await svc._client_pool.disconnect(session_key)
+        except Exception:
+            pass
+
         # Clear pending permission/interaction
         bus_obj = svc._shared_resources.get("bus")
         cleared_permission = False

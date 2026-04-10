@@ -296,36 +296,163 @@ class AgentService:
             await asyncio.wait_for(client.query(query_prompt), timeout=30.0)
             logger.info(f"[AgentService] Query sent, starting receive loop for {context.session_key}")
 
-            # Receive messages with per-message idle timeout (300s)
-            # NOTE: receive_messages() is a persistent stream that does NOT end
-            # after a single query. We must break on ResultMessage to return
-            # control to the caller after each query completes.
+            # Receive loop with result-aware foreground return + background drain.
             msg_count = 0
             idle_timeout = 300.0
-            try:
-                async with asyncio.timeout(idle_timeout) as cm:
-                    async for message in client.receive_messages():
-                        self._sync_sdk_session_mapping(context.session_key, message)
-                        # Reset idle timer on each message received
-                        cm.reschedule(asyncio.get_event_loop().time() + idle_timeout)
-                        msg_count += 1
-                        msg_type = type(message).__name__
-                        logger.debug(f"[AgentService] Received message #{msg_count}: {msg_type}")
-                        response = self._convert_event(message)
-                        if response:
-                            yield response
-                        # ResultMessage signals the end of the current query
-                        if msg_type == "ResultMessage":
+            quiet_window_ms = self._get_post_result_quiet_window_ms()
+            drain_cap_ms = self._get_post_result_drain_cap_ms()
+            terminal_statuses = self._get_task_terminal_statuses()
+
+            pending_task_ids: set[str] = set()
+            result_response: AgentResponse | None = None
+            result_received_at: float | None = None
+            front_returned = False
+            front_deadline: float | None = None
+            drain_deadline: float | None = None
+            bg_drain_started = False
+            bg_drain_events_count = 0
+
+            stream_iter = client.receive_messages().__aiter__()
+            loop = asyncio.get_event_loop()
+
+            while True:
+                now = loop.time()
+                # Select timeout by phase.
+                timeout = idle_timeout
+                if result_response is not None and not front_returned:
+                    if front_deadline is None:
+                        front_deadline = now
+                    timeout = max(0.0, min(idle_timeout, front_deadline - now))
+                elif front_returned and bg_drain_started and pending_task_ids:
+                    if drain_deadline is None:
+                        drain_deadline = now
+                    timeout = max(0.0, min(idle_timeout, drain_deadline - now))
+
+                # Fast exit when background drain is not needed.
+                if front_returned and (not bg_drain_started or not pending_task_ids):
+                    break
+
+                try:
+                    message = await asyncio.wait_for(stream_iter.__anext__(), timeout=timeout)
+                except StopAsyncIteration:
+                    break
+                except TimeoutError:
+                    now = loop.time()
+                    if result_response is not None and not front_returned:
+                        # Front return point: return ResultMessage.result now.
+                        front_returned = True
+                        logger.info(
+                            "[AgentService] front_return session=%s waited_quiet_ms=%s pending=%s",
+                            context.session_key,
+                            int(round((now - (result_received_at or now)) * 1000)),
+                            len(pending_task_ids),
+                        )
+                        yield result_response
+                        if pending_task_ids:
+                            bg_drain_started = True
                             logger.info(
-                                f"[AgentService] ResultMessage received, ending receive loop "
-                                f"for {context.session_key} after {msg_count} messages"
+                                "[AgentService] bg_drain_start session=%s pending=%s",
+                                context.session_key,
+                                len(pending_task_ids),
                             )
-                            break
-            except TimeoutError:
-                logger.warning(
-                    f"[AgentService] Receive loop idle timeout ({idle_timeout}s) "
-                    f"for {context.session_key} after {msg_count} messages"
-                )
+                            continue
+                        break
+
+                    if front_returned and bg_drain_started:
+                        # Stop background drain on cap or idle timeout.
+                        exit_reason = "pending_empty"
+                        if pending_task_ids:
+                            exit_reason = "drain_cap_reached" if drain_deadline and now >= drain_deadline else "idle_timeout"
+                        logger.info(
+                            "[AgentService] bg_drain_stop session=%s reason=%s pending=%s drained_events=%s",
+                            context.session_key,
+                            exit_reason,
+                            len(pending_task_ids),
+                            bg_drain_events_count,
+                        )
+                        break
+
+                    logger.warning(
+                        "[AgentService] Receive loop idle timeout (%ss) for %s after %s messages",
+                        idle_timeout,
+                        context.session_key,
+                        msg_count,
+                    )
+                    break
+
+                self._sync_sdk_session_mapping(context.session_key, message)
+                msg_count += 1
+                msg_type = type(message).__name__
+                logger.debug(f"[AgentService] Received message #{msg_count}: {msg_type}")
+
+                # Update task ledger from raw task events.
+                if msg_type == "TaskStartedMessage":
+                    task_id = getattr(message, "task_id", None)
+                    if isinstance(task_id, str) and task_id:
+                        pending_task_ids.add(task_id)
+                elif msg_type == "TaskNotificationMessage":
+                    status = str(getattr(message, "status", "") or "").lower()
+                    task_id = getattr(message, "task_id", None)
+                    if status in terminal_statuses:
+                        if isinstance(task_id, str) and task_id:
+                            pending_task_ids.discard(task_id)
+                        else:
+                            logger.info(
+                                "[AgentService] task_terminal_without_id session=%s status=%s",
+                                context.session_key,
+                                status,
+                            )
+
+                response = self._convert_event(message)
+                if response:
+                    # Result handling: front return happens immediately or after quiet window
+                    # (only when pending tasks exist at result time).
+                    if msg_type == "ResultMessage":
+                        result_response = response
+                        result_received_at = loop.time()
+                        logger.info(
+                            "[AgentService] result_received session=%s pending_count_at_result=%s",
+                            context.session_key,
+                            len(pending_task_ids),
+                        )
+                        if pending_task_ids:
+                            front_deadline = result_received_at + (quiet_window_ms / 1000.0)
+                            drain_deadline = result_received_at + (drain_cap_ms / 1000.0)
+                            continue
+                        # No pending tasks: return immediately, no background drain needed.
+                        front_returned = True
+                        logger.info(
+                            "[AgentService] front_return session=%s waited_quiet_ms=0 pending=0",
+                            context.session_key,
+                        )
+                        yield result_response
+                        break
+
+                    # Foreground phase: stream events to caller.
+                    if not front_returned:
+                        yield response
+                    # Background drain phase: consume only, no caller output.
+                    elif bg_drain_started:
+                        bg_drain_events_count += 1
+
+                # Background drain exit once pending clears or cap reached.
+                if front_returned and bg_drain_started:
+                    now = loop.time()
+                    if not pending_task_ids:
+                        logger.info(
+                            "[AgentService] bg_drain_stop session=%s reason=pending_empty pending=0 drained_events=%s",
+                            context.session_key,
+                            bg_drain_events_count,
+                        )
+                        break
+                    if drain_deadline is not None and now >= drain_deadline:
+                        logger.info(
+                            "[AgentService] bg_drain_stop session=%s reason=drain_cap_reached pending=%s drained_events=%s",
+                            context.session_key,
+                            len(pending_task_ids),
+                            bg_drain_events_count,
+                        )
+                        break
 
             logger.info(f"[AgentService] Receive loop completed, {msg_count} messages for {context.session_key}")
 
@@ -340,6 +467,40 @@ class AgentService:
             )
         finally:
             self._clear_runtime_tool_and_permission_context(context.session_key)
+
+    def _get_post_result_quiet_window_ms(self) -> int:
+        config = self._shared_resources.get("config")
+        sdk_cfg = getattr(getattr(config, "agents", None), "claude_sdk", None) if config else None
+        value = getattr(sdk_cfg, "post_result_quiet_window_ms", 1200) if sdk_cfg else 1200
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return 1200
+        return max(parsed, 0)
+
+    def _get_post_result_drain_cap_ms(self) -> int:
+        config = self._shared_resources.get("config")
+        sdk_cfg = getattr(getattr(config, "agents", None), "claude_sdk", None) if config else None
+        value = getattr(sdk_cfg, "post_result_drain_cap_ms", 8000) if sdk_cfg else 8000
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError):
+            return 8000
+        return max(parsed, 0)
+
+    def _get_task_terminal_statuses(self) -> set[str]:
+        config = self._shared_resources.get("config")
+        sdk_cfg = getattr(getattr(config, "agents", None), "claude_sdk", None) if config else None
+        raw = getattr(sdk_cfg, "task_terminal_statuses", None) if sdk_cfg else None
+        if not isinstance(raw, list):
+            return {"completed", "failed", "cancelled", "errored"}
+        result: set[str] = set()
+        for item in raw:
+            if isinstance(item, str):
+                value = item.strip().lower()
+                if value:
+                    result.add(value)
+        return result or {"completed", "failed", "cancelled", "errored"}
 
     @staticmethod
     def _build_query_prompt(prompt: str, media: list[Any] | None) -> str:
@@ -826,6 +987,16 @@ class AgentService:
         Returns:
             ClaudeSDKClient instance
         """
+        # Opportunistic idle-client pruning to avoid unbounded growth across session switching.
+        config = self._shared_resources.get("config")
+        sdk_cfg = getattr(getattr(config, "agents", None), "claude_sdk", None) if config else None
+        idle_ttl = getattr(sdk_cfg, "client_idle_ttl_seconds", 3600)
+        scavenger_enabled = getattr(sdk_cfg, "client_scavenger_enabled", True)
+        if scavenger_enabled and isinstance(idle_ttl, (int, float)) and idle_ttl > 0:
+            try:
+                await self._client_pool.prune_idle(float(idle_ttl), exclude_keys={session_key})
+            except Exception as e:
+                logger.debug("Idle client pruning skipped for %s: %s", session_key, e)
 
         # Build options
         options = self._build_sdk_options()
@@ -1587,6 +1758,33 @@ class AgentService:
         # Unknown non-MCP tools default to xbot MCP namespace.
         return f"mcp__{_XBOT_MCP_SERVER_NAME}__{canonical}"
 
+    def _should_release_ephemeral_client(self, session_key: str) -> bool:
+        """Whether this session should release Claude client after one managed turn."""
+        if session_key == "heartbeat" or session_key.startswith("cron:") or session_key == "auxiliary":
+            cfg = self._shared_resources.get("config")
+            sdk_cfg = getattr(getattr(cfg, "agents", None), "claude_sdk", None)
+            enabled = getattr(sdk_cfg, "ephemeral_immediate_release_enabled", True)
+            return bool(enabled) if isinstance(enabled, bool) else True
+        return False
+
+    async def _release_session_client(self, session_key: str, *, reason: str) -> None:
+        """Best-effort client release for a session."""
+        try:
+            ok = await self._client_pool.disconnect(session_key)
+            logger.info(
+                "[AgentService] released session client: session=%s reason=%s ok=%s",
+                session_key,
+                reason,
+                ok,
+            )
+        except Exception as e:
+            logger.warning(
+                "[AgentService] failed to release session client: session=%s reason=%s error=%s",
+                session_key,
+                reason,
+                e,
+            )
+
     # === CLI-compatible methods (migrated from AgentRuntime) ===
 
     async def process_direct(
@@ -1625,7 +1823,7 @@ class AgentService:
         )
 
         try:
-            result = []
+            final_result_text = ""
             async for response in self.process(context):
                 if on_progress and response.progress_texts:
                     for text in response.progress_texts:
@@ -1658,14 +1856,17 @@ class AgentService:
                         event_type=response.event_type or "content_delta",
                         event_data=response.event_data,
                     )
-                if response.is_delta:
-                    result.append(response.delta_content)
-                elif response.content:
-                    result.append(response.content)
+                if response.event_type == "result" and response.content:
+                    final_result_text = response.content
 
-            return "".join(result)
+            return final_result_text
         finally:
             self._unregister_direct_progress_callback(session_key, on_progress)
+            if self._should_release_ephemeral_client(session_key):
+                await self._release_session_client(
+                    session_key,
+                    reason="ephemeral_turn_complete",
+                )
 
     async def run(self) -> None:
         """Run the service with message bus integration.
@@ -1763,7 +1964,8 @@ class AgentService:
                 media=msg.media or [],
             )
 
-            response_text: list[str] = []
+            final_result_text = ""
+            final_sent = False
             last_usage: dict[str, Any] | None = None
 
             async for response in self.process(context):
@@ -1807,11 +2009,16 @@ class AgentService:
                         _event_type=response.event_type or "content_delta",
                     )
 
-                # Accumulate final content
-                if response.is_delta:
-                    response_text.append(response.delta_content)
-                elif response.content:
-                    response_text.append(response.content)
+                # Final user-visible output only comes from ResultMessage.result
+                if response.event_type == "result" and response.content:
+                    final_result_text = response.content
+                    if not final_sent:
+                        await bus.publish_outbound(OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content=final_result_text,
+                        ))
+                        final_sent = True
 
                 # Track usage
                 if response.usage:
@@ -1829,11 +2036,11 @@ class AgentService:
                     )
 
             # Send final response
-            if response_text:
+            if final_result_text and not final_sent:
                 await bus.publish_outbound(OutboundMessage(
                     channel=msg.channel,
                     chat_id=msg.chat_id,
-                    content="".join(response_text),
+                    content=final_result_text,
                 ))
 
             # Session persistence
@@ -1842,8 +2049,8 @@ class AgentService:
                 try:
                     session = sess_mgr.get_or_create(session_key)
                     session.add_message("user", msg.content)
-                    if response_text:
-                        session.add_message("assistant", "".join(response_text))
+                    if final_result_text:
+                        session.add_message("assistant", final_result_text)
                     sess_mgr.save(session)
                 except Exception as e:
                     logger.warning("Failed to persist session: %s", e)
