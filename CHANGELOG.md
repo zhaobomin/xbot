@@ -1,5 +1,11 @@
 # Changelog
 
+## v0.3.48 (2026-04-10)
+
+- 优化 Tool Calls 展示：不再仅在“首个参数为字符串”时显示参数，统一支持命名参数摘要。
+- Tool hint 现展示最多前 3 个参数，并对长文本/复杂结构做紧凑截断，兼顾信息量与可读性。
+- 增加 `AgentService._format_tool_hint` 单测，覆盖 `Edit` 与 `TodoWrite` 的非字符串参数场景。
+
 ## v0.3.47 (2026-04-10)
 
 - 修复 Claude SDK 持久流串轮残留：引入 Result 后 `quiet_window + drain_cap` 收口机制，并用 task ledger 吸收晚到的 `TaskNotification`，降低下一轮污染。

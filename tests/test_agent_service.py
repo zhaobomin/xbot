@@ -232,6 +232,38 @@ class TestAgentService:
         assert result == "ok"
         service._client_pool.disconnect.assert_not_called()
 
+    def test_format_tool_hint_includes_compact_named_args(self) -> None:
+        hint = AgentService._format_tool_hint([{
+            "name": "Edit",
+            "kind": "tool",
+            "input": {
+                "file_path": "/home/xbot/.xbot-dev/config.json",
+                "old_string": "a" * 120,
+                "new_string": "updated",
+                "replace_all": False,
+            },
+        }])
+
+        assert "Tool: Edit(" in hint
+        assert 'file_path="/home/xbot/.xbot-dev/config.json"' in hint
+        assert "old_string=" in hint
+        assert "new_string=" in hint
+        assert "…" in hint
+
+    def test_format_tool_hint_handles_non_string_args_compactly(self) -> None:
+        hint = AgentService._format_tool_hint([{
+            "name": "TodoWrite",
+            "kind": "tool",
+            "input": {
+                "todos": [{"content": "clean up", "status": "pending"}],
+                "append": True,
+            },
+        }])
+
+        assert "Tool: TodoWrite(" in hint
+        assert "todos=[1 items]" in hint
+        assert "append=true" in hint
+
 
 class TestClientPoolLifecycle:
     """Tests for ClientPool cleanup behavior."""

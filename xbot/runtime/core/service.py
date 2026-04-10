@@ -7,6 +7,7 @@ combining the core logic from ClaudeSDKBackend and AgentRuntime.
 from __future__ import annotations
 
 import asyncio
+import json
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
@@ -813,6 +814,39 @@ class AgentService:
     @staticmethod
     def _format_tool_hint(tool_calls: list[dict[str, Any]]) -> str:
         """Format tool calls into a readable hint string."""
+        def _short_text(value: str, limit: int = 48) -> str:
+            text = value.replace("\n", "\\n")
+            return text if len(text) <= limit else f"{text[:limit]}…"
+
+        def _render_value(value: Any) -> str:
+            if isinstance(value, str):
+                return f'"{_short_text(value)}"'
+            if isinstance(value, (bool, int, float)) or value is None:
+                return json.dumps(value, ensure_ascii=False)
+            if isinstance(value, list):
+                return f"[{len(value)} items]"
+            if isinstance(value, dict):
+                keys = list(value.keys())
+                preview = ", ".join(str(k) for k in keys[:3])
+                suffix = ", …" if len(keys) > 3 else ""
+                return "{" + preview + suffix + "}"
+            return f"<{type(value).__name__}>"
+
+        def _render_args(args: Any) -> str:
+            if isinstance(args, dict):
+                if not args:
+                    return ""
+                pairs: list[str] = []
+                for idx, (k, v) in enumerate(args.items()):
+                    if idx >= 3:
+                        pairs.append("…")
+                        break
+                    pairs.append(f"{k}={_render_value(v)}")
+                return ", ".join(pairs)
+            if args is None:
+                return ""
+            return _render_value(args)
+
         def _kind_label(kind: str) -> str:
             return {
                 "tool": "Tool",
@@ -822,13 +856,15 @@ class AgentService:
 
         def _fmt(tc: dict[str, Any]) -> str:
             args = tc.get("input") or tc.get("arguments") or {}
-            val = next(iter(args.values()), None) if isinstance(args, dict) else None
             name = str(tc.get("name", "tool"))
             kind = str(tc.get("kind", "tool"))
             prefix = f"{_kind_label(kind)}: "
-            if not isinstance(val, str):
+            rendered_args = _render_args(args)
+            if not rendered_args:
                 return prefix + name
-            body = f'{name}("{val[:40]}…")' if len(val) > 40 else f'{name}("{val}")'
+            body = f"{name}({rendered_args})"
+            if len(body) > 200:
+                body = f"{body[:197]}..."
             return prefix + body
 
         return ", ".join(_fmt(tc) for tc in tool_calls) if tool_calls else "Using tools..."
