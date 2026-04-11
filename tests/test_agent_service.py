@@ -1,6 +1,8 @@
 """Tests for AgentService."""
 
 import asyncio
+import contextlib
+import os
 from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -441,18 +443,24 @@ class TestClientPoolLifecycle:
 
 
 class TestResultDrainBehavior:
-    """Tests for result return + post-result drain behavior."""
+    """Tests for idle-boundary turn behavior in process()."""
 
     @pytest.mark.asyncio
-    async def test_process_returns_result_immediately_when_no_pending_tasks(self, tmp_path: Path) -> None:
+    async def test_process_waits_for_idle_boundary_after_result(self, tmp_path: Path) -> None:
         from xbot.platform.config.schema import Config
 
         config = AgentConfig(model="claude-sonnet-4-6", system_prompt="Test")
         runtime_config = Config()
-        runtime_config.agents.claude_sdk.post_result_quiet_window_ms = 30
-        runtime_config.agents.claude_sdk.post_result_drain_cap_ms = 100
         service = AgentService()
         await service.initialize(config, {"workspace": str(tmp_path), "config": runtime_config})
+
+        class TextBlock:
+            def __init__(self, text: str) -> None:
+                self.text = text
+
+        class AssistantMessage:
+            def __init__(self, text: str) -> None:
+                self.content = [TextBlock(text)]
 
         class ResultMessage:
             def __init__(self, text: str) -> None:
@@ -461,34 +469,38 @@ class TestResultDrainBehavior:
                 self.stop_reason = "end_turn"
                 self.num_turns = 1
                 self.total_cost_usd = None
+
+        class SystemMessage:
+            def __init__(self, *, subtype: str, state: str | None = None) -> None:
+                self.subtype = subtype
+                self.data = {"subtype": subtype}
+                if state is not None:
+                    self.data["state"] = state
 
         mock_client = MagicMock()
         mock_client.query = AsyncMock()
 
         async def receive_messages():
-            yield ResultMessage("done")
+            yield ResultMessage("R1")
+            yield AssistantMessage("late assistant")
+            yield SystemMessage(subtype="session_state_changed", state="idle")
 
         mock_client.receive_messages = receive_messages
 
-        context = AgentContext(session_key="test:drain1", prompt="hello", channel="test", chat_id="c1")
-        start = asyncio.get_event_loop().time()
+        context = AgentContext(session_key="test:idle1", prompt="hello", channel="test", chat_id="c1")
         with patch.object(service, "_get_or_create_client", AsyncMock(return_value=mock_client)):
             responses = [r async for r in service.process(context)]
-        elapsed = asyncio.get_event_loop().time() - start
 
-        assert [r.event_type for r in responses] == ["result"]
-        assert responses[0].content == "done"
-        # pending=0 should not wait quiet window
-        assert elapsed < 0.03
+        assert [r.event_type for r in responses] == ["result", "content"]
+        assert responses[0].content == "R1"
+        assert responses[1].content == "late assistant"
 
     @pytest.mark.asyncio
-    async def test_process_drains_late_task_notification_without_polluting_next_turn(self, tmp_path: Path) -> None:
+    async def test_process_missing_idle_boundary_returns_error(self, tmp_path: Path) -> None:
         from xbot.platform.config.schema import Config
 
         config = AgentConfig(model="claude-sonnet-4-6", system_prompt="Test")
         runtime_config = Config()
-        runtime_config.agents.claude_sdk.post_result_quiet_window_ms = 15
-        runtime_config.agents.claude_sdk.post_result_drain_cap_ms = 120
         service = AgentService()
         await service.initialize(config, {"workspace": str(tmp_path), "config": runtime_config})
 
@@ -500,68 +512,589 @@ class TestResultDrainBehavior:
                 self.num_turns = 1
                 self.total_cost_usd = None
 
-        class TaskStartedMessage:
-            def __init__(self, task_id: str) -> None:
-                self.task_id = task_id
-                self.description = "Run worker"
-                self.task_type = "agent"
+        class FakeClient:
+            async def query(self, _prompt: str) -> None:
+                return None
 
-        class TaskNotificationMessage:
-            def __init__(self, task_id: str, status: str) -> None:
-                self.task_id = task_id
-                self.status = status
-                self.summary = 'Agent "Query Hangzhou weather" completed'
-                self.output_file = None
+            async def receive_messages(self):
+                yield ResultMessage("R1")
+
+        with patch.object(service, "_get_or_create_client", AsyncMock(return_value=FakeClient())):
+            ctx = AgentContext(
+                session_key="test:idle2",
+                prompt="hello",
+                channel="test",
+                chat_id="c1",
+            )
+            responses = [r async for r in service.process(ctx)]
+
+        assert len(responses) == 2
+        assert responses[0].event_type == "result"
+        assert responses[0].content == "R1"
+        assert responses[1].finish_reason == "error"
+        assert "idle boundary" in responses[1].content.lower()
+
+    @pytest.mark.asyncio
+    async def test_idle_boundary_parser_falls_back_to_message_state(self) -> None:
+        class SystemMessage:
+            def __init__(self) -> None:
+                self.subtype = "session_state_changed"
+                self.data = {"subtype": "session_state_changed"}
+                self.state = "idle"
+
+        assert AgentService._is_idle_boundary_message(SystemMessage()) is True
+
+    @pytest.mark.asyncio
+    async def test_process_sdk_internal_timeout_with_pending_wait_emits_error(self, tmp_path: Path) -> None:
+        from xbot.platform.config.schema import Config
+
+        config = AgentConfig(model="claude-sonnet-4-6", system_prompt="Test")
+        runtime_config = Config()
+        bus = MagicMock()
+        bus.get_pending_request_for_session = MagicMock(return_value="perm-1")
+        bus.get_pending_interaction_for_session = MagicMock(return_value=None)
+        service = AgentService()
+        await service.initialize(
+            config,
+            {"workspace": str(tmp_path), "config": runtime_config, "bus": bus},
+        )
 
         class FakeClient:
-            def __init__(self) -> None:
-                self._queue: list[Any] = []
+            async def query(self, _prompt: str) -> None:
+                return None
 
-            async def query(self, prompt: str) -> None:
-                if "并行查询上海" in prompt:
-                    self._queue.append(TaskStartedMessage("t1"))
-                    self._queue.append(ResultMessage("R1"))
+            async def receive_messages(self):
+                raise TimeoutError("synthetic timeout")
+                yield  # pragma: no cover - keep as async generator
 
-                    async def _late_task_complete() -> None:
-                        await asyncio.sleep(0.03)
-                        self._queue.append(TaskNotificationMessage("t1", "completed"))
+        with patch.object(service, "_get_or_create_client", AsyncMock(return_value=FakeClient())):
+            ctx = AgentContext(
+                session_key="test:idle-timeout-pending",
+                prompt="hello",
+                channel="test",
+                chat_id="c1",
+            )
+            responses = [r async for r in service.process(ctx)]
 
-                    asyncio.create_task(_late_task_complete())
-                else:
-                    self._queue.append(ResultMessage("R2"))
+        assert len(responses) == 1
+        assert responses[0].finish_reason == "error"
+        assert "stream timeout error" in responses[0].content.lower()
+
+    @pytest.mark.asyncio
+    async def test_process_wait_for_timeout_with_pending_wait_does_not_emit_error(self, tmp_path: Path) -> None:
+        from xbot.platform.config.schema import Config
+
+        config = AgentConfig(model="claude-sonnet-4-6", system_prompt="Test")
+        runtime_config = Config()
+        bus = MagicMock()
+        bus.get_pending_request_for_session = MagicMock(return_value="perm-1")
+        bus.get_pending_interaction_for_session = MagicMock(return_value=None)
+        service = AgentService()
+        await service.initialize(
+            config,
+            {"workspace": str(tmp_path), "config": runtime_config, "bus": bus},
+        )
+
+        class FakeClient:
+            async def query(self, _prompt: str) -> None:
+                return None
 
             async def receive_messages(self):
                 while True:
-                    if self._queue:
-                        yield self._queue.pop(0)
-                        continue
-                    await asyncio.sleep(0.001)
+                    await asyncio.sleep(1)
+                    yield MagicMock()
 
-        client = FakeClient()
-        with patch.object(service, "_get_or_create_client", AsyncMock(return_value=client)):
-            heavy_ctx = AgentContext(
-                session_key="test:drain2",
-                prompt="启动多个subagent 最多3个，并行查询上海，杭州，北京的天气，并汇总",
+        original_wait_for = asyncio.wait_for
+        call_count = {"n": 0}
+
+        async def fake_wait_for(awaitable, timeout):
+            call_count["n"] += 1
+            # First call is query() (30s), keep normal.
+            if call_count["n"] == 1:
+                return await original_wait_for(awaitable, timeout)
+            # Second call is receive loop wait_for() => simulate poll timeout.
+            close = getattr(awaitable, "close", None)
+            if callable(close):
+                close()
+            raise TimeoutError("synthetic wait_for timeout")
+
+        with (
+            patch.object(service, "_get_or_create_client", AsyncMock(return_value=FakeClient())),
+            patch("xbot.runtime.core.service.asyncio.wait_for", side_effect=fake_wait_for),
+        ):
+            ctx = AgentContext(
+                session_key="test:idle-waitfor-timeout-pending",
+                prompt="hello",
                 channel="test",
                 chat_id="c1",
             )
-            heavy_responses = [r async for r in service.process(heavy_ctx)]
+            responses = [r async for r in service.process(ctx)]
 
-            follow_ctx = AgentContext(
-                session_key="test:drain2",
-                prompt="今天美国跟伊朗打得怎么样？",
-                channel="test",
-                chat_id="c1",
-            )
-            follow_responses = [r async for r in service.process(follow_ctx)]
+        assert responses == []
 
-        # heavy turn should return task-started progress + final result;
-        # late task completion is consumed in background drain and not yielded.
-        assert [r.event_type for r in heavy_responses] == ["task", "result"]
-        assert heavy_responses[-1].content == "R1"
-        # next turn should not be polluted by previous turn late task completion.
-        assert [r.event_type for r in follow_responses] == ["result"]
-        assert follow_responses[0].content == "R2"
+
+class FakeQueryStream:
+    """Programmable async stream for ACP-style turn tests."""
+
+    _STOP = object()
+
+    def __init__(self) -> None:
+        self._queue: asyncio.Queue[Any] = asyncio.Queue()
+        self.closed = False
+
+    async def emit(self, *messages: Any) -> None:
+        for message in messages:
+            await self._queue.put(message)
+
+    async def close(self) -> None:
+        self.closed = True
+        await self._queue.put(self._STOP)
+
+    async def fail(self, error: Exception) -> None:
+        await self._queue.put(error)
+
+    async def next(self) -> Any:
+        item = await self._queue.get()
+        if item is self._STOP:
+            raise StopAsyncIteration
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+
+class FakeMessageInput:
+    """Tracks pushed prompts for each turn."""
+
+    def __init__(self) -> None:
+        self.pushed_prompts: list[str] = []
+        self.closed = False
+
+    async def push(self, prompt: str) -> None:
+        self.pushed_prompts.append(prompt)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+class FakeQuerySession:
+    """Minimal ACP-like query session state."""
+
+    def __init__(self) -> None:
+        self.query_stream = FakeQueryStream()
+        self.input_stream = FakeMessageInput()
+        self.prompt_running = False
+        self.pending_prompts: list[tuple[str, asyncio.Future[dict[str, Any]]]] = []
+        self.closed = False
+
+    async def close(self) -> None:
+        self.closed = True
+        await self.input_stream.close()
+        await self.query_stream.close()
+
+
+def _make_text_block(text: str) -> Any:
+    cls = type("TextBlock", (), {})
+    obj = cls()
+    obj.text = text
+    return obj
+
+
+def _make_assistant_message(text: str, *, session_id: str | None = None, uuid: str | None = None) -> Any:
+    cls = type("AssistantMessage", (), {})
+    obj = cls()
+    obj.content = [_make_text_block(text)]
+    obj.session_id = session_id
+    obj.uuid = uuid
+    obj.parent_tool_use_id = None
+    obj.message = {"model": "claude-sonnet-4-6", "usage": None, "role": "assistant", "content": []}
+    return obj
+
+
+def _make_result_message(
+    text: str,
+    *,
+    session_id: str | None = None,
+    subtype: str = "success",
+    stop_reason: str = "end_turn",
+    is_error: bool = False,
+    usage: dict[str, int] | None = None,
+) -> Any:
+    cls = type("ResultMessage", (), {})
+    obj = cls()
+    obj.subtype = subtype
+    obj.result = text
+    obj.stop_reason = stop_reason
+    obj.is_error = is_error
+    obj.errors = ["synthetic-error"] if is_error else []
+    obj.session_id = session_id
+    obj.usage = usage or {
+        "input_tokens": 1,
+        "output_tokens": 1,
+        "cache_read_input_tokens": 0,
+        "cache_creation_input_tokens": 0,
+    }
+    obj.total_cost_usd = 0.0
+    obj.duration_ms = 1
+    obj.duration_api_ms = 1
+    obj.num_turns = 1
+    obj.modelUsage = {}
+    return obj
+
+
+def _make_system_message(
+    subtype: str,
+    *,
+    state: str | None = None,
+    session_id: str | None = None,
+    extra: dict[str, Any] | None = None,
+) -> Any:
+    cls = type("SystemMessage", (), {})
+    obj = cls()
+    obj.subtype = subtype
+    payload: dict[str, Any] = {"type": "system", "subtype": subtype}
+    if state is not None:
+        payload["state"] = state
+    if session_id is not None:
+        payload["session_id"] = session_id
+    if extra:
+        payload.update(extra)
+    obj.data = payload
+    obj.message = payload.get("message", "")
+    obj.state = state
+    obj.session_id = session_id
+    return obj
+
+
+def _make_task_notification(
+    *,
+    status: str = "completed",
+    task_id: str = "t1",
+    summary: str = 'Agent "task" completed',
+    session_id: str | None = None,
+) -> Any:
+    cls = type("TaskNotificationMessage", (), {})
+    obj = cls()
+    obj.status = status
+    obj.task_id = task_id
+    obj.summary = summary
+    obj.output_file = None
+    obj.session_id = session_id
+    return obj
+
+
+def _make_task_progress(
+    *,
+    task_id: str = "t1",
+    description: str = "Running worker",
+    last_tool_name: str | None = "Bash",
+    session_id: str | None = None,
+) -> Any:
+    cls = type("TaskProgressMessage", (), {})
+    obj = cls()
+    obj.task_id = task_id
+    obj.description = description
+    obj.last_tool_name = last_tool_name
+    obj.session_id = session_id
+    return obj
+
+
+class FakeAcpTurnRunner:
+    """Feasibility harness: ACP-like turn handling over one persistent query stream."""
+
+    def __init__(self, service: AgentService, session_key: str) -> None:
+        self.service = service
+        self.session_key = session_key
+        self.session = FakeQuerySession()
+        self._children: set[asyncio.Task[None]] = set()
+
+    async def shutdown(self) -> None:
+        for task in list(self._children):
+            task.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await task
+        self._children.clear()
+        await self.session.close()
+
+    async def reset(self) -> None:
+        await self.shutdown()
+
+    async def process_prompt(self, prompt: str) -> dict[str, Any]:
+        if self.session.prompt_running:
+            loop = asyncio.get_running_loop()
+            waiter: asyncio.Future[dict[str, Any]] = loop.create_future()
+            self.session.pending_prompts.append((prompt, waiter))
+            return await waiter
+        return await self._run_prompt(prompt)
+
+    async def _run_prompt(self, prompt: str) -> dict[str, Any]:
+        self.session.prompt_running = True
+        await self.session.input_stream.push(prompt)
+        responses: list[AgentResponse] = []
+        stop_reason = "end_turn"
+        ended_by_idle = False
+
+        try:
+            while True:
+                message = await self.session.query_stream.next()
+                self.service._sync_sdk_session_mapping(self.session_key, message)
+                converted = self.service._convert_event(message)
+                if converted is not None:
+                    responses.append(converted)
+
+                if type(message).__name__ == "ResultMessage":
+                    subtype = str(getattr(message, "subtype", "") or "")
+                    if subtype in {
+                        "error_max_budget_usd",
+                        "error_max_turns",
+                        "error_max_structured_output_retries",
+                    }:
+                        stop_reason = "max_turn_requests"
+                    elif str(getattr(message, "stop_reason", "") or "") == "max_tokens":
+                        stop_reason = "max_tokens"
+                    elif str(getattr(message, "stop_reason", "") or "") == "cancelled":
+                        stop_reason = "cancelled"
+
+                if type(message).__name__ == "SystemMessage" and getattr(message, "subtype", None) == "session_state_changed":
+                    data = getattr(message, "data", None)
+                    state = data.get("state") if isinstance(data, dict) else getattr(message, "state", None)
+                    if state == "idle":
+                        ended_by_idle = True
+                        break
+        except StopAsyncIteration as exc:
+            raise RuntimeError("Session stream ended before idle boundary") from exc
+        finally:
+            self.session.prompt_running = False
+            self._handoff_pending_prompt_if_any()
+
+        return {
+            "responses": responses,
+            "stop_reason": stop_reason,
+            "ended_by_idle": ended_by_idle,
+        }
+
+    def _handoff_pending_prompt_if_any(self) -> None:
+        if not self.session.pending_prompts:
+            return
+        prompt, waiter = self.session.pending_prompts.pop(0)
+
+        async def _run_next() -> None:
+            try:
+                result = await self._run_prompt(prompt)
+            except Exception as err:  # pragma: no cover - defensive
+                if not waiter.done():
+                    waiter.set_exception(err)
+            else:
+                if not waiter.done():
+                    waiter.set_result(result)
+
+        task = asyncio.create_task(_run_next())
+        self._children.add(task)
+        task.add_done_callback(self._children.discard)
+
+
+class TestAcpStyleTurnBoundary:
+    """Feasibility tests for ACP-style turn boundary semantics."""
+
+    @pytest.fixture
+    async def service_and_runner(self, tmp_path: Path) -> tuple[AgentService, FakeAcpTurnRunner]:
+        from xbot.platform.config.schema import Config
+
+        runtime_config = Config()
+        registry = RuntimeSessionRegistry()
+        store = ConversationStore(tmp_path)
+        service = AgentService()
+        await service.initialize(
+            AgentConfig(model="claude-sonnet-4-6", system_prompt="Test"),
+            {
+                "workspace": str(tmp_path),
+                "config": runtime_config,
+                "runtime_registry": registry,
+                "conversation_store": store,
+            },
+        )
+        runner = FakeAcpTurnRunner(service, "acp:test:c1")
+        try:
+            yield service, runner
+        finally:
+            await runner.shutdown()
+            await service.shutdown()
+
+    @pytest.mark.asyncio
+    async def test_multi_result_and_task_events_end_only_on_idle(
+        self, service_and_runner: tuple[AgentService, FakeAcpTurnRunner]
+    ) -> None:
+        _, runner = service_and_runner
+        sid = "sid-1"
+        await runner.session.query_stream.emit(
+            _make_system_message("init", session_id=sid),
+            _make_assistant_message("A1", session_id=sid),
+            _make_result_message("R1", session_id=sid),
+            _make_task_notification(status="completed", task_id="t1", session_id=sid),
+            _make_result_message("R2", session_id=sid),
+            _make_system_message("session_state_changed", state="idle", session_id=sid),
+        )
+        result = await runner.process_prompt("p1")
+
+        assert result["ended_by_idle"] is True
+        event_types = [r.event_type for r in result["responses"]]
+        assert event_types == ["content", "result", "task", "result"]
+        assert [r.content for r in result["responses"] if r.event_type == "result"] == ["R1", "R2"]
+
+    @pytest.mark.asyncio
+    async def test_result_does_not_end_turn_early(
+        self, service_and_runner: tuple[AgentService, FakeAcpTurnRunner]
+    ) -> None:
+        _, runner = service_and_runner
+        sid = "sid-2"
+        await runner.session.query_stream.emit(
+            _make_assistant_message("before", session_id=sid),
+            _make_result_message("mid", session_id=sid),
+            _make_assistant_message("after", session_id=sid),
+            _make_task_progress(task_id="t2", description="still running", session_id=sid),
+            _make_system_message("session_state_changed", state="idle", session_id=sid),
+        )
+        result = await runner.process_prompt("p2")
+
+        assert [r.event_type for r in result["responses"]] == ["content", "result", "content", "task"]
+        assert [r.content for r in result["responses"] if r.event_type == "content"] == ["before", "after"]
+
+    @pytest.mark.asyncio
+    async def test_cross_turn_isolation_no_pollution(
+        self, service_and_runner: tuple[AgentService, FakeAcpTurnRunner]
+    ) -> None:
+        _, runner = service_and_runner
+        sid = "sid-3"
+        await runner.session.query_stream.emit(
+            _make_result_message("T1", session_id=sid),
+            _make_system_message("session_state_changed", state="idle", session_id=sid),
+            _make_result_message("T2", session_id=sid),
+            _make_system_message("session_state_changed", state="idle", session_id=sid),
+        )
+        turn1 = await runner.process_prompt("turn1")
+        turn2 = await runner.process_prompt("turn2")
+
+        assert [r.content for r in turn1["responses"] if r.event_type == "result"] == ["T1"]
+        assert [r.content for r in turn2["responses"] if r.event_type == "result"] == ["T2"]
+        assert runner.session.input_stream.pushed_prompts == ["turn1", "turn2"]
+
+    @pytest.mark.asyncio
+    async def test_prompt_running_fifo_handoff(
+        self, service_and_runner: tuple[AgentService, FakeAcpTurnRunner]
+    ) -> None:
+        _, runner = service_and_runner
+        sid = "sid-4"
+
+        async def first_call() -> dict[str, Any]:
+            return await runner.process_prompt("first")
+
+        task1 = asyncio.create_task(first_call())
+        await asyncio.sleep(0)
+        task2 = asyncio.create_task(runner.process_prompt("second"))
+        await asyncio.sleep(0)
+
+        assert runner.session.prompt_running is True
+        assert len(runner.session.pending_prompts) == 1
+        assert runner.session.input_stream.pushed_prompts == ["first"]
+
+        await runner.session.query_stream.emit(
+            _make_result_message("R-first", session_id=sid),
+            _make_system_message("session_state_changed", state="idle", session_id=sid),
+            _make_result_message("R-second", session_id=sid),
+            _make_system_message("session_state_changed", state="idle", session_id=sid),
+        )
+
+        first_result = await asyncio.wait_for(task1, timeout=2)
+        second_result = await asyncio.wait_for(task2, timeout=2)
+
+        assert [r.content for r in first_result["responses"] if r.event_type == "result"] == ["R-first"]
+        assert [r.content for r in second_result["responses"] if r.event_type == "result"] == ["R-second"]
+        assert runner.session.input_stream.pushed_prompts == ["first", "second"]
+
+    @pytest.mark.asyncio
+    async def test_stop_reason_from_result_subtype_does_not_override_idle_boundary(
+        self, service_and_runner: tuple[AgentService, FakeAcpTurnRunner]
+    ) -> None:
+        _, runner = service_and_runner
+        sid = "sid-5"
+        await runner.session.query_stream.emit(
+            _make_result_message(
+                text="max-turns",
+                session_id=sid,
+                subtype="error_max_turns",
+                stop_reason="end_turn",
+                is_error=False,
+            ),
+            _make_system_message("session_state_changed", state="idle", session_id=sid),
+        )
+        result = await runner.process_prompt("limit-test")
+
+        assert result["stop_reason"] == "max_turn_requests"
+        assert result["ended_by_idle"] is True
+
+    @pytest.mark.asyncio
+    async def test_missing_idle_with_stream_end_raises(
+        self, service_and_runner: tuple[AgentService, FakeAcpTurnRunner]
+    ) -> None:
+        _, runner = service_and_runner
+        await runner.session.query_stream.emit(_make_result_message("partial", session_id="sid-6"))
+        await runner.session.query_stream.close()
+
+        with pytest.raises(RuntimeError, match="ended before idle boundary"):
+            await asyncio.wait_for(runner.process_prompt("no-idle"), timeout=2)
+
+    @pytest.mark.asyncio
+    async def test_session_id_mapping_syncs_from_stream_messages(
+        self, service_and_runner: tuple[AgentService, FakeAcpTurnRunner]
+    ) -> None:
+        service, runner = service_and_runner
+        sid = "sid-sync-7"
+        await runner.session.query_stream.emit(
+            _make_system_message("init", session_id=sid),
+            _make_result_message("ok", session_id=sid),
+            _make_system_message("session_state_changed", state="idle", session_id=sid),
+        )
+        _ = await runner.process_prompt("sync")
+
+        registry: RuntimeSessionRegistry = service._shared_resources["runtime_registry"]
+        assert registry.resolve_sdk_session_id("acp:test:c1") == sid
+
+        store: ConversationStore = service._shared_resources["conversation_store"]
+        loaded = store.get_or_create("acp:test:c1")
+        assert loaded.metadata.get("sdk_session_id") == sid
+
+    @pytest.mark.asyncio
+    async def test_environment_precondition_for_idle_events(self, tmp_path: Path) -> None:
+        from xbot.platform.config.schema import Config
+
+        runtime_config = Config()
+        service = AgentService()
+        await service.initialize(
+            AgentConfig(model="claude-sonnet-4-6", system_prompt="Test"),
+            {"workspace": str(tmp_path), "config": runtime_config},
+        )
+        options = service._build_sdk_options(session_key="acp:test:env")
+        await service.shutdown()
+
+        # Precondition for ACP-style boundary: enable session state events from Claude Code.
+        assert isinstance(options.env, dict)
+        assert options.env.get("CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS") == "1"
+
+    @pytest.mark.asyncio
+    async def test_lifecycle_cleanup_reset_and_shutdown(
+        self, service_and_runner: tuple[AgentService, FakeAcpTurnRunner]
+    ) -> None:
+        _, runner = service_and_runner
+        await runner.session.query_stream.emit(
+            _make_result_message("x", session_id="sid-9"),
+            _make_system_message("session_state_changed", state="idle", session_id="sid-9"),
+        )
+        _ = await runner.process_prompt("lifecycle")
+        assert runner.session.closed is False
+
+        await runner.reset()
+        assert runner.session.closed is True
+        assert runner.session.input_stream.closed is True
+        assert runner.session.query_stream.closed is True
 
 
 class TestRunDispatch:
@@ -675,6 +1208,43 @@ class TestRunDispatch:
         assert len(usage_calls) == 1
         assert "100" in usage_calls[0].args[0].content
         assert "50" in usage_calls[0].args[0].content
+
+    @pytest.mark.asyncio
+    async def test_dispatch_emits_all_result_messages(self, config, shared_resources, bus):
+        """_dispatch should emit each ResultMessage content in order."""
+        service = await self._make_service(config, shared_resources)
+
+        async def fake_process(_context):
+            yield AgentResponse(content="R1", event_type="result")
+            yield AgentResponse(content="R2", event_type="result")
+
+        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="Hi")
+
+        with patch.object(service, "process", side_effect=fake_process):
+            await service._dispatch(msg, bus)
+
+        final_outputs = [
+            c.args[0].content
+            for c in bus.publish_outbound.call_args_list
+            if not c.args[0].metadata
+        ]
+        assert final_outputs == ["R1", "R2"]
+
+    @pytest.mark.asyncio
+    async def test_dispatch_forwards_process_error_response(self, config, shared_resources, bus):
+        """_dispatch should publish error responses yielded by process()."""
+        service = await self._make_service(config, shared_resources)
+
+        async def fake_process(_context):
+            yield AgentResponse(content="Error: synthetic", finish_reason="error")
+
+        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="Hi")
+
+        with patch.object(service, "process", side_effect=fake_process):
+            await service._dispatch(msg, bus)
+
+        outputs = [c.args[0].content for c in bus.publish_outbound.call_args_list]
+        assert any("Error: synthetic" in out for out in outputs)
 
     # --- Test 4: Local command !help ---
 
@@ -1246,3 +1816,116 @@ class TestRunDispatch:
 
         # Should call consolidator once
         service._memory_consolidator.maybe_consolidate_by_tokens.assert_called_once_with(session)
+
+
+class TestClaudeSdkE2EIdleBoundary:
+    """Optional real-SDK E2E tests (opt-in)."""
+
+    @pytest.fixture(autouse=True)
+    def _require_opt_in(self) -> None:
+        if os.getenv("RUN_CLAUDE_SDK_E2E") != "1":
+            pytest.skip("set RUN_CLAUDE_SDK_E2E=1 to run real Claude SDK E2E tests")
+
+    async def _collect_events(
+        self,
+        *,
+        prompt: str,
+        emit_state_events: bool,
+        cwd: str,
+        max_turns: int = 6,
+        max_messages: int = 60,
+    ) -> list[dict[str, Any]]:
+        from claude_agent_sdk import ClaudeAgentOptions, query
+
+        key = "CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS"
+        old = os.environ.get(key)
+        try:
+            if emit_state_events:
+                os.environ[key] = "1"
+            else:
+                os.environ.pop(key, None)
+
+            options = ClaudeAgentOptions(
+                cwd=cwd,
+                max_turns=max_turns,
+                permission_mode="acceptEdits",
+            )
+            events: list[dict[str, Any]] = []
+            async for message in query(prompt=prompt, options=options):
+                subtype = getattr(message, "subtype", None)
+                data = getattr(message, "data", None)
+                state = data.get("state") if isinstance(data, dict) else getattr(message, "state", None)
+                events.append(
+                    {
+                        "type": type(message).__name__,
+                        "subtype": subtype,
+                        "state": state,
+                        "status": getattr(message, "status", None),
+                    }
+                )
+                if len(events) >= max_messages:
+                    break
+                if (
+                    type(message).__name__ == "SystemMessage"
+                    and subtype == "session_state_changed"
+                    and state == "idle"
+                ):
+                    break
+            return events
+        except Exception as e:  # pragma: no cover - environment dependent
+            pytest.skip(f"real SDK E2E unavailable in current environment: {e}")
+        finally:
+            if old is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old
+
+    @pytest.mark.asyncio
+    async def test_real_sdk_emits_idle_boundary_when_env_enabled(self, tmp_path: Path) -> None:
+        events = await self._collect_events(
+            prompt="Reply with exactly: pong",
+            emit_state_events=True,
+            cwd=str(tmp_path),
+            max_turns=3,
+        )
+        saw_running = any(
+            e["type"] == "SystemMessage" and e["subtype"] == "session_state_changed" and e["state"] == "running"
+            for e in events
+        )
+        saw_idle = any(
+            e["type"] == "SystemMessage" and e["subtype"] == "session_state_changed" and e["state"] == "idle"
+            for e in events
+        )
+        saw_result = any(e["type"] == "ResultMessage" for e in events)
+
+        assert saw_running is True
+        assert saw_result is True
+        assert saw_idle is True
+
+    @pytest.mark.asyncio
+    async def test_real_sdk_complex_task_flow_reaches_idle_boundary(self, tmp_path: Path) -> None:
+        events = await self._collect_events(
+            prompt=(
+                "Use one sub-agent to list exactly 3 Linux shell commands for checking disk usage. "
+                "Then provide final answer in Chinese."
+            ),
+            emit_state_events=True,
+            cwd=str(tmp_path),
+            max_turns=8,
+            max_messages=100,
+        )
+        saw_task_started = any(e["type"] == "TaskStartedMessage" for e in events)
+        saw_task_done = any(
+            e["type"] == "TaskNotificationMessage" and str(e["status"]).lower() == "completed"
+            for e in events
+        )
+        saw_result = any(e["type"] == "ResultMessage" for e in events)
+        saw_idle = any(
+            e["type"] == "SystemMessage" and e["subtype"] == "session_state_changed" and e["state"] == "idle"
+            for e in events
+        )
+
+        assert saw_task_started is True
+        assert saw_task_done is True
+        assert saw_result is True
+        assert saw_idle is True

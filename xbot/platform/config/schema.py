@@ -151,12 +151,6 @@ class ClaudeSDKAgentConfig(Base):
     client_force_kill_enabled: bool = Field(default=True, description="Enable force-kill fallback for leaked Claude client processes")
     ephemeral_immediate_release_enabled: bool = Field(default=True, description="Release cron/heartbeat clients immediately after turn completion")
     strict_process_tracking_required: bool = Field(default=False, description="Require stable process tracking for managed Claude clients")
-    post_result_quiet_window_ms: int = Field(default=1200, description="Foreground quiet window after result when pending task notifications exist")
-    post_result_drain_cap_ms: int = Field(default=8000, description="Maximum background drain window after result for pending task notifications")
-    task_terminal_statuses: list[str] = Field(
-        default_factory=lambda: ["completed", "failed", "cancelled", "errored"],
-        description="Task notification statuses treated as terminal for pending ledger updates",
-    )
 
 
 class AgentDefinition(Base):
