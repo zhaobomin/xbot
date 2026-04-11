@@ -1,5 +1,6 @@
 """Tests for simplified client pool."""
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -93,3 +94,17 @@ class TestClientPool:
 
             assert "session:1" in snapshot["clients"]
             assert snapshot["counts"]["connected"] == 1
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_cleans_up_on_connect_timeout(self, pool: ClientPool) -> None:
+        """Connect timeout should trigger client cleanup."""
+        with patch("claude_agent_sdk.ClaudeSDKClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock(side_effect=asyncio.TimeoutError())
+            mock_client.disconnect = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            with pytest.raises(RuntimeError, match="timed out"):
+                await pool.get_or_create("session:timeout", options=MagicMock())
+
+            mock_client.disconnect.assert_awaited_once()

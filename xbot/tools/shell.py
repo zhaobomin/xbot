@@ -47,6 +47,9 @@ class ExecTool(Tool):
 
     _MAX_TIMEOUT = 600
     _MAX_OUTPUT = 10_000
+    _HEX_ESCAPE_RE = re.compile(r"\\x([0-9a-fA-F]{2})")
+    _UNICODE_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
+    _OCTAL_ESCAPE_RE = re.compile(r"\\([0-7]{1,3})")
 
     @property
     def description(self) -> str:
@@ -148,10 +151,15 @@ class ExecTool(Tool):
         """Best-effort safety guard for potentially destructive commands."""
         cmd = command.strip()
         lower = cmd.lower()
+        normalized_candidates = self._normalized_command_candidates(lower)
 
         for pattern in self.deny_patterns:
-            if re.search(pattern, lower):
+            if any(re.search(pattern, candidate) for candidate in normalized_candidates):
                 return "Error: Command blocked by safety guard (dangerous pattern detected)"
+
+        # Block common shell obfuscation vectors used to hide blocked commands.
+        if self._contains_obfuscated_shell_text(lower):
+            return "Error: Command blocked by safety guard (obfuscated shell text detected)"
 
         if self.allow_patterns:
             if not any(re.search(p, lower) for p in self.allow_patterns):
@@ -192,6 +200,48 @@ class ExecTool(Tool):
                     return "Error: Command blocked by safety guard (path outside working dir)"
 
         return None
+
+    def _normalized_command_candidates(self, lower_command: str) -> list[str]:
+        """Return normalized variants for deny pattern matching."""
+        candidates = {lower_command}
+
+        decoded = self._decode_escapes(lower_command)
+        if decoded != lower_command:
+            candidates.add(decoded)
+
+        # Decode ANSI-C quoted fragments: $'...'
+        for fragment in re.findall(r"\$'([^']+)'", lower_command):
+            decoded_fragment = self._decode_escapes(fragment)
+            if decoded_fragment:
+                candidates.add(lower_command.replace(fragment, decoded_fragment))
+                candidates.add(decoded_fragment)
+
+        return list(candidates)
+
+    def _decode_escapes(self, text: str) -> str:
+        text = self._HEX_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), text)
+        text = self._UNICODE_ESCAPE_RE.sub(lambda m: chr(int(m.group(1), 16)), text)
+
+        def _decode_octal(match: re.Match[str]) -> str:
+            value = int(match.group(1), 8)
+            if value > 0x10FFFF:
+                return match.group(0)
+            return chr(value)
+
+        return self._OCTAL_ESCAPE_RE.sub(_decode_octal, text)
+
+    @staticmethod
+    def _contains_obfuscated_shell_text(lower_command: str) -> bool:
+        # ANSI-C strings like $'\x72\x6d'
+        if re.search(r"\$'[^']*\\x[0-9a-f]{2}", lower_command):
+            return True
+        # Command substitution with escaped byte construction
+        if re.search(r"\$\([^)]*\\x[0-9a-f]{2}[^)]*\)", lower_command):
+            return True
+        # printf + escaped bytes often used to construct blocked binaries at runtime
+        if re.search(r"\bprintf\b[^\n;&|]*\\x[0-9a-f]{2}", lower_command):
+            return True
+        return False
 
     @staticmethod
     def _extract_absolute_paths(command: str) -> list[str]:

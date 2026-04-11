@@ -190,13 +190,19 @@ class CrewStateManager:
             self._set_crew_phase(CrewPhase.COMPLETING)
 
     def _set_crew_phase(self, to_phase: CrewPhase) -> None:
-        """Set crew phase if transition is valid; silently skip otherwise."""
+        """Set crew phase if transition is valid; warn when transition is invalid."""
         from_phase = self._crew_phase
         if from_phase == to_phase:
             return
         if to_phase in CREW_VALID_TRANSITIONS.get(from_phase, set()):
             self._crew_phase = to_phase
             self._log_transition("crew", "crew", from_phase.value, to_phase.value, "auto-sync")
+            return
+        logger.warning(
+            "Invalid auto-sync crew transition ignored: %s -> %s",
+            from_phase.value,
+            to_phase.value,
+        )
 
     def _check_invariants(self) -> None:
         """Validate state consistency invariants after transitions.

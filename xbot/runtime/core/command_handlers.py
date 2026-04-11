@@ -160,8 +160,7 @@ class LocalCommandHandler:
 
         # Cancel active dispatch task
         task = svc._active_tasks.pop(session_key, None)
-        if task and not task.done():
-            task.cancel()
+        if await self._cancel_task_if_running(task, session_key=session_key, action="stop"):
             cancelled += 1
 
         # Release SDK client for this session to avoid idle client accumulation.
@@ -212,8 +211,7 @@ class LocalCommandHandler:
         # Cancel active task
         task = svc._active_tasks.pop(session_key, None)
         cancelled = 0
-        if task and not task.done():
-            task.cancel()
+        if await self._cancel_task_if_running(task, session_key=session_key, action="reset"):
             cancelled += 1
 
         # Clear pending requests
@@ -253,6 +251,23 @@ class LocalCommandHandler:
             parts.append("\U0001f4cc SDK context preserved (--soft).")
 
         return "\n".join(parts)
+
+    async def _cancel_task_if_running(self, task: Any, *, session_key: str, action: str) -> bool:
+        """Cancel a running task and wait briefly for termination."""
+        if task is None or not hasattr(task, "done") or task.done():
+            return False
+
+        task.cancel()
+        if isinstance(task, asyncio.Task):
+            try:
+                await asyncio.wait_for(task, timeout=2.0)
+            except asyncio.CancelledError:
+                pass
+            except asyncio.TimeoutError:
+                logger.warning("Timed out waiting for cancelled task during %s (%s)", action, session_key)
+            except Exception as e:
+                logger.debug("Cancelled task raised during %s (%s): %s", action, session_key, e)
+        return True
 
     def _session_diagnostics_text(self, session_key: str) -> str:
         """Generate session diagnostics (matches v0.3.37 !state output)."""

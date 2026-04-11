@@ -423,5 +423,16 @@ class TestToolCapabilityMap:
         creator = RoleCreator()
         tools = creator._infer_tools([Capability.REVIEW])
 
-        # REVIEW may not have a specific mapping, so tools might be None or minimal
-        assert tools is None or isinstance(tools, list)
+        assert tools is not None
+        assert "read_file" in tools
+
+    def test_review_validate_refactor_have_explicit_tool_mappings(self):
+        """Regression: quality/code capabilities should not degrade to all-tools fallback."""
+        creator = RoleCreator()
+        review_tools = creator._infer_tools([Capability.REVIEW])
+        validate_tools = creator._infer_tools([Capability.VALIDATE])
+        refactor_tools = creator._infer_tools([Capability.REFACTOR])
+
+        assert review_tools is not None and "read_file" in review_tools
+        assert validate_tools is not None and "bash" in validate_tools
+        assert refactor_tools is not None and "edit_file" in refactor_tools

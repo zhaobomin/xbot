@@ -20,6 +20,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from xbot.exceptions import ConfigurationError
 from xbot.platform.config.schema import Config
 from xbot.platform.logging.core import get_logger
 
@@ -88,9 +89,12 @@ def load_config(config_path: Path | None = None) -> Config:
     try:
         return Config.model_validate(data)
     except ValidationError as e:
-        logger.warning("Invalid configuration: %s", e)
-        logger.warning("Using default configuration.")
-        return Config()
+        logger.error("Invalid configuration: %s", e)
+        raise ConfigurationError(
+            "Configuration schema validation failed",
+            details={"errors": e.errors()},
+            cause=e,
+        ) from e
 
 
 def _load_split_config(config_dir: Path, data: dict[str, Any]) -> dict[str, Any]:

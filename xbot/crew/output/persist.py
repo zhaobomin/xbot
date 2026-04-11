@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -349,8 +350,6 @@ class OutputPersister:
                     started = datetime.fromisoformat(started_str)
                     if started.timestamp() < cutoff:
                         logger.info(f"[crew-output] Removing old run: {run_path.name}")
-                        # Remove directory
-                        import shutil
                         shutil.rmtree(run_path)
                 except (ValueError, KeyError, json.JSONDecodeError):
                     pass  # Invalid manifest, skip

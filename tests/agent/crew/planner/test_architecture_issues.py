@@ -503,6 +503,48 @@ class TestEdgeCases:
         assert any("nonexistent_agent" in e for e in errors)
         assert any("nonexistent_task" in e for e in errors)
 
+    def test_plan_validation_detects_circular_dependencies(self):
+        """CrewPlan.validate() should report dependency cycles."""
+        role = RoleDefinition(
+            name="agent1",
+            display_name="Agent",
+            description="Test",
+            goal="Test",
+            backstory="",
+            tier=RoleTier.CORE,
+            capabilities=[Capability.ANALYZE],
+        )
+        task1 = TaskPlan(name="task1", description="Task 1", agent="agent1", dependencies=["task2"])
+        task2 = TaskPlan(name="task2", description="Task 2", agent="agent1", dependencies=["task1"])
+        plan = CrewPlan(
+            name="cyclic_plan",
+            description="Cyclic",
+            process="sequential",
+            global_context="",
+            roles=[role],
+            tasks=[task1, task2],
+            analysis=GoalAnalysis(
+                summary="Test",
+                required_capabilities=[],
+                complexity="simple",
+                estimated_tasks=2,
+                suggested_process="sequential",
+            ),
+            role_selection=RoleSelection(
+                selected_roles=[role],
+                selection_reason={},
+                skipped_roles=[],
+                coverage_score=1.0,
+                created_roles=[],
+                role_gaps=[],
+            ),
+            planning_time=0.0,
+            confidence=1.0,
+        )
+
+        errors = plan.validate()
+        assert any("Circular dependency detected" in e for e in errors)
+
     def test_heuristic_selection_with_zero_candidates(self):
         """Test heuristic selection when no candidates match."""
         from xbot.crew.planner.role_selector import RoleSelector

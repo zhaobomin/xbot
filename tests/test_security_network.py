@@ -89,6 +89,16 @@ def test_validate_resolved_url_blocks_rebound_private_host():
         assert "private" in err.lower() or "blocked" in err.lower()
 
 
+def test_validate_resolved_url_fails_closed_when_dns_fails():
+    def _resolver(hostname, port, family=0, type_=0):
+        raise socket.gaierror("dns failure")
+
+    with patch("xbot.platform.security.network.socket.getaddrinfo", _resolver):
+        ok, err = validate_resolved_url("https://example.com/path")
+        assert not ok
+        assert "cannot be resolved" in err.lower()
+
+
 # ---------------------------------------------------------------------------
 # contains_internal_url — shell command scanning
 # ---------------------------------------------------------------------------

@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from xbot.crew.planner.models import Capability, GoalAnalysis
-from xbot.crew.planner.prompts import GOAL_ANALYSIS_PROMPT
+from xbot.crew.planner.prompts import GOAL_ANALYSIS_PROMPT, shield_untrusted_input
 from xbot.crew.planner.utils import LLMResponseParser
 from xbot.crew.planner.validators import LLMValidator
 from xbot.platform.logging.core import get_logger
@@ -115,8 +115,8 @@ class GoalAnalyzer:
         # Try LLM-based analysis if available
         if self.llm_callable:
             prompt = GOAL_ANALYSIS_PROMPT.format(
-                goal=goal,
-                context=context_str or "None",
+                goal=shield_untrusted_input(goal, label="USER_GOAL"),
+                context=shield_untrusted_input(context_str or "None", label="USER_CONTEXT"),
             )
             try:
                 response = self.llm_callable(prompt)
@@ -191,7 +191,8 @@ class GoalAnalyzer:
         if not capabilities:
             capabilities = [Capability.ANALYZE]
 
-        return list(set(capabilities))
+        # Keep insertion order stable while deduplicating.
+        return list(dict.fromkeys(capabilities))
 
     def infer_complexity(self, goal: str) -> str:
         """Infer complexity from goal text.

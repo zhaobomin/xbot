@@ -145,6 +145,17 @@ class TestJsonFormat:
         assert result.valid is True
         assert result.structured == {"status": "ok"}
 
+    def test_nested_json_with_surrounding_text(self) -> None:
+        """Nested JSON embedded in text should be extracted as a full balanced object."""
+        parser = OutputParser()
+        result = parser.parse(
+            'Result: {"outer":{"inner":[1,2,{"k":"v"}]}} trailing text',
+            OutputFormat.JSON,
+        )
+
+        assert result.valid is True
+        assert result.structured == {"outer": {"inner": [1, 2, {"k": "v"}]}}
+
 
 class TestJsonSchemaValidation:
     """Test JSON schema validation."""

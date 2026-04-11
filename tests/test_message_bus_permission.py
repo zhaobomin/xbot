@@ -191,6 +191,29 @@ class TestMessageBusPermission:
         assert "req-timeout" not in bus._pending_permission_responses
 
     @pytest.mark.asyncio
+    async def test_wait_permission_response_timeout_cleans_stale_result(self, bus):
+        req = PermissionRequest(
+            request_id="req-timeout-clean",
+            session_key="telegram:456",
+            channel="telegram",
+            chat_id="456",
+            tool_name="exec",
+            tool_input={"command": "ls"},
+            message="Need permission",
+        )
+        await bus.publish_permission_request(req)
+        _ = await bus.consume_outbound()
+        bus._permission_results["req-timeout-clean"] = PermissionResponse(
+            request_id="req-timeout-clean",
+            session_key="telegram:456",
+            decision="allow",
+        )
+
+        response = await bus.wait_permission_response("req-timeout-clean", timeout=0.01)
+        assert response.decision == "deny"
+        assert "req-timeout-clean" not in bus._permission_results
+
+    @pytest.mark.asyncio
     async def test_submit_permission_response_no_waiter(self, bus):
         resp = PermissionResponse(
             request_id="nonexistent",

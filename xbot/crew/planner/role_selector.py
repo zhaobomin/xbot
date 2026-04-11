@@ -11,7 +11,7 @@ from xbot.crew.planner.models import (
     RolePool,
     RoleSelection,
 )
-from xbot.crew.planner.prompts import ROLE_SELECTION_PROMPT
+from xbot.crew.planner.prompts import ROLE_SELECTION_PROMPT, shield_untrusted_input
 from xbot.crew.planner.utils import LLMResponseParser
 from xbot.platform.logging.core import get_logger
 
@@ -211,8 +211,8 @@ class RoleSelector:
         ])
 
         return ROLE_SELECTION_PROMPT.format(
-            goal=analysis.summary,
+            goal=shield_untrusted_input(analysis.summary, label="GOAL_SUMMARY"),
             required_capabilities=", ".join(c.value for c in analysis.required_capabilities),
             complexity=analysis.complexity,
-            candidates=candidates_desc,
+            candidates=shield_untrusted_input(candidates_desc, label="ROLE_CANDIDATES"),
         )

@@ -345,6 +345,15 @@ class TestCrewStateManager:
         sm.transition_task("t1", TaskPhase.COMPLETED)
         assert sm.crew_phase == CrewPhase.ABORTING
 
+    def test_invalid_auto_sync_transition_emits_warning(self, caplog):
+        sm = CrewStateManager(["t1"])
+        sm.transition_crew(CrewPhase.INITIALIZING)
+        sm.transition_crew(CrewPhase.RUNNING)
+        caplog.set_level("WARNING")
+        sm._set_crew_phase(CrewPhase.CREATED)
+        assert sm.crew_phase == CrewPhase.RUNNING
+        assert "Invalid auto-sync crew transition ignored" in caplog.text
+
     def test_on_transition_callback(self):
         transitions = []
         sm = CrewStateManager(

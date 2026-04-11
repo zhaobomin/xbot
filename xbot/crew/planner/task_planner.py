@@ -11,7 +11,7 @@ from xbot.crew.planner.models import (
     RoleSelection,
     TaskPlan,
 )
-from xbot.crew.planner.prompts import TASK_PLANNING_PROMPT
+from xbot.crew.planner.prompts import TASK_PLANNING_PROMPT, shield_untrusted_input
 from xbot.crew.planner.utils import LLMResponseParser
 from xbot.crew.planner.validators import LLMValidator
 from xbot.platform.logging.core import get_logger
@@ -185,20 +185,19 @@ class TaskPlanner:
             timeout=300,
         ))
 
-        # Second task: execution
-        if len(roles) > 1:
-            executor = self._find_role_with_capability(
-                roles, [Capability.WRITE_CODE, Capability.DEBUG]
-            ) or roles[min(1, len(roles) - 1)]
+        # Second task: execution (always needed for medium complexity)
+        executor = self._find_role_with_capability(
+            roles, [Capability.WRITE_CODE, Capability.DEBUG]
+        ) or (roles[1] if len(roles) > 1 else researcher)
 
-            tasks.append(TaskPlan(
-                name="execute_plan",
-                description="Execute the planned actions",
-                agent=executor.name,
-                dependencies=["analyze_goal"],
-                expected_output="Execution results",
-                timeout=400,
-            ))
+        tasks.append(TaskPlan(
+            name="execute_plan",
+            description="Execute the planned actions",
+            agent=executor.name,
+            dependencies=["analyze_goal"],
+            expected_output="Execution results",
+            timeout=400,
+        ))
 
         return tasks
 
@@ -391,9 +390,9 @@ class TaskPlanner:
         constraints = "\n".join(f"- {c}" for c in analysis.constraints) if analysis.constraints else "None"
 
         return TASK_PLANNING_PROMPT.format(
-            goal=goal,
+            goal=shield_untrusted_input(goal, label="USER_GOAL"),
             complexity=analysis.complexity,
             estimated_tasks=analysis.estimated_tasks,
-            roles=roles_desc,
-            constraints=constraints,
+            roles=shield_untrusted_input(roles_desc, label="AVAILABLE_ROLES"),
+            constraints=shield_untrusted_input(constraints, label="TASK_CONSTRAINTS"),
         )

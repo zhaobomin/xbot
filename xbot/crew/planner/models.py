@@ -310,6 +310,7 @@ class CrewPlan:
         errors = []
         role_names = {r.name for r in self.roles}
         task_names = {t.name for t in self.tasks}
+        task_by_name = {t.name: t for t in self.tasks}
 
         for task in self.tasks:
             # Check agent exists
@@ -324,6 +325,39 @@ class CrewPlan:
                     errors.append(
                         f"Task '{task.name}' has unknown dependency '{dep}'"
                     )
+
+        # Check for circular dependencies.
+        visiting: set[str] = set()
+        visited: set[str] = set()
+        cycle_reported: set[tuple[str, ...]] = set()
+
+        def _detect_cycle(task_name: str, path: list[str]) -> None:
+            if task_name in visiting:
+                if task_name in path:
+                    start = path.index(task_name)
+                    cycle = tuple(path[start:] + [task_name])
+                else:
+                    cycle = (task_name, task_name)
+                if cycle not in cycle_reported:
+                    cycle_reported.add(cycle)
+                    errors.append(f"Circular dependency detected: {' -> '.join(cycle)}")
+                return
+            if task_name in visited:
+                return
+
+            visiting.add(task_name)
+            path.append(task_name)
+            task = task_by_name.get(task_name)
+            if task is not None:
+                for dep in task.dependencies:
+                    if dep in task_by_name:
+                        _detect_cycle(dep, path)
+            path.pop()
+            visiting.remove(task_name)
+            visited.add(task_name)
+
+        for name in task_by_name:
+            _detect_cycle(name, [])
 
         return errors
 

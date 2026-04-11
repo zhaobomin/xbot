@@ -1323,6 +1323,30 @@ class TestRunDispatch:
         assert "stopped" in bus.publish_outbound.call_args.args[0].content.lower() or \
                "stop" in bus.publish_outbound.call_args.args[0].content.lower()
 
+    @pytest.mark.asyncio
+    async def test_local_command_stop_waits_for_task_cancellation(self, config, shared_resources, bus):
+        """!stop should wait for task cancellation to settle before returning."""
+        service = await self._make_service(config, shared_resources)
+        session_key = "test:c1"
+        cancelled = asyncio.Event()
+
+        async def _long_running():
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                cancelled.set()
+                raise
+
+        active_task = asyncio.create_task(_long_running())
+        await asyncio.sleep(0)
+        service._active_tasks[session_key] = active_task
+
+        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="!stop")
+        await service._command_handler.handle(msg, bus)
+
+        assert cancelled.is_set()
+        assert active_task.done()
+
     # --- Test 6: Busy rejection ---
 
     @pytest.mark.asyncio

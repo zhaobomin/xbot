@@ -81,6 +81,10 @@ class ClientPool:
                 await asyncio.wait_for(client.connect(), timeout=120.0)
             except asyncio.TimeoutError:
                 logger.error(f"SDK client connect timed out after 120s for session {session_key}")
+                try:
+                    await asyncio.wait_for(client.disconnect(), timeout=5.0)
+                except Exception:
+                    await self._best_effort_force_disconnect(client, session_key)
                 raise RuntimeError(f"SDK client connect timed out after 120s for session {session_key}")
 
             self._clients[session_key] = ClientRecord(

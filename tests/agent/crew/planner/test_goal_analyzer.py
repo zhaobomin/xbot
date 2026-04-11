@@ -65,6 +65,7 @@ class TestInferCapabilities:
         capabilities = analyzer.infer_capabilities("Search and analyze the code")
         assert Capability.SEARCH in capabilities
         assert Capability.ANALYZE in capabilities
+        assert capabilities.index(Capability.SEARCH) < capabilities.index(Capability.ANALYZE)
 
     def test_infer_defaults_to_analyze(self, analyzer):
         """Test that unknown goals default to ANALYZE."""

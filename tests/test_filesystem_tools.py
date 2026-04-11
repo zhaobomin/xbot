@@ -6,6 +6,7 @@ from xbot.tools.filesystem import (
     EditFileTool,
     ListDirTool,
     ReadFileTool,
+    WriteFileTool,
     _find_match,
 )
 
@@ -361,3 +362,15 @@ class TestWorkspaceRestriction:
         assert "Error" in result
         assert "outside" in result.lower()
         assert skill_file.read_text() == "# Weather\nOriginal content."
+
+
+class TestWriteFileTool:
+
+    @pytest.mark.asyncio
+    async def test_write_file_rejects_oversized_content(self, tmp_path):
+        tool = WriteFileTool(workspace=tmp_path, allowed_dir=tmp_path)
+        oversized = "a" * (WriteFileTool._MAX_WRITE_BYTES + 1)
+        result = await tool.execute(path=str(tmp_path / "too_big.txt"), content=oversized)
+        assert "Error" in result
+        assert "too large" in result
+        assert not (tmp_path / "too_big.txt").exists()

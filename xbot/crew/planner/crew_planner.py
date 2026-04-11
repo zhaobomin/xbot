@@ -41,7 +41,7 @@ class CrewPlanner:
 
     Usage:
         >>> planner = CrewPlanner(llm_callable=my_llm)
-        >>> plan = await planner.plan("Analyze code quality and fix bugs")
+        >>> plan = planner.plan("Analyze code quality and fix bugs")
         >>> yaml_content = planner.generate_config(plan)
     """
 

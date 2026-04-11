@@ -127,17 +127,67 @@ class OutputParser:
             except json.JSONDecodeError:
                 pass
 
-        # Try to find JSON object/array anywhere in content
-        for pattern in [r'\{.*?\}', r'\[.*?\]']:
-            match = re.search(pattern, content, re.DOTALL)
-            if match:
-                try:
-                    json.loads(match.group())
-                    return match.group()
-                except json.JSONDecodeError:
-                    continue
+        # Try to find balanced JSON object/array anywhere in content.
+        # This avoids non-greedy regex truncation on nested structures.
+        for candidate in self._iter_balanced_json_candidates(content):
+            try:
+                json.loads(candidate)
+                return candidate
+            except json.JSONDecodeError:
+                continue
 
         return content
+
+    def _iter_balanced_json_candidates(self, content: str):
+        """Yield balanced JSON object/array substrings in source order."""
+        for i, ch in enumerate(content):
+            if ch not in "{[":
+                continue
+            end = self._find_balanced_end(content, i)
+            if end is None:
+                continue
+            yield content[i:end + 1]
+
+    def _find_balanced_end(self, text: str, start: int) -> int | None:
+        """Find end index for a balanced JSON object/array starting at `start`."""
+        opening = text[start]
+        if opening not in "{[":
+            return None
+
+        stack = [opening]
+        in_string = False
+        escaped = False
+
+        for i in range(start + 1, len(text)):
+            ch = text[i]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif ch == "\\":
+                    escaped = True
+                elif ch == '"':
+                    in_string = False
+                continue
+
+            if ch == '"':
+                in_string = True
+                continue
+
+            if ch in "{[":
+                stack.append(ch)
+                continue
+
+            if ch in "}]":
+                if not stack:
+                    return None
+                expected = "}" if stack[-1] == "{" else "]"
+                if ch != expected:
+                    return None
+                stack.pop()
+                if not stack:
+                    return i
+
+        return None
 
     def _validate_schema(self, data: Any, schema: dict) -> list[str]:
         """Validate data against JSON schema.

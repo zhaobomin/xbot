@@ -55,6 +55,18 @@ def test_configure_logging_uses_single_output_chain() -> None:
     assert output.count("stdlib once") == 1
 
 
+def test_configure_logging_does_not_mutate_root_logger_level() -> None:
+    xbot_logging = _reload_logging_module()
+    root = logging.getLogger()
+    original_level = root.level
+    root.setLevel(logging.WARNING)
+    try:
+        xbot_logging.configure_logging(level=logging.DEBUG)
+        assert root.level == logging.WARNING
+    finally:
+        root.setLevel(original_level)
+
+
 def test_business_modules_use_xbot_get_logger_entrypoint() -> None:
     root = Path(__file__).resolve().parents[1] / "xbot"
     offenders: list[str] = []

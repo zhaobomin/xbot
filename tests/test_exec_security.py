@@ -83,3 +83,11 @@ async def test_exec_blocks_rm_with_extra_flags(command: str):
     result = await tool.execute(command=command)
     assert "Error" in result
     assert "blocked" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_exec_blocks_ansi_c_escaped_dangerous_command():
+    tool = ExecTool()
+    result = await tool.execute(command=r"$'\x72\x6d' -rf /tmp/danger")
+    assert "Error" in result
+    assert "blocked" in result.lower()

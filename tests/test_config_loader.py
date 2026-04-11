@@ -3,6 +3,9 @@
 import json
 from pathlib import Path
 
+import pytest
+
+from xbot.exceptions import ConfigurationError
 from xbot.platform.config.loader import (
     _migrate_config,
     get_config_path,
@@ -91,7 +94,7 @@ class TestLoadConfig:
         assert any("Failed" in record.message for record in caplog.records)
 
     def test_load_config_invalid_schema_returns_default(self, tmp_path, caplog):
-        """Test that invalid schema returns default config."""
+        """Test that invalid schema raises a configuration error."""
         config_path = tmp_path / "config.json"
         # Invalid type for a field
         config_data = {
@@ -104,9 +107,8 @@ class TestLoadConfig:
         config_path.write_text(json.dumps(config_data), encoding="utf-8")
 
         with caplog.at_level("WARNING"):
-            config = load_config(config_path)
-
-        assert isinstance(config, Config)
+            with pytest.raises(ConfigurationError, match="schema validation failed"):
+                load_config(config_path)
 
 
 class TestSaveConfig:

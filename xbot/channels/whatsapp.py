@@ -3,6 +3,7 @@
 import asyncio
 import json
 import mimetypes
+import time
 from collections import OrderedDict
 from typing import Any
 
@@ -34,6 +35,8 @@ class WhatsAppChannel(BaseChannel):
 
     name = "whatsapp"
     display_name = "WhatsApp"
+    _DEDUP_MAX_IDS = 1000
+    _DEDUP_TTL_SECONDS = 6 * 60 * 60
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:
@@ -45,7 +48,33 @@ class WhatsAppChannel(BaseChannel):
         super().__init__(config, bus)
         self._ws = None
         self._connected = False
-        self._processed_message_ids: OrderedDict[str, None] = OrderedDict()
+        self._processed_message_ids: OrderedDict[str, float] = OrderedDict()
+
+    def _cleanup_processed_message_ids(self, now: float | None = None) -> None:
+        """Expire old message IDs and enforce bounded cache size."""
+        now_ts = now if now is not None else time.time()
+        cutoff = now_ts - self._DEDUP_TTL_SECONDS
+
+        # OrderedDict preserves insertion order; remove stale entries from head.
+        while self._processed_message_ids:
+            _, ts = next(iter(self._processed_message_ids.items()))
+            if ts >= cutoff:
+                break
+            self._processed_message_ids.popitem(last=False)
+
+        while len(self._processed_message_ids) > self._DEDUP_MAX_IDS:
+            self._processed_message_ids.popitem(last=False)
+
+    def _is_duplicate_message_id(self, message_id: str, now: float | None = None) -> bool:
+        """Return True if message_id was seen recently; otherwise record it."""
+        now_ts = now if now is not None else time.time()
+        self._cleanup_processed_message_ids(now_ts)
+        seen_at = self._processed_message_ids.get(message_id)
+        if seen_at is not None and now_ts - seen_at <= self._DEDUP_TTL_SECONDS:
+            return True
+        self._processed_message_ids[message_id] = now_ts
+        self._cleanup_processed_message_ids(now_ts)
+        return False
 
     async def start(self) -> None:
         """Start the WhatsApp channel by connecting to the bridge."""
@@ -131,11 +160,8 @@ class WhatsAppChannel(BaseChannel):
             message_id = data.get("id", "")
 
             if message_id:
-                if message_id in self._processed_message_ids:
+                if self._is_duplicate_message_id(message_id):
                     return
-                self._processed_message_ids[message_id] = None
-                while len(self._processed_message_ids) > 1000:
-                    self._processed_message_ids.popitem(last=False)
 
             # Extract just the phone number or lid as chat_id
             user_id = pn if pn else sender

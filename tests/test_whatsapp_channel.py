@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -215,10 +216,21 @@ class TestWhatsAppChannelProcessedMessages:
 
         channel = WhatsAppChannel(WhatsAppConfig(), MessageBus())
 
-        # Simulate the limit logic from the code
+        now = time.time()
         for i in range(1500):
-            channel._processed_message_ids[str(i)] = None
-            while len(channel._processed_message_ids) > 1000:
-                channel._processed_message_ids.popitem(last=False)
+            channel._processed_message_ids[str(i)] = now
+        channel._cleanup_processed_message_ids(now)
 
-        assert len(channel._processed_message_ids) == 1000
+        assert len(channel._processed_message_ids) == channel._DEDUP_MAX_IDS
+
+    def test_processed_message_ids_ttl_cleanup(self):
+        """Expired message IDs should be removed by TTL cleanup."""
+        channel = WhatsAppChannel(WhatsAppConfig(), MessageBus())
+        now = time.time()
+        channel._processed_message_ids["old"] = now - channel._DEDUP_TTL_SECONDS - 1
+        channel._processed_message_ids["new"] = now
+
+        channel._cleanup_processed_message_ids(now)
+
+        assert "old" not in channel._processed_message_ids
+        assert "new" in channel._processed_message_ids

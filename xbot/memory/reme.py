@@ -23,28 +23,33 @@ logger = get_logger(__name__)
 if TYPE_CHECKING:
     from xbot.runtime.core.service import AgentService
 
-# Patch sqlite3 for chromadb compatibility (requires sqlite >= 3.35.0)
-# This must be done before any chromadb imports
-def _patch_sqlite3() -> bool:
-    """Patch sqlite3 to use pysqlite3 if system sqlite is too old."""
+# Prepare sqlite3 compatibility for chromadb (requires sqlite >= 3.35.0).
+# We only patch during ReMe import, then restore to avoid process-wide side effects.
+def _patch_sqlite3() -> tuple[bool, object | None]:
+    """Temporarily patch sqlite3 with pysqlite3 when system sqlite is too old.
+
+    Returns:
+        (patched, original_sqlite_module)
+    """
     try:
         import sqlite3
         version = tuple(int(x) for x in sqlite3.sqlite_version.split('.'))
         if version < (3, 35, 0):
             try:
                 import pysqlite3
+                original = sys.modules.get("sqlite3")
                 sys.modules['sqlite3'] = pysqlite3
                 logger.debug("sqlite3 patched with pysqlite3")
-                return True
+                return True, original
             except ImportError:
                 logger.warning("pysqlite3 not available, ReMe may not work")
-                return False
-        return True
+                return False, None
+        return False, None
     except Exception as e:
         logger.warning(f"Failed to patch sqlite3: {e}")
-        return False
+        return False, None
 
-_sqlite_patched = _patch_sqlite3()
+_sqlite_patched, _original_sqlite3 = _patch_sqlite3()
 
 # ReMe imports with graceful fallback
 _REME_AVAILABLE = False
@@ -63,6 +68,12 @@ except RuntimeError as e:
         ReMeLight = None  # type: ignore
     else:
         raise
+finally:
+    if _sqlite_patched:
+        if _original_sqlite3 is not None:
+            sys.modules["sqlite3"] = _original_sqlite3
+        else:
+            sys.modules.pop("sqlite3", None)
 
 
 class ReMeMemoryStore:

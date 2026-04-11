@@ -95,6 +95,14 @@ async def test_chat_with_retry_preserves_cancelled_error() -> None:
 
 
 @pytest.mark.asyncio
+async def test_chat_with_retry_propagates_unexpected_provider_exception() -> None:
+    provider = ScriptedProvider([RuntimeError("programming bug")])
+
+    with pytest.raises(RuntimeError, match="programming bug"):
+        await provider.chat_with_retry(messages=[{"role": "user", "content": "hello"}])
+
+
+@pytest.mark.asyncio
 async def test_chat_with_retry_uses_provider_generation_defaults() -> None:
     """When callers omit generation params, provider.generation defaults are used."""
     provider = ScriptedProvider([LLMResponse(content="ok")])

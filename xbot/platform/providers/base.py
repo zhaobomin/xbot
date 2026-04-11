@@ -218,13 +218,14 @@ class LLMProvider(ABC):
         return result if found else None
 
     async def _safe_chat(self, **kwargs: Any) -> LLMResponse:
-        """Call chat() and convert unexpected exceptions to error responses."""
+        """Call chat() and preserve unexpected programming errors."""
         try:
             return await self.chat(**kwargs)
         except asyncio.CancelledError:
             raise
-        except Exception as exc:
-            return LLMResponse(content=f"Error calling LLM: {exc}", finish_reason="error")
+        except Exception:
+            logger.exception("Unexpected exception from provider chat()")
+            raise
 
     async def chat_with_retry(
         self,

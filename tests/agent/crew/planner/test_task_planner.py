@@ -99,6 +99,29 @@ class TestTaskPlannerPlan:
                 # Tasks should have dependencies on previous tasks
                 assert len(task.dependencies) >= 1
 
+    def test_plan_medium_goal_single_role_still_creates_execution_task(self, planner, sample_roles):
+        """Medium complexity should include an execution step even with one role."""
+        analysis = GoalAnalysis(
+            summary="Analyze and fix code",
+            required_capabilities=[Capability.ANALYZE, Capability.WRITE_CODE],
+            complexity="medium",
+            estimated_tasks=2,
+            suggested_process="sequential",
+        )
+        selection = RoleSelection(
+            selected_roles=[sample_roles[0]],
+            selection_reason={sample_roles[0].name: "Match"},
+            skipped_roles=[],
+            coverage_score=1.0,
+            created_roles=[],
+            role_gaps=[],
+        )
+
+        tasks = planner.plan("Analyze and fix the bug", analysis, selection)
+
+        assert [t.name for t in tasks] == ["analyze_goal", "execute_plan"]
+        assert tasks[1].dependencies == ["analyze_goal"]
+
     def test_plan_complex_goal(self, planner, sample_roles):
         """Test planning for complex goal."""
         # Add reviewer and tester for complex tasks

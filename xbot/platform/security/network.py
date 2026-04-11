@@ -131,7 +131,7 @@ def validate_resolved_url(url: str) -> tuple[bool, str]:
         try:
             resolved = _resolve_host_ips(hostname)
         except socket.gaierror:
-            return True, ""
+            return False, f"Redirect target cannot be resolved: {hostname}"
         if not resolved:
             return False, f"Redirect target cannot be resolved: {hostname}"
         for addr in resolved:

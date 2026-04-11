@@ -158,6 +158,7 @@ class ReadFileTool(_FsTool):
 
 class WriteFileTool(_FsTool):
     """Write content to a file."""
+    _MAX_WRITE_BYTES = 10 * 1024 * 1024  # 10MB guardrail to prevent accidental disk exhaustion
 
     @property
     def name(self) -> str:
@@ -181,9 +182,15 @@ class WriteFileTool(_FsTool):
     async def execute(self, path: str, content: str, **kwargs: Any) -> str:
         try:
             fp = self._resolve(path)
+            byte_count = len(content.encode("utf-8"))
+            if byte_count > self._MAX_WRITE_BYTES:
+                return (
+                    f"Error: content too large ({byte_count} bytes). "
+                    f"Maximum allowed is {self._MAX_WRITE_BYTES} bytes."
+                )
             fp.parent.mkdir(parents=True, exist_ok=True)
             fp.write_text(content, encoding="utf-8")
-            return f"Successfully wrote {len(content.encode('utf-8'))} bytes to {fp}"
+            return f"Successfully wrote {byte_count} bytes to {fp}"
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:

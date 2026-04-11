@@ -24,7 +24,7 @@ def configure_logging(
     level: int | str = logging.INFO,
     stream: IO[str] | None = None,
 ) -> None:
-    """Configure root logging for xbot.
+    """Configure xbot logging without mutating global root logger level.
 
     Repeated calls replace only the xbot-managed stream handler and keep
     external handlers like pytest's caplog attached to root.
@@ -34,10 +34,9 @@ def configure_logging(
 
     with _LOCK:
         root_logger = logging.getLogger()
-        root_logger.setLevel(normalized_level)
         package_logger = logging.getLogger("xbot")
         package_logger.disabled = False
-        package_logger.setLevel(logging.NOTSET)
+        package_logger.setLevel(normalized_level)
 
         global _HANDLER
         if _HANDLER is not None:

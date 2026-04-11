@@ -1,32 +1,16 @@
-"""Compatibility layer for pinned HTTP transports used by web_fetch.
+"""Pinned HTTP transports used by web_fetch.
 
-This module isolates any reliance on httpx/httpcore private APIs so the main
-web tool logic does not import those internals directly.
+This module intentionally relies on public httpx/httpcore APIs only.
 """
 
 from __future__ import annotations
 
+import contextlib
+import ssl
 from typing import Any
 
+import httpcore
 import httpx
-
-_PRIVATE_IMPORT_ERROR: Exception | None = None
-
-try:
-    from httpx._config import DEFAULT_LIMITS, Proxy, create_ssl_context
-    from httpx._transports.base import AsyncBaseTransport
-    from httpx._transports.default import AsyncResponseStream, map_httpcore_exceptions
-
-    _PRIVATE_IMPORTS_OK = True
-except Exception as exc:  # pragma: no cover - import behavior depends on httpx version
-    DEFAULT_LIMITS = None
-    Proxy = None
-    create_ssl_context = None
-    AsyncBaseTransport = object  # type: ignore[assignment]
-    AsyncResponseStream = None
-    map_httpcore_exceptions = None
-    _PRIVATE_IMPORTS_OK = False
-    _PRIVATE_IMPORT_ERROR = exc
 
 
 class PinnedAsyncNetworkBackend:
@@ -71,71 +55,78 @@ class PinnedAsyncNetworkBackend:
         await self._backend.sleep(seconds)
 
 
-class PinnedAsyncHTTPTransport(AsyncBaseTransport):
+class PinnedAsyncHTTPTransport(httpx.AsyncBaseTransport):
     """HTTPX transport that pins selected hostnames to already-validated IPs."""
 
     def __init__(self, pinned_hosts: dict[str, str], proxy: str | None = None):
-        if not _PRIVATE_IMPORTS_OK:
-            raise RuntimeError(f"httpx private transport APIs unavailable: {_PRIVATE_IMPORT_ERROR}")
-
-        import httpcore
-
-        proxy_config = Proxy(url=proxy) if isinstance(proxy, str) else proxy
-        ssl_context = create_ssl_context(verify=True, cert=None, trust_env=True)
+        limits = httpx.Limits()
+        ssl_context = ssl.create_default_context()
         backend = PinnedAsyncNetworkBackend(pinned_hosts)
 
-        if proxy_config is None:
-            self._pool = httpcore.AsyncConnectionPool(
+        max_connections = limits.max_connections or 100
+        max_keepalive_connections = limits.max_keepalive_connections or 20
+        keepalive_expiry = limits.keepalive_expiry if limits.keepalive_expiry is not None else 5.0
+
+        if proxy is None:
+            self._pool: Any = httpcore.AsyncConnectionPool(
                 ssl_context=ssl_context,
-                max_connections=DEFAULT_LIMITS.max_connections,
-                max_keepalive_connections=DEFAULT_LIMITS.max_keepalive_connections,
-                keepalive_expiry=DEFAULT_LIMITS.keepalive_expiry,
+                max_connections=max_connections,
+                max_keepalive_connections=max_keepalive_connections,
+                keepalive_expiry=keepalive_expiry,
                 http1=True,
                 http2=False,
                 network_backend=backend,
             )
-        elif proxy_config.url.scheme in ("http", "https"):
+            return
+
+        proxy_url = httpx.URL(proxy)
+        auth: tuple[bytes, bytes] | None = None
+        if proxy_url.username is not None:
+            auth = (
+                proxy_url.username.encode("utf-8"),
+                (proxy_url.password or "").encode("utf-8"),
+            )
+
+        if proxy_url.scheme in ("http", "https"):
             self._pool = httpcore.AsyncHTTPProxy(
                 proxy_url=httpcore.URL(
-                    scheme=proxy_config.url.raw_scheme,
-                    host=proxy_config.url.raw_host,
-                    port=proxy_config.url.port,
-                    target=proxy_config.url.raw_path,
+                    scheme=proxy_url.raw_scheme,
+                    host=proxy_url.raw_host,
+                    port=proxy_url.port,
+                    target=proxy_url.raw_path,
                 ),
-                proxy_auth=proxy_config.raw_auth,
-                proxy_headers=proxy_config.headers.raw,
-                proxy_ssl_context=proxy_config.ssl_context,
+                proxy_auth=auth,
+                proxy_headers=None,
+                proxy_ssl_context=ssl_context,
                 ssl_context=ssl_context,
-                max_connections=DEFAULT_LIMITS.max_connections,
-                max_keepalive_connections=DEFAULT_LIMITS.max_keepalive_connections,
-                keepalive_expiry=DEFAULT_LIMITS.keepalive_expiry,
+                max_connections=max_connections,
+                max_keepalive_connections=max_keepalive_connections,
+                keepalive_expiry=keepalive_expiry,
                 http1=True,
                 http2=False,
                 network_backend=backend,
             )
-        elif proxy_config.url.scheme in ("socks5", "socks5h"):
+        elif proxy_url.scheme in ("socks5", "socks5h"):
             self._pool = httpcore.AsyncSOCKSProxy(
                 proxy_url=httpcore.URL(
-                    scheme=proxy_config.url.raw_scheme,
-                    host=proxy_config.url.raw_host,
-                    port=proxy_config.url.port,
-                    target=proxy_config.url.raw_path,
+                    scheme=proxy_url.raw_scheme,
+                    host=proxy_url.raw_host,
+                    port=proxy_url.port,
+                    target=proxy_url.raw_path,
                 ),
-                proxy_auth=proxy_config.raw_auth,
+                proxy_auth=auth,
                 ssl_context=ssl_context,
-                max_connections=DEFAULT_LIMITS.max_connections,
-                max_keepalive_connections=DEFAULT_LIMITS.max_keepalive_connections,
-                keepalive_expiry=DEFAULT_LIMITS.keepalive_expiry,
+                max_connections=max_connections,
+                max_keepalive_connections=max_keepalive_connections,
+                keepalive_expiry=keepalive_expiry,
                 http1=True,
                 http2=False,
                 network_backend=backend,
             )
         else:  # pragma: no cover
-            raise ValueError(f"Unsupported proxy scheme: {proxy_config.url.scheme!r}")
+            raise ValueError(f"Unsupported proxy scheme: {proxy_url.scheme!r}")
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        import httpcore
-
         req = httpcore.Request(
             method=request.method,
             url=httpcore.URL(
@@ -148,16 +139,24 @@ class PinnedAsyncHTTPTransport(AsyncBaseTransport):
             content=request.stream,
             extensions=request.extensions,
         )
-        with map_httpcore_exceptions():
+        try:
             resp = await self._pool.handle_async_request(req)
+        except Exception as exc:
+            raise httpx.TransportError(f"Pinned transport request failed: {exc}") from exc
+
+        try:
+            content = b"".join([chunk async for chunk in resp.stream])
+        finally:
+            with contextlib.suppress(Exception):
+                await resp.stream.aclose()
 
         return httpx.Response(
             status_code=resp.status,
             headers=resp.headers,
-            stream=AsyncResponseStream(resp.stream),
+            content=content,
             extensions=resp.extensions,
+            request=request,
         )
 
     async def aclose(self) -> None:
         await self._pool.aclose()
-

@@ -148,18 +148,18 @@ class BaseProcess(ABC):
         # 2. Human briefing (pre-execution)
         human_briefing = await self._human_briefing(task)
 
-        # 3. Build prompt and get media files
+        # 3. Generate session key for this execution
+        session_key = f"crew:{self.crew_config.name}:{task.name}:{uuid.uuid4().hex[:8]}"
+
+        # 4. Build prompt and get media files
         prompt, media = self.context.build_agent_context(
             task=task,
             role=role,
-            session_key=f"crew:{self.crew_config.name}:{task.name}:{uuid.uuid4().hex[:8]}",
+            session_key=session_key,
             global_context=self.crew_config.global_context,
             human_briefing=human_briefing,
             max_context_length=self.crew_config.max_context_length,
         )
-
-        # 4. Generate session key
-        session_key = f"crew:{self.crew_config.name}:{task.name}:{uuid.uuid4().hex[:8]}"
 
         # 5. Determine timeout mode
         use_soft_timeout = task.timeout is None
