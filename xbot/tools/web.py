@@ -8,19 +8,28 @@ import json
 import os
 import re
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, urljoin, urlparse
 
 import httpx
-from httpx._config import DEFAULT_LIMITS, Proxy, create_ssl_context
-from httpx._transports.base import AsyncBaseTransport
-from httpx._transports.default import AsyncResponseStream, map_httpcore_exceptions
 
 from xbot.platform.logging.core import get_logger
 from xbot.tools.base import Tool
+from xbot.tools.web_http_transport import (
+    PinnedAsyncHTTPTransport as _PinnedAsyncHTTPTransport,
+)
+from xbot.tools.web_http_transport import (
+    PinnedAsyncNetworkBackend as _PinnedAsyncNetworkBackend,
+)
 
 logger = get_logger(__name__)
 if TYPE_CHECKING:
     from xbot.platform.config.schema import WebSearchConfig
+
+__all__ = [
+    "WebSearchTool",
+    "WebFetchTool",
+    "_PinnedAsyncNetworkBackend",
+]
 
 # Shared constants
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36"
@@ -101,136 +110,6 @@ def _validate_and_pin_url(url: str) -> tuple[bool, str, dict[str, str]]:
             return False, f"Blocked: {hostname} resolves to private/internal address {addr}", {}
 
     return True, "", {hostname: str(resolved[0])}
-
-
-class _PinnedAsyncNetworkBackend:
-    """Resolve approved hostnames once and connect using the pinned IP."""
-
-    def __init__(self, pinned_hosts: dict[str, str], backend: Any | None = None):
-        from httpcore._backends.auto import AutoBackend
-
-        self._pinned_hosts = pinned_hosts
-        self._backend = backend or AutoBackend()
-
-    async def connect_tcp(
-        self,
-        host: str,
-        port: int,
-        timeout: float | None = None,
-        local_address: str | None = None,
-        socket_options: Any | None = None,
-    ) -> Any:
-        target_host = self._pinned_hosts.get(host, host)
-        return await self._backend.connect_tcp(
-            target_host,
-            port,
-            timeout=timeout,
-            local_address=local_address,
-            socket_options=socket_options,
-        )
-
-    async def connect_unix_socket(
-        self,
-        path: str,
-        timeout: float | None = None,
-        socket_options: Any | None = None,
-    ) -> Any:
-        return await self._backend.connect_unix_socket(
-            path,
-            timeout=timeout,
-            socket_options=socket_options,
-        )
-
-    async def sleep(self, seconds: float) -> None:
-        await self._backend.sleep(seconds)
-
-
-class _PinnedAsyncHTTPTransport(AsyncBaseTransport):
-    """HTTPX transport that pins selected hostnames to already-validated IPs."""
-
-    def __init__(self, pinned_hosts: dict[str, str], proxy: str | None = None):
-        import httpcore
-
-        proxy_config = Proxy(url=proxy) if isinstance(proxy, str) else proxy
-        ssl_context = create_ssl_context(verify=True, cert=None, trust_env=True)
-        backend = _PinnedAsyncNetworkBackend(pinned_hosts)
-
-        if proxy_config is None:
-            self._pool = httpcore.AsyncConnectionPool(
-                ssl_context=ssl_context,
-                max_connections=DEFAULT_LIMITS.max_connections,
-                max_keepalive_connections=DEFAULT_LIMITS.max_keepalive_connections,
-                keepalive_expiry=DEFAULT_LIMITS.keepalive_expiry,
-                http1=True,
-                http2=False,
-                network_backend=backend,
-            )
-        elif proxy_config.url.scheme in ("http", "https"):
-            self._pool = httpcore.AsyncHTTPProxy(
-                proxy_url=httpcore.URL(
-                    scheme=proxy_config.url.raw_scheme,
-                    host=proxy_config.url.raw_host,
-                    port=proxy_config.url.port,
-                    target=proxy_config.url.raw_path,
-                ),
-                proxy_auth=proxy_config.raw_auth,
-                proxy_headers=proxy_config.headers.raw,
-                proxy_ssl_context=proxy_config.ssl_context,
-                ssl_context=ssl_context,
-                max_connections=DEFAULT_LIMITS.max_connections,
-                max_keepalive_connections=DEFAULT_LIMITS.max_keepalive_connections,
-                keepalive_expiry=DEFAULT_LIMITS.keepalive_expiry,
-                http1=True,
-                http2=False,
-                network_backend=backend,
-            )
-        elif proxy_config.url.scheme in ("socks5", "socks5h"):
-            self._pool = httpcore.AsyncSOCKSProxy(
-                proxy_url=httpcore.URL(
-                    scheme=proxy_config.url.raw_scheme,
-                    host=proxy_config.url.raw_host,
-                    port=proxy_config.url.port,
-                    target=proxy_config.url.raw_path,
-                ),
-                proxy_auth=proxy_config.raw_auth,
-                ssl_context=ssl_context,
-                max_connections=DEFAULT_LIMITS.max_connections,
-                max_keepalive_connections=DEFAULT_LIMITS.max_keepalive_connections,
-                keepalive_expiry=DEFAULT_LIMITS.keepalive_expiry,
-                http1=True,
-                http2=False,
-                network_backend=backend,
-            )
-        else:  # pragma: no cover
-            raise ValueError(f"Unsupported proxy scheme: {proxy_config.url.scheme!r}")
-
-    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
-        import httpcore
-
-        req = httpcore.Request(
-            method=request.method,
-            url=httpcore.URL(
-                scheme=request.url.raw_scheme,
-                host=request.url.raw_host,
-                port=request.url.port,
-                target=request.url.raw_path,
-            ),
-            headers=request.headers.raw,
-            content=request.stream,
-            extensions=request.extensions,
-        )
-        with map_httpcore_exceptions():
-            resp = await self._pool.handle_async_request(req)
-
-        return httpx.Response(
-            status_code=resp.status,
-            headers=resp.headers,
-            stream=AsyncResponseStream(resp.stream),
-            extensions=resp.extensions,
-        )
-
-    async def aclose(self) -> None:
-        await self._pool.aclose()
 
 
 def _resolve_pinned_host(url: str) -> dict[str, str]:
@@ -452,6 +331,7 @@ class WebFetchTool(Tool):
         self.web_config = web_config
         self.timeout = timeout or TimeoutsConfig().web_fetch
         self.disable_security_checks = bool(getattr(web_config, "disable_security_checks", False))
+        self.use_jina = bool(getattr(web_config, "web_fetch_use_jina", True))
         if self.disable_security_checks:
             logger.warning("WebFetchTool: SSRF security checks are DISABLED via config. This is unsafe in production.")
 
@@ -477,9 +357,13 @@ class WebFetchTool(Tool):
                 logger.warning("WebFetch: URL validation failed for '%s': %s", url, error_msg)
                 return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
 
-        result = await self._fetch_jina(url, max_chars)
+        use_jina = bool(getattr(self.web_config, "web_fetch_use_jina", self.use_jina))
+        result = None
+        if use_jina:
+            result = await self._fetch_jina(url, max_chars)
+            if result is None:
+                logger.debug("WebFetch: Jina failed, falling back to readability for '%s'", url)
         if result is None:
-            logger.debug("WebFetch: Jina failed, falling back to readability for '%s'", url)
             result = await self._fetch_readability(url, extract_mode, max_chars)
 
         logger.debug("WebFetch: completed for '%s', result_len=%s", url, len(result))
@@ -492,8 +376,9 @@ class WebFetchTool(Tool):
             jina_key = os.environ.get("JINA_API_KEY", "")
             if jina_key:
                 headers["Authorization"] = f"Bearer {jina_key}"
+            encoded_url = quote(url, safe="")
             async with httpx.AsyncClient(proxy=self.proxy, timeout=self.timeout) as client:
-                r = await client.get(f"https://r.jina.ai/{url}", headers=headers)
+                r = await client.get(f"https://r.jina.ai/{encoded_url}", headers=headers)
                 if r.status_code == 429:
                     logger.debug("Jina Reader rate limited, falling back to readability")
                     return None

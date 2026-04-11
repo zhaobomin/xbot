@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import socket
 from unittest.mock import AsyncMock, patch
+from urllib.parse import quote
 
 import pytest
 
@@ -179,3 +180,46 @@ async def test_pinned_network_backend_uses_resolved_ip_for_connection():
     await backend.connect_tcp("other.example", 443)
 
     assert calls == ["93.184.216.34", "other.example"]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_use_jina_flag_disables_jina_path():
+    tool = WebFetchTool(web_config=WebToolsConfig(disable_security_checks=True))
+    tool.web_config.web_fetch_use_jina = False
+
+    with patch.object(tool, "_fetch_jina", AsyncMock(return_value='{"unexpected": true}')) as m_jina, \
+         patch.object(tool, "_fetch_readability", AsyncMock(return_value='{"extractor":"readability"}')):
+        result = await tool.execute(url="https://example.com/search?q=1")
+
+    assert m_jina.await_count == 0
+    data = json.loads(result)
+    assert data.get("extractor") == "readability"
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_jina_request_encodes_full_target_url():
+    tool = WebFetchTool(web_config=WebToolsConfig(disable_security_checks=True))
+
+    target = "https://example.com/path/p%2Fq?foo=bar&lang=zh#frag"
+    expected = f"https://r.jina.ai/{quote(target, safe='')}"
+    state: dict[str, str] = {}
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": {"title": "ok", "content": "ok", "url": target}}
+
+    async def _fake_get(self, url, **kwargs):
+        state["requested_url"] = str(url)
+        return FakeResponse()
+
+    with patch("httpx.AsyncClient.get", _fake_get):
+        result = await tool._fetch_jina(target, max_chars=200)
+
+    data = json.loads(result)
+    assert state["requested_url"] == expected
+    assert data["finalUrl"] == target

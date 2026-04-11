@@ -279,6 +279,7 @@ class WebToolsConfig(Base):
         None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
     )
     disable_security_checks: bool = False  # When true, skip SSRF/private-network URL validation for web tools
+    web_fetch_use_jina: bool = True  # When true, web_fetch tries Jina Reader first and falls back to readability
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
 
 
