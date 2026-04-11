@@ -162,6 +162,46 @@ class TestWhatsAppChannelSend:
         payload = json.loads(channel._ws.send.call_args[0][0])
         assert payload["media"] == ["/tmp/a.png", "/tmp/b.pdf"]
 
+    @pytest.mark.asyncio
+    async def test_send_retries_transient_failures(self, monkeypatch):
+        channel = WhatsAppChannel(WhatsAppConfig(), MessageBus())
+        channel._connected = True
+        channel._ws = MagicMock()
+
+        calls = {"n": 0}
+
+        async def flaky_send(*args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise RuntimeError("temporary")
+
+        channel._ws.send = AsyncMock(side_effect=flaky_send)
+        monkeypatch.setattr("xbot.channels.whatsapp.asyncio.sleep", AsyncMock())
+
+        msg = OutboundMessage(
+            channel="whatsapp",
+            chat_id="1234567890@s.whatsapp.net",
+            content="retry message",
+        )
+        await channel.send(msg)
+        assert calls["n"] == 3
+
+    @pytest.mark.asyncio
+    async def test_send_exhausts_retries_without_raising(self, monkeypatch):
+        channel = WhatsAppChannel(WhatsAppConfig(), MessageBus())
+        channel._connected = True
+        channel._ws = MagicMock()
+        channel._ws.send = AsyncMock(side_effect=RuntimeError("always fail"))
+        monkeypatch.setattr("xbot.channels.whatsapp.asyncio.sleep", AsyncMock())
+
+        msg = OutboundMessage(
+            channel="whatsapp",
+            chat_id="1234567890@s.whatsapp.net",
+            content="will fail",
+        )
+        await channel.send(msg)
+        assert channel._ws.send.call_count == channel._SEND_MAX_RETRIES
+
 
 class TestWhatsAppChannelHandleBridgeMessage:
     """Tests for WhatsApp bridge message handling."""

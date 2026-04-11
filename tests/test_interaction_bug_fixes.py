@@ -661,6 +661,37 @@ class TestBugFixes:
         # Retry count should be cleaned up on success
         assert interaction_retry_key("test:session12", "req-success") not in runtime._interaction_retry_counts
 
+    @pytest.mark.asyncio
+    async def test_retry_count_argument_is_used_as_initial_baseline(self, handler, runtime, mock_transaction):
+        """Verify retry_count argument seeds first strict-validation retry when no state exists."""
+        runtime.runtime_registry.get_phase.return_value = SessionPhase.WAITING_INTERACTION
+        runtime.runtime_registry.transaction.return_value = mock_transaction
+
+        request = InteractionRequest(
+            request_id="req-retry-arg",
+            session_key="test:session15",
+            channel="test",
+            chat_id="chat1",
+            kind="question",
+            prompt="Choose",
+            suggestions=["A", "B"],
+            metadata={"valid_options": ["A", "B"]},
+        )
+        await runtime.bus.publish_interaction_request(request)
+        await runtime.bus.consume_outbound()
+
+        msg = InboundMessage(
+            channel="test",
+            sender_id="user1",
+            chat_id="chat1",
+            content="invalid",
+            session_key_override="test:session15",
+        )
+        result = await handler.handle_interaction_response(msg, retry_count=2)
+
+        assert result is True
+        assert interaction_retry_key("test:session15", "req-retry-arg") not in runtime._interaction_retry_counts
+
 
 class TestFeishuInteractionFormatting:
     """Tests for Feishu channel interaction message formatting."""

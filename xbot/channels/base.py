@@ -36,7 +36,6 @@ class BaseChannel(ABC):
         self.bus = bus
         self._running = False
         self._background_tasks: set[asyncio.Task] = set()  # Track background tasks
-        self._stop_event = asyncio.Event()  # For coordinated stopping
 
     async def transcribe_audio(self, file_path: str | Path) -> str:
         """Transcribe an audio file via Groq Whisper. Returns empty string on failure."""
@@ -144,15 +143,8 @@ class BaseChannel(ABC):
         """Check if the channel is running."""
         return self._running
 
-    async def _default_stop(self) -> None:
-        """Default stop implementation that cancels tracked background tasks.
-
-        Subclasses should call this via `await super().stop()` or use the
-        task tracking helpers for proper cleanup.
-        """
-        self._running = False
-        self._stop_event.set()
-
+    async def _cancel_background_tasks(self, timeout: float = 5.0) -> None:
+        """Cancel and drain all tracked background tasks."""
         # Cancel all tracked background tasks
         for task in self._background_tasks:
             if not task.done():
@@ -163,18 +155,11 @@ class BaseChannel(ABC):
             try:
                 await asyncio.wait_for(
                     asyncio.gather(*self._background_tasks, return_exceptions=True),
-                    timeout=5.0
+                    timeout=timeout
                 )
             except asyncio.TimeoutError:
                 logger.warning(f"{self.name}: some background tasks did not complete in time")
             self._background_tasks.clear()
-
-        # Call subclass cleanup
-        await self._cleanup_resources()
-
-    async def _cleanup_resources(self) -> None:
-        """Override this method to clean up channel-specific resources."""
-        pass
 
     def _consume_tracked_task_exception(self, task: asyncio.Task) -> None:
         """Drain task exceptions so channel-owned fire-and-forget tasks stay observable."""

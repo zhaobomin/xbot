@@ -32,8 +32,10 @@ class ExecTool(Tool):
             r"\brmdir\s+/s\b",               # rmdir /s
             r"(?:^|[;&|]\s*)format\b",       # format (as standalone command only)
             r"\b(mkfs|diskpart)\b",          # disk operations
-            r"\bdd\s+if=",                   # dd
+            r"\bdd\b[^\n;&|]*(?:\bif=|\bof=)",  # dd read/write disk images
             r">\s*/dev/sd",                  # write to disk
+            r"\btee\b[^\n;&|]*/dev/",        # tee writing to device nodes
+            r"\b(nc|netcat|socat|nmap)\b",   # high-risk network tooling
             r"\b(shutdown|reboot|poweroff)\b",  # system power
             r":\(\)\s*\{.*\};\s*:",          # fork bomb
         ]

@@ -233,7 +233,7 @@ class RuntimeSessionRegistry:
             del self._sdk_index[state.sdk_session_id]
 
         # Delete session state
-        del self._sessions[session_key]
+        self._sessions.pop(session_key, None)
 
         logger.info(f"cleanup_session: removed {session_key}")
 
@@ -409,7 +409,15 @@ class RuntimeSessionRegistry:
 
         def set_phase(self, phase: SessionPhase, reason: str = "") -> None:
             """Set session phase within transaction."""
-            self.manager.force_transition(self.session_key, phase, reason=reason)
+            if self.validate_on_commit:
+                ok = self.manager.transition(self.session_key, phase, reason=reason)
+                if not ok:
+                    current = self.manager.get_phase(self.session_key)
+                    raise ValueError(
+                        f"Invalid phase transition in transaction: {current.value} -> {phase.value}"
+                    )
+            else:
+                self.manager.force_transition(self.session_key, phase, reason=reason)
             self._phase_set = True
 
         def acquire_lock(self) -> None:

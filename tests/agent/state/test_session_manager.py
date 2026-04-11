@@ -322,6 +322,18 @@ async def test_cleanup_session():
 
 
 @pytest.mark.asyncio
+async def test_cleanup_session_is_idempotent():
+    """Second cleanup call should not raise even if session is already gone."""
+    manager = RuntimeSessionRegistry()
+    manager.get_or_create("slack:C12345")
+
+    await manager.cleanup_session("slack:C12345")
+    await manager.cleanup_session("slack:C12345")
+
+    assert manager.get("slack:C12345") is None
+
+
+@pytest.mark.asyncio
 async def test_cleanup_session_cancels_tasks():
     """Test cleanup_session cancels active tasks."""
     manager = RuntimeSessionRegistry()
@@ -354,3 +366,26 @@ async def test_list_stale_sessions():
 
     stale = manager.list_stale_sessions(ttl_seconds=300)  # 5 min TTL
     assert stale == ["slack:C1"]
+
+
+@pytest.mark.asyncio
+async def test_transaction_set_phase_respects_validation():
+    manager = RuntimeSessionRegistry()
+    manager.get_or_create("slack:C12345")
+    manager.transition("slack:C12345", SessionPhase.RUNNING, reason="start")
+
+    with pytest.raises(ValueError, match="Invalid phase transition"):
+        async with manager.transaction("slack:C12345", validate_on_commit=True) as tx:
+            tx.set_phase(SessionPhase.DELETING, reason="invalid")
+
+
+@pytest.mark.asyncio
+async def test_transaction_set_phase_can_force_when_validation_disabled():
+    manager = RuntimeSessionRegistry()
+    manager.get_or_create("slack:C12345")
+    manager.transition("slack:C12345", SessionPhase.RUNNING, reason="start")
+
+    async with manager.transaction("slack:C12345", validate_on_commit=False) as tx:
+        tx.set_phase(SessionPhase.DELETING, reason="force")
+
+    assert manager.get_phase("slack:C12345") == SessionPhase.DELETING

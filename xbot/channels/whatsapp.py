@@ -37,6 +37,8 @@ class WhatsAppChannel(BaseChannel):
     display_name = "WhatsApp"
     _DEDUP_MAX_IDS = 1000
     _DEDUP_TTL_SECONDS = 6 * 60 * 60
+    _SEND_MAX_RETRIES = 3
+    _SEND_RETRY_DELAYS = [1.0, 2.0]
 
     @classmethod
     def default_config(cls) -> dict[str, Any]:
@@ -129,16 +131,40 @@ class WhatsAppChannel(BaseChannel):
             logger.warning("WhatsApp bridge not connected")
             return
 
-        try:
-            payload = {
-                "type": "send",
-                "to": msg.chat_id,
-                "text": msg.content,
-                "media": list(msg.media or []),
-            }
-            await self._ws.send(json.dumps(payload, ensure_ascii=False))
-        except Exception as e:
-            logger.error("Error sending WhatsApp message: %s", e)
+        payload = {
+            "type": "send",
+            "to": msg.chat_id,
+            "text": msg.content,
+            "media": list(msg.media or []),
+        }
+        payload_json = json.dumps(payload, ensure_ascii=False)
+
+        last_error: Exception | None = None
+        for attempt in range(1, self._SEND_MAX_RETRIES + 1):
+            try:
+                await self._ws.send(payload_json)
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                last_error = e
+                if attempt >= self._SEND_MAX_RETRIES:
+                    break
+                delay = self._SEND_RETRY_DELAYS[min(attempt - 1, len(self._SEND_RETRY_DELAYS) - 1)]
+                logger.warning(
+                    "WhatsApp send failed (attempt %d/%d): %s; retrying in %.1fs",
+                    attempt,
+                    self._SEND_MAX_RETRIES,
+                    e,
+                    delay,
+                )
+                await asyncio.sleep(delay)
+
+        logger.error(
+            "Error sending WhatsApp message after %d attempts: %s",
+            self._SEND_MAX_RETRIES,
+            last_error,
+        )
 
     async def _handle_bridge_message(self, raw: str) -> None:
         """Handle a message from the bridge."""

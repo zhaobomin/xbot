@@ -186,8 +186,6 @@ class RuntimeResponseHandlers:
         if self._bus is None:
             return False
 
-        del retry_count
-
         if getattr(self._runtime, '_is_local_runtime_command', lambda _: False)(msg.content):
             return False
 
@@ -287,7 +285,7 @@ class RuntimeResponseHandlers:
 
                 if matched_option is None and validation_mode == "strict":
                     retry_key = self._interaction_retry_key(msg.session_key, request_id)
-                    current_retry_count = int(self._interaction_retry_counts.get(retry_key, 0))
+                    current_retry_count = int(self._interaction_retry_counts.get(retry_key, retry_count))
                     retry_count = current_retry_count + 1
                     self._interaction_retry_counts[retry_key] = retry_count
 

@@ -58,10 +58,16 @@ class PinnedAsyncNetworkBackend:
 class PinnedAsyncHTTPTransport(httpx.AsyncBaseTransport):
     """HTTPX transport that pins selected hostnames to already-validated IPs."""
 
-    def __init__(self, pinned_hosts: dict[str, str], proxy: str | None = None):
+    def __init__(
+        self,
+        pinned_hosts: dict[str, str],
+        proxy: str | None = None,
+        max_response_bytes: int = 10 * 1024 * 1024,
+    ):
         limits = httpx.Limits()
         ssl_context = ssl.create_default_context()
         backend = PinnedAsyncNetworkBackend(pinned_hosts)
+        self._max_response_bytes = max_response_bytes
 
         max_connections = limits.max_connections or 100
         max_keepalive_connections = limits.max_keepalive_connections or 20
@@ -145,7 +151,14 @@ class PinnedAsyncHTTPTransport(httpx.AsyncBaseTransport):
             raise httpx.TransportError(f"Pinned transport request failed: {exc}") from exc
 
         try:
-            content = b"".join([chunk async for chunk in resp.stream])
+            content_buffer = bytearray()
+            async for chunk in resp.stream:
+                content_buffer.extend(chunk)
+                if len(content_buffer) > self._max_response_bytes:
+                    raise httpx.TransportError(
+                        f"Pinned transport response exceeded size limit: "
+                        f"{len(content_buffer)} > {self._max_response_bytes} bytes"
+                    )
         finally:
             with contextlib.suppress(Exception):
                 await resp.stream.aclose()
@@ -153,7 +166,7 @@ class PinnedAsyncHTTPTransport(httpx.AsyncBaseTransport):
         return httpx.Response(
             status_code=resp.status,
             headers=resp.headers,
-            content=content,
+            content=bytes(content_buffer),
             extensions=resp.extensions,
             request=request,
         )

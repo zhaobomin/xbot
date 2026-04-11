@@ -174,8 +174,8 @@ class CrewOrchestrator:
             # Just return the result with aborted status
             pass
         except KeyboardInterrupt:
-            # Cleanup already completed in __aexit__
-            pass
+            # Cleanup already completed in __aexit__; preserve interrupt semantics.
+            raise
 
         # Calculate total time after cleanup
         total_time = time.perf_counter() - wall_start

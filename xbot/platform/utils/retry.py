@@ -41,14 +41,12 @@ async def run_with_retry(
         raise ValueError("max_attempts must be >= 1")
     sleep = sleep_func or asyncio.sleep
 
-    last_error: BaseException | None = None
     for attempt in range(1, policy.max_attempts + 1):
         try:
             return await func()
         except asyncio.CancelledError:
             raise
         except policy.retryable_exceptions as exc:
-            last_error = exc
             if attempt >= policy.max_attempts:
                 raise
             delay = policy.delay_for_attempt(attempt)
@@ -63,6 +61,3 @@ async def run_with_retry(
             await sleep(delay)
         except Exception:
             raise
-
-    assert last_error is not None
-    raise last_error

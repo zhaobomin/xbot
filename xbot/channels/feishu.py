@@ -1056,32 +1056,6 @@ class FeishuChannel(BaseChannel):
         except Exception:
             logger.exception("Error sending Feishu message")
 
-    def _on_message_sync(self, data: Any) -> None:
-        """
-        Sync handler for incoming messages (called from WebSocket thread).
-        Schedules async handling in the main event loop.
-        """
-        if self._main_loop is None or not self._main_loop.is_running():
-            logger.warning(
-                "Feishu: cannot process message - main event loop not available. "
-                "This may happen during shutdown."
-            )
-            return
-
-        # Thread-safe deduplication before scheduling async handler
-        message_id = self._extract_message_id_from_event(data)
-        if not self._mark_message_seen(message_id):
-            return
-
-        try:
-            _ = asyncio.run_coroutine_threadsafe(
-                self._on_message(data), self._main_loop
-            )
-            # Don't wait for result - fire and forget for better throughput
-            # The future will complete asynchronously
-        except Exception as e:
-            logger.error(f"Feishu: failed to schedule message handler: {e}")
-
     async def _on_message(self, data: Any) -> None:
         """Handle incoming message from Feishu."""
         try:

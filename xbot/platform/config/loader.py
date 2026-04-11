@@ -251,16 +251,26 @@ def _auto_detect_provider(data: dict[str, Any]) -> dict[str, Any]:
     if provider != "auto":
         return data
 
-    # Get base_url from providers config
-    base_url = None
+    # Get base_url/provider name from providers config
+    detected_provider: str | None = None
     providers = data.get("providers", {})
     for provider_name, provider_config in providers.items():
-        if isinstance(provider_config, dict) and provider_config.get("apiKey"):
-            base_url = provider_config.get("apiBase", "")
-            break
+        if not isinstance(provider_config, dict):
+            continue
+        api_base = (provider_config.get("apiBase") or "").strip()
+        api_key = (provider_config.get("apiKey") or "").strip()
+        if not api_base and not api_key:
+            continue
 
-    if base_url:
-        detected_provider = _infer_provider_name(base_url)
+        if api_base:
+            inferred = _infer_provider_name(api_base)
+            # Keep explicit configured provider name for unknown/custom bases.
+            detected_provider = provider_name if inferred == "custom" else inferred
+        else:
+            detected_provider = provider_name
+        break
+
+    if detected_provider:
         if "agents" not in data:
             data["agents"] = {}
         if "defaults" not in data["agents"]:

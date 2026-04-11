@@ -134,6 +134,37 @@ class TestOrchestratorCancelledError:
                     # The state_manager here is NOT used since we mock CrewResourceManager
                     # Real state transitions are tested in test_resource_manager.py
 
+    @pytest.mark.asyncio
+    async def test_orchestrator_reraises_keyboard_interrupt(self) -> None:
+        crew_config = self._make_minimal_crew_config()
+        xbot_config = MagicMock()
+        permission_handler = MockPermissionHandler()
+
+        orchestrator = CrewOrchestrator(
+            crew_config, xbot_config, permission_handler
+        )
+
+        with patch.object(orchestrator, "_get_llm_repair_callable", return_value=None):
+            with patch("xbot.crew.orchestrator.CrewResourceManager") as mock_mgr_cls:
+                mock_manager = MagicMock()
+                mock_manager.initialize_pool = AsyncMock()
+                mock_manager.set_process = MagicMock()
+                mock_manager.set_results = MagicMock()
+                mock_manager.should_re_raise_cancelled = MagicMock(return_value=False)
+                mock_manager.final_status = "aborted"
+                mock_manager.results = []
+                mock_manager.__aenter__ = AsyncMock(return_value=mock_manager)
+                mock_manager.__aexit__ = AsyncMock(return_value=False)
+                mock_mgr_cls.return_value = mock_manager
+
+                with patch("xbot.crew.orchestrator.SequentialProcess") as mock_process_cls:
+                    mock_process = MagicMock()
+                    mock_process.execute = AsyncMock(side_effect=KeyboardInterrupt())
+                    mock_process_cls.return_value = mock_process
+
+                    with pytest.raises(KeyboardInterrupt):
+                        await orchestrator.run()
+
 
 class TestProcessCancelledError:
     """Test process handles CancelledError in task execution."""

@@ -51,7 +51,7 @@ async def test_create_tracked_task_consumes_exception(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_default_stop_cancels_and_clears_tracked_tasks() -> None:
+async def test_cancel_background_tasks_cancels_and_clears_tracked_tasks() -> None:
     channel = _DummyChannel(SimpleNamespace(allow_from=["*"]), MessageBus())
     channel._running = True
 
@@ -67,7 +67,6 @@ async def test_default_stop_cancels_and_clears_tracked_tasks() -> None:
     channel._create_tracked_task(worker(), name="worker")
     await started.wait()
 
-    await channel._default_stop()
+    await channel._cancel_background_tasks()
 
-    assert channel.is_running is False
     assert channel._background_tasks == set()

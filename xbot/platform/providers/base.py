@@ -100,69 +100,6 @@ class LLMProvider(ABC):
         self.api_base = api_base
         self.generation: GenerationSettings = GenerationSettings()
 
-    @staticmethod
-    def _sanitize_empty_content(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
-        """Sanitize message content: fix empty blocks, strip internal _meta fields."""
-        result: list[dict[str, Any]] = []
-        for msg in messages:
-            content = msg.get("content")
-
-            if isinstance(content, str) and not content:
-                clean = dict(msg)
-                clean["content"] = None if (msg.get("role") == "assistant" and msg.get("tool_calls")) else "(empty)"
-                result.append(clean)
-                continue
-
-            if isinstance(content, list):
-                new_items: list[Any] = []
-                changed = False
-                for item in content:
-                    if (
-                        isinstance(item, dict)
-                        and item.get("type") in ("text", "input_text", "output_text")
-                        and not item.get("text")
-                    ):
-                        changed = True
-                        continue
-                    if isinstance(item, dict) and "_meta" in item:
-                        new_items.append({k: v for k, v in item.items() if k != "_meta"})
-                        changed = True
-                    else:
-                        new_items.append(item)
-                if changed:
-                    clean = dict(msg)
-                    if new_items:
-                        clean["content"] = new_items
-                    elif msg.get("role") == "assistant" and msg.get("tool_calls"):
-                        clean["content"] = None
-                    else:
-                        clean["content"] = "(empty)"
-                    result.append(clean)
-                    continue
-
-            if isinstance(content, dict):
-                clean = dict(msg)
-                clean["content"] = [content]
-                result.append(clean)
-                continue
-
-            result.append(msg)
-        return result
-
-    @staticmethod
-    def _sanitize_request_messages(
-        messages: list[dict[str, Any]],
-        allowed_keys: frozenset[str],
-    ) -> list[dict[str, Any]]:
-        """Keep only provider-safe message keys and normalize assistant content."""
-        sanitized = []
-        for msg in messages:
-            clean = {k: v for k, v in msg.items() if k in allowed_keys}
-            if clean.get("role") == "assistant" and "content" not in clean:
-                clean["content"] = None
-            sanitized.append(clean)
-        return sanitized
-
     @abstractmethod
     async def chat(
         self,

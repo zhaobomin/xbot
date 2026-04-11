@@ -84,7 +84,14 @@ class DiscordChannel(BaseChannel):
                 async with websockets.connect(self.config.gateway_url) as ws:
                     self._ws = ws
                     self._reconnect_attempts = 0  # Reset on successful connection
-                    await self._gateway_loop()
+                    try:
+                        await self._gateway_loop()
+                    finally:
+                        if self._heartbeat_task:
+                            self._heartbeat_task.cancel()
+                            with contextlib.suppress(asyncio.CancelledError):
+                                await self._heartbeat_task
+                            self._heartbeat_task = None
             except asyncio.CancelledError:
                 break
             except Exception as e:
@@ -129,6 +136,7 @@ class DiscordChannel(BaseChannel):
         if self._http:
             await self._http.aclose()
             self._http = None
+        await self._cancel_background_tasks()
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Discord REST API, including file attachments."""

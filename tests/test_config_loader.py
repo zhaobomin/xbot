@@ -7,6 +7,7 @@ import pytest
 
 from xbot.exceptions import ConfigurationError
 from xbot.platform.config.loader import (
+    _auto_detect_provider,
     _migrate_config,
     get_config_path,
     load_config,
@@ -198,3 +199,18 @@ class TestMigrateConfig:
 
         assert result["agents"]["type"] == "claude_sdk"
         assert result["tools"]["exec"]["timeout"] == 120
+
+
+class TestAutoDetectProvider:
+    def test_auto_detect_provider_uses_api_base_without_api_key(self):
+        data = {
+            "agents": {"defaults": {"provider": "auto"}},
+            "providers": {
+                "custom_proxy": {
+                    "apiBase": "http://localhost:8080/v1",
+                    "apiKey": "",
+                }
+            },
+        }
+        result = _auto_detect_provider(data)
+        assert result["agents"]["defaults"]["provider"] == "custom_proxy"
