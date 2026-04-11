@@ -571,14 +571,69 @@ class AgentService:
         self._initialized = False
         logger.info("AgentService shutdown complete")
 
-    async def reset_session(self, session_key: str) -> None:
+    async def reset_session(
+        self,
+        session_key: str,
+        *,
+        drop_sdk_context: bool = False,
+    ) -> None:
         """Reset session state.
 
         Args:
             session_key: Session identifier
+            drop_sdk_context: Whether to delete SDK-side session context
         """
-        logger.info(f"Resetting session {session_key}")
+        logger.info(
+            "Resetting session %s (drop_sdk_context=%s)",
+            session_key,
+            drop_sdk_context,
+        )
+
+        runtime_registry = self._shared_resources.get("runtime_registry")
+        sdk_session_id: str | None = None
+        if drop_sdk_context and runtime_registry and hasattr(runtime_registry, "resolve_sdk_session_id"):
+            try:
+                resolved = runtime_registry.resolve_sdk_session_id(session_key)
+                if isinstance(resolved, str) and resolved.strip():
+                    sdk_session_id = resolved.strip()
+            except Exception as e:
+                logger.debug("Failed to resolve sdk_session_id for reset_session(%s): %s", session_key, e)
+
         await self._client_pool.disconnect(session_key)
+
+        if drop_sdk_context and sdk_session_id:
+            try:
+                from claude_agent_sdk import delete_session as sdk_delete_session
+                result = sdk_delete_session(sdk_session_id)
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as e:
+                logger.warning(
+                    "Failed to delete SDK session during reset (session_key=%s, sdk_session_id=%s): %s",
+                    session_key,
+                    sdk_session_id,
+                    e,
+                )
+
+        if drop_sdk_context and runtime_registry:
+            set_sdk_impl = getattr(runtime_registry, "_set_sdk_session_id_impl", None)
+            if callable(set_sdk_impl):
+                try:
+                    set_sdk_impl(session_key, None)
+                except Exception as e:
+                    logger.debug("Failed to clear sdk_session_id via _set_sdk_session_id_impl for %s: %s", session_key, e)
+
+            set_sdk = getattr(runtime_registry, "set_sdk_session_id", None)
+            if callable(set_sdk):
+                try:
+                    result = set_sdk(session_key, None)
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception as e:
+                    logger.debug("Failed to clear sdk_session_id via set_sdk_session_id for %s: %s", session_key, e)
+
+        if drop_sdk_context:
+            self._persist_sdk_session_id_to_store(session_key, None)
 
     async def get_session_commands(
         self,
@@ -1035,11 +1090,11 @@ class AgentService:
                 logger.debug("Idle client pruning skipped for %s: %s", session_key, e)
 
         # Build options
-        options = self._build_sdk_options()
+        options = self._build_sdk_options(session_key=session_key)
 
         return await self._client_pool.get_or_create(session_key, options=options)
 
-    def _build_sdk_options(self) -> Any:
+    def _build_sdk_options(self, session_key: str | None = None) -> Any:
         """Build ClaudeAgentOptions from configuration."""
         from claude_agent_sdk import ClaudeAgentOptions
 
@@ -1085,11 +1140,23 @@ class AgentService:
 
         # Build system prompt via ContextBuilder (restores v0.3.35 behaviour)
         system_prompt = self._build_system_prompt()
+        resume_session: str | None = None
+        if session_key:
+            self._hydrate_sdk_session_id_from_store_if_missing(session_key)
+            runtime_registry = self._shared_resources.get("runtime_registry")
+            if runtime_registry and hasattr(runtime_registry, "resolve_sdk_session_id"):
+                try:
+                    resolved = runtime_registry.resolve_sdk_session_id(session_key)
+                    if isinstance(resolved, str) and resolved.strip():
+                        resume_session = resolved.strip()
+                except Exception as e:
+                    logger.debug("Failed to resolve sdk_session_id for %s: %s", session_key, e)
 
         options = ClaudeAgentOptions(
             cwd=workspace_expanded,
             model=self._config.model,
             system_prompt=system_prompt,
+            resume=resume_session,
             mcp_servers=mcp_servers if mcp_servers else None,
             agents=agents,
             env=env,
@@ -1202,7 +1269,7 @@ class AgentService:
 
     def _build_options(self, context: AgentContext) -> Any:
         """Build processing options for a context."""
-        return self._build_sdk_options()
+        return self._build_sdk_options(session_key=context.session_key)
 
     def _build_hooks(self, sdk_config: Any) -> dict[str, list] | None:
         """Build hooks configuration including compact notification.
@@ -2222,6 +2289,7 @@ class AgentService:
         if callable(set_sdk_impl):
             try:
                 set_sdk_impl(session_key, str(sdk_session_id))
+                self._persist_sdk_session_id_to_store(session_key, str(sdk_session_id))
                 return
             except Exception as e:
                 logger.debug("Failed to sync sdk_session_id for %s: %s", session_key, e)
@@ -2232,8 +2300,91 @@ class AgentService:
                 result = set_sdk(session_key, str(sdk_session_id))
                 if asyncio.iscoroutine(result):
                     asyncio.create_task(result)
+                self._persist_sdk_session_id_to_store(session_key, str(sdk_session_id))
             except Exception as e:
                 logger.debug("Failed to sync sdk_session_id for %s: %s", session_key, e)
+
+    def _hydrate_sdk_session_id_from_store_if_missing(self, session_key: str) -> None:
+        """Load persisted sdk_session_id from conversation store into runtime registry."""
+        runtime_registry = self._shared_resources.get("runtime_registry")
+        if not runtime_registry:
+            return
+        if not hasattr(runtime_registry, "resolve_sdk_session_id"):
+            return
+
+        try:
+            existing = runtime_registry.resolve_sdk_session_id(session_key)
+            if isinstance(existing, str) and existing.strip():
+                return
+        except Exception:
+            return
+
+        conversation_store = self._shared_resources.get("conversation_store")
+        if conversation_store is None or not hasattr(conversation_store, "get"):
+            return
+
+        try:
+            session = conversation_store.get(session_key)
+        except Exception:
+            return
+        if session is None:
+            return
+
+        metadata = getattr(session, "metadata", None)
+        persisted = metadata.get("sdk_session_id") if isinstance(metadata, dict) else None
+        if not isinstance(persisted, str) or not persisted.strip():
+            return
+        sdk_session_id = persisted.strip()
+
+        set_sdk_impl = getattr(runtime_registry, "_set_sdk_session_id_impl", None)
+        if callable(set_sdk_impl):
+            try:
+                runtime_registry.get_or_create(session_key)
+                set_sdk_impl(session_key, sdk_session_id)
+                return
+            except Exception:
+                pass
+
+        set_sdk = getattr(runtime_registry, "set_sdk_session_id", None)
+        if callable(set_sdk):
+            try:
+                runtime_registry.get_or_create(session_key)
+                result = set_sdk(session_key, sdk_session_id)
+                if asyncio.iscoroutine(result):
+                    asyncio.create_task(result)
+            except Exception:
+                pass
+
+    def _persist_sdk_session_id_to_store(self, session_key: str, sdk_session_id: str | None) -> None:
+        """Persist sdk_session_id in conversation store metadata for restart recovery."""
+        conversation_store = self._shared_resources.get("conversation_store")
+        if conversation_store is None:
+            return
+        if not hasattr(conversation_store, "get_or_create") or not hasattr(conversation_store, "save"):
+            return
+
+        try:
+            session = conversation_store.get_or_create(session_key)
+            metadata = getattr(session, "metadata", None)
+            if not isinstance(metadata, dict):
+                session.metadata = {}
+                metadata = session.metadata
+
+            old_val = metadata.get("sdk_session_id")
+            if sdk_session_id is None:
+                if "sdk_session_id" not in metadata:
+                    return
+                del metadata["sdk_session_id"]
+            else:
+                if old_val == sdk_session_id:
+                    return
+                metadata["sdk_session_id"] = sdk_session_id
+
+            if hasattr(session, "mark_metadata_dirty"):
+                session.mark_metadata_dirty()
+            conversation_store.save(session)
+        except Exception as e:
+            logger.debug("Failed to persist sdk_session_id for %s: %s", session_key, e)
 
     def _register_direct_progress_callback(
         self,

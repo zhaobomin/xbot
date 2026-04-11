@@ -227,8 +227,8 @@ class LocalCommandHandler:
                 if bus_obj.get_pending_interaction_for_session(session_key):
                     cleared_interaction = True
 
-        # Disconnect SDK client
-        await svc._client_pool.disconnect(session_key)
+        # Reset SDK runtime and optionally drop SDK session context
+        await svc.reset_session(session_key, drop_sdk_context=not soft)
 
         # Set phase to IDLE
         sm = svc._shared_resources.get("runtime_registry")

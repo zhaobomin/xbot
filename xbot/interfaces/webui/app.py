@@ -511,9 +511,9 @@ def create_app(
         if internal_session_key != session_key:
             removed = container.conversation_store.delete(internal_session_key) or removed
         try:
-            await container.agent.reset_session(internal_session_key)
+            await container.agent.reset_session(internal_session_key, drop_sdk_context=True)
             if internal_session_key != session_key:
-                await container.agent.reset_session(session_key)
+                await container.agent.reset_session(session_key, drop_sdk_context=True)
         except Exception:
             # Keep delete API best-effort for runtime cleanup.
             pass

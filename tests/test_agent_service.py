@@ -11,6 +11,7 @@ from xbot.platform.bus.events import InboundMessage
 from xbot.runtime.core.protocol import AgentContext, AgentResponse
 from xbot.runtime.core.service import AgentService
 from xbot.runtime.core.types import AgentConfig
+from xbot.runtime.session.conversation_store import ConversationStore
 from xbot.runtime.state import RuntimeSessionRegistry
 from xbot.runtime.state.machine import SessionPhase
 from xbot.runtime.core.client_pool import ClientPool, ClientRecord
@@ -179,6 +180,154 @@ class TestAgentService:
         cached = shared_resources["runtime_registry"].get_commands("test:c1")
         assert "/review" in cached
         assert "/schedule" in cached
+
+    @pytest.mark.asyncio
+    async def test_build_sdk_options_includes_resume_from_runtime_registry(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """_build_sdk_options should set resume to persisted sdk_session_id."""
+        from xbot.platform.config.schema import Config
+
+        shared_resources["config"] = Config()
+        registry = RuntimeSessionRegistry()
+        registry.get_or_create("test:c1")
+        await registry.set_sdk_session_id("test:c1", "sdk-session-123")
+        shared_resources["runtime_registry"] = registry
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        options = service._build_sdk_options(session_key="test:c1")
+        assert getattr(options, "resume", None) == "sdk-session-123"
+
+    @pytest.mark.asyncio
+    async def test_reset_session_can_drop_sdk_context(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """reset_session(drop_sdk_context=True) should clear sdk_session_id mapping."""
+        registry = RuntimeSessionRegistry()
+        registry.get_or_create("test:c1")
+        await registry.set_sdk_session_id("test:c1", "sdk-session-abc")
+        shared_resources["runtime_registry"] = registry
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+        service._client_pool.disconnect = AsyncMock(return_value=True)
+
+        await service.reset_session("test:c1", drop_sdk_context=True)
+        assert registry.resolve_sdk_session_id("test:c1") is None
+
+    @pytest.mark.asyncio
+    async def test_reset_session_soft_preserves_sdk_context(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """reset_session(drop_sdk_context=False) should preserve sdk_session_id mapping."""
+        registry = RuntimeSessionRegistry()
+        registry.get_or_create("test:c1")
+        await registry.set_sdk_session_id("test:c1", "sdk-session-keep")
+        shared_resources["runtime_registry"] = registry
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+        service._client_pool.disconnect = AsyncMock(return_value=True)
+
+        await service.reset_session("test:c1", drop_sdk_context=False)
+        assert registry.resolve_sdk_session_id("test:c1") == "sdk-session-keep"
+
+    @pytest.mark.asyncio
+    async def test_process_persists_sdk_session_id_to_conversation_metadata(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """process should persist sdk_session_id into conversation metadata."""
+        conversation_store = ConversationStore(tmp_path)
+        shared_resources["conversation_store"] = conversation_store
+        shared_resources["runtime_registry"] = RuntimeSessionRegistry()
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        sdk_message = MagicMock()
+        sdk_message.session_id = "sdk-persist-1"
+        result_message = MagicMock()
+        result_message.session_id = "sdk-persist-1"
+
+        async def receive_messages():
+            yield sdk_message
+            yield result_message
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
+        mock_client.receive_messages = receive_messages
+        mock_client.get_server_info = AsyncMock(return_value={})
+
+        context = AgentContext(session_key="test:c1", prompt="hello", channel="test", chat_id="c1")
+        with patch.object(service, "_get_or_create_client", AsyncMock(return_value=mock_client)):
+            async for _ in service.process(context):
+                pass
+
+        loaded = conversation_store.get_or_create("test:c1")
+        assert loaded.metadata.get("sdk_session_id") == "sdk-persist-1"
+
+    @pytest.mark.asyncio
+    async def test_build_sdk_options_restores_resume_from_conversation_metadata(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """_build_sdk_options should hydrate resume from conversation metadata when registry is empty."""
+        from xbot.platform.config.schema import Config
+
+        shared_resources["config"] = Config()
+        registry = RuntimeSessionRegistry()
+        shared_resources["runtime_registry"] = registry
+
+        conversation_store = ConversationStore(tmp_path)
+        session = conversation_store.get_or_create("test:c1")
+        session.metadata["sdk_session_id"] = "sdk-from-store-1"
+        session.mark_metadata_dirty()
+        conversation_store.save(session)
+        shared_resources["conversation_store"] = conversation_store
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        options = service._build_sdk_options(session_key="test:c1")
+        assert getattr(options, "resume", None) == "sdk-from-store-1"
+        assert registry.resolve_sdk_session_id("test:c1") == "sdk-from-store-1"
+
+    @pytest.mark.asyncio
+    async def test_reset_session_drop_context_clears_conversation_metadata(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """reset_session(drop_sdk_context=True) should remove persisted sdk_session_id metadata."""
+        conversation_store = ConversationStore(tmp_path)
+        session = conversation_store.get_or_create("test:c1")
+        session.metadata["sdk_session_id"] = "sdk-to-delete-1"
+        session.mark_metadata_dirty()
+        conversation_store.save(session)
+        shared_resources["conversation_store"] = conversation_store
+        shared_resources["runtime_registry"] = RuntimeSessionRegistry()
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+        service._client_pool.disconnect = AsyncMock(return_value=True)
+
+        await service.reset_session("test:c1", drop_sdk_context=True)
+        loaded = conversation_store.get_or_create("test:c1")
+        assert "sdk_session_id" not in loaded.metadata
 
     @pytest.mark.asyncio
     async def test_process_managed_direct_releases_ephemeral_client(
@@ -557,6 +706,26 @@ class TestRunDispatch:
         assert bus.publish_outbound.call_count == 1
         out = bus.publish_outbound.call_args.args[0]
         assert "reset" in out.content.lower() or "fresh start" in out.content.lower()
+
+    @pytest.mark.asyncio
+    async def test_local_command_reset_soft_keeps_sdk_context(self, config, shared_resources, bus):
+        """!reset --soft should call reset_session with drop_sdk_context=False."""
+        service = await self._make_service(config, shared_resources)
+        service.reset_session = AsyncMock(return_value=None)
+        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="!reset --soft")
+
+        await service._command_handler.handle(msg, bus)
+        service.reset_session.assert_awaited_once_with("test:c1", drop_sdk_context=False)
+
+    @pytest.mark.asyncio
+    async def test_local_command_reset_hard_drops_sdk_context(self, config, shared_resources, bus):
+        """!reset should call reset_session with drop_sdk_context=True."""
+        service = await self._make_service(config, shared_resources)
+        service.reset_session = AsyncMock(return_value=None)
+        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="!reset")
+
+        await service._command_handler.handle(msg, bus)
+        service.reset_session.assert_awaited_once_with("test:c1", drop_sdk_context=True)
 
     # --- Test 5: Local command !stop ---
 
