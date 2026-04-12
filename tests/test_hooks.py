@@ -169,3 +169,86 @@ class TestBuildCompactHook:
 
         hooks = build_compact_hook(enabled=False)
         assert hooks == {}
+
+
+class TestSubagentModelCompatHookHandler:
+    """Tests for SubagentModelCompatHookHandler."""
+
+    def test_rewrites_unsupported_typed_subagent_model(self) -> None:
+        """Unsupported typed subagent model should keep type and use inherit."""
+        from xbot.runtime.core.hooks import SubagentModelCompatHookHandler
+
+        handler = SubagentModelCompatHookHandler(
+            enabled=True,
+            provider_name="alrun",
+            is_model_supported=lambda model: model.lower() == "glm-5",
+        )
+
+        mock_input = {
+            "session_id": "cli:direct",
+            "tool_name": "Agent",
+            "tool_input": {
+                "description": "查询北京天气",
+                "prompt": "查询今天北京天气",
+                "model": "haiku",
+                "subagent_type": "Explore",
+            },
+        }
+        mock_context = MagicMock()
+
+        import asyncio
+        result = asyncio.run(handler(mock_input, None, mock_context))
+
+        assert result is not None
+        updated = result["hookSpecificOutput"]["updatedInput"]
+        assert updated["model"] == "inherit"
+        assert updated["subagent_type"] == "Explore"
+        assert "Keeping subagent_type and falling back to model=inherit" in result["systemMessage"]
+
+    def test_keeps_supported_typed_subagent_model(self) -> None:
+        """Supported model should not be rewritten."""
+        from xbot.runtime.core.hooks import SubagentModelCompatHookHandler
+
+        handler = SubagentModelCompatHookHandler(
+            enabled=True,
+            provider_name="alrun",
+            is_model_supported=lambda model: model.lower() in {"glm-5", "haiku"},
+        )
+
+        mock_input = {
+            "session_id": "cli:direct",
+            "tool_name": "Agent",
+            "tool_input": {
+                "model": "haiku",
+                "subagent_type": "Explore",
+            },
+        }
+        mock_context = MagicMock()
+
+        import asyncio
+        result = asyncio.run(handler(mock_input, None, mock_context))
+
+        assert result is None
+
+    def test_ignores_non_typed_agent_call(self) -> None:
+        """No rewrite when subagent_type is absent."""
+        from xbot.runtime.core.hooks import SubagentModelCompatHookHandler
+
+        handler = SubagentModelCompatHookHandler(
+            enabled=True,
+            is_model_supported=lambda model: False,
+        )
+
+        mock_input = {
+            "session_id": "cli:direct",
+            "tool_name": "Agent",
+            "tool_input": {
+                "model": "haiku",
+            },
+        }
+        mock_context = MagicMock()
+
+        import asyncio
+        result = asyncio.run(handler(mock_input, None, mock_context))
+
+        assert result is None

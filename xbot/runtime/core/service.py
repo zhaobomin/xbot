@@ -1277,7 +1277,149 @@ class AgentService:
             hooks.setdefault("PreCompact", []).append(HookMatcher(hooks=[compact_handler]))
             logger.info("[Hooks] Added PreCompact hook, keys=%s", list(hooks.keys()))
 
+        # Add PreToolUse compatibility hook for typed subagent model fallbacks
+        from xbot.runtime.core.hooks import SubagentModelCompatHookHandler
+
+        provider_name = self._resolve_effective_provider_name()
+        supported_models = self._resolve_supported_subagent_models(provider_name)
+
+        def is_model_supported(model_name: str) -> bool:
+            normalized = (model_name or "").strip().lower()
+            if not normalized:
+                return True
+            return normalized in supported_models
+
+        def send_subagent_compat_notification(session_ref: str, message: str) -> None:
+            sm = self._shared_resources.get("runtime_registry")
+            resolved_target = None
+            if sm and hasattr(sm, "resolve_compact_notification_target"):
+                try:
+                    resolved_target = sm.resolve_compact_notification_target(session_ref)
+                except Exception as e:
+                    logger.debug("[Subagent Compat] resolve failed for '%s': %s", session_ref, e)
+
+            if not self._is_valid_compact_target(resolved_target):
+                resolved_target = None
+
+            resolved_session_key = (
+                str(resolved_target[0]) if resolved_target else str(session_ref)
+            )
+            bus = self._shared_resources.get("bus")
+
+            async def _send() -> None:
+                try:
+                    handled = await self._emit_direct_progress_for_session(
+                        resolved_session_key,
+                        message,
+                        event_type="system",
+                        event_data={"subtype": "subagent_model_fallback"},
+                    )
+                    if handled:
+                        return
+                except Exception as e:
+                    logger.debug("Direct subagent compat notification failed for %s: %s", resolved_session_key, e)
+
+                if bus is None or resolved_target is None:
+                    return
+                session_key, channel, chat_id = resolved_target
+                try:
+                    await bus.publish_outbound(
+                        OutboundMessage(
+                            channel=channel,
+                            chat_id=chat_id,
+                            content=message,
+                            metadata={
+                                "_progress": True,
+                                "_event_type": "system",
+                                "_progress_kind": "system",
+                                "_event_data": {"subtype": "subagent_model_fallback"},
+                            },
+                        )
+                    )
+                    logger.debug(
+                        "Sent subagent compat notification to %s:%s (session=%s)",
+                        channel,
+                        chat_id,
+                        session_key,
+                    )
+                except Exception as e:
+                    logger.debug("Failed to send subagent compat notification to %s:%s: %s", channel, chat_id, e)
+
+            try:
+                loop = asyncio.get_running_loop()
+                asyncio.ensure_future(_send(), loop=loop)
+            except RuntimeError:
+                logger.debug("No event loop for subagent compat notification: session=%s", session_ref)
+
+        compat_handler = SubagentModelCompatHookHandler(
+            enabled=True,
+            provider_name=provider_name,
+            is_model_supported=is_model_supported,
+            message_callback=send_subagent_compat_notification,
+        )
+        hooks.setdefault("PreToolUse", []).append(HookMatcher(hooks=[compat_handler]))
+        logger.info(
+            "[Hooks] Added PreToolUse subagent model compatibility hook: provider=%s supported_models=%s",
+            provider_name,
+            sorted(supported_models),
+        )
+
         return hooks if hooks else None
+
+    def _resolve_effective_provider_name(self) -> str:
+        """Resolve current provider name for logging/compat decisions."""
+        config = self._shared_resources.get("config")
+        if config is None:
+            return "unknown"
+
+        defaults = getattr(getattr(config, "agents", None), "defaults", None)
+        provider = getattr(defaults, "provider", None)
+        if isinstance(provider, str) and provider and provider != "auto":
+            return provider
+
+        get_provider_name = getattr(config, "get_provider_name", None)
+        if callable(get_provider_name):
+            try:
+                model_name = self._config.model if self._config else None
+                resolved = get_provider_name(model_name)
+                if isinstance(resolved, str) and resolved:
+                    return resolved
+            except Exception as e:
+                logger.debug("Failed to resolve provider name from config: %s", e)
+
+        if isinstance(provider, str) and provider:
+            return provider
+        return "unknown"
+
+    def _resolve_supported_subagent_models(self, provider_name: str) -> set[str]:
+        """Compute allow-list for typed subagent model override."""
+        normalized_provider = (provider_name or "").strip().lower()
+        config = self._shared_resources.get("config")
+        defaults = getattr(getattr(config, "agents", None), "defaults", None)
+
+        supported: set[str] = {"inherit"}
+        available_models = list(getattr(defaults, "available_models", []) or [])
+        for model_name in available_models:
+            if not isinstance(model_name, str):
+                continue
+            normalized = model_name.strip().lower()
+            if normalized:
+                supported.add(normalized)
+
+        configured_model = ""
+        if defaults is not None:
+            configured_model = str(getattr(defaults, "model", "") or "").strip().lower()
+        if not configured_model and self._config is not None:
+            configured_model = str(getattr(self._config, "model", "") or "").strip().lower()
+        if configured_model:
+            supported.add(configured_model)
+
+        # Anthropic native provider usually accepts alias models even if
+        # available_models is not explicitly configured.
+        if not available_models and normalized_provider == "anthropic":
+            supported.update({"haiku", "sonnet", "opus"})
+
+        return supported
 
     def _convert_event(self, event: Any) -> AgentResponse | None:
         """Convert SDK event to AgentResponse."""

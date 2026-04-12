@@ -1953,3 +1953,95 @@ class TestClaudeSdkE2EIdleBoundary:
         assert saw_task_done is True
         assert saw_result is True
         assert saw_idle is True
+
+
+class TestSubagentModelCompatHooks:
+    """Integration tests for subagent model compatibility hook wiring."""
+
+    @pytest.mark.asyncio
+    async def test_build_hooks_adds_pretooluse_model_fallback(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        agent_config = AgentConfig(
+            model="glm-5",
+            system_prompt="test",
+        )
+        runtime_config = MagicMock()
+        runtime_config.agents.defaults.provider = "alrun"
+        runtime_config.agents.defaults.model = "glm-5"
+        runtime_config.agents.defaults.available_models = ["glm-5"]
+        runtime_config.agents.claude_sdk.compact_notify = False
+        runtime_config.agents.claude_sdk.hooks = None
+
+        service = AgentService()
+        await service.initialize(
+            agent_config,
+            {"workspace": str(tmp_path), "config": runtime_config},
+        )
+
+        hooks = service._build_hooks(runtime_config.agents.claude_sdk)
+        assert hooks is not None
+        assert "PreToolUse" in hooks
+
+        matcher = hooks["PreToolUse"][0]
+        handler = matcher.hooks[0]
+
+        output = await handler(
+            {
+                "session_id": "cli:direct",
+                "tool_name": "Agent",
+                "tool_input": {
+                    "model": "haiku",
+                    "subagent_type": "Explore",
+                },
+            },
+            None,
+            MagicMock(),
+        )
+
+        assert output is not None
+        updated = output["hookSpecificOutput"]["updatedInput"]
+        assert updated["model"] == "inherit"
+        assert updated["subagent_type"] == "Explore"
+
+    @pytest.mark.asyncio
+    async def test_build_hooks_keeps_anthropic_alias_model_without_available_models(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        agent_config = AgentConfig(
+            model="claude-sonnet-4-5",
+            system_prompt="test",
+        )
+        runtime_config = MagicMock()
+        runtime_config.agents.defaults.provider = "anthropic"
+        runtime_config.agents.defaults.model = "claude-sonnet-4-5"
+        runtime_config.agents.defaults.available_models = []
+        runtime_config.agents.claude_sdk.compact_notify = False
+        runtime_config.agents.claude_sdk.hooks = None
+
+        service = AgentService()
+        await service.initialize(
+            agent_config,
+            {"workspace": str(tmp_path), "config": runtime_config},
+        )
+
+        hooks = service._build_hooks(runtime_config.agents.claude_sdk)
+        matcher = hooks["PreToolUse"][0]
+        handler = matcher.hooks[0]
+
+        output = await handler(
+            {
+                "session_id": "cli:direct",
+                "tool_name": "Agent",
+                "tool_input": {
+                    "model": "haiku",
+                    "subagent_type": "Explore",
+                },
+            },
+            None,
+            MagicMock(),
+        )
+
+        assert output is None
