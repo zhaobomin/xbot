@@ -128,3 +128,15 @@ def test_sanitize_terminal_text_strips_literal_escaped_csi():
     """Literal '\\x1b[...m' text fragments should be removed when leaked."""
     raw = r"Done \x1b[31mERROR\x1b[0m"
     assert commands._sanitize_terminal_text(raw) == "Done ERROR"
+
+
+def test_parse_media_from_input_resolves_relative_path_against_workspace(tmp_path):
+    workspace = tmp_path / "session-cwd"
+    workspace.mkdir(parents=True)
+    note = workspace / "note.txt"
+    note.write_text("hello", encoding="utf-8")
+
+    clean, media = commands._parse_media_from_input("@note.txt", workspace=workspace)
+
+    assert clean == "请处理这些文件"
+    assert media == [str(note.resolve())]

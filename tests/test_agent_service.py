@@ -205,6 +205,55 @@ class TestAgentService:
         assert getattr(options, "resume", None) == "sdk-session-123"
 
     @pytest.mark.asyncio
+    async def test_build_sdk_options_uses_cli_session_cwd_override(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """CLI mode should use per-session cwd override from runtime registry."""
+        from xbot.platform.config.schema import Config
+
+        registry = RuntimeSessionRegistry()
+        session_key = "cli:cwd1"
+        cwd = tmp_path / "session-cwd"
+        cwd.mkdir(parents=True)
+        registry.set_session_cwd(session_key, str(cwd))
+
+        shared_resources["config"] = Config()
+        shared_resources["runtime_registry"] = registry
+        shared_resources["run_mode"] = "cli"
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        options = service._build_sdk_options(session_key=session_key)
+        assert Path(options.cwd) == cwd.resolve()
+
+    @pytest.mark.asyncio
+    async def test_build_sdk_options_ignores_session_cwd_outside_cli_mode(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """Non-CLI mode should continue using configured workspace cwd."""
+        from xbot.platform.config.schema import Config
+
+        registry = RuntimeSessionRegistry()
+        session_key = "gateway:cwd1"
+        registry.set_session_cwd(session_key, str(tmp_path / "session-cwd"))
+        shared_resources["config"] = Config()
+        shared_resources["runtime_registry"] = registry
+        shared_resources["run_mode"] = "gateway"
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        options = service._build_sdk_options(session_key=session_key)
+        assert Path(options.cwd) == Path(shared_resources["workspace"]).resolve()
+
+    @pytest.mark.asyncio
     async def test_reset_session_can_drop_sdk_context(
         self,
         config: AgentConfig,

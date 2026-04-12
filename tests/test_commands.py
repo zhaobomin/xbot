@@ -241,6 +241,7 @@ def test_agent_help_shows_workspace_and_config_options():
     stripped_output = _strip_ansi(result.stdout)
     assert "--workspace" in stripped_output
     assert "-w" in stripped_output
+    assert "--cwd" in stripped_output
     assert "--config" in stripped_output
     assert "-c" in stripped_output
 
@@ -291,6 +292,58 @@ def test_agent_single_message_initializes_service(monkeypatch, tmp_path: Path) -
     assert result.exit_code == 0
     assert fake_service.initialized is True
     assert "ok-from-agent" in _strip_ansi(result.stdout)
+
+
+def test_agent_single_message_sets_session_cwd(monkeypatch, tmp_path: Path) -> None:
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+
+    explicit_cwd = tmp_path / "session-cwd"
+    explicit_cwd.mkdir(parents=True)
+
+    class _Registry:
+        def __init__(self) -> None:
+            self.session_cwds: dict[str, str] = {}
+
+        def set_session_cwd(self, session_key: str, cwd: str | None) -> None:
+            if cwd is None:
+                self.session_cwds.pop(session_key, None)
+            else:
+                self.session_cwds[session_key] = cwd
+
+        def get_session_cwd(self, session_key: str) -> str | None:
+            return self.session_cwds.get(session_key)
+
+    registry = _Registry()
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._load_runtime_config", lambda _c, _w: config)
+    monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("xbot.platform.bus.queue.MessageBus", lambda: object())
+    monkeypatch.setattr("xbot.runtime.state.RuntimeSessionRegistry", lambda: registry)
+    monkeypatch.setattr("xbot.runtime.system.cron.service.CronService", lambda _path: object())
+
+    class _FakeService:
+        def __init__(self) -> None:
+            self.channels_config = None
+
+        async def initialize(self) -> None:
+            return None
+
+        async def process_direct(self, *args, **kwargs) -> str:
+            assert registry.get_session_cwd("cli:direct") == str(explicit_cwd.resolve())
+            return "ok-cwd"
+
+        async def close_mcp(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "xbot.interfaces.cli.commands._make_agent_service",
+        lambda **kwargs: _FakeService(),
+    )
+
+    result = runner.invoke(app, ["agent", "-m", "hi", "--cwd", str(explicit_cwd)])
+    assert result.exit_code == 0
+    assert "ok-cwd" in _strip_ansi(result.stdout)
 
 
 def test_agent_interactive_reports_agent_loop_failure(monkeypatch, tmp_path: Path) -> None:

@@ -175,7 +175,10 @@ def _parse_media_from_input(
 
     def _replace(m: _re.Match) -> str:
         raw_path = m.group(1) or m.group(2) or m.group(3)
-        p = Path(raw_path).expanduser().resolve()
+        candidate = Path(raw_path).expanduser()
+        if not candidate.is_absolute():
+            candidate = effective_workspace / candidate
+        p = candidate.resolve()
 
         if not p.is_file():
             # File does not exist – keep original text so user sees it
@@ -923,6 +926,7 @@ def agent(
     message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
     session_id: str = typer.Option("cli:direct", "--session", "-s", help="ConversationSession ID"),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    cwd: str | None = typer.Option(None, "--cwd", help="Execution working directory for this session"),
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
     markdown: bool = typer.Option(True, "--markdown/--no-markdown", help="Render assistant output as Markdown"),
     logs: bool = typer.Option(False, "--logs/--no-logs", help="Show xbot runtime logs during chat"),
@@ -1011,6 +1015,27 @@ def agent(
         cli_channel, cli_chat_id = session_id.split(":", 1)
     else:
         cli_channel, cli_chat_id = "cli", session_id
+
+    cwd_source = Path(cwd).expanduser() if cwd else Path.cwd()
+    try:
+        session_cwd = cwd_source.resolve(strict=True)
+    except FileNotFoundError:
+        console.print(f"[red]Error: cwd does not exist: {cwd_source}[/red]")
+        raise typer.Exit(1)
+    except OSError as e:
+        console.print(f"[red]Error: invalid cwd '{cwd_source}': {e}[/red]")
+        raise typer.Exit(1)
+
+    if not session_cwd.is_dir():
+        console.print(f"[red]Error: cwd is not a directory: {session_cwd}[/red]")
+        raise typer.Exit(1)
+
+    if hasattr(runtime_registry, "set_session_cwd"):
+        try:
+            runtime_registry.set_session_cwd(session_id, str(session_cwd))
+        except Exception as e:
+            console.print(f"[red]Error: failed to bind session cwd: {e}[/red]")
+            raise typer.Exit(1)
 
     if message:
         # Single message mode — direct call, no bus needed
@@ -1186,7 +1211,7 @@ def agent(
                             pending_runtime_error = None
                             continue
 
-                        clean_text, media_paths = _parse_media_from_input(user_input, workspace=config.workspace_path)
+                        clean_text, media_paths = _parse_media_from_input(user_input, workspace=session_cwd)
                         if media_paths:
                             console.print(f"[dim]Attached {len(media_paths)} file(s)[/dim]")
 

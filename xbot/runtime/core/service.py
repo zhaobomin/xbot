@@ -1026,9 +1026,20 @@ class AgentService:
         # Build hooks (compact notification, etc.)
         hooks = self._build_hooks(sdk_config)
 
-        # Expand workspace path (resolve ~ to actual home directory)
+        # Default execution cwd is workspace; CLI can override per session.
         workspace_raw = self._shared_resources.get("workspace", ".")
         workspace_expanded = str(Path(workspace_raw).expanduser().resolve())
+        execution_cwd = workspace_expanded
+        run_mode = str(self._shared_resources.get("run_mode", "")).lower()
+        if run_mode == "cli" and session_key:
+            runtime_registry = self._shared_resources.get("runtime_registry")
+            if runtime_registry and hasattr(runtime_registry, "get_session_cwd"):
+                try:
+                    session_cwd = runtime_registry.get_session_cwd(session_key)
+                    if isinstance(session_cwd, str) and session_cwd.strip():
+                        execution_cwd = str(Path(session_cwd).expanduser().resolve())
+                except Exception as e:
+                    logger.debug("Failed to resolve session cwd override for %s: %s", session_key, e)
 
         # Read SDK-specific parameters
         max_turns = getattr(sdk_config, "max_turns", 40) if sdk_config else 40
@@ -1061,7 +1072,7 @@ class AgentService:
                     logger.debug("Failed to resolve sdk_session_id for %s: %s", session_key, e)
 
         options = ClaudeAgentOptions(
-            cwd=workspace_expanded,
+            cwd=execution_cwd,
             model=self._config.model,
             system_prompt=system_prompt,
             resume=resume_session,
@@ -1079,7 +1090,7 @@ class AgentService:
             stderr=lambda line: logger.warning(f"[CLI stderr] {line}"),
         )
         logger.info(
-            f"[AgentService] SDK options: model={options.model}, cwd={workspace_expanded}, "
+            f"[AgentService] SDK options: model={options.model}, cwd={execution_cwd}, "
             f"max_turns={max_turns}, permission_mode={permission_mode}, "
             f"env keys={list(options.env.keys()) if options.env else 'None'}, "
             f"add_dirs={len(add_dirs)}, plugins={len(plugins)}, "

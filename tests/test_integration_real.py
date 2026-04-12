@@ -31,6 +31,7 @@ from xbot.runtime.core.protocol import (
 )
 from xbot.runtime.core.service import AgentService
 from xbot.runtime.core.types import AgentConfig
+from xbot.runtime.state import RuntimeSessionRegistry
 from xbot.runtime.state.machine import SessionPhase, SessionStateMachine
 
 # ---------------------------------------------------------------------------
@@ -217,6 +218,29 @@ class TestSDKOptionsBuilder:
         # Should have sensible defaults
         assert options.max_turns == 40
         assert options.permission_mode == "acceptEdits"
+
+    @pytest.mark.asyncio
+    async def test_cli_session_cwd_override_from_runtime_registry(
+        self, service: AgentService, agent_config, tmp_path: Path
+    ) -> None:
+        registry = RuntimeSessionRegistry()
+        session_key = "cli:test-cwd"
+        workspace = tmp_path / "workspace"
+        workspace.mkdir(parents=True)
+        session_cwd = tmp_path / "session-cwd"
+        session_cwd.mkdir(parents=True)
+        registry.set_session_cwd(session_key, str(session_cwd))
+
+        resources = {
+            "workspace": str(workspace),
+            "config": _make_config_mock(claude_sdk=None),
+            "runtime_registry": registry,
+            "run_mode": "cli",
+        }
+        await service.initialize(agent_config, resources)
+
+        options = service._build_sdk_options(session_key=session_key)
+        assert Path(options.cwd) == session_cwd.resolve()
 
 
 # ---------------------------------------------------------------------------

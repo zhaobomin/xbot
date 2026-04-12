@@ -271,6 +271,7 @@ class RuntimeSessionRegistry:
             "exists": True,
             "phase": state.phase.value,
             "sdk_session_id": state.sdk_session_id,
+            "session_cwd": state.session_cwd,
             "channel": state.channel,
             "chat_id": state.chat_id,
             "has_client": state.client is not None,
@@ -475,6 +476,16 @@ class RuntimeSessionRegistry:
         """Set model for session."""
         state = self.get_or_create(session_key)
         state.model = model
+
+    def get_session_cwd(self, session_key: str) -> str | None:
+        """Get CLI per-session execution cwd override."""
+        state = self.get(session_key)
+        return state.session_cwd if state else None
+
+    def set_session_cwd(self, session_key: str, cwd: str | None) -> None:
+        """Set CLI per-session execution cwd override."""
+        state = self.get_or_create(session_key)
+        state.session_cwd = cwd
 
     def get_commands(self, session_key: str) -> list[str]:
         """Get commands for session."""

@@ -172,6 +172,7 @@ class SessionState:
 
     # Backend metadata (TODO: Remove in next major version - SDK manages these internally)
     model: str | None = None  # Model name for this session
+    session_cwd: str | None = None  # CLI-only per-session execution directory override
     commands: list[str] = field(default_factory=list, compare=False)  # Commands for this session
     sdk_skills: list[str] = field(default_factory=list, compare=False)  # SDK init skills snapshot
     sdk_tools: list[str] = field(default_factory=list, compare=False)  # SDK init tools snapshot
