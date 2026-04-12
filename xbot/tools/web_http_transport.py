@@ -94,6 +94,9 @@ class PinnedAsyncHTTPTransport(httpx.AsyncBaseTransport):
             )
 
         if proxy_url.scheme in ("http", "https"):
+            # proxy_ssl_context only applies to HTTPS proxies, not HTTP proxies
+            proxy_ssl_ctx = ssl_context if proxy_url.scheme == "https" else None
+
             self._pool = httpcore.AsyncHTTPProxy(
                 proxy_url=httpcore.URL(
                     scheme=proxy_url.raw_scheme,
@@ -103,7 +106,7 @@ class PinnedAsyncHTTPTransport(httpx.AsyncBaseTransport):
                 ),
                 proxy_auth=auth,
                 proxy_headers=None,
-                proxy_ssl_context=ssl_context,
+                proxy_ssl_context=proxy_ssl_ctx,
                 ssl_context=ssl_context,
                 max_connections=max_connections,
                 max_keepalive_connections=max_keepalive_connections,
