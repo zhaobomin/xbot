@@ -110,3 +110,21 @@ async def test_print_interactive_progress_line_pauses_spinner_before_printing():
             await commands._print_interactive_progress_line("tool running", thinking)
 
     assert order == ["start", "stop", "print", "start", "stop"]
+
+
+def test_sanitize_terminal_text_strips_ansi_cpr_response():
+    """CPR/ANSI control sequences should never leak to user-visible output."""
+    raw = "天气汇总\x1b[43;1R\nOK\x1b[2K"
+    assert commands._sanitize_terminal_text(raw) == "天气汇总\nOK"
+
+
+def test_sanitize_terminal_text_strips_caret_encoded_cpr_response():
+    """Caret-encoded CPR remnants should also be removed."""
+    raw = "配置已更新 ^[[24;1R Usage: input 1 tokens"
+    assert commands._sanitize_terminal_text(raw) == "配置已更新  Usage: input 1 tokens"
+
+
+def test_sanitize_terminal_text_strips_literal_escaped_csi():
+    """Literal '\\x1b[...m' text fragments should be removed when leaked."""
+    raw = r"Done \x1b[31mERROR\x1b[0m"
+    assert commands._sanitize_terminal_text(raw) == "Done ERROR"

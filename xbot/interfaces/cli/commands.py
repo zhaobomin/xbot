@@ -62,6 +62,25 @@ app = typer.Typer(
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
+_ANSI_ESCAPE_RE = _re.compile(
+    r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])"
+)
+_ANSI_OSC_RE = _re.compile(r"\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)")
+_ANSI_DCS_PM_APC_RE = _re.compile(r"\x1B[P^_].*?\x1B\\", _re.DOTALL)
+_CARET_CSI_RE = _re.compile(r"\^\[\[[0-9;?]*[ -/]*[@-~]")
+_LITERAL_ESC_CSI_RE = _re.compile(r"\\x1b\[[0-9;?]*[ -/]*[@-~]", _re.IGNORECASE)
+_CONTROL_CHAR_RE = _re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
+
+
+def _sanitize_terminal_text(text: str) -> str:
+    """Strip terminal control sequences that may leak into CLI output."""
+    cleaned = text or ""
+    cleaned = _ANSI_OSC_RE.sub("", cleaned)
+    cleaned = _ANSI_DCS_PM_APC_RE.sub("", cleaned)
+    cleaned = _ANSI_ESCAPE_RE.sub("", cleaned)
+    cleaned = _CARET_CSI_RE.sub("", cleaned)
+    cleaned = _LITERAL_ESC_CSI_RE.sub("", cleaned)
+    return _CONTROL_CHAR_RE.sub("", cleaned)
 
 
 def _resolve_heartbeat_target(
@@ -298,7 +317,7 @@ def _render_interactive_ansi(render_fn) -> str:
 def _print_agent_response(response: str, render_markdown: bool) -> None:
     """Render assistant response with consistent terminal styling."""
     console = _make_console()
-    content = response or ""
+    content = _sanitize_terminal_text(response or "")
     body = Markdown(content) if render_markdown else Text(content)
     console.print()
     console.print(f"[cyan]{__logo__} xbot[/cyan]")
@@ -308,9 +327,11 @@ def _print_agent_response(response: str, render_markdown: bool) -> None:
 
 async def _print_interactive_line(text: str) -> None:
     """Print async interactive updates with prompt_toolkit-safe Rich styling."""
+    safe_text = _sanitize_terminal_text(text)
+
     def _write() -> None:
         ansi = _render_interactive_ansi(
-            lambda c: c.print(f"  [dim]↳ {text}[/dim]")
+            lambda c: c.print(f"  [dim]↳ {safe_text}[/dim]")
         )
         print_formatted_text(ANSI(ansi), end="")
 
@@ -319,8 +340,9 @@ async def _print_interactive_line(text: str) -> None:
 
 async def _print_interactive_response(response: str, render_markdown: bool) -> None:
     """Print async interactive replies with prompt_toolkit-safe Rich styling."""
+    content = _sanitize_terminal_text(response or "")
+
     def _write() -> None:
-        content = response or ""
         ansi = _render_interactive_ansi(
             lambda c: (
                 c.print(),
@@ -369,8 +391,9 @@ class _ThinkingSpinner:
 
 def _print_cli_progress_line(text: str, thinking: _ThinkingSpinner | None) -> None:
     """Print a CLI progress line, pausing the spinner if needed."""
+    safe_text = _sanitize_terminal_text(text)
     with thinking.pause() if thinking else nullcontext():
-        console.print(f"  [dim]↳ {text}[/dim]")
+        console.print(f"  [dim]↳ {safe_text}[/dim]")
 
 
 async def _print_interactive_progress_line(text: str, thinking: _ThinkingSpinner | None) -> None:

@@ -415,6 +415,17 @@ class TestAgentService:
         assert "todos=[1 items]" in hint
         assert "append=true" in hint
 
+    def test_format_tool_hint_includes_description_when_args_absent(self) -> None:
+        hint = AgentService._format_tool_hint([{
+            "name": "Bash",
+            "kind": "tool",
+            "input": {},
+            "description": "Running Get current weather in Beijing",
+        }])
+
+        assert hint.startswith("Tool: Bash (")
+        assert "Get current weather in Beijing" in hint
+
 
 class TestClientPoolLifecycle:
     """Tests for ClientPool cleanup behavior."""
@@ -1672,11 +1683,13 @@ class TestRunDispatch:
         progress.description = "Working"
         progress.task_id = "t1"
         progress.last_tool_name = "bash"
+        progress.data = {"last_tool_input": {"command": "curl wttr.in/beijing"}}
         r2 = service._convert_event(progress)
         assert r2 is not None
         assert r2.event_type == "task"
         assert r2.event_data["status"] == "progress"
         assert r2.tool_calls is not None
+        assert r2.tool_calls[0]["input"] == {"command": "curl wttr.in/beijing"}
 
         note = TaskNotificationMessage()
         note.status = "completed"

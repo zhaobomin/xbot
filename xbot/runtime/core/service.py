@@ -818,8 +818,12 @@ class AgentService:
             name = str(tc.get("name", "tool"))
             kind = str(tc.get("kind", "tool"))
             prefix = f"{_kind_label(kind)}: "
+            description = str(tc.get("description") or "").strip()
             rendered_args = _render_args(args)
             if not rendered_args:
+                if description:
+                    detail = description if len(description) <= 120 else f"{description[:117]}..."
+                    return f"{prefix}{name} ({detail})"
                 return prefix + name
             body = f"{name}({rendered_args})"
             if len(body) > 200:
@@ -1544,11 +1548,28 @@ class AgentService:
         """Convert TaskProgressMessage to AgentResponse."""
         tool_calls = None
         last_tool_name = getattr(message, "last_tool_name", None)
+        description = str(getattr(message, "description", "") or "").strip()
         if last_tool_name:
+            input_payload: Any = {}
+            raw_data = getattr(message, "data", None)
+            if isinstance(raw_data, dict):
+                for key in (
+                    "last_tool_input",
+                    "tool_input",
+                    "input",
+                    "last_tool_args",
+                    "tool_args",
+                    "arguments",
+                ):
+                    candidate = raw_data.get(key)
+                    if candidate is not None:
+                        input_payload = candidate
+                        break
             tool_calls = [{
                 "name": last_tool_name,
-                "input": {},
+                "input": input_payload,
                 "kind": self._classify_tool_name(last_tool_name),
+                "description": description,
             }]
         return AgentResponse(
             content="",
