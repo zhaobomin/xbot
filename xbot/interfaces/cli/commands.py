@@ -1016,19 +1016,31 @@ def agent(
                 for item in ready:
                     _print_cli_progress_line(item.text, _thinking)
 
-            with _thinking:
-                response = await agent_loop.process_direct(
-                    content=message,
-                    session_key=session_id,
-                    channel=cli_channel,
-                    chat_id=cli_chat_id,
-                    on_progress=_coalesced_cli_progress,
-                )
-                for item in progress_coalescer.flush_all():
-                    _print_cli_progress_line(item.text, _thinking)
-            _thinking = None
-            _print_agent_response(response, render_markdown=markdown)
-            await agent_loop.close_mcp()
+            try:
+                await agent_loop.initialize()
+            except Exception as e:
+                console.print(f"[red]Error: failed to initialize agent: {e}[/red]")
+                await agent_loop.close_mcp()
+                return
+
+            try:
+                with _thinking:
+                    response = await agent_loop.process_direct(
+                        content=message,
+                        session_key=session_id,
+                        channel=cli_channel,
+                        chat_id=cli_chat_id,
+                        on_progress=_coalesced_cli_progress,
+                    )
+                    for item in progress_coalescer.flush_all():
+                        _print_cli_progress_line(item.text, _thinking)
+                _thinking = None
+                _print_agent_response(response, render_markdown=markdown)
+            except Exception as e:
+                console.print(f"[red]Error: failed to process message: {e}[/red]")
+            finally:
+                _thinking = None
+                await agent_loop.close_mcp()
 
         asyncio.run(run_once())
     else:
@@ -1054,19 +1066,36 @@ def agent(
             signal.signal(signal.SIGPIPE, signal.SIG_IGN)
 
         async def run_interactive():
-            task_registry = ServiceTaskRegistry()
+            turn_done = asyncio.Event()
+            turn_done.set()
+            turn_response: list[str] = []
+            progress_coalescer = ProgressCoalescer()
+            pending_runtime_error: str | None = None
+
+            def _report_task_error(owner: str, task_name: str, exc: BaseException) -> None:
+                nonlocal pending_runtime_error
+                if owner != "interactive-cli":
+                    return
+                pending_runtime_error = f"{task_name} failed: {exc}"
+                turn_done.set()
+
+            task_registry = ServiceTaskRegistry(error_reporter=_report_task_error)
             # Set spinner reference on permission handler for this session
             if isinstance(_permission_handler, InteractivePermissionHandler):
                 _thinking_ref = _ThinkingSpinner(enabled=not logs)
                 _permission_handler.set_thinking_spinner(_thinking_ref)
 
+            try:
+                await agent_loop.initialize()
+            except Exception as e:
+                await _print_interactive_line(f"Error: failed to initialize agent: {e}")
+                await agent_loop.close_mcp()
+                return
+
             task_registry.spawn("interactive-cli", agent_loop.run(), name="agent-loop")
-            turn_done = asyncio.Event()
-            turn_done.set()
-            turn_response: list[str] = []
-            progress_coalescer = ProgressCoalescer()
 
             async def _consume_outbound():
+                nonlocal pending_runtime_error
                 while True:
                     try:
                         msg = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
@@ -1101,6 +1130,10 @@ def agent(
                         continue
                     except asyncio.CancelledError:
                         break
+                    except Exception as e:
+                        pending_runtime_error = f"outbound-consumer failed: {e}"
+                        turn_done.set()
+                        break
 
             task_registry.spawn(
                 "interactive-cli",
@@ -1125,6 +1158,11 @@ def agent(
                         turn_done.clear()
                         turn_response.clear()
 
+                        if pending_runtime_error:
+                            await _print_interactive_line(f"Error: {pending_runtime_error}")
+                            pending_runtime_error = None
+                            continue
+
                         clean_text, media_paths = _parse_media_from_input(user_input, workspace=config.workspace_path)
                         if media_paths:
                             console.print(f"[dim]Attached {len(media_paths)} file(s)[/dim]")
@@ -1145,6 +1183,11 @@ def agent(
                         with _thinking:
                             await turn_done.wait()
                         _thinking = None
+
+                        if pending_runtime_error:
+                            await _print_interactive_line(f"Error: {pending_runtime_error}")
+                            pending_runtime_error = None
+                            continue
 
                         if turn_response:
                             _print_agent_response(turn_response[0], render_markdown=markdown)

@@ -11,7 +11,11 @@
       "WebSearch",
       "Bash(python test_sdk_capabilities.py)",
       "Bash(wc -l xbot/agent/backends/*.py)",
-      "Bash(wc -l xbot/agent/*.py)"
+      "Bash(wc -l xbot/agent/*.py)",
+      "Bash(python3 -c \"import sys; print\\(sys.version\\)\")",
+      "Bash(python3 -c ':*)",
+      "Bash(git fetch:*)",
+      "Bash(xbot --version)"
     ]
   },
   "outputStyle": "Explanatory"

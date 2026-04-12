@@ -1,6 +1,7 @@
 import json
 import re
 import shutil
+import asyncio
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -253,6 +254,162 @@ def test_agent_help_shows_workspace_and_config_options():
 
 
 
+
+
+def test_agent_single_message_initializes_service(monkeypatch, tmp_path: Path) -> None:
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._load_runtime_config", lambda _c, _w: config)
+    monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("xbot.platform.bus.queue.MessageBus", lambda: object())
+    monkeypatch.setattr("xbot.runtime.state.RuntimeSessionRegistry", lambda: object())
+    monkeypatch.setattr("xbot.runtime.system.cron.service.CronService", lambda _path: object())
+
+    class _FakeService:
+        def __init__(self) -> None:
+            self.initialized = False
+            self.channels_config = None
+
+        async def initialize(self) -> None:
+            self.initialized = True
+
+        async def process_direct(self, *args, **kwargs) -> str:
+            assert self.initialized is True
+            return "ok-from-agent"
+
+        async def close_mcp(self) -> None:
+            return None
+
+    fake_service = _FakeService()
+    monkeypatch.setattr(
+        "xbot.interfaces.cli.commands._make_agent_service",
+        lambda **kwargs: fake_service,
+    )
+
+    result = runner.invoke(app, ["agent", "-m", "hi"])
+    assert result.exit_code == 0
+    assert fake_service.initialized is True
+    assert "ok-from-agent" in _strip_ansi(result.stdout)
+
+
+def test_agent_interactive_reports_agent_loop_failure(monkeypatch, tmp_path: Path) -> None:
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    class _FakeBus:
+        def __init__(self) -> None:
+            self.inbound = []
+
+        async def publish_inbound(self, msg) -> None:
+            self.inbound.append(msg)
+
+        async def consume_outbound(self):
+            await asyncio.sleep(3600)
+
+    fake_bus = _FakeBus()
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._load_runtime_config", lambda _c, _w: config)
+    monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("xbot.platform.bus.queue.MessageBus", lambda: fake_bus)
+    monkeypatch.setattr("xbot.runtime.state.RuntimeSessionRegistry", lambda: object())
+    monkeypatch.setattr("xbot.runtime.system.cron.service.CronService", lambda _path: object())
+    monkeypatch.setattr("xbot.interfaces.cli.commands._init_prompt_session", lambda: None)
+    monkeypatch.setattr("xbot.interfaces.cli.commands._flush_pending_tty_input", lambda: None)
+    monkeypatch.setattr("xbot.interfaces.cli.commands._restore_terminal", lambda: None)
+
+    inputs = iter(["hi", "exit"])
+
+    async def _fake_read_input() -> str:
+        return next(inputs)
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._read_interactive_input_async", _fake_read_input)
+
+    class _FailingService:
+        channels_config = None
+
+        async def initialize(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            raise RuntimeError("boom")
+
+        def stop(self) -> None:
+            return None
+
+        async def close_mcp(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "xbot.interfaces.cli.commands._make_agent_service",
+        lambda **kwargs: _FailingService(),
+    )
+
+    result = runner.invoke(app, ["agent"])
+    assert result.exit_code == 0
+    output = _strip_ansi(result.stdout)
+    assert "Error: agent-loop failed: boom" in output
+
+
+def test_agent_interactive_reports_outbound_consumer_failure(monkeypatch, tmp_path: Path) -> None:
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    seen_lines: list[str] = []
+
+    class _BrokenBus:
+        async def publish_inbound(self, msg) -> None:
+            return None
+
+        async def consume_outbound(self):
+            raise RuntimeError("queue broken")
+
+    fake_bus = _BrokenBus()
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._load_runtime_config", lambda _c, _w: config)
+    monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("xbot.platform.bus.queue.MessageBus", lambda: fake_bus)
+    monkeypatch.setattr("xbot.runtime.state.RuntimeSessionRegistry", lambda: object())
+    monkeypatch.setattr("xbot.runtime.system.cron.service.CronService", lambda _path: object())
+    monkeypatch.setattr("xbot.interfaces.cli.commands._init_prompt_session", lambda: None)
+    monkeypatch.setattr("xbot.interfaces.cli.commands._flush_pending_tty_input", lambda: None)
+    monkeypatch.setattr("xbot.interfaces.cli.commands._restore_terminal", lambda: None)
+
+    async def _capture_line(text: str) -> None:
+        seen_lines.append(text)
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._print_interactive_line", _capture_line)
+
+    inputs = iter(["hi", "exit"])
+
+    async def _fake_read_input() -> str:
+        return next(inputs)
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._read_interactive_input_async", _fake_read_input)
+
+    class _AliveService:
+        channels_config = None
+
+        async def initialize(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            while True:
+                await asyncio.sleep(3600)
+
+        def stop(self) -> None:
+            return None
+
+        async def close_mcp(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "xbot.interfaces.cli.commands._make_agent_service",
+        lambda **kwargs: _AliveService(),
+    )
+
+    result = runner.invoke(app, ["agent"])
+    assert result.exit_code == 0
+    assert any("Error: outbound-consumer failed: queue broken" in line for line in seen_lines)
 
 
 def test_gateway_uses_workspace_from_config_by_default(monkeypatch, tmp_path: Path) -> None:
