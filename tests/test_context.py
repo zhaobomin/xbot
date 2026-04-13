@@ -49,7 +49,18 @@ class TestContextBuilder:
         """Test getting identity section."""
         identity = builder._get_identity()
         assert "xbot" in identity
-        assert "Workspace" in identity
+        assert "Execution CWD" in identity
+        assert "Workspace Assets Dir" in identity
+
+    def test_get_identity_with_different_execution_cwd(self, workspace: Path, tmp_path: Path) -> None:
+        """Identity should distinguish execution cwd and workspace assets directory."""
+        execution_cwd = tmp_path / "project"
+        execution_cwd.mkdir(parents=True)
+        builder = ContextBuilder(workspace, execution_cwd=execution_cwd, use_reme=False)
+
+        identity = builder._get_identity()
+        assert f"Execution CWD: {execution_cwd.resolve()}" in identity
+        assert f"Workspace Assets Dir: {workspace.resolve()}" in identity
 
     def test_load_bootstrap_files_empty(self, builder: ContextBuilder) -> None:
         """Test loading bootstrap files when none exist."""

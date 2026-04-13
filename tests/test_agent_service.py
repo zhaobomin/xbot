@@ -305,6 +305,33 @@ class TestAgentService:
         assert Path(options.cwd) == Path(shared_resources["workspace"]).resolve()
 
     @pytest.mark.asyncio
+    async def test_build_sdk_options_legacy_session_cwd_is_still_honored(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """Legacy session_cwd field should still work during migration."""
+        from xbot.platform.config.schema import Config
+
+        registry = RuntimeSessionRegistry()
+        session_key = "cli:legacy-cwd"
+        legacy_cwd = tmp_path / "legacy-cwd"
+        legacy_cwd.mkdir(parents=True)
+        state = registry.get_or_create(session_key)
+        state.execution_cwd = None
+        state.session_cwd = str(legacy_cwd)
+        shared_resources["config"] = Config()
+        shared_resources["runtime_registry"] = registry
+        shared_resources["run_mode"] = "cli"
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        options = service._build_sdk_options(session_key=session_key)
+        assert Path(options.cwd) == legacy_cwd.resolve()
+
+    @pytest.mark.asyncio
     async def test_process_direct_tool_hint_includes_cli_execution_cwd(
         self,
         config: AgentConfig,

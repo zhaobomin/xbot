@@ -346,6 +346,106 @@ def test_agent_single_message_sets_session_cwd(monkeypatch, tmp_path: Path) -> N
     assert "ok-cwd" in _strip_ansi(result.stdout)
 
 
+def test_agent_single_message_tool_hint_shows_session_execution_cwd(
+    monkeypatch, tmp_path: Path
+) -> None:
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+
+    explicit_cwd = tmp_path / "session-cwd"
+    explicit_cwd.mkdir(parents=True)
+
+    class _Registry:
+        def __init__(self) -> None:
+            self.execution_cwds: dict[str, str] = {}
+
+        def set_execution_cwd(self, session_key: str, cwd: str | None) -> None:
+            if cwd is None:
+                self.execution_cwds.pop(session_key, None)
+            else:
+                self.execution_cwds[session_key] = cwd
+
+        def get_execution_cwd(self, session_key: str) -> str | None:
+            return self.execution_cwds.get(session_key)
+
+    registry = _Registry()
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._load_runtime_config", lambda _c, _w: config)
+    monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("xbot.platform.bus.queue.MessageBus", lambda: object())
+    monkeypatch.setattr("xbot.runtime.state.RuntimeSessionRegistry", lambda: registry)
+    monkeypatch.setattr("xbot.runtime.system.cron.service.CronService", lambda _path: object())
+
+    class _FakeService:
+        def __init__(self) -> None:
+            self.channels_config = None
+
+        async def initialize(self) -> None:
+            return None
+
+        async def process_direct(self, *args, **kwargs) -> str:
+            on_progress = kwargs["on_progress"]
+            session_key = kwargs["session_key"]
+            cwd = registry.get_execution_cwd(session_key)
+            await on_progress(
+                f'Tool: Bash(cwd="{cwd}", command="pwd")',
+                tool_hint=True,
+                event_type="tool_call",
+                event_data={"tool_calls": [{"name": "Bash"}]},
+            )
+            return "ok"
+
+        async def close_mcp(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "xbot.interfaces.cli.commands._make_agent_service",
+        lambda **kwargs: _FakeService(),
+    )
+
+    result = runner.invoke(app, ["agent", "-m", "hi", "--cwd", str(explicit_cwd)])
+    assert result.exit_code == 0
+    output = _strip_ansi(result.stdout)
+    compact = output.replace("\n", "")
+    assert "Tool:" in compact
+    assert "Bash(cwd=" in compact
+    assert str(explicit_cwd.resolve()) in compact
+    assert 'command="pwd"' in compact
+
+
+def test_gateway_passes_workspace_as_execution_cwd(monkeypatch, tmp_path: Path) -> None:
+    config_file = tmp_path / "instance" / "config.json"
+    config_file.parent.mkdir(parents=True)
+    config_file.write_text("{}")
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "configured-workspace")
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        "xbot.platform.config.loader.set_config_path",
+        lambda path: captured.__setitem__("config_path", path),
+    )
+    monkeypatch.setattr("xbot.platform.config.loader.load_config", lambda _path=None: config)
+    monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("xbot.platform.bus.queue.MessageBus", lambda: object())
+    monkeypatch.setattr("xbot.runtime.session.conversation_store.ConversationStore", lambda _w: object())
+    monkeypatch.setattr("xbot.runtime.state.RuntimeSessionRegistry", lambda: object())
+    monkeypatch.setattr("xbot.runtime.system.monitoring.health.HealthCheckService", lambda **_k: object())
+    monkeypatch.setattr("xbot.runtime.system.cron.service.CronService", lambda _p: object())
+    monkeypatch.setattr("xbot.interaction.permission.PermissionRequestHandler", lambda **_k: object())
+
+    def _capture_make_agent_service(**kwargs):
+        captured["execution_cwd"] = kwargs.get("execution_cwd")
+        raise _StopGateway("captured")
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._make_agent_service", _capture_make_agent_service)
+
+    result = runner.invoke(app, ["gateway", "--config", str(config_file)])
+    assert isinstance(result.exception, _StopGateway)
+    assert captured["execution_cwd"] == config.workspace_path
+
+
 def test_agent_interactive_reports_agent_loop_failure(monkeypatch, tmp_path: Path) -> None:
     config = Config()
     config.agents.defaults.workspace = str(tmp_path)

@@ -172,7 +172,9 @@ class SessionState:
 
     # Backend metadata (TODO: Remove in next major version - SDK manages these internally)
     model: str | None = None  # Model name for this session
-    session_cwd: str | None = None  # CLI-only per-session execution directory override
+    execution_cwd: str | None = None  # Per-session execution cwd for SDK tools/commands
+    workspace_dir: str | None = None  # Session workspace asset directory (memory/bootstrap/skills)
+    session_cwd: str | None = None  # Backward-compat alias; migrate to execution_cwd
     commands: list[str] = field(default_factory=list, compare=False)  # Commands for this session
     sdk_skills: list[str] = field(default_factory=list, compare=False)  # SDK init skills snapshot
     sdk_tools: list[str] = field(default_factory=list, compare=False)  # SDK init tools snapshot

@@ -197,6 +197,9 @@ class AgentService:
         # Initialize ReMe main chain: ContextBuilder + MemoryConsolidator
         runtime_config = self._shared_resources.get("config")
         workspace_path = Path(self._shared_resources.get("workspace", ".")).expanduser().resolve()
+        execution_cwd_path = Path(
+            self._shared_resources.get("execution_cwd", workspace_path)
+        ).expanduser().resolve()
         sessions = self._shared_resources.get("conversation_store")
 
         if runtime_config:
@@ -214,6 +217,7 @@ class AgentService:
 
             self._context_builder = ContextBuilder(
                 workspace=workspace_path,
+                execution_cwd=execution_cwd_path,
                 use_reme=use_reme,
                 llm_config=llm_config,
                 enable_vector_search=enable_vector_search,
@@ -1105,7 +1109,7 @@ class AgentService:
     def _resolve_execution_cwd(self, session_key: str | None) -> str:
         """Resolve effective SDK execution cwd.
 
-        CLI mode: session_cwd override (if present) > configured workspace.
+        CLI mode: execution_cwd override (if present) > configured workspace.
         Non-CLI modes: always configured workspace.
         """
         workspace_raw = self._shared_resources.get("workspace", ".")
@@ -1115,9 +1119,13 @@ class AgentService:
             return workspace_expanded
 
         runtime_registry = self._shared_resources.get("runtime_registry")
-        if runtime_registry and hasattr(runtime_registry, "get_session_cwd"):
+        if runtime_registry:
             try:
-                session_cwd = runtime_registry.get_session_cwd(session_key)
+                session_cwd = None
+                if hasattr(runtime_registry, "get_execution_cwd"):
+                    session_cwd = runtime_registry.get_execution_cwd(session_key)
+                elif hasattr(runtime_registry, "get_session_cwd"):
+                    session_cwd = runtime_registry.get_session_cwd(session_key)
                 if isinstance(session_cwd, str) and session_cwd.strip():
                     return str(Path(session_cwd).expanduser().resolve())
             except Exception as e:

@@ -26,6 +26,7 @@ class ContextBuilder:
     def __init__(
         self,
         workspace: Path,
+        execution_cwd: Path | None = None,
         use_reme: bool = True,
         llm_config: dict[str, Any] | None = None,
         embedding_config: dict[str, Any] | None = None,
@@ -36,6 +37,8 @@ class ContextBuilder:
 
         Args:
             workspace: Workspace directory
+            execution_cwd: Runtime execution cwd for command/tool operations.
+                If omitted, defaults to workspace.
             use_reme: Use ReMe memory backend if available
             llm_config: LLM configuration for memory summarization
             embedding_config: Embedding configuration for memory vectorization
@@ -45,6 +48,7 @@ class ContextBuilder:
                 keeping identity/memory sections intact.
         """
         self.workspace = workspace
+        self.execution_cwd = execution_cwd or workspace
         self.commands = CommandsLoader(workspace)
         self._load_bootstrap_files_enabled = load_bootstrap_files
 
@@ -100,6 +104,7 @@ class ContextBuilder:
     def _get_identity(self) -> str:
         """Get the core identity section."""
         workspace_path = str(self.workspace.expanduser().resolve())
+        execution_cwd_path = str(self.execution_cwd.expanduser().resolve())
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
 
@@ -123,8 +128,9 @@ You are xbot, a helpful AI assistant.
 ## Runtime
 {runtime}
 
-## Workspace
-Your workspace is at: {workspace_path}
+## Paths
+- Execution CWD: {execution_cwd_path}
+- Workspace Assets Dir: {workspace_path}
 - Long-term memory: {workspace_path}/memory/MEMORY.md (write important facts here)
 - History log: {workspace_path}/memory/HISTORY.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
 - Custom skills: {workspace_path}/.claude/skills/{{skill-name}}/SKILL.md

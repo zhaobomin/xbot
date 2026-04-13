@@ -271,6 +271,8 @@ class RuntimeSessionRegistry:
             "exists": True,
             "phase": state.phase.value,
             "sdk_session_id": state.sdk_session_id,
+            "execution_cwd": state.execution_cwd,
+            "workspace_dir": state.workspace_dir,
             "session_cwd": state.session_cwd,
             "channel": state.channel,
             "chat_id": state.chat_id,
@@ -477,15 +479,40 @@ class RuntimeSessionRegistry:
         state = self.get_or_create(session_key)
         state.model = model
 
-    def get_session_cwd(self, session_key: str) -> str | None:
-        """Get CLI per-session execution cwd override."""
+    def get_execution_cwd(self, session_key: str) -> str | None:
+        """Get session execution cwd override.
+
+        Backward compatibility: falls back to legacy session_cwd when needed.
+        """
         state = self.get(session_key)
-        return state.session_cwd if state else None
+        if not state:
+            return None
+        return state.execution_cwd or state.session_cwd
+
+    def set_execution_cwd(self, session_key: str, cwd: str | None) -> None:
+        """Set session execution cwd override."""
+        state = self.get_or_create(session_key)
+        state.execution_cwd = cwd
+        # Keep legacy field synchronized during migration window.
+        state.session_cwd = cwd
+
+    def get_workspace_dir(self, session_key: str) -> str | None:
+        """Get session workspace asset directory."""
+        state = self.get(session_key)
+        return state.workspace_dir if state else None
+
+    def set_workspace_dir(self, session_key: str, workspace_dir: str | None) -> None:
+        """Set session workspace asset directory."""
+        state = self.get_or_create(session_key)
+        state.workspace_dir = workspace_dir
+
+    def get_session_cwd(self, session_key: str) -> str | None:
+        """Backward-compatible alias for get_execution_cwd()."""
+        return self.get_execution_cwd(session_key)
 
     def set_session_cwd(self, session_key: str, cwd: str | None) -> None:
-        """Set CLI per-session execution cwd override."""
-        state = self.get_or_create(session_key)
-        state.session_cwd = cwd
+        """Backward-compatible alias for set_execution_cwd()."""
+        self.set_execution_cwd(session_key, cwd)
 
     def get_commands(self, session_key: str) -> list[str]:
         """Get commands for session."""

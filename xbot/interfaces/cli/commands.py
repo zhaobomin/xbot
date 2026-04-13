@@ -631,6 +631,7 @@ def _make_agent_service(
     config: Config,
     bus,
     workspace: Path,
+    execution_cwd: Path | None,
     cron_service,
     conversation_store,
     runtime_registry=None,
@@ -650,6 +651,7 @@ def _make_agent_service(
     shared_resources = {
         "bus": bus,
         "workspace": workspace,
+        "execution_cwd": execution_cwd,
         "cron_service": cron_service,
         "conversation_store": conversation_store,
         "config": config,
@@ -735,6 +737,7 @@ def gateway(
         config=config,
         bus=bus,
         workspace=config.workspace_path,
+        execution_cwd=config.workspace_path,
         cron_service=cron,
         conversation_store=conversation_store,
         runtime_registry=runtime_registry,
@@ -957,6 +960,25 @@ def agent(
     # Get permission config
     perm_config = config.agents.claude_sdk.permission
 
+    if ":" in session_id:
+        cli_channel, cli_chat_id = session_id.split(":", 1)
+    else:
+        cli_channel, cli_chat_id = "cli", session_id
+
+    cwd_source = Path(cwd).expanduser() if cwd else Path.cwd()
+    try:
+        session_cwd = cwd_source.resolve(strict=True)
+    except FileNotFoundError:
+        console.print(f"[red]Error: cwd does not exist: {cwd_source}[/red]")
+        raise typer.Exit(1)
+    except OSError as e:
+        console.print(f"[red]Error: invalid cwd '{cwd_source}': {e}[/red]")
+        raise typer.Exit(1)
+
+    if not session_cwd.is_dir():
+        console.print(f"[red]Error: cwd is not a directory: {session_cwd}[/red]")
+        raise typer.Exit(1)
+
     if message:
         # Single message mode — non-interactive CLI permission handler
         _permission_handler = CLIPermissionHandler(
@@ -975,6 +997,7 @@ def agent(
         config=config,
         bus=bus,
         workspace=config.workspace_path,
+        execution_cwd=session_cwd,
         cron_service=cron,
         conversation_store=None,
         runtime_registry=runtime_registry,
@@ -1011,31 +1034,16 @@ def agent(
             return
         _print_cli_progress_line(content, _thinking)
 
-    if ":" in session_id:
-        cli_channel, cli_chat_id = session_id.split(":", 1)
-    else:
-        cli_channel, cli_chat_id = "cli", session_id
-
-    cwd_source = Path(cwd).expanduser() if cwd else Path.cwd()
     try:
-        session_cwd = cwd_source.resolve(strict=True)
-    except FileNotFoundError:
-        console.print(f"[red]Error: cwd does not exist: {cwd_source}[/red]")
-        raise typer.Exit(1)
-    except OSError as e:
-        console.print(f"[red]Error: invalid cwd '{cwd_source}': {e}[/red]")
-        raise typer.Exit(1)
-
-    if not session_cwd.is_dir():
-        console.print(f"[red]Error: cwd is not a directory: {session_cwd}[/red]")
-        raise typer.Exit(1)
-
-    if hasattr(runtime_registry, "set_session_cwd"):
-        try:
+        if hasattr(runtime_registry, "set_execution_cwd"):
+            runtime_registry.set_execution_cwd(session_id, str(session_cwd))
+        elif hasattr(runtime_registry, "set_session_cwd"):
             runtime_registry.set_session_cwd(session_id, str(session_cwd))
-        except Exception as e:
-            console.print(f"[red]Error: failed to bind session cwd: {e}[/red]")
-            raise typer.Exit(1)
+        if hasattr(runtime_registry, "set_workspace_dir"):
+            runtime_registry.set_workspace_dir(session_id, str(config.workspace_path))
+    except Exception as e:
+        console.print(f"[red]Error: failed to bind session cwd: {e}[/red]")
+        raise typer.Exit(1)
 
     if message:
         # Single message mode — direct call, no bus needed
