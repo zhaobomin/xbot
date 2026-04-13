@@ -904,6 +904,17 @@ class AgentService:
         key = "gateway" if run_mode == "gateway" else "cli"
         return list(getattr(sources_cfg, key, ["user", "project", "local"]))
 
+    def _effective_setting_sources(self, sdk_config: Any, run_mode: str) -> list[str] | None:
+        """Resolve effective setting_sources used when building SDK options.
+
+        Gateway/CLI should be isolated from Claude user/project/local settings.
+        The SDK transport only emits --setting-sources when this field is
+        truthy, so use [""] to force an explicit empty CLI value.
+        """
+        if run_mode in {"gateway", "cli"}:
+            return [""]
+        return self._resolve_setting_sources(sdk_config, run_mode)
+
     def _log_memory_runtime_config(self, runtime_config: Any) -> None:
         """Log memory wiring details for observability."""
         sdk_cfg = getattr(getattr(runtime_config, "agents", None), "claude_sdk", None)
@@ -911,7 +922,7 @@ class AgentService:
         memory_provider = getattr(memory_cfg, "provider", "file")
         consolidation_mode = getattr(sdk_cfg, "memory_consolidation_mode", "off")
         run_mode = str(self._shared_resources.get("run_mode", "cli")).lower()
-        setting_sources = self._resolve_setting_sources(sdk_cfg, run_mode)
+        setting_sources = self._effective_setting_sources(sdk_cfg, run_mode)
         strategy = getattr(sdk_cfg, "system_prompt_strategy", None)
         if isinstance(strategy, dict):
             preset = strategy.get("preset", "xbot")
@@ -1122,6 +1133,8 @@ class AgentService:
         max_turns = getattr(sdk_config, "max_turns", 40) if sdk_config else 40
         permission_mode = getattr(sdk_config, "permission_mode", "acceptEdits") if sdk_config else "acceptEdits"
         disallowed_tools = getattr(sdk_config, "disallowed_tools", ["WebFetch", "WebSearch"]) if sdk_config else ["WebFetch", "WebSearch"]
+        run_mode = str(self._shared_resources.get("run_mode", "cli")).lower()
+        setting_sources = self._effective_setting_sources(sdk_config, run_mode)
 
         permission_handler = self._shared_resources.get("permission_handler")
         can_use_tool = None
@@ -1167,12 +1180,14 @@ class AgentService:
             add_dirs=add_dirs,
             plugins=plugins,
             hooks=hooks,
+            setting_sources=setting_sources,
             # Capture CLI stderr for debugging
             stderr=lambda line: logger.warning(f"[CLI stderr] {line}"),
         )
         logger.info(
             f"[AgentService] SDK options: model={options.model}, cwd={execution_cwd}, "
             f"max_turns={max_turns}, permission_mode={permission_mode}, "
+            f"setting_sources={setting_sources}, "
             f"env keys={list(options.env.keys()) if options.env else 'None'}, "
             f"add_dirs={len(add_dirs)}, plugins={len(plugins)}, "
             f"mcp_servers={len(mcp_servers)}"

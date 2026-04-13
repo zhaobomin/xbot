@@ -82,7 +82,15 @@ class ClaudeSDKMemorySettings(Base):
 
 
 class ClaudeSDKSettingSourcesConfig(Base):
-    """SDK setting_sources by runtime mode."""
+    """SDK setting_sources by runtime mode.
+
+    Note:
+    - Runtime currently isolates both `cli` and `gateway` from Claude
+      user/project/local setting layers by forcing an explicit empty
+      `--setting-sources` at execution time.
+    - These fields remain for forward compatibility and non-cli/gateway
+      runtimes that may honor resolved setting sources.
+    """
 
     cli: list[Literal["user", "project", "local"]] = Field(
         default_factory=lambda: ["user", "project", "local"]

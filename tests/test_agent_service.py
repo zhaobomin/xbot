@@ -305,6 +305,126 @@ class TestAgentService:
         assert Path(options.cwd) == Path(shared_resources["workspace"]).resolve()
 
     @pytest.mark.asyncio
+    async def test_build_sdk_options_gateway_uses_no_setting_sources(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """Gateway mode should not load Claude user/project/local settings."""
+        from xbot.platform.config.schema import Config
+
+        runtime_config = Config()
+        shared_resources["config"] = runtime_config
+        shared_resources["run_mode"] = "gateway"
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        options = service._build_sdk_options(session_key="gateway:settings")
+        # [""] forces SDK transport to emit `--setting-sources ""`,
+        # which disables Claude user/project/local setting resolution.
+        assert getattr(options, "setting_sources", None) == [""]
+
+    @pytest.mark.asyncio
+    async def test_build_sdk_options_gateway_emits_empty_setting_sources_cli_flag(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """Gateway mode should force an explicit empty --setting-sources flag."""
+        from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
+        from xbot.platform.config.schema import Config
+
+        runtime_config = Config()
+        shared_resources["config"] = runtime_config
+        shared_resources["run_mode"] = "gateway"
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+        options = service._build_sdk_options(session_key="gateway:settings")
+
+        async def _empty_stream():
+            if False:
+                yield {}
+
+        transport = SubprocessCLITransport(prompt=_empty_stream(), options=options)
+        transport._cli_path = "claude"
+        cmd = transport._build_command()
+
+        assert "--setting-sources" in cmd
+        idx = cmd.index("--setting-sources")
+        assert cmd[idx + 1] == ""
+
+    @pytest.mark.asyncio
+    async def test_build_sdk_options_cli_uses_no_setting_sources(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """CLI mode should also avoid Claude user/project/local settings."""
+        from xbot.platform.config.schema import Config
+
+        runtime_config = Config()
+        shared_resources["config"] = runtime_config
+        shared_resources["run_mode"] = "cli"
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        options = service._build_sdk_options(session_key="cli:settings")
+        assert getattr(options, "setting_sources", None) == [""]
+
+    @pytest.mark.asyncio
+    async def test_build_sdk_options_cli_emits_empty_setting_sources_cli_flag(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """CLI mode should force an explicit empty --setting-sources flag."""
+        from claude_agent_sdk._internal.transport.subprocess_cli import SubprocessCLITransport
+        from xbot.platform.config.schema import Config
+
+        runtime_config = Config()
+        shared_resources["config"] = runtime_config
+        shared_resources["run_mode"] = "cli"
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+        options = service._build_sdk_options(session_key="cli:settings")
+
+        async def _empty_stream():
+            if False:
+                yield {}
+
+        transport = SubprocessCLITransport(prompt=_empty_stream(), options=options)
+        transport._cli_path = "claude"
+        cmd = transport._build_command()
+
+        assert "--setting-sources" in cmd
+        idx = cmd.index("--setting-sources")
+        assert cmd[idx + 1] == ""
+
+    @pytest.mark.asyncio
+    async def test_build_sdk_options_gateway_keeps_configured_permission_mode(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """Gateway mode should preserve xbot-configured permission mode."""
+        from xbot.platform.config.schema import Config
+
+        runtime_config = Config()
+        runtime_config.agents.claude_sdk.permission_mode = "bypassPermissions"
+        shared_resources["config"] = runtime_config
+        shared_resources["run_mode"] = "gateway"
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        options = service._build_sdk_options(session_key="gateway:permission")
+        assert getattr(options, "permission_mode", None) == "bypassPermissions"
+
+    @pytest.mark.asyncio
     async def test_build_sdk_options_legacy_session_cwd_is_still_honored(
         self,
         config: AgentConfig,
