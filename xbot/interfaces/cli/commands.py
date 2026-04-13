@@ -1424,10 +1424,12 @@ def agent(
 
                         turn_done.clear()
                         turn_response.clear()
+                        turn_rejected_busy = False
 
                         if pending_runtime_error:
                             await _print_interactive_line(f"Error: {pending_runtime_error}")
                             pending_runtime_error = None
+                            turn_rejected_busy = False
                             continue
 
                         clean_text, media_paths = _parse_media_from_input(user_input, workspace=session_cwd)
@@ -1454,6 +1456,7 @@ def agent(
                         if pending_runtime_error:
                             await _print_interactive_line(f"Error: {pending_runtime_error}")
                             pending_runtime_error = None
+                            turn_rejected_busy = False
                             continue
 
                         if turn_rejected_busy:
