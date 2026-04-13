@@ -149,6 +149,27 @@ class TestCompactHookHandler:
         assert "systemMessage" in result
         assert "Compressing context" in result["systemMessage"]
 
+    def test_handler_tolerates_broken_get_on_input_object(self) -> None:
+        """Input objects with broken .get() should still be handled safely."""
+        from xbot.runtime.core.hooks import CompactHookHandler
+
+        class _BrokenInput:
+            session_id = "sess-1"
+            trigger = "auto"
+
+            def get(self, *_args, **_kwargs):  # pragma: no cover - defensive path
+                raise RuntimeError("broken get")
+
+        handler = CompactHookHandler(enabled=True)
+        mock_context = MagicMock()
+        mock_context.signal = None
+
+        import asyncio
+        result = asyncio.run(handler(_BrokenInput(), None, mock_context))
+
+        assert isinstance(result, dict)
+        assert "systemMessage" in result
+
 
 class TestBuildCompactHook:
     """Tests for build_compact_hook function."""

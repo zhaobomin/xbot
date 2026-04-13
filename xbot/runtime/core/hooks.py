@@ -68,6 +68,24 @@ class CompactHookHandler:
         self.message_callback = message_callback
         self._recent_events: list[CompactEvent] = []
 
+    @staticmethod
+    def _get_input_field(payload: Any, key: str, default: Any = None) -> Any:
+        """Safely read a field from dict-like or object-like hook payloads."""
+        if isinstance(payload, dict):
+            return payload.get(key, default)
+        attr_value = getattr(payload, key, None)
+        # MagicMock for missing attributes is callable; real scalar fields are not.
+        if attr_value is not None and not callable(attr_value):
+            return attr_value
+        if hasattr(payload, "get"):
+            try:
+                got_value = payload.get(key, default)
+                if got_value is not None and not callable(got_value):
+                    return got_value
+            except Exception:
+                pass
+        return default
+
     async def __call__(
         self,
         input: "PreCompactHookInput",
@@ -98,13 +116,8 @@ class CompactHookHandler:
 
         # Extract session_id from input (PreCompactHookInput inherits from BaseHookInput)
         # NOTE: session_id is in INPUT, not in context! context only has 'signal' field.
-        if isinstance(input, dict):
-            session_key = input.get("session_id", "unknown")
-            trigger = input.get("trigger", "auto")
-        else:
-            # Handle TypedDict objects (which support .get()) and mock objects
-            session_key = getattr(input, "session_id", None) or input.get("session_id", "unknown") if hasattr(input, "get") else getattr(input, "session_id", "unknown")
-            trigger = getattr(input, "trigger", None) or input.get("trigger", "auto") if hasattr(input, "get") else getattr(input, "trigger", "auto")
+        session_key = self._get_input_field(input, "session_id", "unknown")
+        trigger = self._get_input_field(input, "trigger", "auto")
 
         # Ensure we have string values (handles MagicMock and other edge cases)
         session_key = str(session_key) if session_key is not None else "unknown"

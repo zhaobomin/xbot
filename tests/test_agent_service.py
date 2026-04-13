@@ -205,6 +205,57 @@ class TestAgentService:
         assert getattr(options, "resume", None) == "sdk-session-123"
 
     @pytest.mark.asyncio
+    async def test_build_mcp_servers_ignores_invalid_config_type(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """_build_mcp_servers should not crash when mcp_servers is malformed."""
+        config.mcp_servers = "invalid"  # type: ignore[assignment]
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        servers = service._build_mcp_servers()
+        assert "xbot" in servers
+        assert len(servers) == 1
+
+    @pytest.mark.asyncio
+    async def test_build_mcp_servers_skips_null_entries(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """Null entries in mcp_servers should be ignored safely."""
+        config.mcp_servers = {"ok": {"type": "stdio", "command": "echo"}, "bad": None}
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        servers = service._build_mcp_servers()
+        assert "ok" in servers
+        assert "bad" not in servers
+
+    @pytest.mark.asyncio
+    async def test_build_hooks_ignores_invalid_user_hook_structure(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """Invalid hooks config should be ignored instead of raising errors."""
+        from xbot.platform.config.schema import Config
+
+        runtime_config = Config()
+        runtime_config.agents.claude_sdk.hooks = "bad-hooks"  # type: ignore[assignment]
+        runtime_config.agents.claude_sdk.compact_notify = False
+        shared_resources["config"] = runtime_config
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        hooks = service._build_hooks(runtime_config.agents.claude_sdk)
+        assert hooks is not None
+        assert "PreToolUse" in hooks
+
+    @pytest.mark.asyncio
     async def test_build_sdk_options_uses_cli_session_cwd_override(
         self,
         config: AgentConfig,

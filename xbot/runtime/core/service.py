@@ -1162,11 +1162,24 @@ class AgentService:
         Converts Pydantic MCPServerConfig to JSON-serializable dicts.
         """
         configured_servers: dict[str, Any] = {}
-        if self._config and self._config.mcp_servers:
-            configured_servers = {
-                name: server.model_dump() if hasattr(server, "model_dump") else server
-                for name, server in self._config.mcp_servers.items()
-            }
+        raw_servers = getattr(self._config, "mcp_servers", None) if self._config else None
+        if raw_servers is None:
+            raw_servers = {}
+        if not isinstance(raw_servers, dict):
+            logger.warning(
+                "Invalid AgentConfig.mcp_servers type: %s (expected dict); ignoring configured MCP servers",
+                type(raw_servers).__name__,
+            )
+            raw_servers = {}
+        if raw_servers:
+            for name, server in raw_servers.items():
+                if not isinstance(name, str) or not name.strip():
+                    logger.warning("Ignoring MCP server with invalid name: %r", name)
+                    continue
+                if server is None:
+                    logger.warning("Ignoring MCP server '%s' because config is null", name)
+                    continue
+                configured_servers[name] = server.model_dump() if hasattr(server, "model_dump") else server
 
         # Merge xbot extension tools exposed as an SDK MCP server.
         xbot_server: dict[str, Any] = {}
@@ -1203,11 +1216,33 @@ class AgentService:
 
         from claude_agent_sdk.types import HookMatcher
 
-        # Start with user-configured hooks
-        try:
-            hooks: dict[str, list] = copy.deepcopy(getattr(sdk_config, "hooks", None) or {})
-        except Exception:
-            hooks = dict(getattr(sdk_config, "hooks", None) or {})
+        # Start with user-configured hooks (strictly sanitized).
+        hooks: dict[str, list] = {}
+        raw_hooks = getattr(sdk_config, "hooks", None) if sdk_config else None
+        if raw_hooks is not None:
+            if not isinstance(raw_hooks, dict):
+                logger.warning(
+                    "Invalid Claude SDK hooks config type: %s (expected dict); ignoring user hooks",
+                    type(raw_hooks).__name__,
+                )
+            else:
+                for event_name, matchers in raw_hooks.items():
+                    if not isinstance(event_name, str) or not event_name.strip():
+                        logger.warning("Ignoring hook config with invalid event name: %r", event_name)
+                        continue
+                    if matchers is None:
+                        continue
+                    if not isinstance(matchers, list):
+                        logger.warning(
+                            "Ignoring hook config for '%s': expected list, got %s",
+                            event_name,
+                            type(matchers).__name__,
+                        )
+                        continue
+                    try:
+                        hooks[event_name] = copy.deepcopy(matchers)
+                    except Exception:
+                        hooks[event_name] = list(matchers)
 
         # Add PreCompact hook if compact_notify is enabled
         compact_notify = getattr(sdk_config, "compact_notify", True) if sdk_config else True
@@ -1779,9 +1814,19 @@ class AgentService:
 
         from claude_agent_sdk.types import AgentDefinition
 
+        raw_mcp_servers = getattr(self._config, "mcp_servers", {})
+        if raw_mcp_servers is None:
+            raw_mcp_servers = {}
+        if not isinstance(raw_mcp_servers, dict):
+            logger.warning(
+                "Invalid AgentConfig.mcp_servers type for capability policy: %s (expected dict); falling back to empty config",
+                type(raw_mcp_servers).__name__,
+            )
+            raw_mcp_servers = {}
+
         policy = CapabilityPolicy(
             CapabilityCatalog(self._shared_resources.get("workspace", ".")),
-            mcp_servers=self._config.mcp_servers or {},
+            mcp_servers=raw_mcp_servers or {},
         )
 
         agents: dict[str, AgentDefinition] = {}
