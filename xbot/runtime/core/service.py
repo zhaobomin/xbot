@@ -2289,7 +2289,10 @@ class AgentService:
                     await self._publish_event(
                         bus, msg.channel, msg.chat_id,
                         "\u23f3 \u6b63\u5728\u5904\u7406\u4e2d\uff0c\u8bf7\u7a0d\u5019...",
+                        _event_type="busy_reject",
                         _progress=True,
+                        busy_reject=True,
+                        busy_reason="active_task",
                     )
                     continue
 

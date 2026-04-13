@@ -488,6 +488,36 @@ def test_sessions_list_and_show(monkeypatch, tmp_path: Path) -> None:
     assert "SDK Session: sdk-123" in plain
 
 
+def test_sessions_list_plain_outputs_full_ids(monkeypatch, tmp_path: Path) -> None:
+    config = Config()
+    workspace = tmp_path / "workspace"
+    config.agents.defaults.workspace = str(workspace)
+    monkeypatch.setattr("xbot.interfaces.cli.commands._load_runtime_config", lambda _c, _w: config)
+
+    from xbot.runtime.session.conversation_store import ConversationStore
+
+    long_session = "cli:20260413-141645-131992f3"
+    long_sdk = "94001eda-9d69-41e0-9b4e-123456789abc"
+    store = ConversationStore(workspace)
+    s1 = store.get_or_create(long_session)
+    s1.metadata.update({
+        "sdk_session_id": long_sdk,
+        "execution_cwd": str((tmp_path / "project").resolve()),
+        "last_used_at": "2026-04-13T10:00:00Z",
+        "run_mode": "cli",
+    })
+    s1.mark_metadata_dirty()
+    store.save(s1)
+
+    result = runner.invoke(app, ["sessions", "list", "--plain"])
+    assert result.exit_code == 0
+    plain = _strip_ansi(result.stdout)
+    assert "session_key" in plain
+    assert "sdk_session_id" in plain
+    assert long_session in plain
+    assert long_sdk in plain
+
+
 def test_agent_single_message_tool_hint_shows_session_execution_cwd(
     monkeypatch, tmp_path: Path
 ) -> None:
@@ -705,6 +735,83 @@ def test_agent_interactive_reports_outbound_consumer_failure(monkeypatch, tmp_pa
     result = runner.invoke(app, ["agent"])
     assert result.exit_code == 0
     assert any("Error: outbound-consumer failed: queue broken" in line for line in seen_lines)
+
+
+def test_agent_interactive_busy_reject_unblocks_wait_and_prints_hint(monkeypatch, tmp_path: Path) -> None:
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+    seen_lines: list[str] = []
+
+    class _BusyBus:
+        def __init__(self) -> None:
+            self._published = 0
+            self._queue: asyncio.Queue = asyncio.Queue()
+
+        async def publish_inbound(self, msg) -> None:
+            self._published += 1
+            if self._published == 1:
+                await self._queue.put(type("Msg", (), {
+                    "channel": msg.channel,
+                    "chat_id": msg.chat_id,
+                    "content": "⏳ 正在处理中，请稍候...",
+                    "metadata": {
+                        "_progress": True,
+                        "_event_type": "busy_reject",
+                        "busy_reject": True,
+                        "busy_reason": "active_task",
+                    },
+                })())
+
+        async def consume_outbound(self):
+            return await self._queue.get()
+
+    fake_bus = _BusyBus()
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._load_runtime_config", lambda _c, _w: config)
+    monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("xbot.platform.bus.queue.MessageBus", lambda: fake_bus)
+    monkeypatch.setattr("xbot.runtime.state.RuntimeSessionRegistry", lambda: object())
+    monkeypatch.setattr("xbot.runtime.system.cron.service.CronService", lambda _path: object())
+    monkeypatch.setattr("xbot.interfaces.cli.commands._init_prompt_session", lambda: None)
+    monkeypatch.setattr("xbot.interfaces.cli.commands._flush_pending_tty_input", lambda: None)
+    monkeypatch.setattr("xbot.interfaces.cli.commands._restore_terminal", lambda: None)
+
+    async def _capture_line(text: str) -> None:
+        seen_lines.append(text)
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._print_interactive_line", _capture_line)
+
+    inputs = iter(["first", "exit"])
+
+    async def _fake_read_input() -> str:
+        return next(inputs)
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._read_interactive_input_async", _fake_read_input)
+
+    class _AliveService:
+        channels_config = None
+
+        async def initialize(self) -> None:
+            return None
+
+        async def run(self) -> None:
+            while True:
+                await asyncio.sleep(3600)
+
+        def stop(self) -> None:
+            return None
+
+        async def close_mcp(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "xbot.interfaces.cli.commands._make_agent_service",
+        lambda **kwargs: _AliveService(),
+    )
+
+    result = runner.invoke(app, ["agent"])
+    assert result.exit_code == 0
+    assert any("本次输入未执行" in line for line in seen_lines)
 
 
 def test_gateway_uses_workspace_from_config_by_default(monkeypatch, tmp_path: Path) -> None:

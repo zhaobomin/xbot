@@ -1329,6 +1329,7 @@ def agent(
             turn_response: list[str] = []
             progress_coalescer = ProgressCoalescer()
             pending_runtime_error: str | None = None
+            turn_rejected_busy = False
 
             def _report_task_error(owner: str, task_name: str, exc: BaseException) -> None:
                 nonlocal pending_runtime_error
@@ -1353,11 +1354,14 @@ def agent(
             task_registry.spawn("interactive-cli", agent_loop.run(), name="agent-loop")
 
             async def _consume_outbound():
-                nonlocal pending_runtime_error
+                nonlocal pending_runtime_error, turn_rejected_busy
                 while True:
                     try:
                         msg = await asyncio.wait_for(bus.consume_outbound(), timeout=1.0)
                         if msg.metadata.get("_progress"):
+                            is_busy_reject = bool(msg.metadata.get("busy_reject")) or (
+                                str(msg.metadata.get("_event_type", "")) == "busy_reject"
+                            )
                             is_tool_hint = msg.metadata.get("_tool_hint", False)
                             event_type = msg.metadata.get("_event_type", "progress")
                             if _should_emit_cli_progress(bool(is_tool_hint), str(event_type)):
@@ -1370,6 +1374,11 @@ def agent(
                                 )
                                 for item in ready:
                                     await _print_interactive_progress_line(item.text, _thinking)
+                            if is_busy_reject and not turn_done.is_set():
+                                for item in progress_coalescer.flush_all():
+                                    await _print_interactive_progress_line(item.text, _thinking)
+                                turn_rejected_busy = True
+                                turn_done.set()
 
                         elif not turn_done.is_set():
                             for item in progress_coalescer.flush_all():
@@ -1447,6 +1456,11 @@ def agent(
                             pending_runtime_error = None
                             continue
 
+                        if turn_rejected_busy:
+                            await _print_interactive_line("当前仍在处理上一条，本次输入未执行。")
+                            turn_rejected_busy = False
+                            continue
+
                         if turn_response:
                             _print_agent_response(turn_response[0], render_markdown=markdown)
                     except KeyboardInterrupt:
@@ -1478,6 +1492,7 @@ app.add_typer(sessions_app, name="sessions")
 def sessions_list(
     cwd: str | None = typer.Option(None, "--cwd", help="Filter sessions by execution cwd"),
     limit: int = typer.Option(20, "--limit", help="Maximum sessions to show"),
+    plain: bool = typer.Option(False, "--plain", help="Print full IDs in plain text (copy-friendly)"),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
 ):
@@ -1495,11 +1510,29 @@ def sessions_list(
     if limit > 0:
         sessions = sessions[:limit]
 
-    table = Table(title="CLI Sessions")
-    table.add_column("Session Key", style="cyan")
-    table.add_column("Updated", style="green")
-    table.add_column("SDK Session", style="magenta")
-    table.add_column("Execution CWD", style="yellow")
+    if not sessions:
+        console.print("[dim]No sessions found.[/dim]")
+        return
+
+    if plain:
+        # Tab-separated full fields for easy copy/paste.
+        sys.stdout.write("session_key\tsdk_session_id\tupdated\texecution_cwd\n")
+        for item in sessions:
+            sys.stdout.write(
+                "\t".join([
+                    str(item.get("key") or ""),
+                    str(item.get("sdk_session_id") or ""),
+                    str(item.get("last_used_at") or item.get("updated_at") or ""),
+                    str(item.get("execution_cwd") or ""),
+                ]) + "\n"
+            )
+        return
+
+    table = Table(title="CLI Sessions", expand=True)
+    table.add_column("Session Key", style="cyan", overflow="fold")
+    table.add_column("Updated", style="green", overflow="fold")
+    table.add_column("SDK Session", style="magenta", overflow="fold")
+    table.add_column("Execution CWD", style="yellow", overflow="fold")
 
     for item in sessions:
         table.add_row(
@@ -1508,10 +1541,6 @@ def sessions_list(
             str(item.get("sdk_session_id") or "-"),
             str(item.get("execution_cwd") or "-"),
         )
-
-    if not sessions:
-        console.print("[dim]No sessions found.[/dim]")
-        return
 
     console.print(table)
 
