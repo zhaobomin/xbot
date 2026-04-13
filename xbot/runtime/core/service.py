@@ -771,7 +771,11 @@ class AgentService:
         ))
 
     @staticmethod
-    def _format_tool_hint(tool_calls: list[dict[str, Any]]) -> str:
+    def _format_tool_hint(
+        tool_calls: list[dict[str, Any]],
+        *,
+        execution_cwd: str | None = None,
+    ) -> str:
         """Format tool calls into a readable hint string."""
         def _short_text(value: str, limit: int = 48) -> str:
             text = value.replace("\n", "\\n")
@@ -800,6 +804,9 @@ class AgentService:
                     if idx >= 3:
                         pairs.append("…")
                         break
+                    if k == "cwd" and isinstance(v, str):
+                        pairs.append(f'{k}="{v}"')
+                        continue
                     pairs.append(f"{k}={_render_value(v)}")
                 return ", ".join(pairs)
             if args is None:
@@ -817,6 +824,14 @@ class AgentService:
             args = tc.get("input") or tc.get("arguments") or {}
             name = str(tc.get("name", "tool"))
             kind = str(tc.get("kind", "tool"))
+            if (
+                isinstance(args, dict)
+                and execution_cwd
+                and name.strip().lower() == "bash"
+                and "cwd" not in args
+            ):
+                # Expose actual execution directory for CLI observability.
+                args = {"cwd": execution_cwd, **args}
             prefix = f"{_kind_label(kind)}: "
             description = str(tc.get("description") or "").strip()
             rendered_args = _render_args(args)
@@ -1026,20 +1041,9 @@ class AgentService:
         # Build hooks (compact notification, etc.)
         hooks = self._build_hooks(sdk_config)
 
-        # Default execution cwd is workspace; CLI can override per session.
         workspace_raw = self._shared_resources.get("workspace", ".")
         workspace_expanded = str(Path(workspace_raw).expanduser().resolve())
-        execution_cwd = workspace_expanded
-        run_mode = str(self._shared_resources.get("run_mode", "")).lower()
-        if run_mode == "cli" and session_key:
-            runtime_registry = self._shared_resources.get("runtime_registry")
-            if runtime_registry and hasattr(runtime_registry, "get_session_cwd"):
-                try:
-                    session_cwd = runtime_registry.get_session_cwd(session_key)
-                    if isinstance(session_cwd, str) and session_cwd.strip():
-                        execution_cwd = str(Path(session_cwd).expanduser().resolve())
-                except Exception as e:
-                    logger.debug("Failed to resolve session cwd override for %s: %s", session_key, e)
+        execution_cwd = self._resolve_execution_cwd(session_key)
 
         # Read SDK-specific parameters
         max_turns = getattr(sdk_config, "max_turns", 40) if sdk_config else 40
@@ -1097,6 +1101,28 @@ class AgentService:
             f"mcp_servers={len(mcp_servers)}"
         )
         return options
+
+    def _resolve_execution_cwd(self, session_key: str | None) -> str:
+        """Resolve effective SDK execution cwd.
+
+        CLI mode: session_cwd override (if present) > configured workspace.
+        Non-CLI modes: always configured workspace.
+        """
+        workspace_raw = self._shared_resources.get("workspace", ".")
+        workspace_expanded = str(Path(workspace_raw).expanduser().resolve())
+        run_mode = str(self._shared_resources.get("run_mode", "")).lower()
+        if run_mode != "cli" or not session_key:
+            return workspace_expanded
+
+        runtime_registry = self._shared_resources.get("runtime_registry")
+        if runtime_registry and hasattr(runtime_registry, "get_session_cwd"):
+            try:
+                session_cwd = runtime_registry.get_session_cwd(session_key)
+                if isinstance(session_cwd, str) and session_cwd.strip():
+                    return str(Path(session_cwd).expanduser().resolve())
+            except Exception as e:
+                logger.debug("Failed to resolve session cwd override for %s: %s", session_key, e)
+        return workspace_expanded
 
     def _build_env_config(self) -> dict[str, str]:
         """Build environment configuration for SDK.
@@ -2054,6 +2080,7 @@ class AgentService:
 
         try:
             final_result_text = ""
+            execution_cwd = self._resolve_execution_cwd(session_key)
             async for response in self.process(context):
                 if on_progress and response.progress_texts:
                     for text in response.progress_texts:
@@ -2074,7 +2101,7 @@ class AgentService:
                 if on_progress and response.tool_calls:
                     await self._emit_progress(
                         on_progress,
-                        self._format_tool_hint(response.tool_calls),
+                        self._format_tool_hint(response.tool_calls, execution_cwd=execution_cwd),
                         tool_hint=True,
                         event_type="tool_call",
                         event_data={"tool_calls": response.tool_calls},
@@ -2199,6 +2226,7 @@ class AgentService:
             final_result_text = ""
             last_usage: dict[str, Any] | None = None
             error_sent = False
+            execution_cwd = self._resolve_execution_cwd(session_key)
 
             async for response in self.process(context):
                 # Forward thinking/progress
@@ -2223,7 +2251,7 @@ class AgentService:
 
                 # Forward tool hints
                 if response.tool_calls:
-                    hint = self._format_tool_hint(response.tool_calls)
+                    hint = self._format_tool_hint(response.tool_calls, execution_cwd=execution_cwd)
                     await self._publish_event(
                         bus, msg.channel, msg.chat_id, hint,
                         source_metadata=msg.metadata,

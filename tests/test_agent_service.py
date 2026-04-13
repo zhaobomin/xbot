@@ -305,6 +305,57 @@ class TestAgentService:
         assert Path(options.cwd) == Path(shared_resources["workspace"]).resolve()
 
     @pytest.mark.asyncio
+    async def test_process_direct_tool_hint_includes_cli_execution_cwd(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """CLI direct mode tool hint should expose resolved execution cwd for Bash."""
+        registry = RuntimeSessionRegistry()
+        session_key = "cli:hint-cwd"
+        session_cwd = tmp_path / "session-cwd"
+        session_cwd.mkdir(parents=True)
+        registry.set_session_cwd(session_key, str(session_cwd))
+        shared_resources["runtime_registry"] = registry
+        shared_resources["run_mode"] = "cli"
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        seen_progress: list[str] = []
+
+        async def on_progress(
+            text: str,
+            *,
+            tool_hint: bool = False,
+            event_type: str = "progress",
+            event_data: dict[str, Any] | None = None,
+        ) -> None:
+            _ = tool_hint, event_type, event_data
+            seen_progress.append(text)
+
+        async def fake_process(_context):
+            yield AgentResponse(
+                content="",
+                tool_calls=[{"name": "Bash", "input": {"command": "pwd"}, "kind": "tool"}],
+                event_type="tool_call",
+            )
+            yield AgentResponse(content="ok", event_type="result")
+
+        with patch.object(service, "process", side_effect=fake_process):
+            result = await service.process_direct(
+                content="show cwd",
+                session_key=session_key,
+                channel="cli",
+                chat_id="direct",
+                on_progress=on_progress,
+            )
+
+        assert result == "ok"
+        assert any('Tool: Bash(cwd="' in line and str(session_cwd.resolve()) in line for line in seen_progress)
+
+    @pytest.mark.asyncio
     async def test_reset_session_can_drop_sdk_context(
         self,
         config: AgentConfig,
@@ -525,6 +576,20 @@ class TestAgentService:
 
         assert hint.startswith("Tool: Bash (")
         assert "Get current weather in Beijing" in hint
+
+    def test_format_tool_hint_includes_execution_cwd_for_bash(self) -> None:
+        hint = AgentService._format_tool_hint(
+            [{
+                "name": "Bash",
+                "kind": "tool",
+                "input": {"command": "ls -la"},
+            }],
+            execution_cwd="/tmp/project",
+        )
+
+        assert "Tool: Bash(" in hint
+        assert 'cwd="/tmp/project"' in hint
+        assert 'command="ls -la"' in hint
 
 
 class TestClientPoolLifecycle:
