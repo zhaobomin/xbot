@@ -242,6 +242,9 @@ def test_agent_help_shows_workspace_and_config_options():
     assert "--workspace" in stripped_output
     assert "-w" in stripped_output
     assert "--cwd" in stripped_output
+    assert "--continue" in stripped_output
+    assert "--resume" in stripped_output
+    assert "--new" in stripped_output
     assert "--config" in stripped_output
     assert "-c" in stripped_output
 
@@ -341,9 +344,148 @@ def test_agent_single_message_sets_session_cwd(monkeypatch, tmp_path: Path) -> N
         lambda **kwargs: _FakeService(),
     )
 
-    result = runner.invoke(app, ["agent", "-m", "hi", "--cwd", str(explicit_cwd)])
+    result = runner.invoke(app, ["agent", "-m", "hi", "--session", "cli:direct", "--cwd", str(explicit_cwd)])
     assert result.exit_code == 0
     assert "ok-cwd" in _strip_ansi(result.stdout)
+
+
+def test_agent_default_creates_new_session_each_run(monkeypatch, tmp_path: Path) -> None:
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+
+    seen_session_keys: list[str] = []
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._load_runtime_config", lambda _c, _w: config)
+    monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("xbot.platform.bus.queue.MessageBus", lambda: object())
+    monkeypatch.setattr("xbot.runtime.state.RuntimeSessionRegistry", lambda: object())
+    monkeypatch.setattr("xbot.runtime.system.cron.service.CronService", lambda _path: object())
+
+    class _FakeService:
+        def __init__(self) -> None:
+            self.channels_config = None
+
+        async def initialize(self) -> None:
+            return None
+
+        async def process_direct(self, *args, **kwargs) -> str:
+            seen_session_keys.append(kwargs["session_key"])
+            return "ok"
+
+        async def close_mcp(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "xbot.interfaces.cli.commands._make_agent_service",
+        lambda **kwargs: _FakeService(),
+    )
+
+    result1 = runner.invoke(app, ["agent", "-m", "hi"])
+    result2 = runner.invoke(app, ["agent", "-m", "hi"])
+    assert result1.exit_code == 0
+    assert result2.exit_code == 0
+    assert len(seen_session_keys) == 2
+    assert seen_session_keys[0].startswith("cli:")
+    assert seen_session_keys[1].startswith("cli:")
+    assert seen_session_keys[0] != seen_session_keys[1]
+
+
+def test_agent_rejects_conflicting_resume_flags(monkeypatch, tmp_path: Path) -> None:
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+    monkeypatch.setattr("xbot.interfaces.cli.commands._load_runtime_config", lambda _c, _w: config)
+    monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_templates", lambda _path: None)
+
+    result = runner.invoke(app, ["agent", "-m", "hi", "--new", "--continue"])
+    assert result.exit_code == 1
+    assert "--new cannot be used with --continue or --resume" in _strip_ansi(result.stdout)
+
+
+def test_agent_continue_selects_latest_session_for_cwd(monkeypatch, tmp_path: Path) -> None:
+    config = Config()
+    workspace = tmp_path / "workspace"
+    config.agents.defaults.workspace = str(workspace)
+    target_cwd = tmp_path / "project-a"
+    target_cwd.mkdir(parents=True)
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._load_runtime_config", lambda _c, _w: config)
+    monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr("xbot.platform.bus.queue.MessageBus", lambda: object())
+    monkeypatch.setattr("xbot.runtime.state.RuntimeSessionRegistry", lambda: object())
+    monkeypatch.setattr("xbot.runtime.system.cron.service.CronService", lambda _path: object())
+
+    from xbot.runtime.session.conversation_store import ConversationStore
+
+    store = ConversationStore(workspace)
+    s1 = store.get_or_create("cli:older")
+    s1.metadata.update({
+        "execution_cwd": str(target_cwd.resolve()),
+        "last_used_at": "2026-04-12T00:00:00Z",
+        "run_mode": "cli",
+    })
+    s1.mark_metadata_dirty()
+    store.save(s1)
+    s2 = store.get_or_create("cli:newer")
+    s2.metadata.update({
+        "execution_cwd": str(target_cwd.resolve()),
+        "last_used_at": "2026-04-13T00:00:00Z",
+        "run_mode": "cli",
+    })
+    s2.mark_metadata_dirty()
+    store.save(s2)
+
+    seen: dict[str, str] = {}
+
+    class _FakeService:
+        def __init__(self) -> None:
+            self.channels_config = None
+
+        async def initialize(self) -> None:
+            return None
+
+        async def process_direct(self, *args, **kwargs) -> str:
+            seen["session_key"] = kwargs["session_key"]
+            return "ok"
+
+        async def close_mcp(self) -> None:
+            return None
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._make_agent_service", lambda **kwargs: _FakeService())
+
+    result = runner.invoke(app, ["agent", "-m", "hi", "--continue", "--cwd", str(target_cwd)])
+    assert result.exit_code == 0
+    assert seen["session_key"] == "cli:newer"
+
+
+def test_sessions_list_and_show(monkeypatch, tmp_path: Path) -> None:
+    config = Config()
+    workspace = tmp_path / "workspace"
+    config.agents.defaults.workspace = str(workspace)
+    monkeypatch.setattr("xbot.interfaces.cli.commands._load_runtime_config", lambda _c, _w: config)
+
+    from xbot.runtime.session.conversation_store import ConversationStore
+
+    store = ConversationStore(workspace)
+    s1 = store.get_or_create("cli:test-show")
+    s1.metadata.update({
+        "sdk_session_id": "sdk-123",
+        "execution_cwd": str((tmp_path / "project").resolve()),
+        "last_used_at": "2026-04-13T10:00:00Z",
+        "run_mode": "cli",
+    })
+    s1.mark_metadata_dirty()
+    store.save(s1)
+
+    result_list = runner.invoke(app, ["sessions", "list"])
+    assert result_list.exit_code == 0
+    assert "cli:test-show" in _strip_ansi(result_list.stdout)
+    assert "sdk-123" in _strip_ansi(result_list.stdout)
+
+    result_show = runner.invoke(app, ["sessions", "show", "cli:test-show"])
+    assert result_show.exit_code == 0
+    plain = _strip_ansi(result_show.stdout)
+    assert "Session Key: cli:test-show" in plain
+    assert "SDK Session: sdk-123" in plain
 
 
 def test_agent_single_message_tool_hint_shows_session_execution_cwd(

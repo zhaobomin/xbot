@@ -930,7 +930,13 @@ class AgentService:
             append_xbot_prompt,
         )
 
-    def _build_system_prompt(self) -> str:
+    def _build_system_prompt(
+        self,
+        *,
+        session_key: str | None = None,
+        execution_cwd: str | None = None,
+        workspace_dir: str | None = None,
+    ) -> str:
         """Build the system prompt for the agent.
 
         Restores the ContextBuilder → system prompt link from v0.3.35
@@ -951,7 +957,12 @@ class AgentService:
 
         # Priority 2: build via ContextBuilder
         if self._context_builder is not None:
-            base_prompt = self._context_builder.build_system_prompt()
+            effective_execution_cwd = execution_cwd or self._resolve_execution_cwd(session_key)
+            effective_workspace_dir = workspace_dir or self._resolve_workspace_dir(session_key)
+            base_prompt = self._context_builder.build_system_prompt(
+                execution_cwd=Path(effective_execution_cwd),
+                workspace=Path(effective_workspace_dir),
+            )
             identity_section = self._build_runtime_identity_section()
             if identity_section:
                 base_prompt = f"{base_prompt}\n\n{identity_section}"
@@ -1018,8 +1029,65 @@ class AgentService:
 
         # Build options
         options = self._build_sdk_options(session_key=session_key)
+        try:
+            return await self._client_pool.get_or_create(session_key, options=options)
+        except Exception as e:
+            if self._should_retry_without_resume(session_key, options, e):
+                logger.warning(
+                    "[AgentService] Resume failed for %s, retrying with fresh SDK session: %s",
+                    session_key,
+                    e,
+                )
+                self._clear_sdk_resume_context(session_key)
+                retry_options = self._build_sdk_options(session_key=session_key)
+                return await self._client_pool.get_or_create(session_key, options=retry_options)
+            raise
 
-        return await self._client_pool.get_or_create(session_key, options=options)
+    def _should_retry_without_resume(self, session_key: str, options: Any, error: Exception) -> bool:
+        """Decide whether to retry once without resume on SDK connect failure."""
+        _ = session_key
+        resume_id = str(getattr(options, "resume", "") or "").strip()
+        if not resume_id:
+            return False
+
+        run_mode = str(self._shared_resources.get("run_mode", "")).lower()
+        if run_mode != "cli":
+            return False
+
+        policy = self._shared_resources.get("resume_policy")
+        explicit_resume = bool(policy.get("explicit_resume")) if isinstance(policy, dict) else False
+        strict_resume = bool(policy.get("strict_resume")) if isinstance(policy, dict) else False
+        if explicit_resume and strict_resume:
+            return False
+
+        text = str(error).lower()
+        # Conservative gate: only retry when the error clearly indicates
+        # an invalid/missing resume target. Avoid clearing valid session
+        # mappings for unrelated connection/runtime failures.
+        has_resume_context = "resume" in text
+        has_not_found = "not found" in text or "does not exist" in text
+        has_invalid = "invalid resume" in text or "resume is invalid" in text
+        has_resume_session_not_found = "resume session" in text and has_not_found
+        return has_resume_session_not_found or (has_resume_context and (has_not_found or has_invalid))
+
+    def _clear_sdk_resume_context(self, session_key: str) -> None:
+        """Clear cached SDK resume mapping for one session and persisted metadata."""
+        runtime_registry = self._shared_resources.get("runtime_registry")
+        if runtime_registry:
+            try:
+                if hasattr(runtime_registry, "_set_sdk_session_id_impl"):
+                    runtime_registry._set_sdk_session_id_impl(session_key, None)
+                elif hasattr(runtime_registry, "set_sdk_session_id"):
+                    result = runtime_registry.set_sdk_session_id(session_key, None)
+                    if asyncio.iscoroutine(result):
+                        asyncio.create_task(result)
+            except Exception as e:
+                logger.debug("Failed to clear runtime sdk_session_id for %s: %s", session_key, e)
+
+        try:
+            self._persist_sdk_session_id_to_store(session_key, None)
+        except Exception as e:
+            logger.debug("Failed to clear persisted sdk_session_id for %s: %s", session_key, e)
 
     def _build_sdk_options(self, session_key: str | None = None) -> Any:
         """Build ClaudeAgentOptions from configuration."""
@@ -1048,6 +1116,7 @@ class AgentService:
         workspace_raw = self._shared_resources.get("workspace", ".")
         workspace_expanded = str(Path(workspace_raw).expanduser().resolve())
         execution_cwd = self._resolve_execution_cwd(session_key)
+        workspace_dir = self._resolve_workspace_dir(session_key)
 
         # Read SDK-specific parameters
         max_turns = getattr(sdk_config, "max_turns", 40) if sdk_config else 40
@@ -1066,7 +1135,11 @@ class AgentService:
         plugins = self._build_plugin_configs(workspace_expanded)
 
         # Build system prompt via ContextBuilder (restores v0.3.35 behaviour)
-        system_prompt = self._build_system_prompt()
+        system_prompt = self._build_system_prompt(
+            session_key=session_key,
+            execution_cwd=execution_cwd,
+            workspace_dir=workspace_dir,
+        )
         resume_session: str | None = None
         if session_key:
             self._hydrate_sdk_session_id_from_store_if_missing(session_key)
@@ -1109,14 +1182,22 @@ class AgentService:
     def _resolve_execution_cwd(self, session_key: str | None) -> str:
         """Resolve effective SDK execution cwd.
 
-        CLI mode: execution_cwd override (if present) > configured workspace.
+        CLI mode: session execution_cwd override (if present) > shared execution_cwd > configured workspace.
         Non-CLI modes: always configured workspace.
         """
         workspace_raw = self._shared_resources.get("workspace", ".")
         workspace_expanded = str(Path(workspace_raw).expanduser().resolve())
         run_mode = str(self._shared_resources.get("run_mode", "")).lower()
-        if run_mode != "cli" or not session_key:
+        if run_mode != "cli":
             return workspace_expanded
+
+        shared_execution_cwd = self._shared_resources.get("execution_cwd")
+        default_cli_cwd = workspace_expanded
+        if isinstance(shared_execution_cwd, str) and shared_execution_cwd.strip():
+            default_cli_cwd = str(Path(shared_execution_cwd).expanduser().resolve())
+
+        if not session_key:
+            return default_cli_cwd
 
         runtime_registry = self._shared_resources.get("runtime_registry")
         if runtime_registry:
@@ -1130,6 +1211,24 @@ class AgentService:
                     return str(Path(session_cwd).expanduser().resolve())
             except Exception as e:
                 logger.debug("Failed to resolve session cwd override for %s: %s", session_key, e)
+        return default_cli_cwd
+
+    def _resolve_workspace_dir(self, session_key: str | None) -> str:
+        """Resolve workspace assets directory for prompt/bootstrap/memory metadata."""
+        workspace_raw = self._shared_resources.get("workspace", ".")
+        workspace_expanded = str(Path(workspace_raw).expanduser().resolve())
+        run_mode = str(self._shared_resources.get("run_mode", "")).lower()
+        if run_mode != "cli" or not session_key:
+            return workspace_expanded
+
+        runtime_registry = self._shared_resources.get("runtime_registry")
+        if runtime_registry and hasattr(runtime_registry, "get_workspace_dir"):
+            try:
+                workspace_dir = runtime_registry.get_workspace_dir(session_key)
+                if isinstance(workspace_dir, str) and workspace_dir.strip():
+                    return str(Path(workspace_dir).expanduser().resolve())
+            except Exception as e:
+                logger.debug("Failed to resolve workspace dir override for %s: %s", session_key, e)
         return workspace_expanded
 
     def _build_env_config(self) -> dict[str, str]:

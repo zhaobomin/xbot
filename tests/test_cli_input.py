@@ -21,9 +21,11 @@ async def test_read_interactive_input_async_returns_input(mock_prompt_session):
     """Test that _read_interactive_input_async returns the user input from prompt_session."""
     mock_prompt_session.prompt_async.return_value = "hello world"
 
-    result = await commands._read_interactive_input_async()
+    with patch("xbot.interfaces.cli.commands._flush_pending_tty_input") as mock_flush:
+        result = await commands._read_interactive_input_async()
 
     assert result == "hello world"
+    mock_flush.assert_called_once()
     mock_prompt_session.prompt_async.assert_called_once()
     args, _ = mock_prompt_session.prompt_async.call_args
     assert isinstance(args[0], HTML)  # Verify HTML prompt is used
@@ -52,6 +54,7 @@ def test_init_prompt_session_creates_session():
         commands._init_prompt_session()
 
         assert commands._PROMPT_SESSION is not None
+        assert commands.os.environ.get("PROMPT_TOOLKIT_NO_CPR") == "1"
         MockSession.assert_called_once()
         _, kwargs = MockSession.call_args
         assert kwargs["multiline"] is False

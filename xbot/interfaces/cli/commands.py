@@ -8,8 +8,10 @@ import select
 import signal
 import sys
 from contextlib import contextmanager, nullcontext
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
+from uuid import uuid4
 
 if sys.platform == "win32":
     if sys.stdout.encoding != "utf-8":
@@ -129,6 +131,115 @@ def _resolve_heartbeat_target(
             return channel, chat_id
 
     return None
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+def _normalize_iso_for_sort(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    return ""
+
+
+def _normalize_exec_cwd(cwd: Path | str) -> str:
+    return str(Path(cwd).expanduser().resolve())
+
+
+def _generate_cli_session_key() -> str:
+    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    return f"cli:{ts}-{uuid4().hex[:8]}"
+
+
+def _list_session_index(conversation_store: Any) -> list[dict[str, Any]]:
+    """Build a lightweight session index with metadata for CLI resume selection."""
+    if conversation_store is None or not hasattr(conversation_store, "list_sessions"):
+        return []
+
+    sessions: list[dict[str, Any]] = []
+    for item in conversation_store.list_sessions():
+        key = str(item.get("key") or "").strip()
+        if not key:
+            continue
+
+        metadata: dict[str, Any] = {}
+        if hasattr(conversation_store, "get"):
+            try:
+                sess = conversation_store.get(key)
+                candidate = getattr(sess, "metadata", None) if sess is not None else None
+                if isinstance(candidate, dict):
+                    metadata = dict(candidate)
+            except Exception:
+                metadata = {}
+
+        sessions.append({
+            "key": key,
+            "created_at": item.get("created_at"),
+            "updated_at": item.get("updated_at"),
+            "sdk_session_id": metadata.get("sdk_session_id"),
+            "execution_cwd": metadata.get("execution_cwd"),
+            "last_used_at": metadata.get("last_used_at"),
+            "run_mode": metadata.get("run_mode"),
+        })
+
+    sessions.sort(
+        key=lambda s: (
+            _normalize_iso_for_sort(s.get("last_used_at"))
+            or _normalize_iso_for_sort(s.get("updated_at"))
+            or _normalize_iso_for_sort(s.get("created_at"))
+        ),
+        reverse=True,
+    )
+    return sessions
+
+
+def _select_continue_session(sessions: list[dict[str, Any]], execution_cwd: Path) -> dict[str, Any] | None:
+    target_cwd = _normalize_exec_cwd(execution_cwd)
+    for session in sessions:
+        if str(session.get("execution_cwd") or "") == target_cwd:
+            return session
+    return None
+
+
+def _select_resume_session(sessions: list[dict[str, Any]], resume_value: str) -> dict[str, Any] | None:
+    value = (resume_value or "").strip()
+    if not value:
+        return None
+    for session in sessions:
+        if str(session.get("key") or "") == value:
+            return session
+    for session in sessions:
+        if str(session.get("sdk_session_id") or "") == value:
+            return session
+    return None
+
+
+def _update_cli_session_metadata(
+    conversation_store: Any,
+    *,
+    session_key: str,
+    execution_cwd: Path,
+) -> None:
+    """Persist CLI metadata used by resume/continue selection."""
+    if conversation_store is None:
+        return
+    if not hasattr(conversation_store, "get_or_create") or not hasattr(conversation_store, "save"):
+        return
+    try:
+        session = conversation_store.get_or_create(session_key)
+        metadata = getattr(session, "metadata", None)
+        if not isinstance(metadata, dict):
+            session.metadata = {}
+            metadata = session.metadata
+        metadata["execution_cwd"] = _normalize_exec_cwd(execution_cwd)
+        metadata["last_used_at"] = _utc_now_iso()
+        metadata["run_mode"] = "cli"
+        if hasattr(session, "mark_metadata_dirty"):
+            session.mark_metadata_dirty()
+        conversation_store.save(session)
+    except Exception as e:
+        logger.debug("Failed to persist CLI session metadata for %s: %s", session_key, e)
 
 # ---------------------------------------------------------------------------
 # File reference parsing for @path syntax
@@ -258,6 +369,11 @@ def _restore_terminal() -> None:
 def _init_prompt_session() -> None:
     """Create the prompt_toolkit session with persistent file history."""
     global _PROMPT_SESSION, _SAVED_TERM_ATTRS
+
+    # Some terminals/proxies echo CPR responses (ESC[<row>;<col>R) into the UI,
+    # leaking fragments like "^[[43;1R". Disable prompt_toolkit CPR probing
+    # to avoid these artifacts in interactive mode.
+    os.environ["PROMPT_TOOLKIT_NO_CPR"] = "1"
 
     # Save terminal state so we can restore it on exit
     try:
@@ -421,6 +537,9 @@ async def _read_interactive_input_async() -> str:
     if _PROMPT_SESSION is None:
         raise RuntimeError("Call _init_prompt_session() first")
     try:
+        # Best-effort cleanup for any stray terminal control responses that may
+        # have been buffered between turns.
+        _flush_pending_tty_input()
         with patch_stdout():
             return await _PROMPT_SESSION.prompt_async(
                 HTML("<b fg='ansiblue'>You:</b> "),
@@ -636,6 +755,7 @@ def _make_agent_service(
     conversation_store,
     runtime_registry=None,
     permission_handler=None,
+    resume_policy: dict[str, Any] | None = None,
     run_mode: str = "cli",
 ):
     """Create the unified agent service."""
@@ -662,6 +782,8 @@ def _make_agent_service(
         shared_resources["runtime_registry"] = runtime_registry
     if permission_handler is not None:
         shared_resources["permission_handler"] = permission_handler
+    if resume_policy is not None:
+        shared_resources["resume_policy"] = resume_policy
 
     service = AgentService(agent_config, shared_resources)
     return service
@@ -927,7 +1049,15 @@ def gateway(
 @app.command()
 def agent(
     message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
-    session_id: str = typer.Option("cli:direct", "--session", "-s", help="ConversationSession ID"),
+    session_id: str | None = typer.Option(None, "--session", "-s", help="ConversationSession ID"),
+    continue_chat: bool = typer.Option(False, "--continue", help="Continue latest CLI session in current cwd"),
+    resume: str | None = typer.Option(None, "--resume", help="Resume by session key or SDK session id"),
+    new: bool = typer.Option(False, "--new", help="Force a new session (disable resume/continue)"),
+    resume_strict: bool = typer.Option(
+        True,
+        "--resume-strict/--no-resume-strict",
+        help="Fail when --resume target is not found (default: strict)",
+    ),
     workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
     cwd: str | None = typer.Option(None, "--cwd", help="Execution working directory for this session"),
     config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
@@ -937,6 +1067,7 @@ def agent(
     """Interact with the agent directly."""
     from xbot.platform.bus.queue import MessageBus
     from xbot.platform.config.paths import get_cron_dir
+    from xbot.runtime.session.conversation_store import ConversationStore
     from xbot.runtime.state import RuntimeSessionRegistry
     from xbot.runtime.system.cron.service import CronService
 
@@ -946,6 +1077,7 @@ def agent(
 
     bus = MessageBus()
     runtime_registry = RuntimeSessionRegistry()
+    conversation_store = ConversationStore(config.workspace_path)
 
     # Create cron service for tool usage (no callback needed for CLI unless running)
     cron_store_path = get_cron_dir() / "jobs.json"
@@ -960,11 +1092,6 @@ def agent(
     # Get permission config
     perm_config = config.agents.claude_sdk.permission
 
-    if ":" in session_id:
-        cli_channel, cli_chat_id = session_id.split(":", 1)
-    else:
-        cli_channel, cli_chat_id = "cli", session_id
-
     cwd_source = Path(cwd).expanduser() if cwd else Path.cwd()
     try:
         session_cwd = cwd_source.resolve(strict=True)
@@ -978,6 +1105,57 @@ def agent(
     if not session_cwd.is_dir():
         console.print(f"[red]Error: cwd is not a directory: {session_cwd}[/red]")
         raise typer.Exit(1)
+
+    if new and (continue_chat or bool(resume)):
+        console.print("[red]Error: --new cannot be used with --continue or --resume[/red]")
+        raise typer.Exit(1)
+    if continue_chat and bool(resume):
+        console.print("[red]Error: --continue cannot be used with --resume[/red]")
+        raise typer.Exit(1)
+
+    session_index = _list_session_index(conversation_store)
+    resume_mode = "none"
+    selected_resume_id: str | None = None
+
+    if new:
+        resolved_session_key = _generate_cli_session_key()
+    elif resume:
+        selected = _select_resume_session(session_index, resume)
+        if selected is None:
+            if resume_strict:
+                console.print(f"[red]Error: resume target not found: {resume}[/red]")
+                raise typer.Exit(1)
+            resolved_session_key = session_id or _generate_cli_session_key()
+            resume_mode = "resume-miss"
+        else:
+            resolved_session_key = str(selected["key"])
+            selected_resume_id = str(selected.get("sdk_session_id") or "").strip() or None
+            resume_mode = "resume"
+    elif continue_chat:
+        selected = _select_continue_session(session_index, session_cwd)
+        if selected is not None:
+            resolved_session_key = str(selected["key"])
+            selected_resume_id = str(selected.get("sdk_session_id") or "").strip() or None
+            resume_mode = "continue"
+        else:
+            resolved_session_key = session_id or _generate_cli_session_key()
+            resume_mode = "continue-miss"
+    elif session_id:
+        resolved_session_key = session_id
+        selected = _select_resume_session(session_index, resolved_session_key)
+        selected_resume_id = (
+            str(selected.get("sdk_session_id") or "").strip()
+            if selected is not None
+            else None
+        ) or None
+        resume_mode = "session"
+    else:
+        resolved_session_key = _generate_cli_session_key()
+
+    if ":" in resolved_session_key:
+        cli_channel, cli_chat_id = resolved_session_key.split(":", 1)
+    else:
+        cli_channel, cli_chat_id = "cli", resolved_session_key
 
     if message:
         # Single message mode — non-interactive CLI permission handler
@@ -999,9 +1177,14 @@ def agent(
         workspace=config.workspace_path,
         execution_cwd=session_cwd,
         cron_service=cron,
-        conversation_store=None,
+        conversation_store=conversation_store,
         runtime_registry=runtime_registry,
         permission_handler=_permission_handler,
+        resume_policy={
+            "mode": resume_mode,
+            "explicit_resume": bool(resume),
+            "strict_resume": bool(resume_strict),
+        },
         run_mode="cli",
     )
 
@@ -1035,15 +1218,34 @@ def agent(
         _print_cli_progress_line(content, _thinking)
 
     try:
+        if hasattr(runtime_registry, "get_or_create"):
+            runtime_registry.get_or_create(resolved_session_key)
         if hasattr(runtime_registry, "set_execution_cwd"):
-            runtime_registry.set_execution_cwd(session_id, str(session_cwd))
+            runtime_registry.set_execution_cwd(resolved_session_key, str(session_cwd))
         elif hasattr(runtime_registry, "set_session_cwd"):
-            runtime_registry.set_session_cwd(session_id, str(session_cwd))
+            runtime_registry.set_session_cwd(resolved_session_key, str(session_cwd))
         if hasattr(runtime_registry, "set_workspace_dir"):
-            runtime_registry.set_workspace_dir(session_id, str(config.workspace_path))
+            runtime_registry.set_workspace_dir(resolved_session_key, str(config.workspace_path))
+        if selected_resume_id:
+            if hasattr(runtime_registry, "_set_sdk_session_id_impl"):
+                runtime_registry._set_sdk_session_id_impl(resolved_session_key, selected_resume_id)
+            elif hasattr(runtime_registry, "set_sdk_session_id"):
+                maybe = runtime_registry.set_sdk_session_id(resolved_session_key, selected_resume_id)
+                if asyncio.iscoroutine(maybe):
+                    asyncio.run(maybe)
+        _update_cli_session_metadata(
+            conversation_store,
+            session_key=resolved_session_key,
+            execution_cwd=session_cwd,
+        )
     except Exception as e:
         console.print(f"[red]Error: failed to bind session cwd: {e}[/red]")
         raise typer.Exit(1)
+
+    startup_sdk = selected_resume_id or "new"
+    console.print(
+        f"[dim]Session={resolved_session_key} | Resume={resume_mode} | SDK={startup_sdk} | CWD={session_cwd}[/dim]"
+    )
 
     if message:
         # Single message mode — direct call, no bus needed
@@ -1083,7 +1285,7 @@ def agent(
                 with _thinking:
                     response = await agent_loop.process_direct(
                         content=message,
-                        session_key=session_id,
+                        session_key=resolved_session_key,
                         channel=cli_channel,
                         chat_id=cli_chat_id,
                         on_progress=_coalesced_cli_progress,
@@ -1261,6 +1463,85 @@ def agent(
                 await agent_loop.close_mcp()
 
         asyncio.run(run_interactive())
+
+
+# ============================================================================
+# Session Commands
+# ============================================================================
+
+
+sessions_app = typer.Typer(help="Manage CLI sessions")
+app.add_typer(sessions_app, name="sessions")
+
+
+@sessions_app.command("list")
+def sessions_list(
+    cwd: str | None = typer.Option(None, "--cwd", help="Filter sessions by execution cwd"),
+    limit: int = typer.Option(20, "--limit", help="Maximum sessions to show"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+):
+    """List recent CLI sessions."""
+    from xbot.runtime.session.conversation_store import ConversationStore
+
+    runtime_config = _load_runtime_config(config, workspace)
+    store = ConversationStore(runtime_config.workspace_path)
+    sessions = _list_session_index(store)
+
+    target_cwd = _normalize_exec_cwd(cwd) if cwd else None
+    if target_cwd:
+        sessions = [s for s in sessions if str(s.get("execution_cwd") or "") == target_cwd]
+
+    if limit > 0:
+        sessions = sessions[:limit]
+
+    table = Table(title="CLI Sessions")
+    table.add_column("Session Key", style="cyan")
+    table.add_column("Updated", style="green")
+    table.add_column("SDK Session", style="magenta")
+    table.add_column("Execution CWD", style="yellow")
+
+    for item in sessions:
+        table.add_row(
+            str(item.get("key") or ""),
+            str(item.get("last_used_at") or item.get("updated_at") or "-"),
+            str(item.get("sdk_session_id") or "-"),
+            str(item.get("execution_cwd") or "-"),
+        )
+
+    if not sessions:
+        console.print("[dim]No sessions found.[/dim]")
+        return
+
+    console.print(table)
+
+
+@sessions_app.command("show")
+def sessions_show(
+    session_key: str = typer.Argument(..., help="Session key to inspect"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Config file path"),
+):
+    """Show details for one session."""
+    from xbot.runtime.session.conversation_store import ConversationStore
+
+    runtime_config = _load_runtime_config(config, workspace)
+    store = ConversationStore(runtime_config.workspace_path)
+    session = store.get(session_key)
+    if session is None:
+        console.print(f"[red]Error: session not found: {session_key}[/red]")
+        raise typer.Exit(1)
+
+    metadata = session.metadata if isinstance(session.metadata, dict) else {}
+    lines = [
+        f"Session Key: {session_key}",
+        f"SDK Session: {metadata.get('sdk_session_id') or 'none'}",
+        f"Execution CWD: {metadata.get('execution_cwd') or 'unknown'}",
+        f"Last Used: {metadata.get('last_used_at') or 'unknown'}",
+        f"Run Mode: {metadata.get('run_mode') or 'unknown'}",
+        f"Messages: {len(session.messages)}",
+    ]
+    console.print("\n".join(lines))
 
 
 # ============================================================================

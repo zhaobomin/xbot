@@ -332,6 +332,63 @@ class TestAgentService:
         assert Path(options.cwd) == legacy_cwd.resolve()
 
     @pytest.mark.asyncio
+    async def test_build_sdk_options_cli_falls_back_to_shared_execution_cwd(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """CLI mode should use shared execution_cwd when session override is missing."""
+        from xbot.platform.config.schema import Config
+
+        shared_cli_cwd = tmp_path / "shared-cwd"
+        shared_cli_cwd.mkdir(parents=True)
+        shared_resources["config"] = Config()
+        shared_resources["runtime_registry"] = RuntimeSessionRegistry()
+        shared_resources["run_mode"] = "cli"
+        shared_resources["execution_cwd"] = str(shared_cli_cwd)
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        options = service._build_sdk_options(session_key="cli:no-session-cwd")
+        assert Path(options.cwd) == shared_cli_cwd.resolve()
+
+    @pytest.mark.asyncio
+    async def test_build_sdk_options_system_prompt_uses_session_paths(
+        self,
+        shared_resources: dict[str, Any],
+        tmp_path: Path,
+    ) -> None:
+        """System prompt should reflect per-session execution/workspace paths."""
+        from xbot.platform.config.schema import Config
+
+        session_key = "cli:session-paths"
+        session_cwd = tmp_path / "session-cwd"
+        session_workspace = tmp_path / "session-workspace"
+        session_cwd.mkdir(parents=True)
+        session_workspace.mkdir(parents=True)
+
+        registry = RuntimeSessionRegistry()
+        registry.set_execution_cwd(session_key, str(session_cwd))
+        registry.set_workspace_dir(session_key, str(session_workspace))
+
+        shared_resources["config"] = Config()
+        shared_resources["runtime_registry"] = registry
+        shared_resources["run_mode"] = "cli"
+        default_workspace = tmp_path / "default-workspace"
+        default_workspace.mkdir(parents=True)
+        shared_resources["workspace"] = str(default_workspace)
+
+        config = AgentConfig(model="claude-sonnet-4-6", system_prompt="")
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        options = service._build_sdk_options(session_key=session_key)
+        assert f"Execution CWD: {session_cwd.resolve()}" in options.system_prompt
+        assert f"Workspace Assets Dir: {session_workspace.resolve()}" in options.system_prompt
+
+    @pytest.mark.asyncio
     async def test_process_direct_tool_hint_includes_cli_execution_cwd(
         self,
         config: AgentConfig,
@@ -381,6 +438,109 @@ class TestAgentService:
 
         assert result == "ok"
         assert any('Tool: Bash(cwd="' in line and str(session_cwd.resolve()) in line for line in seen_progress)
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_client_retries_without_resume_for_cli_auto_mode(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        from xbot.platform.config.schema import Config
+
+        registry = RuntimeSessionRegistry()
+        session_key = "cli:retry-resume"
+        registry.get_or_create(session_key)
+        registry._set_sdk_session_id_impl(session_key, "sdk-old")
+
+        shared_resources["config"] = Config()
+        shared_resources["runtime_registry"] = registry
+        shared_resources["run_mode"] = "cli"
+        shared_resources["resume_policy"] = {
+            "mode": "continue",
+            "explicit_resume": False,
+            "strict_resume": False,
+        }
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        fake_client = MagicMock()
+        service._client_pool.get_or_create = AsyncMock(
+            side_effect=[RuntimeError("resume session not found"), fake_client]
+        )
+
+        client = await service._get_or_create_client(session_key)
+        assert client is fake_client
+        assert service._client_pool.get_or_create.await_count == 2
+        assert registry.resolve_sdk_session_id(session_key) is None
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_client_strict_explicit_resume_does_not_retry(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        from xbot.platform.config.schema import Config
+
+        registry = RuntimeSessionRegistry()
+        session_key = "cli:strict-resume"
+        registry.get_or_create(session_key)
+        registry._set_sdk_session_id_impl(session_key, "sdk-explicit")
+
+        shared_resources["config"] = Config()
+        shared_resources["runtime_registry"] = registry
+        shared_resources["run_mode"] = "cli"
+        shared_resources["resume_policy"] = {
+            "mode": "resume",
+            "explicit_resume": True,
+            "strict_resume": True,
+        }
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        service._client_pool.get_or_create = AsyncMock(
+            side_effect=RuntimeError("resume session not found")
+        )
+
+        with pytest.raises(RuntimeError, match="resume session not found"):
+            await service._get_or_create_client(session_key)
+        assert service._client_pool.get_or_create.await_count == 1
+        assert registry.resolve_sdk_session_id(session_key) == "sdk-explicit"
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_client_non_resume_error_does_not_clear_session_mapping(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        from xbot.platform.config.schema import Config
+
+        registry = RuntimeSessionRegistry()
+        session_key = "cli:non-resume-error"
+        registry.get_or_create(session_key)
+        registry._set_sdk_session_id_impl(session_key, "sdk-keep")
+
+        shared_resources["config"] = Config()
+        shared_resources["runtime_registry"] = registry
+        shared_resources["run_mode"] = "cli"
+        shared_resources["resume_policy"] = {
+            "mode": "continue",
+            "explicit_resume": False,
+            "strict_resume": False,
+        }
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        service._client_pool.get_or_create = AsyncMock(
+            side_effect=RuntimeError("session startup unknown provider failure")
+        )
+
+        with pytest.raises(RuntimeError, match="unknown provider failure"):
+            await service._get_or_create_client(session_key)
+        assert service._client_pool.get_or_create.await_count == 1
+        assert registry.resolve_sdk_session_id(session_key) == "sdk-keep"
 
     @pytest.mark.asyncio
     async def test_reset_session_can_drop_sdk_context(

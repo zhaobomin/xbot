@@ -87,11 +87,15 @@ class ContextBuilder:
 
     def build_system_prompt(
         self,
+        *,
+        execution_cwd: Path | None = None,
+        workspace: Path | None = None,
     ) -> str:
         """Build the system prompt from identity, bootstrap files, and memory."""
-        parts = [self._get_identity()]
+        workspace_dir = workspace or self.workspace
+        parts = [self._get_identity(workspace=workspace_dir, execution_cwd=execution_cwd)]
 
-        bootstrap = self._load_bootstrap_files()
+        bootstrap = self._load_bootstrap_files(workspace=workspace_dir)
         if bootstrap:
             parts.append(bootstrap)
 
@@ -101,10 +105,12 @@ class ContextBuilder:
 
         return "\n\n---\n\n".join(parts)
 
-    def _get_identity(self) -> str:
+    def _get_identity(self, *, workspace: Path | None = None, execution_cwd: Path | None = None) -> str:
         """Get the core identity section."""
-        workspace_path = str(self.workspace.expanduser().resolve())
-        execution_cwd_path = str(self.execution_cwd.expanduser().resolve())
+        workspace_dir = workspace or self.workspace
+        cwd = execution_cwd or self.execution_cwd
+        workspace_path = str(workspace_dir.expanduser().resolve())
+        execution_cwd_path = str(cwd.expanduser().resolve())
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
 
@@ -155,7 +161,7 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
             lines += [f"Channel: {channel}", f"Chat ID: {chat_id}"]
         return ContextBuilder._RUNTIME_CONTEXT_TAG + "\n" + "\n".join(lines)
 
-    def _load_bootstrap_files(self) -> str:
+    def _load_bootstrap_files(self, *, workspace: Path | None = None) -> str:
         """Load all bootstrap files from workspace.
 
         Returns empty string when load_bootstrap_files is disabled.
@@ -164,9 +170,10 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
             return ""
 
         parts = []
+        workspace_dir = workspace or self.workspace
 
         for filename in self.BOOTSTRAP_FILES:
-            file_path = self.workspace / filename
+            file_path = workspace_dir / filename
             if file_path.exists():
                 content = file_path.read_text(encoding="utf-8")
                 parts.append(f"## {filename}\n\n{content}")

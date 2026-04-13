@@ -98,6 +98,28 @@ class TestContextBuilder:
         assert "xbot" in prompt
         assert "Workspace" in prompt
 
+    def test_build_system_prompt_supports_runtime_path_override(
+        self,
+        workspace: Path,
+        tmp_path: Path,
+    ) -> None:
+        """System prompt should render runtime overrides when provided."""
+        runtime_workspace = tmp_path / "runtime-workspace"
+        runtime_cwd = tmp_path / "runtime-cwd"
+        runtime_workspace.mkdir(parents=True)
+        runtime_cwd.mkdir(parents=True)
+
+        (runtime_workspace / "AGENTS.md").write_text("runtime-agent", encoding="utf-8")
+        builder = ContextBuilder(workspace, use_reme=False)
+        prompt = builder.build_system_prompt(
+            workspace=runtime_workspace,
+            execution_cwd=runtime_cwd,
+        )
+
+        assert f"Execution CWD: {runtime_cwd.resolve()}" in prompt
+        assert f"Workspace Assets Dir: {runtime_workspace.resolve()}" in prompt
+        assert "runtime-agent" in prompt
+
     def test_build_user_content_text_only(self, builder: ContextBuilder) -> None:
         """Test building user content with text only."""
         result = builder._build_user_content("Hello world", None)
