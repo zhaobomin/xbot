@@ -383,6 +383,11 @@ class AgentService:
             raise
         except Exception as e:
             logger.error(f"[AgentService] Error processing: {e}")
+            if self._should_recycle_client_after_stream_error(e):
+                await self._recycle_session_client_after_stream_error(
+                    context.session_key,
+                    reason=type(e).__name__,
+                )
             yield AgentResponse(
                 content=f"Error: {e}",
                 finish_reason="error",
@@ -419,6 +424,29 @@ class AgentService:
             except Exception:
                 has_interaction = False
         return has_permission or has_interaction
+
+    @staticmethod
+    def _should_recycle_client_after_stream_error(error: Exception) -> bool:
+        """Whether this error indicates the SDK stream/session is unhealthy."""
+        text = str(error).lower()
+        return any(
+            marker in text
+            for marker in (
+                "receive loop idle timeout",
+                "missing idle boundary",
+                "stream ended before idle boundary",
+                "stream timeout error before idle boundary",
+                "sdk stream timeout error before idle boundary",
+            )
+        )
+
+    async def _recycle_session_client_after_stream_error(self, session_key: str, *, reason: str) -> None:
+        """Best-effort cleanup for unhealthy SDK sessions after stream boundary failures."""
+        self._clear_sdk_resume_context(session_key)
+        await self._release_session_client(
+            session_key,
+            reason=f"stream_error:{reason}",
+        )
 
     @staticmethod
     def _build_query_prompt(prompt: str, media: list[Any] | None) -> str:

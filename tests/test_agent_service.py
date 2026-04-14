@@ -1024,6 +1024,26 @@ class TestClientPoolLifecycle:
         assert "s1" not in pool._clients
         assert "s2" in pool._clients
 
+    @pytest.mark.asyncio
+    async def test_get_or_create_recycles_unhealthy_connected_client(self) -> None:
+        """get_or_create should recycle unhealthy clients instead of reusing them."""
+        pool = ClientPool()
+
+        unhealthy_client = MagicMock()
+        unhealthy_client.get_server_info = AsyncMock(side_effect=TimeoutError("stuck"))
+        unhealthy_client.disconnect = AsyncMock(return_value=None)
+        pool._clients["s1"] = ClientRecord(session_key="s1", client=unhealthy_client)
+
+        new_client = MagicMock()
+        new_client.connect = AsyncMock(return_value=None)
+
+        with patch("claude_agent_sdk.ClaudeSDKClient", return_value=new_client):
+            created = await pool.get_or_create("s1", options=MagicMock())
+
+        assert created is new_client
+        unhealthy_client.disconnect.assert_awaited_once()
+        new_client.connect.assert_awaited_once()
+
 
 class TestResultDrainBehavior:
     """Tests for idle-boundary turn behavior in process()."""
@@ -1102,7 +1122,11 @@ class TestResultDrainBehavior:
             async def receive_messages(self):
                 yield ResultMessage("R1")
 
-        with patch.object(service, "_get_or_create_client", AsyncMock(return_value=FakeClient())):
+        with (
+            patch.object(service, "_get_or_create_client", AsyncMock(return_value=FakeClient())),
+            patch.object(service, "_release_session_client", AsyncMock(return_value=None)) as release_client,
+            patch.object(service, "_clear_sdk_resume_context") as clear_resume,
+        ):
             ctx = AgentContext(
                 session_key="test:idle2",
                 prompt="hello",
@@ -1116,6 +1140,8 @@ class TestResultDrainBehavior:
         assert responses[0].content == "R1"
         assert responses[1].finish_reason == "error"
         assert "idle boundary" in responses[1].content.lower()
+        clear_resume.assert_called_once_with("test:idle2")
+        release_client.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_idle_boundary_parser_falls_back_to_message_state(self) -> None:

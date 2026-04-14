@@ -65,8 +65,18 @@ class ClientPool:
         async with self._lock:
             record = self._clients.get(session_key)
             if record is not None and record.state == "connected":
-                record.last_used_at = time.time()
-                return record.client
+                if await self._is_client_healthy(record.client, session_key):
+                    record.last_used_at = time.time()
+                    return record.client
+
+                logger.warning("Recycling unhealthy SDK client for session %s", session_key)
+                try:
+                    await asyncio.wait_for(record.client.disconnect(), timeout=3.0)
+                except Exception as e:
+                    logger.debug("Best-effort disconnect failed for unhealthy client %s: %s", session_key, e)
+                    await self._best_effort_force_disconnect(record.client, session_key)
+                record.state = "disconnected"
+                del self._clients[session_key]
 
             # Create new client
             from claude_agent_sdk import ClaudeSDKClient
@@ -93,6 +103,18 @@ class ClientPool:
             )
             logger.info(f"Created and connected client for session {session_key}")
             return client
+
+    async def _is_client_healthy(self, client: Any, session_key: str) -> bool:
+        """Perform a lightweight liveness check before reusing a connected client."""
+        get_info = getattr(client, "get_server_info", None)
+        if not callable(get_info):
+            return True
+        try:
+            await asyncio.wait_for(get_info(), timeout=2.0)
+            return True
+        except Exception as e:
+            logger.warning("SDK client health check failed for %s: %s", session_key, e)
+            return False
 
     async def disconnect(self, session_key: str) -> bool:
         """Disconnect a client.
