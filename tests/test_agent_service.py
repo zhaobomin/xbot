@@ -1140,7 +1140,7 @@ class TestResultDrainBehavior:
         assert responses[0].content == "R1"
         assert responses[1].finish_reason == "error"
         assert "idle boundary" in responses[1].content.lower()
-        clear_resume.assert_called_once_with("test:idle2")
+        clear_resume.assert_not_called()
         release_client.assert_awaited_once()
 
     @pytest.mark.asyncio

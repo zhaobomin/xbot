@@ -441,8 +441,12 @@ class AgentService:
         )
 
     async def _recycle_session_client_after_stream_error(self, session_key: str, *, reason: str) -> None:
-        """Best-effort cleanup for unhealthy SDK sessions after stream boundary failures."""
-        self._clear_sdk_resume_context(session_key)
+        """Best-effort cleanup for unhealthy SDK sessions after stream boundary failures.
+
+        Important:
+        - Keep sdk_session_id/resume context intact to preserve conversation continuity.
+        - Only recycle the live client process/connection for resource recovery.
+        """
         await self._release_session_client(
             session_key,
             reason=f"stream_error:{reason}",
