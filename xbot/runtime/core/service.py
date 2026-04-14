@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
@@ -151,6 +152,14 @@ class AgentService:
         self._memory_consolidator: Any | None = None
         self._sdk_settings_file: str | None = None
         self._async_consolidation_tasks: set[asyncio.Task] = set()
+        self._cli_stderr_window_seconds = 5.0
+        self._cli_stderr_max_warnings_per_window = 20
+        self._cli_stderr_max_line_chars = 800
+        self._cli_stderr_window_start = time.monotonic()
+        self._cli_stderr_emitted_in_window = 0
+        self._cli_stderr_rate_limited_in_window = 0
+        self._cli_stderr_duplicate_suppressed_in_window = 0
+        self._cli_stderr_last_line: str | None = None
 
         # For backward compatibility with AgentRuntime interface
         self._pending_config = config
@@ -915,6 +924,24 @@ class AgentService:
             return [""]
         return self._resolve_setting_sources(sdk_config, run_mode)
 
+    def _resolve_disallowed_tools(self, sdk_config: Any, run_mode: str) -> list[str]:
+        """Resolve disallowed tools from config with optional run-mode override."""
+        if sdk_config is None:
+            return []
+
+        base_raw = getattr(sdk_config, "disallowed_tools", [])
+        base = [t.strip() for t in (base_raw or []) if isinstance(t, str) and t.strip()]
+
+        by_mode_raw = getattr(sdk_config, "disallowed_tools_by_mode", None)
+        if isinstance(by_mode_raw, dict):
+            override_raw = by_mode_raw.get(run_mode)
+            if isinstance(override_raw, list):
+                override = [t.strip() for t in override_raw if isinstance(t, str) and t.strip()]
+                if override:
+                    return list(dict.fromkeys(override))
+
+        return list(dict.fromkeys(base))
+
     def _log_memory_runtime_config(self, runtime_config: Any) -> None:
         """Log memory wiring details for observability."""
         sdk_cfg = getattr(getattr(runtime_config, "agents", None), "claude_sdk", None)
@@ -940,6 +967,52 @@ class AgentService:
             preset,
             append_xbot_prompt,
         )
+
+    def _handle_cli_stderr(self, line: str) -> None:
+        """Log SDK CLI stderr with rate limiting and duplicate suppression."""
+        text = str(line or "").strip()
+        if not text:
+            return
+
+        now = time.monotonic()
+        elapsed = now - self._cli_stderr_window_start
+        if elapsed >= self._cli_stderr_window_seconds:
+            summary_parts: list[str] = []
+            if self._cli_stderr_rate_limited_in_window > 0:
+                summary_parts.append(
+                    f"{self._cli_stderr_rate_limited_in_window} rate-limited lines"
+                )
+            if self._cli_stderr_duplicate_suppressed_in_window > 0:
+                summary_parts.append(
+                    f"{self._cli_stderr_duplicate_suppressed_in_window} duplicate lines"
+                )
+            if summary_parts:
+                logger.warning(
+                    "[CLI stderr] Suppressed %s in last %.1fs",
+                    " and ".join(summary_parts),
+                    elapsed,
+                )
+
+            self._cli_stderr_window_start = now
+            self._cli_stderr_emitted_in_window = 0
+            self._cli_stderr_rate_limited_in_window = 0
+            self._cli_stderr_duplicate_suppressed_in_window = 0
+            self._cli_stderr_last_line = None
+
+        if text == self._cli_stderr_last_line:
+            self._cli_stderr_duplicate_suppressed_in_window += 1
+            return
+
+        self._cli_stderr_last_line = text
+        if self._cli_stderr_emitted_in_window >= self._cli_stderr_max_warnings_per_window:
+            self._cli_stderr_rate_limited_in_window += 1
+            return
+
+        if len(text) > self._cli_stderr_max_line_chars:
+            text = text[: self._cli_stderr_max_line_chars] + " ...[truncated]"
+
+        self._cli_stderr_emitted_in_window += 1
+        logger.warning("[CLI stderr] %s", text)
 
     def _build_system_prompt(
         self,
@@ -1132,8 +1205,8 @@ class AgentService:
         # Read SDK-specific parameters
         max_turns = getattr(sdk_config, "max_turns", 40) if sdk_config else 40
         permission_mode = getattr(sdk_config, "permission_mode", "acceptEdits") if sdk_config else "acceptEdits"
-        disallowed_tools = getattr(sdk_config, "disallowed_tools", ["WebFetch", "WebSearch"]) if sdk_config else ["WebFetch", "WebSearch"]
         run_mode = str(self._shared_resources.get("run_mode", "cli")).lower()
+        disallowed_tools = self._resolve_disallowed_tools(sdk_config, run_mode)
         setting_sources = self._effective_setting_sources(sdk_config, run_mode)
 
         permission_handler = self._shared_resources.get("permission_handler")
@@ -1182,11 +1255,12 @@ class AgentService:
             hooks=hooks,
             setting_sources=setting_sources,
             # Capture CLI stderr for debugging
-            stderr=lambda line: logger.warning(f"[CLI stderr] {line}"),
+            stderr=self._handle_cli_stderr,
         )
         logger.info(
             f"[AgentService] SDK options: model={options.model}, cwd={execution_cwd}, "
             f"max_turns={max_turns}, permission_mode={permission_mode}, "
+            f"disallowed_tools={disallowed_tools}, "
             f"setting_sources={setting_sources}, "
             f"env keys={list(options.env.keys()) if options.env else 'None'}, "
             f"add_dirs={len(add_dirs)}, plugins={len(plugins)}, "

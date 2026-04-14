@@ -129,6 +129,9 @@ class ClaudeSDKAgentConfig(Base):
     # 禁用 SDK 内置工具，避免与 xbot MCP 工具冲突
     # 默认禁用 WebFetch/WebSearch，让 agent 使用带代理配置的 mcp__xbot__web_fetch/web_search
     disallowed_tools: list[str] = Field(default_factory=lambda: ["WebFetch", "WebSearch"])
+    # 按运行模式覆盖 disallowed_tools（可选，未配置时使用 disallowed_tools）
+    # 示例: {"gateway": ["WebFetch", "WebSearch", "EnterPlanMode", "ExitPlanMode"]}
+    disallowed_tools_by_mode: dict[str, list[str]] = Field(default_factory=dict)
     # Context Compaction 通知配置
     compact_notify: bool = True  # 是否在压缩上下文时发送通知
     include_partial_messages: bool = False  # Disable SDK partial/delta messages by default for stable output

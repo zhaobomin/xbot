@@ -63,6 +63,55 @@ class TestAgentService:
 
         assert service._initialized is False
 
+    def test_handle_cli_stderr_rate_limit_summary(self) -> None:
+        """CLI stderr logger should rate-limit lines and emit suppression summary."""
+        service = AgentService()
+        service._cli_stderr_max_warnings_per_window = 2
+        service._cli_stderr_window_seconds = 60.0
+
+        with patch("xbot.runtime.core.service.logger.warning") as mock_warning:
+            service._handle_cli_stderr("line-1")
+            service._handle_cli_stderr("line-2")
+            service._handle_cli_stderr("line-3")  # rate-limited
+
+            assert mock_warning.call_count == 2
+
+            # Force window rollover and trigger summary flush.
+            service._cli_stderr_window_start -= 61.0
+            service._handle_cli_stderr("line-4")
+
+            assert mock_warning.call_count == 4
+            suppression_calls = [
+                call for call in mock_warning.call_args_list
+                if "Suppressed" in str(call.args[0])
+            ]
+            assert suppression_calls
+            assert "rate-limited lines" in str(suppression_calls[0].args[1])
+
+    def test_handle_cli_stderr_suppresses_consecutive_duplicates(self) -> None:
+        """Consecutive duplicate stderr lines should be collapsed."""
+        service = AgentService()
+        service._cli_stderr_window_seconds = 60.0
+
+        with patch("xbot.runtime.core.service.logger.warning") as mock_warning:
+            service._handle_cli_stderr("same-line")
+            service._handle_cli_stderr("same-line")
+            service._handle_cli_stderr("same-line")
+
+            # First line is logged once; duplicates are suppressed.
+            assert mock_warning.call_count == 1
+
+            # Force rollover to emit duplicate suppression summary.
+            service._cli_stderr_window_start -= 61.0
+            service._handle_cli_stderr("next-line")
+
+            suppression_calls = [
+                call for call in mock_warning.call_args_list
+                if "Suppressed" in str(call.args[0])
+            ]
+            assert suppression_calls
+            assert "duplicate lines" in str(suppression_calls[0].args[1])
+
     @pytest.mark.asyncio
     async def test_process_returns_response(
         self,
@@ -403,6 +452,57 @@ class TestAgentService:
         assert "--setting-sources" in cmd
         idx = cmd.index("--setting-sources")
         assert cmd[idx + 1] == ""
+
+    @pytest.mark.asyncio
+    async def test_build_sdk_options_gateway_uses_disallowed_tools_by_mode_override(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """Gateway should honor mode-specific disallowed tool override from config."""
+        from xbot.platform.config.schema import Config
+
+        runtime_config = Config()
+        runtime_config.agents.claude_sdk.disallowed_tools = ["WebFetch"]
+        runtime_config.agents.claude_sdk.disallowed_tools_by_mode = {
+            "gateway": ["WebFetch", "WebSearch", "EnterPlanMode", "ExitPlanMode"],
+        }
+        shared_resources["config"] = runtime_config
+        shared_resources["run_mode"] = "gateway"
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        options = service._build_sdk_options(session_key="gateway:tools")
+        assert getattr(options, "disallowed_tools", None) == [
+            "WebFetch",
+            "WebSearch",
+            "EnterPlanMode",
+            "ExitPlanMode",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_build_sdk_options_cli_uses_base_disallowed_tools_without_override(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """CLI should use base disallowed tools when no mode override is configured."""
+        from xbot.platform.config.schema import Config
+
+        runtime_config = Config()
+        runtime_config.agents.claude_sdk.disallowed_tools = ["WebFetch", "WebSearch"]
+        runtime_config.agents.claude_sdk.disallowed_tools_by_mode = {
+            "gateway": ["WebFetch", "WebSearch", "EnterPlanMode", "ExitPlanMode"],
+        }
+        shared_resources["config"] = runtime_config
+        shared_resources["run_mode"] = "cli"
+
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        options = service._build_sdk_options(session_key="cli:tools")
+        assert getattr(options, "disallowed_tools", None) == ["WebFetch", "WebSearch"]
 
     @pytest.mark.asyncio
     async def test_build_sdk_options_gateway_keeps_configured_permission_mode(
@@ -2529,4 +2629,4 @@ class TestSubagentModelCompatHooks:
             MagicMock(),
         )
 
-        assert output is None
+        assert output == {}

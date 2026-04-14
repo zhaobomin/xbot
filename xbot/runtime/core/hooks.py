@@ -91,7 +91,7 @@ class CompactHookHandler:
         input: "PreCompactHookInput",
         output: str | None,
         context: "HookContext",
-    ) -> dict[str, str] | None:
+    ) -> dict[str, str]:
         """Handle PreCompact hook event.
 
         Args:
@@ -100,10 +100,10 @@ class CompactHookHandler:
             context: Hook context with signal (does NOT contain session_id)
 
         Returns:
-            Hook output dict with systemMessage for CLI display, or None if disabled
+            Hook output dict with systemMessage for CLI display.
         """
         if not self.enabled:
-            return None
+            return {}
 
         # DEBUG: Log raw input and context for troubleshooting
         logger.info(
@@ -228,27 +228,27 @@ class SubagentModelCompatHookHandler:
         input: "PreToolUseHookInput",
         output: str | None,
         context: "HookContext",
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, Any]:
         del output, context
         if not self.enabled:
-            return None
+            return {}
 
         tool_name = self._get_field(input, "tool_name")
         if tool_name != "Agent":
-            return None
+            return {}
 
         tool_input = self._get_field(input, "tool_input")
         if not isinstance(tool_input, dict):
-            return None
+            return {}
 
         subagent_type = tool_input.get("subagent_type")
         if not isinstance(subagent_type, str) or not subagent_type.strip():
-            return None
+            return {}
 
         model_raw = tool_input.get("model")
         model = str(model_raw).strip() if model_raw is not None else ""
         if not model or model.lower() == "inherit":
-            return None
+            return {}
 
         supported = True
         if self.is_model_supported is not None:
@@ -259,7 +259,7 @@ class SubagentModelCompatHookHandler:
                 supported = True
 
         if supported:
-            return None
+            return {}
 
         updated_input = dict(tool_input)
         updated_input["model"] = "inherit"

@@ -46,7 +46,7 @@ class TestCompactHookHandler:
     """Tests for CompactHookHandler."""
 
     def test_handler_disabled(self) -> None:
-        """Test that disabled handler returns None."""
+        """Test that disabled handler returns empty hook output."""
         from xbot.runtime.core.hooks import CompactHookHandler
 
         handler = CompactHookHandler(enabled=False)
@@ -62,7 +62,7 @@ class TestCompactHookHandler:
 
         import asyncio
         result = asyncio.run(handler(mock_input, None, mock_context))
-        assert result is None
+        assert result == {}
 
     def test_handler_enabled_returns_message(self) -> None:
         """Test that enabled handler returns notification message dict."""
@@ -249,7 +249,7 @@ class TestSubagentModelCompatHookHandler:
         import asyncio
         result = asyncio.run(handler(mock_input, None, mock_context))
 
-        assert result is None
+        assert result == {}
 
     def test_ignores_non_typed_agent_call(self) -> None:
         """No rewrite when subagent_type is absent."""
@@ -272,4 +272,4 @@ class TestSubagentModelCompatHookHandler:
         import asyncio
         result = asyncio.run(handler(mock_input, None, mock_context))
 
-        assert result is None
+        assert result == {}
