@@ -148,7 +148,6 @@ class RuntimeResponseHandlers:
                 msg.session_key,
                 SessionEvent.PERMISSION_PENDING,
                 reason="pending_permission_detected",
-                strict=False,
             )
 
         response = PermissionResponse(
@@ -164,7 +163,6 @@ class RuntimeResponseHandlers:
                 msg.session_key,
                 SessionEvent.PERMISSION_EXPIRED,
                 reason="permission_response_expired",
-                strict=False,
             )
             await self._bus.publish_outbound(
                 OutboundMessage(
@@ -181,7 +179,6 @@ class RuntimeResponseHandlers:
             msg.session_key,
             SessionEvent.PERMISSION_RESOLVED,
             reason="permission_response_submitted",
-            strict=False,
         )
 
         return True
@@ -256,7 +253,6 @@ class RuntimeResponseHandlers:
                 msg.session_key,
                 SessionEvent.INTERACTION_PENDING,
                 reason="pending_interaction_detected",
-                strict=False,
             )
 
         req = self._bus.get_interaction_request(request_id)
@@ -265,7 +261,6 @@ class RuntimeResponseHandlers:
                 msg.session_key,
                 SessionEvent.INTERACTION_EXPIRED,
                 reason="interaction_request_expired",
-                strict=False,
             )
             await self._bus.publish_outbound(
                 OutboundMessage(
@@ -310,7 +305,6 @@ class RuntimeResponseHandlers:
                             msg.session_key,
                             SessionEvent.INTERACTION_EXPIRED,
                             reason="invalid_answer_max_retries",
-                            strict=False,
                         )
                         self._clear_interaction_retry_state(
                             msg.session_key,
@@ -364,7 +358,6 @@ class RuntimeResponseHandlers:
                 msg.session_key,
                 SessionEvent.INTERACTION_EXPIRED,
                 reason="interaction_response_expired",
-                strict=False,
             )
             await self._bus.publish_outbound(
                 OutboundMessage(
@@ -388,7 +381,6 @@ class RuntimeResponseHandlers:
             msg.session_key,
             SessionEvent.INTERACTION_RESOLVED,
             reason="interaction_response_submitted",
-            strict=False,
         )
         logger.info(
             f"[Interaction] session={msg.session_key}, request_id={request_id}, "

@@ -196,7 +196,6 @@ class LocalCommandHandler:
                 session_key,
                 SessionEvent.TURN_COMPLETED,
                 reason="user_stop",
-                strict=False,
             )
 
         # Build response
@@ -240,7 +239,6 @@ class LocalCommandHandler:
                 session_key,
                 SessionEvent.TURN_COMPLETED,
                 reason="user_reset",
-                strict=False,
             )
 
         # Build response

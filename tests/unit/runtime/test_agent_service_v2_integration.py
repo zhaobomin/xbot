@@ -495,3 +495,55 @@ async def test_dispatch_process_exception_returns_failure_message(tmp_path) -> N
     outbound = await _drain_outbound(bus)
     assert len(outbound) == 1
     assert "处理出错: boom" in outbound[0].content
+
+
+@pytest.mark.asyncio
+async def test_interrupt_session_disconnect_failure_transitions_to_broken(tmp_path) -> None:
+    service, registry = _make_service(tmp_path)
+    session_key = "feishu:c-interrupt"
+    service._active_tasks[session_key] = asyncio.create_task(asyncio.sleep(10))
+
+    async def _disconnect_fail(key: str) -> bool:
+        _ = key
+        return False
+
+    service._client_pool.disconnect = _disconnect_fail  # type: ignore[method-assign]
+
+    result = await service.interrupt_session(session_key)
+    assert result["interrupted"] is True
+    assert registry.get_phase(session_key) == SessionPhase.BROKEN
+
+
+@pytest.mark.asyncio
+async def test_process_direct_recoverable_error_auto_recovers_once(tmp_path) -> None:
+    service, _ = _make_service(tmp_path)
+    process_calls = {"count": 0}
+    recover_calls = {"count": 0}
+
+    async def fake_process(context: AgentContext) -> AsyncIterator[AgentResponse]:
+        _ = context
+        process_calls["count"] += 1
+        if process_calls["count"] == 1:
+            yield AgentResponse(
+                content=(
+                    "Error: [AgentService] Receive loop idle timeout (300.0s) "
+                    "before idle boundary for feishu:c1 after 8 messages"
+                ),
+                finish_reason="error",
+            )
+            return
+        yield AgentResponse(content="done", event_type="result")
+
+    async def fake_recovery(session_key: str, *, reason: str) -> bool:
+        _ = session_key
+        _ = reason
+        recover_calls["count"] += 1
+        return True
+
+    service.process = fake_process  # type: ignore[method-assign]
+    service._attempt_broken_session_recovery = fake_recovery  # type: ignore[method-assign]
+
+    result = await service.process_direct("hello", session_key="feishu:c1")
+    assert result == "done"
+    assert process_calls["count"] == 2
+    assert recover_calls["count"] == 1

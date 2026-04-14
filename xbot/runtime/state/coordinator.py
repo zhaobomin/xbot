@@ -120,15 +120,19 @@ _EVENT_TARGET: dict[SessionEvent, SessionPhase] = {
 VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
     SessionPhase.IDLE: {
         SessionPhase.ACQUIRING_CLIENT,
+        SessionPhase.WAITING_PERMISSION,
+        SessionPhase.WAITING_INTERACTION,
         SessionPhase.RELEASING_CLIENT,
         SessionPhase.BROKEN,
     },
     SessionPhase.ACQUIRING_CLIENT: {
         SessionPhase.SENDING_QUERY,
+        SessionPhase.RELEASING_CLIENT,
         SessionPhase.BROKEN,
     },
     SessionPhase.SENDING_QUERY: {
         SessionPhase.RECEIVING_STREAM,
+        SessionPhase.RELEASING_CLIENT,
         SessionPhase.BROKEN,
     },
     SessionPhase.RECEIVING_STREAM: {

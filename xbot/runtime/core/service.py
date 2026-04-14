@@ -286,11 +286,10 @@ class AgentService:
         self._set_session_routing(context.session_key, context.channel, context.chat_id)
         self._set_runtime_tool_and_permission_context(context)
         if sm:
-            sm.dispatch(
+            self._dispatch_state_event(
                 context.session_key,
                 SessionEvent.USER_MESSAGE,
                 reason="process_start",
-                strict=False,
             )
 
         try:
@@ -298,19 +297,17 @@ class AgentService:
             try:
                 client = await self._get_or_create_client(context.session_key)
                 if sm:
-                    sm.dispatch(
+                    self._dispatch_state_event(
                         context.session_key,
                         SessionEvent.CLIENT_ACQUIRED,
                         reason="client_ready",
-                        strict=False,
                     )
             except Exception:
                 if sm:
-                    sm.dispatch(
+                    self._dispatch_state_event(
                         context.session_key,
                         SessionEvent.CLIENT_ACQUIRE_FAILED,
                         reason="client_acquire_failed",
-                        strict=False,
                     )
                 raise
 
@@ -322,19 +319,17 @@ class AgentService:
             try:
                 await asyncio.wait_for(client.query(query_prompt), timeout=30.0)
                 if sm:
-                    sm.dispatch(
+                    self._dispatch_state_event(
                         context.session_key,
                         SessionEvent.QUERY_SENT,
                         reason="query_sent",
-                        strict=False,
                     )
             except Exception:
                 if sm:
-                    sm.dispatch(
+                    self._dispatch_state_event(
                         context.session_key,
                         SessionEvent.QUERY_FAILED,
                         reason="query_failed",
-                        strict=False,
                     )
                 raise
             logger.info(f"[AgentService] Query sent, starting receive loop for {context.session_key}")
@@ -362,22 +357,20 @@ class AgentService:
                     message = await asyncio.wait_for(_read_next_message(), timeout=idle_timeout)
                 except StopAsyncIteration:
                     if sm:
-                        sm.dispatch(
+                        self._dispatch_state_event(
                             context.session_key,
                             SessionEvent.STREAM_ENDED_UNEXPECTEDLY,
                             reason="stream_ended_unexpectedly",
-                            strict=False,
                         )
                     raise RuntimeError(
                         f"SDK stream ended before idle boundary for session {context.session_key}"
                     )
                 except _SdkStreamTimeoutError as e:
                     if sm:
-                        sm.dispatch(
+                        self._dispatch_state_event(
                             context.session_key,
                             SessionEvent.STREAM_TIMEOUT,
                             reason="sdk_stream_timeout",
-                            strict=False,
                         )
                     raise RuntimeError(
                         f"SDK stream timeout error before idle boundary for {context.session_key}: {e}"
@@ -394,11 +387,10 @@ class AgentService:
                         )
                         break
                     if sm:
-                        sm.dispatch(
+                        self._dispatch_state_event(
                             context.session_key,
                             SessionEvent.STREAM_TIMEOUT,
                             reason="receive_loop_idle_timeout",
-                            strict=False,
                         )
                     raise RuntimeError(
                         "[AgentService] Receive loop idle timeout "
@@ -418,11 +410,10 @@ class AgentService:
                 if self._is_idle_boundary_message(message):
                     saw_idle_boundary = True
                     if sm:
-                        sm.dispatch(
+                        self._dispatch_state_event(
                             context.session_key,
                             SessionEvent.STREAM_IDLE_BOUNDARY,
                             reason="idle_boundary",
-                            strict=False,
                         )
                     logger.info(
                         "[AgentService] idle boundary reached for %s after %s messages",
@@ -445,21 +436,19 @@ class AgentService:
         except asyncio.CancelledError:
             logger.info(f"[AgentService] Processing cancelled for {context.session_key}")
             if sm:
-                sm.dispatch(
+                self._dispatch_state_event(
                     context.session_key,
                     SessionEvent.INTERRUPT,
                     reason="process_cancelled",
-                    strict=False,
                 )
             raise
         except Exception as e:
             logger.error(f"[AgentService] Error processing: {e}")
             if sm and self._is_recoverable_stream_error_text(str(e)):
-                sm.dispatch(
+                self._dispatch_state_event(
                     context.session_key,
                     SessionEvent.STREAM_ERROR,
                     reason=type(e).__name__,
-                    strict=False,
                 )
             yield AgentResponse(
                 content=f"Error: {e}",
@@ -534,25 +523,22 @@ class AgentService:
                     has_pending_interaction = False
 
         if has_pending_permission:
-            sm.dispatch(
+            self._dispatch_state_event(
                 session_key,
                 SessionEvent.PERMISSION_PENDING,
                 reason=f"{reason}:pending_permission",
-                strict=False,
             )
         elif has_pending_interaction:
-            sm.dispatch(
+            self._dispatch_state_event(
                 session_key,
                 SessionEvent.INTERACTION_PENDING,
                 reason=f"{reason}:pending_interaction",
-                strict=False,
             )
         else:
-            sm.dispatch(
+            self._dispatch_state_event(
                 session_key,
                 SessionEvent.TURN_COMPLETED,
                 reason=f"{reason}:turn_completed",
-                strict=False,
             )
 
     async def _attempt_broken_session_recovery(self, session_key: str, *, reason: str) -> bool:
@@ -565,11 +551,10 @@ class AgentService:
         """
         sm = self._shared_resources.get("runtime_registry")
         if sm:
-            sm.dispatch(
+            self._dispatch_state_event(
                 session_key,
                 SessionEvent.STREAM_ERROR,
                 reason=f"{reason}:stream_error",
-                strict=False,
             )
 
         released = await self._release_session_client(
@@ -578,27 +563,24 @@ class AgentService:
         )
         if released:
             if sm:
-                sm.dispatch(
+                self._dispatch_state_event(
                     session_key,
                     SessionEvent.DISCONNECT_OK,
                     reason=f"{reason}:disconnect_ok",
-                    strict=False,
                 )
-                sm.dispatch(
+                self._dispatch_state_event(
                     session_key,
                     SessionEvent.RECOVER,
                     reason=f"{reason}:recover",
-                    strict=False,
                 )
                 sm.reset_recovery_failures(session_key)
             return True
 
         if sm:
-            sm.dispatch(
+            self._dispatch_state_event(
                 session_key,
                 SessionEvent.DISCONNECT_FAILED,
                 reason=f"{reason}:disconnect_failed",
-                strict=False,
             )
             fail_count = sm.note_recovery_failure(session_key)
             if fail_count >= 3:
@@ -917,13 +899,56 @@ class AgentService:
         if task and not task.done():
             task.cancel()
             interrupted = True
-        await self._client_pool.disconnect(session_key)
+        disconnected = await self._client_pool.disconnect(session_key)
         # Transition to releasing/idle
         sm = self._shared_resources.get("runtime_registry")
         if sm:
-            sm.dispatch(session_key, SessionEvent.INTERRUPT, reason="interrupted", strict=False)
-            sm.dispatch(session_key, SessionEvent.DISCONNECT_OK, reason="interrupt_disconnect", strict=False)
+            self._dispatch_state_event(
+                session_key,
+                SessionEvent.INTERRUPT,
+                reason="interrupted",
+            )
+            self._dispatch_state_event(
+                session_key,
+                SessionEvent.DISCONNECT_OK if disconnected else SessionEvent.DISCONNECT_FAILED,
+                reason="interrupt_disconnect",
+            )
         return {"interrupted": interrupted, "usage": None}
+
+    def _dispatch_state_event(
+        self,
+        session_key: str,
+        event: SessionEvent,
+        *,
+        reason: str = "",
+        strict: bool = True,
+    ) -> bool:
+        """Dispatch one session event through runtime registry with guard logging."""
+        sm = self._shared_resources.get("runtime_registry")
+        if not sm:
+            return False
+        try:
+            ok = sm.dispatch(session_key, event, reason=reason, strict=strict)
+            if not ok:
+                phase = sm.get_phase(session_key)
+                logger.warning(
+                    "[AgentService] state transition rejected: session=%s event=%s phase=%s reason=%s strict=%s",
+                    session_key,
+                    event.value,
+                    phase.value if hasattr(phase, "value") else phase,
+                    reason,
+                    strict,
+                )
+            return ok
+        except Exception as e:
+            logger.warning(
+                "[AgentService] state dispatch failed: session=%s event=%s reason=%s error=%s",
+                session_key,
+                event.value,
+                reason,
+                e,
+            )
+            return False
 
     # === State Delegation ===
 
@@ -2461,42 +2486,58 @@ class AgentService:
         try:
             final_result_text = ""
             execution_cwd = self._resolve_execution_cwd(session_key)
-            async for response in self.process(context):
-                if on_progress and response.progress_texts:
-                    for text in response.progress_texts:
+            attempts = 0
+            max_attempts = 2
+            while attempts < max_attempts:
+                error_response_content: str | None = None
+                async for response in self.process(context):
+                    if on_progress and response.progress_texts:
+                        for text in response.progress_texts:
+                            await self._emit_progress(
+                                on_progress,
+                                text,
+                                tool_hint=False,
+                                event_type=response.event_type or "progress",
+                                event_data=response.event_data,
+                            )
+                    if on_progress and response.tool_hint_text:
                         await self._emit_progress(
                             on_progress,
-                            text,
-                            tool_hint=False,
-                            event_type=response.event_type or "progress",
+                            response.tool_hint_text,
+                            tool_hint=True,
+                            event_type="tool_hint",
+                        )
+                    if on_progress and response.tool_calls:
+                        await self._emit_progress(
+                            on_progress,
+                            self._format_tool_hint(response.tool_calls, execution_cwd=execution_cwd),
+                            tool_hint=True,
+                            event_type="tool_call",
+                            event_data={"tool_calls": response.tool_calls},
+                        )
+                    if on_progress and response.is_delta and response.delta_content:
+                        await self._emit_progress(
+                            on_progress,
+                            response.delta_content,
+                            event_type=response.event_type or "content_delta",
                             event_data=response.event_data,
                         )
-                if on_progress and response.tool_hint_text:
-                    await self._emit_progress(
-                        on_progress,
-                        response.tool_hint_text,
-                        tool_hint=True,
-                        event_type="tool_hint",
+                    if response.finish_reason == "error" and response.content:
+                        error_response_content = response.content
+                        final_result_text = response.content
+                        break
+                    if response.event_type == "result" and response.content:
+                        final_result_text = response.content
+
+                if error_response_content and attempts == 0 and self._is_recoverable_stream_error_text(error_response_content):
+                    recovered = await self._attempt_broken_session_recovery(
+                        session_key,
+                        reason="process_direct_stream_error_auto_retry",
                     )
-                if on_progress and response.tool_calls:
-                    await self._emit_progress(
-                        on_progress,
-                        self._format_tool_hint(response.tool_calls, execution_cwd=execution_cwd),
-                        tool_hint=True,
-                        event_type="tool_call",
-                        event_data={"tool_calls": response.tool_calls},
-                    )
-                if on_progress and response.is_delta and response.delta_content:
-                    await self._emit_progress(
-                        on_progress,
-                        response.delta_content,
-                        event_type=response.event_type or "content_delta",
-                        event_data=response.event_data,
-                    )
-                if response.finish_reason == "error" and response.content:
-                    final_result_text = response.content
-                if response.event_type == "result" and response.content:
-                    final_result_text = response.content
+                    if recovered:
+                        attempts += 1
+                        continue
+                break
 
             return final_result_text
         finally:
