@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 
@@ -26,7 +25,7 @@ from xbot.runtime.core.command_handlers import LocalCommandHandler
 from xbot.runtime.core.context.builder import ContextBuilder
 from xbot.runtime.core.protocol import AgentContext, AgentResponse, StructuredLLMResponse, ToolCall
 from xbot.runtime.core.types import AgentConfig
-from xbot.runtime.state.machine import SessionPhase
+from xbot.runtime.state import SessionEvent, SessionPhase
 
 if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeSDKClient
@@ -97,19 +96,6 @@ def _progress_kind_from_event_type(event_type: str, *, tool_hint: bool = False) 
     if tool_hint:
         return "tool"
     return _EVENT_TYPE_TO_KIND.get(event_type, "progress")
-
-
-class _NoOpTransaction:
-    """No-op transaction for when runtime_registry is not available."""
-
-    def set_phase(self, phase: Any, reason: str = "") -> None:
-        pass
-
-    def set_sdk_session_id(self, sdk_session_id: Any) -> None:
-        pass
-
-    def clear_sdk_session_id(self) -> None:
-        pass
 
 
 class AgentService:
@@ -294,20 +280,63 @@ class AgentService:
             f"prompt={context.prompt[:50]}..."
         )
 
+        sm = self._shared_resources.get("runtime_registry")
+
         # Keep routing info fresh so compact hooks can always resolve targets.
         self._set_session_routing(context.session_key, context.channel, context.chat_id)
         self._set_runtime_tool_and_permission_context(context)
+        if sm:
+            sm.dispatch(
+                context.session_key,
+                SessionEvent.USER_MESSAGE,
+                reason="process_start",
+                strict=False,
+            )
 
-        # Get or create client
-        client = await self._get_or_create_client(context.session_key)
-        await self._refresh_session_commands_from_client(context.session_key, client)
-
-        # Process through SDK using query + receive_messages pattern
         try:
+            # Get or create client
+            try:
+                client = await self._get_or_create_client(context.session_key)
+                if sm:
+                    sm.dispatch(
+                        context.session_key,
+                        SessionEvent.CLIENT_ACQUIRED,
+                        reason="client_ready",
+                        strict=False,
+                    )
+            except Exception:
+                if sm:
+                    sm.dispatch(
+                        context.session_key,
+                        SessionEvent.CLIENT_ACQUIRE_FAILED,
+                        reason="client_acquire_failed",
+                        strict=False,
+                    )
+                raise
+
+            await self._refresh_session_commands_from_client(context.session_key, client)
+
             query_prompt = self._build_query_prompt(context.prompt, context.media)
             # Send the query - SDK accepts string directly
             logger.info(f"[AgentService] Sending query for {context.session_key}")
-            await asyncio.wait_for(client.query(query_prompt), timeout=30.0)
+            try:
+                await asyncio.wait_for(client.query(query_prompt), timeout=30.0)
+                if sm:
+                    sm.dispatch(
+                        context.session_key,
+                        SessionEvent.QUERY_SENT,
+                        reason="query_sent",
+                        strict=False,
+                    )
+            except Exception:
+                if sm:
+                    sm.dispatch(
+                        context.session_key,
+                        SessionEvent.QUERY_FAILED,
+                        reason="query_failed",
+                        strict=False,
+                    )
+                raise
             logger.info(f"[AgentService] Query sent, starting receive loop for {context.session_key}")
 
             # ACP-style turn boundary: consume stream until explicit idle state event.
@@ -332,10 +361,24 @@ class AgentService:
 
                     message = await asyncio.wait_for(_read_next_message(), timeout=idle_timeout)
                 except StopAsyncIteration:
+                    if sm:
+                        sm.dispatch(
+                            context.session_key,
+                            SessionEvent.STREAM_ENDED_UNEXPECTEDLY,
+                            reason="stream_ended_unexpectedly",
+                            strict=False,
+                        )
                     raise RuntimeError(
                         f"SDK stream ended before idle boundary for session {context.session_key}"
                     )
                 except _SdkStreamTimeoutError as e:
+                    if sm:
+                        sm.dispatch(
+                            context.session_key,
+                            SessionEvent.STREAM_TIMEOUT,
+                            reason="sdk_stream_timeout",
+                            strict=False,
+                        )
                     raise RuntimeError(
                         f"SDK stream timeout error before idle boundary for {context.session_key}: {e}"
                     ) from e
@@ -350,6 +393,13 @@ class AgentService:
                             msg_count,
                         )
                         break
+                    if sm:
+                        sm.dispatch(
+                            context.session_key,
+                            SessionEvent.STREAM_TIMEOUT,
+                            reason="receive_loop_idle_timeout",
+                            strict=False,
+                        )
                     raise RuntimeError(
                         "[AgentService] Receive loop idle timeout "
                         f"({idle_timeout}s) before idle boundary for {context.session_key} "
@@ -367,6 +417,13 @@ class AgentService:
 
                 if self._is_idle_boundary_message(message):
                     saw_idle_boundary = True
+                    if sm:
+                        sm.dispatch(
+                            context.session_key,
+                            SessionEvent.STREAM_IDLE_BOUNDARY,
+                            reason="idle_boundary",
+                            strict=False,
+                        )
                     logger.info(
                         "[AgentService] idle boundary reached for %s after %s messages",
                         context.session_key,
@@ -378,15 +435,31 @@ class AgentService:
             if not saw_idle_boundary and not ended_due_to_pending_wait:
                 raise RuntimeError(f"Missing idle boundary for {context.session_key}")
 
+            if sm:
+                self._dispatch_terminal_state(
+                    context.session_key,
+                    sm=sm,
+                    reason="process_complete",
+                )
+
         except asyncio.CancelledError:
             logger.info(f"[AgentService] Processing cancelled for {context.session_key}")
+            if sm:
+                sm.dispatch(
+                    context.session_key,
+                    SessionEvent.INTERRUPT,
+                    reason="process_cancelled",
+                    strict=False,
+                )
             raise
         except Exception as e:
             logger.error(f"[AgentService] Error processing: {e}")
-            if self._should_recycle_client_after_stream_error(e):
-                await self._recycle_session_client_after_stream_error(
+            if sm and self._is_recoverable_stream_error_text(str(e)):
+                sm.dispatch(
                     context.session_key,
+                    SessionEvent.STREAM_ERROR,
                     reason=type(e).__name__,
+                    strict=False,
                 )
             yield AgentResponse(
                 content=f"Error: {e}",
@@ -426,9 +499,9 @@ class AgentService:
         return has_permission or has_interaction
 
     @staticmethod
-    def _should_recycle_client_after_stream_error(error: Exception) -> bool:
-        """Whether this error indicates the SDK stream/session is unhealthy."""
-        text = str(error).lower()
+    def _is_recoverable_stream_error_text(error_text: str) -> bool:
+        """Whether an error string indicates recoverable stream boundary corruption."""
+        text = str(error_text).lower()
         return any(
             marker in text
             for marker in (
@@ -440,17 +513,103 @@ class AgentService:
             )
         )
 
-    async def _recycle_session_client_after_stream_error(self, session_key: str, *, reason: str) -> None:
-        """Best-effort cleanup for unhealthy SDK sessions after stream boundary failures.
+    def _dispatch_terminal_state(self, session_key: str, *, sm: Any, reason: str) -> None:
+        """Finalize a turn into waiting or idle states based on pending requests."""
+        bus_obj = self._shared_resources.get("bus")
+        has_pending_permission = False
+        has_pending_interaction = False
+        if bus_obj:
+            try:
+                has_pending_permission = bool(
+                    bus_obj.get_pending_request_for_session(session_key)
+                )
+            except Exception:
+                has_pending_permission = False
+            if hasattr(bus_obj, "get_pending_interaction_for_session"):
+                try:
+                    has_pending_interaction = bool(
+                        bus_obj.get_pending_interaction_for_session(session_key)
+                    )
+                except Exception:
+                    has_pending_interaction = False
 
-        Important:
-        - Keep sdk_session_id/resume context intact to preserve conversation continuity.
-        - Only recycle the live client process/connection for resource recovery.
+        if has_pending_permission:
+            sm.dispatch(
+                session_key,
+                SessionEvent.PERMISSION_PENDING,
+                reason=f"{reason}:pending_permission",
+                strict=False,
+            )
+        elif has_pending_interaction:
+            sm.dispatch(
+                session_key,
+                SessionEvent.INTERACTION_PENDING,
+                reason=f"{reason}:pending_interaction",
+                strict=False,
+            )
+        else:
+            sm.dispatch(
+                session_key,
+                SessionEvent.TURN_COMPLETED,
+                reason=f"{reason}:turn_completed",
+                strict=False,
+            )
+
+    async def _attempt_broken_session_recovery(self, session_key: str, *, reason: str) -> bool:
+        """Session-scoped self-healing for stream corruption without gateway restart.
+
+        Recovery strategy:
+        1. Release unhealthy client connection.
+        2. Keep sdk_session_id for resume unless 3 consecutive failures occur.
+        3. Move state back to acquiring to allow one retry of the current request.
         """
-        await self._release_session_client(
+        sm = self._shared_resources.get("runtime_registry")
+        if sm:
+            sm.dispatch(
+                session_key,
+                SessionEvent.STREAM_ERROR,
+                reason=f"{reason}:stream_error",
+                strict=False,
+            )
+
+        released = await self._release_session_client(
             session_key,
-            reason=f"stream_error:{reason}",
+            reason=f"recovery:{reason}",
         )
+        if released:
+            if sm:
+                sm.dispatch(
+                    session_key,
+                    SessionEvent.DISCONNECT_OK,
+                    reason=f"{reason}:disconnect_ok",
+                    strict=False,
+                )
+                sm.dispatch(
+                    session_key,
+                    SessionEvent.RECOVER,
+                    reason=f"{reason}:recover",
+                    strict=False,
+                )
+                sm.reset_recovery_failures(session_key)
+            return True
+
+        if sm:
+            sm.dispatch(
+                session_key,
+                SessionEvent.DISCONNECT_FAILED,
+                reason=f"{reason}:disconnect_failed",
+                strict=False,
+            )
+            fail_count = sm.note_recovery_failure(session_key)
+            if fail_count >= 3:
+                logger.warning(
+                    "[AgentService] recovery failed %s times, clearing sdk_session_id: session=%s",
+                    fail_count,
+                    session_key,
+                )
+                self._clear_sdk_resume_context(session_key)
+                sm.reset_recovery_failures(session_key)
+        return False
 
     @staticmethod
     def _build_query_prompt(prompt: str, media: list[Any] | None) -> str:
@@ -759,10 +918,11 @@ class AgentService:
             task.cancel()
             interrupted = True
         await self._client_pool.disconnect(session_key)
-        # Reset phase to IDLE
+        # Transition to releasing/idle
         sm = self._shared_resources.get("runtime_registry")
         if sm:
-            sm.force_transition(session_key, SessionPhase.IDLE, reason="interrupted")
+            sm.dispatch(session_key, SessionEvent.INTERRUPT, reason="interrupted", strict=False)
+            sm.dispatch(session_key, SessionEvent.DISCONNECT_OK, reason="interrupt_disconnect", strict=False)
         return {"interrupted": interrupted, "usage": None}
 
     # === State Delegation ===
@@ -773,16 +933,6 @@ class AgentService:
         if sm:
             return sm.get_phase(session_key)
         return SessionPhase.IDLE
-
-    @asynccontextmanager
-    async def transaction(self, session_key: str, validate_on_commit: bool = True):
-        """Async context manager for transactional state changes (delegates to runtime_registry)."""
-        sm = self._shared_resources.get("runtime_registry")
-        if sm:
-            async with sm.transaction(session_key, validate_on_commit=validate_on_commit) as tx:
-                yield tx
-        else:
-            yield _NoOpTransaction()
 
     # === Event Publishing ===
 
@@ -2251,7 +2401,7 @@ class AgentService:
             return bool(enabled) if isinstance(enabled, bool) else True
         return False
 
-    async def _release_session_client(self, session_key: str, *, reason: str) -> None:
+    async def _release_session_client(self, session_key: str, *, reason: str) -> bool:
         """Best-effort client release for a session."""
         try:
             ok = await self._client_pool.disconnect(session_key)
@@ -2261,6 +2411,7 @@ class AgentService:
                 reason,
                 ok,
             )
+            return ok
         except Exception as e:
             logger.warning(
                 "[AgentService] failed to release session client: session=%s reason=%s error=%s",
@@ -2268,6 +2419,7 @@ class AgentService:
                 reason,
                 e,
             )
+            return False
 
     # === CLI-compatible methods (migrated from AgentRuntime) ===
 
@@ -2432,11 +2584,6 @@ class AgentService:
             # Ensure routing exists before processing so hooks can resolve targets.
             self._set_session_routing(session_key, msg.channel, msg.chat_id)
 
-            # Transition to RUNNING
-            sm = self._shared_resources.get("runtime_registry")
-            if sm:
-                sm.force_transition(session_key, SessionPhase.RUNNING, reason="dispatch_start")
-
             # Workspace command injection
             prompt = msg.content
             if self._commands_loader and self._commands_loader.is_command(prompt):
@@ -2458,70 +2605,83 @@ class AgentService:
             last_usage: dict[str, Any] | None = None
             error_sent = False
             execution_cwd = self._resolve_execution_cwd(session_key)
+            attempts = 0
+            max_attempts = 2
 
-            async for response in self.process(context):
-                # Forward thinking/progress
-                if response.progress_texts:
-                    evt_type = response.event_type or "thinking"
-                    evt_data = response.event_data
-                    for text in response.progress_texts:
+            while attempts < max_attempts:
+                error_response_content: str | None = None
+                async for response in self.process(context):
+                    # Forward thinking/progress
+                    if response.progress_texts:
+                        evt_type = response.event_type or "thinking"
+                        evt_data = response.event_data
+                        for text in response.progress_texts:
+                            await self._publish_event(
+                                bus, msg.channel, msg.chat_id, text,
+                                source_metadata=msg.metadata,
+                                event_data=evt_data,
+                                _progress=True, _event_type=evt_type,
+                            )
+
+                    # Forward explicit tool-hint text
+                    if response.tool_hint_text:
                         await self._publish_event(
-                            bus, msg.channel, msg.chat_id, text,
+                            bus, msg.channel, msg.chat_id, response.tool_hint_text,
                             source_metadata=msg.metadata,
-                            event_data=evt_data,
-                            _progress=True, _event_type=evt_type,
+                            _tool_hint=True, _progress=True, _event_type="tool_hint",
                         )
 
-                # Forward explicit tool-hint text
-                if response.tool_hint_text:
-                    await self._publish_event(
-                        bus, msg.channel, msg.chat_id, response.tool_hint_text,
-                        source_metadata=msg.metadata,
-                        _tool_hint=True, _progress=True, _event_type="tool_hint",
-                    )
+                    # Forward tool hints
+                    if response.tool_calls:
+                        hint = self._format_tool_hint(response.tool_calls, execution_cwd=execution_cwd)
+                        await self._publish_event(
+                            bus, msg.channel, msg.chat_id, hint,
+                            source_metadata=msg.metadata,
+                            event_data={"tool_calls": response.tool_calls},
+                            _tool_hint=True, _progress=True, _event_type="tool_call",
+                        )
 
-                # Forward tool hints
-                if response.tool_calls:
-                    hint = self._format_tool_hint(response.tool_calls, execution_cwd=execution_cwd)
-                    await self._publish_event(
-                        bus, msg.channel, msg.chat_id, hint,
-                        source_metadata=msg.metadata,
-                        event_data={"tool_calls": response.tool_calls},
-                        _tool_hint=True, _progress=True, _event_type="tool_call",
-                    )
+                    # Forward content deltas to progress stream
+                    if response.is_delta and response.delta_content:
+                        await self._publish_event(
+                            bus, msg.channel, msg.chat_id, response.delta_content,
+                            source_metadata=msg.metadata,
+                            event_data=response.event_data,
+                            _progress=True,
+                            _event_type=response.event_type or "content_delta",
+                        )
 
-                # Forward content deltas to progress stream
-                if response.is_delta and response.delta_content:
-                    await self._publish_event(
-                        bus, msg.channel, msg.chat_id, response.delta_content,
-                        source_metadata=msg.metadata,
-                        event_data=response.event_data,
-                        _progress=True,
-                        _event_type=response.event_type or "content_delta",
-                    )
+                    # Final user-visible output only comes from ResultMessage.result
+                    if response.event_type == "result" and response.content:
+                        final_result_text = response.content
+                        await bus.publish_outbound(OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content=response.content,
+                        ))
 
-                # Final user-visible output only comes from ResultMessage.result
-                if response.event_type == "result" and response.content:
-                    final_result_text = response.content
-                    await bus.publish_outbound(OutboundMessage(
-                        channel=msg.channel,
-                        chat_id=msg.chat_id,
-                        content=response.content,
-                    ))
+                    # Capture process errors for potential automatic recovery.
+                    if response.finish_reason == "error" and response.content:
+                        error_response_content = response.content
+                        break
 
-                # Ensure process() error responses are visible to users.
-                if response.finish_reason == "error" and response.content:
+                    # Track usage
+                    if response.usage:
+                        last_usage = response.usage
+
+                if error_response_content and attempts == 0 and self._is_recoverable_stream_error_text(error_response_content):
+                    recovered = await self._attempt_broken_session_recovery(session_key, reason="stream_error_auto_retry")
+                    if recovered:
+                        attempts += 1
+                        continue
+                if error_response_content:
                     error_sent = True
                     await bus.publish_outbound(OutboundMessage(
                         channel=msg.channel,
                         chat_id=msg.chat_id,
-                        content=response.content,
+                        content=error_response_content,
                     ))
-                    break
-
-                # Track usage
-                if response.usage:
-                    last_usage = response.usage
+                break
 
             # Send usage summary
             if last_usage and not error_sent:
@@ -2560,30 +2720,6 @@ class AgentService:
             except Exception:
                 pass
         finally:
-            # Restore phase (matches v0.3.37 _dispatch finally logic)
-            sm = self._shared_resources.get("runtime_registry")
-            if sm:
-                bus_obj = self._shared_resources.get("bus")
-                has_pending_permission = False
-                has_pending_interaction = False
-                if bus_obj:
-                    has_pending_permission = bool(
-                        bus_obj.get_pending_request_for_session(session_key)
-                    )
-                    if hasattr(bus_obj, "get_pending_interaction_for_session"):
-                        has_pending_interaction = bool(
-                            bus_obj.get_pending_interaction_for_session(session_key)
-                        )
-                if has_pending_permission:
-                    target = SessionPhase.WAITING_PERMISSION
-                    reason = "pending_permission"
-                elif has_pending_interaction:
-                    target = SessionPhase.WAITING_INTERACTION
-                    reason = "pending_interaction"
-                else:
-                    target = SessionPhase.IDLE
-                    reason = "dispatch_end"
-                sm.force_transition(session_key, target, reason=reason)
             self._active_tasks.pop(session_key, None)
 
     @staticmethod

@@ -20,6 +20,7 @@
 
 ## 📢 Latest Updates
 
+- **2026-04-14** 🚀 Released **v2.0.0** — unified runtime state machine with `SessionCoordinator`; removed legacy phase/transition compatibility paths (breaking change, see migration guide)
 - **2026-03-23** 🔄 **Coordinator Mode Migration** — Unified state management with SessionStateCoordinator, transaction-based atomic operations, removed legacy dual-track architecture
 - **2026-03-22** 🚀 **Major Architecture Upgrade** — Agent Router with pluggable backends, Claude SDK native integration, capability-based permission system, and enhanced memory with reme-ai
 - **2026-03-16** 🚀 Released **v0.1.4.post5** — a refinement-focused release with stronger reliability and channel support
@@ -116,6 +117,7 @@ The router provides:
 - [Architecture](#️-architecture)
 - [Features](#-features)
 - [Install](#-install)
+- [v2 Migration Guide](#-v2-migration-guide)
 - [Quick Start](#-quick-start)
 - [Chat Apps](#-chat-apps)
 - [Agent Social Network](#-agent-social-network)
@@ -178,6 +180,49 @@ git clone https://github.com/HKUDS/xbot.git
 cd xbot
 pip install -e .
 ```
+
+## 🔥 v2 Migration Guide
+
+`v2.0.0` is a breaking release that removes old session-state APIs.
+
+- Runtime state writes must go through `RuntimeSessionRegistry.dispatch(session_key, SessionEvent, ...)`.
+- Old transition APIs are removed:
+  - `SessionStateMachine`
+  - `RuntimeSessionRegistry.force_transition(...)`
+  - `RuntimeSessionRegistry.transition(...)`
+  - `RuntimeSessionRegistry.transaction(...)`
+  - `AgentService.transaction(...)`
+- Legacy phases are removed:
+  - `RUNNING`
+  - `STOPPING`
+  - `RESETTING`
+  - `ERROR`
+- New canonical phases:
+  - `IDLE`
+  - `ACQUIRING_CLIENT`
+  - `SENDING_QUERY`
+  - `RECEIVING_STREAM`
+  - `WAITING_PERMISSION`
+  - `WAITING_INTERACTION`
+  - `DRAINING`
+  - `RELEASING_CLIENT`
+  - `BROKEN`
+
+Detailed migration notes: [docs/SESSION_STATE_V2_MIGRATION.md](./docs/SESSION_STATE_V2_MIGRATION.md)
+
+### Runtime v2 Regression Suite
+
+Run the runtime v2 state-machine regression tests locally:
+
+```bash
+./scripts/test_runtime_v2.sh
+```
+
+This suite enforces coverage gate for:
+
+- `xbot/runtime/state`
+
+Current coverage threshold (state-machine core): **90%**.
 
 **Install with [uv](https://github.com/astral-sh/uv)** (stable, fast)
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.0.0 (2026-04-14)
+
+- Runtime session state machine fully replaced with `SessionCoordinator` as the only write path.
+- Removed legacy state interfaces and compatibility paths: `SessionStateMachine`, `force_transition`, `transition`, `transaction`.
+- Removed legacy phases: `RUNNING`, `STOPPING`, `RESETTING`, `ERROR`.
+- Added unified recovery policy: session-level recovery + one automatic retry; clear `sdk_session_id` only after 3 consecutive recovery failures.
+- Added v2 migration doc: `docs/SESSION_STATE_V2_MIGRATION.md`.
+
 ## v0.3.48 (2026-04-10)
 
 - 优化 Tool Calls 展示：不再仅在“首个参数为字符串”时显示参数，统一支持命名参数摘要。

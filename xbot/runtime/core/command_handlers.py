@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 from xbot.platform.bus.events import InboundMessage, OutboundMessage
 from xbot.platform.logging.core import get_logger
-from xbot.runtime.state.machine import SessionPhase
+from xbot.runtime.state import SessionEvent, SessionPhase
 
 if TYPE_CHECKING:
     from xbot.runtime.core.service import AgentService
@@ -192,7 +192,12 @@ class LocalCommandHandler:
         # Set phase to IDLE
         sm = svc._shared_resources.get("runtime_registry")
         if sm:
-            sm.force_transition(session_key, SessionPhase.IDLE, reason="user_stop")
+            sm.dispatch(
+                session_key,
+                SessionEvent.TURN_COMPLETED,
+                reason="user_stop",
+                strict=False,
+            )
 
         # Build response
         content_parts: list[str] = []
@@ -231,7 +236,12 @@ class LocalCommandHandler:
         # Set phase to IDLE
         sm = svc._shared_resources.get("runtime_registry")
         if sm:
-            sm.force_transition(session_key, SessionPhase.IDLE, reason="user_reset")
+            sm.dispatch(
+                session_key,
+                SessionEvent.TURN_COMPLETED,
+                reason="user_reset",
+                strict=False,
+            )
 
         # Build response
         parts = ["\u267b\ufe0f Session reset completed."]
@@ -354,17 +364,14 @@ class LocalCommandHandler:
         sm = svc._shared_resources.get("runtime_registry")
         lines = ["\U0001f527 State Coordinator", ""]
 
-        if sm and hasattr(sm, "_sessions"):
-            sessions = sm._sessions
-            total = len(sessions)
-            by_phase: dict[str, int] = {}
-            for s in sessions.values():
-                phase_name = s.phase.value if hasattr(s.phase, "value") else str(s.phase)
-                by_phase[phase_name] = by_phase.get(phase_name, 0) + 1
-
+        if sm and hasattr(sm, "snapshot"):
+            snap = sm.snapshot()
+            total = int(snap.get("sessions", 0))
+            by_phase = dict(snap.get("by_phase", {}) or {})
             lines.append(f"Sessions: {total}")
             for phase_name, count in sorted(by_phase.items()):
                 lines.append(f"  {phase_name}: {count}")
+            lines.append(f"Illegal transitions: {int(snap.get('illegal_transition_total', 0))}")
 
             # Active tasks across all sessions
             active_tasks = len(svc._active_tasks)

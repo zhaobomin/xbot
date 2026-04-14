@@ -17,7 +17,7 @@ from xbot.interaction.response_parser import (
 from xbot.platform.bus.events import InboundMessage, OutboundMessage
 from xbot.platform.bus.queue import InteractionResponse, PermissionResponse
 from xbot.platform.logging.core import get_logger
-from xbot.runtime.state.machine import SessionPhase
+from xbot.runtime.state import SessionEvent, SessionPhase
 
 logger = get_logger(__name__)
 
@@ -77,7 +77,6 @@ class RuntimeResponseHandlers:
         """Clear retry state for a session, including stale request-scoped entries."""
         retry_counts = self._interaction_retry_counts
 
-        # Remove the legacy session-scoped key during the migration to request-scoped tracking.
         retry_counts.pop(session_key, None)
 
         if request_id is not None or clear_session:
@@ -137,7 +136,7 @@ class RuntimeResponseHandlers:
         if current_phase not in {
             SessionPhase.WAITING_PERMISSION,
             SessionPhase.IDLE,
-            SessionPhase.RUNNING,
+            SessionPhase.RECEIVING_STREAM,
         }:
             logger.debug(
                 f"Ignoring permission response for session in {current_phase.value} state"
@@ -145,10 +144,12 @@ class RuntimeResponseHandlers:
             return True
 
         if current_phase != SessionPhase.WAITING_PERMISSION:
-            async with self._state_coordinator.transaction(
-                msg.session_key, validate_on_commit=False
-            ) as tx:
-                tx.set_phase(SessionPhase.WAITING_PERMISSION, reason="pending_permission_detected")
+            self._state_coordinator.dispatch(
+                msg.session_key,
+                SessionEvent.PERMISSION_PENDING,
+                reason="pending_permission_detected",
+                strict=False,
+            )
 
         response = PermissionResponse(
             request_id=request_id,
@@ -159,10 +160,12 @@ class RuntimeResponseHandlers:
         submitted = await self._bus.submit_permission_response(response)
         if not submitted:
             logger.warning(f"Permission response no longer pending: request={request_id}")
-            async with self._state_coordinator.transaction(
-                msg.session_key, validate_on_commit=False
-            ) as tx:
-                tx.set_phase(SessionPhase.IDLE, reason="permission_response_expired")
+            self._state_coordinator.dispatch(
+                msg.session_key,
+                SessionEvent.PERMISSION_EXPIRED,
+                reason="permission_response_expired",
+                strict=False,
+            )
             await self._bus.publish_outbound(
                 OutboundMessage(
                     channel=msg.channel,
@@ -174,10 +177,12 @@ class RuntimeResponseHandlers:
 
         logger.info(f"Permission response submitted: {decision} for request {request_id}")
 
-        async with self._state_coordinator.transaction(
-            msg.session_key, validate_on_commit=False
-        ) as tx:
-            tx.set_phase(SessionPhase.RUNNING, reason="permission_response_submitted")
+        self._state_coordinator.dispatch(
+            msg.session_key,
+            SessionEvent.PERMISSION_RESOLVED,
+            reason="permission_response_submitted",
+            strict=False,
+        )
 
         return True
 
@@ -217,7 +222,7 @@ class RuntimeResponseHandlers:
         if current_phase not in {
             SessionPhase.WAITING_INTERACTION,
             SessionPhase.IDLE,
-            SessionPhase.RUNNING,
+            SessionPhase.RECEIVING_STREAM,
         }:
             logger.debug(
                 f"Ignoring interaction response for session in {current_phase.value} state"
@@ -225,9 +230,9 @@ class RuntimeResponseHandlers:
             # Give user feedback about why their response wasn't processed
             phase_messages = {
                 SessionPhase.WAITING_PERMISSION: "⚠️ 当前有待处理的权限请求，请先完成权限确认后再回答此问题。",
-                SessionPhase.STOPPING: "⚠️ 系统正在关闭中，交互已取消。",
-                SessionPhase.ERROR: "⚠️ 会话遇到错误，无法处理交互请求。",
-                SessionPhase.RESETTING: "⚠️ 会话正在重置中，请稍后再试。",
+                SessionPhase.RELEASING_CLIENT: "⚠️ 会话正在释放资源，请稍后重试。",
+                SessionPhase.BROKEN: "⚠️ 会话正在自动恢复中，请稍后重试。",
+                SessionPhase.ACQUIRING_CLIENT: "⚠️ 会话正在初始化，请稍后重试。",
             }
             fallback_msg = f"⚠️ 当前状态为「{current_phase.value}」，无法处理交互请求。"
             user_msg = phase_messages.get(current_phase, fallback_msg)
@@ -247,17 +252,21 @@ class RuntimeResponseHandlers:
             return True
 
         if current_phase != SessionPhase.WAITING_INTERACTION:
-            async with self._state_coordinator.transaction(
-                msg.session_key, validate_on_commit=False
-            ) as tx:
-                tx.set_phase(SessionPhase.WAITING_INTERACTION, reason="pending_interaction_detected")
+            self._state_coordinator.dispatch(
+                msg.session_key,
+                SessionEvent.INTERACTION_PENDING,
+                reason="pending_interaction_detected",
+                strict=False,
+            )
 
         req = self._bus.get_interaction_request(request_id)
         if req is None:
-            async with self._state_coordinator.transaction(
-                msg.session_key, validate_on_commit=False
-            ) as tx:
-                tx.set_phase(SessionPhase.IDLE, reason="interaction_request_expired")
+            self._state_coordinator.dispatch(
+                msg.session_key,
+                SessionEvent.INTERACTION_EXPIRED,
+                reason="interaction_request_expired",
+                strict=False,
+            )
             await self._bus.publish_outbound(
                 OutboundMessage(
                     channel=msg.channel,
@@ -297,10 +306,12 @@ class RuntimeResponseHandlers:
                                 content=f"⚠️ 答案无效已达 3 次，交互已取消。\n有效选项：{', '.join(str(opt) for opt in valid_options)}",
                             )
                         )
-                        async with self._state_coordinator.transaction(
-                            msg.session_key, validate_on_commit=False
-                        ) as tx:
-                            tx.set_phase(SessionPhase.IDLE, reason="invalid_answer_max_retries")
+                        self._state_coordinator.dispatch(
+                            msg.session_key,
+                            SessionEvent.INTERACTION_EXPIRED,
+                            reason="invalid_answer_max_retries",
+                            strict=False,
+                        )
                         self._clear_interaction_retry_state(
                             msg.session_key,
                             request_id=request_id,
@@ -349,10 +360,12 @@ class RuntimeResponseHandlers:
         )
         if not submitted:
             logger.warning(f"Interaction response no longer pending: request={request_id}")
-            async with self._state_coordinator.transaction(
-                msg.session_key, validate_on_commit=False
-            ) as tx:
-                tx.set_phase(SessionPhase.IDLE, reason="interaction_response_expired")
+            self._state_coordinator.dispatch(
+                msg.session_key,
+                SessionEvent.INTERACTION_EXPIRED,
+                reason="interaction_response_expired",
+                strict=False,
+            )
             await self._bus.publish_outbound(
                 OutboundMessage(
                     channel=msg.channel,
@@ -371,13 +384,15 @@ class RuntimeResponseHandlers:
 
         # === 诊断日志: 状态转换 ===
         old_phase = self._state_coordinator.get_phase(msg.session_key)
-        async with self._state_coordinator.transaction(
-            msg.session_key, validate_on_commit=False
-        ) as tx:
-            tx.set_phase(SessionPhase.RUNNING, reason="interaction_response_submitted")
+        self._state_coordinator.dispatch(
+            msg.session_key,
+            SessionEvent.INTERACTION_RESOLVED,
+            reason="interaction_response_submitted",
+            strict=False,
+        )
         logger.info(
             f"[Interaction] session={msg.session_key}, request_id={request_id}, "
-            f"transition={old_phase.value}->RUNNING"
+            f"transition={old_phase.value}->RECEIVING_STREAM"
         )
 
         self._clear_interaction_retry_state(

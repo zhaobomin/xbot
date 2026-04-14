@@ -12,8 +12,8 @@ from typing import Any
 # Re-export from protocol.py for backward compatibility
 from xbot.runtime.core.protocol import AgentContext, AgentResponse
 
-# Re-export from state/machine.py for backward compatibility
-from xbot.runtime.state.machine import SessionPhase, SessionState
+# Re-export from state coordinator model
+from xbot.runtime.state import SessionPhase, SessionState
 
 
 @dataclass
