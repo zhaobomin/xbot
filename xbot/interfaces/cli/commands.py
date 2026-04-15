@@ -1092,7 +1092,12 @@ def agent(
     # Get permission config
     perm_config = config.agents.claude_sdk.permission
 
-    cwd_source = Path(cwd).expanduser() if cwd else Path.cwd()
+    try:
+        cwd_source = Path(cwd).expanduser() if cwd else Path.cwd()
+    except OSError as e:
+        console.print(f"[red]Error: current working directory unavailable: {e}[/red]")
+        raise typer.Exit(1)
+
     try:
         session_cwd = cwd_source.resolve(strict=True)
     except FileNotFoundError:

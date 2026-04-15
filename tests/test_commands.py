@@ -260,6 +260,56 @@ def test_agent_help_shows_workspace_and_config_options():
 
 
 
+def test_agent_fails_cleanly_when_current_working_directory_unavailable(monkeypatch) -> None:
+    config = Config()
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._load_runtime_config", lambda _c, _w: config)
+    monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_templates", lambda _path: None)
+    monkeypatch.setattr(
+        "xbot.interfaces.cli.commands.Path.cwd",
+        classmethod(lambda cls: (_ for _ in ()).throw(FileNotFoundError("cwd removed"))),
+    )
+
+    result = runner.invoke(app, ["agent", "--message", "ping"])
+    stripped_output = _strip_ansi(result.stdout)
+
+    assert result.exit_code == 1
+    assert "Error: current working directory unavailable" in stripped_output
+
+
+def test_agent_fails_cleanly_when_cwd_does_not_exist(monkeypatch, tmp_path: Path) -> None:
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._load_runtime_config", lambda _c, _w: config)
+    monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_templates", lambda _path: None)
+
+    missing_cwd = tmp_path / "missing-dir"
+    result = runner.invoke(app, ["agent", "--message", "ping", "--cwd", str(missing_cwd)])
+    stripped_output = _strip_ansi(result.stdout)
+
+    assert result.exit_code == 1
+    assert "Error: cwd does not exist:" in stripped_output
+    assert str(missing_cwd) in stripped_output.replace("\n", "")
+
+
+def test_agent_fails_cleanly_when_cwd_is_not_directory(monkeypatch, tmp_path: Path) -> None:
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path)
+
+    monkeypatch.setattr("xbot.interfaces.cli.commands._load_runtime_config", lambda _c, _w: config)
+    monkeypatch.setattr("xbot.interfaces.cli.commands.sync_workspace_templates", lambda _path: None)
+
+    not_dir = tmp_path / "not-dir.txt"
+    not_dir.write_text("x", encoding="utf-8")
+    result = runner.invoke(app, ["agent", "--message", "ping", "--cwd", str(not_dir)])
+    stripped_output = _strip_ansi(result.stdout)
+
+    assert result.exit_code == 1
+    assert "Error: cwd is not a directory:" in stripped_output
+    assert str(not_dir) in stripped_output.replace("\n", "")
+
+
 def test_agent_single_message_initializes_service(monkeypatch, tmp_path: Path) -> None:
     config = Config()
     config.agents.defaults.workspace = str(tmp_path)

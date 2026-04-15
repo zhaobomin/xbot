@@ -82,15 +82,7 @@ class ClaudeSDKMemorySettings(Base):
 
 
 class ClaudeSDKSettingSourcesConfig(Base):
-    """SDK setting_sources by runtime mode.
-
-    Note:
-    - Runtime currently isolates both `cli` and `gateway` from Claude
-      user/project/local setting layers by forcing an explicit empty
-      `--setting-sources` at execution time.
-    - These fields remain for forward compatibility and non-cli/gateway
-      runtimes that may honor resolved setting sources.
-    """
+    """SDK setting_sources by runtime mode."""
 
     cli: list[Literal["user", "project", "local"]] = Field(
         default_factory=lambda: ["user", "project", "local"]
@@ -129,9 +121,6 @@ class ClaudeSDKAgentConfig(Base):
     # 禁用 SDK 内置工具，避免与 xbot MCP 工具冲突
     # 默认禁用 WebFetch/WebSearch，让 agent 使用带代理配置的 mcp__xbot__web_fetch/web_search
     disallowed_tools: list[str] = Field(default_factory=lambda: ["WebFetch", "WebSearch"])
-    # 按运行模式覆盖 disallowed_tools（可选，未配置时使用 disallowed_tools）
-    # 示例: {"gateway": ["WebFetch", "WebSearch", "EnterPlanMode", "ExitPlanMode"]}
-    disallowed_tools_by_mode: dict[str, list[str]] = Field(default_factory=dict)
     # Context Compaction 通知配置
     compact_notify: bool = True  # 是否在压缩上下文时发送通知
     include_partial_messages: bool = False  # Disable SDK partial/delta messages by default for stable output
@@ -284,7 +273,6 @@ class WebToolsConfig(Base):
         None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
     )
     disable_security_checks: bool = False  # When true, skip SSRF/private-network URL validation for web tools
-    web_fetch_use_jina: bool = True  # When true, web_fetch tries Jina Reader first and falls back to readability
     search: WebSearchConfig = Field(default_factory=WebSearchConfig)
 
 

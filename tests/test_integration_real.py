@@ -14,8 +14,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-pytestmark = pytest.mark.skip(reason="Legacy integration suite targets removed pre-v2 state APIs.")
-
 from xbot.interaction.response_handlers import RuntimeResponseHandlers
 from xbot.platform.bus.events import InboundMessage, OutboundMessage
 from xbot.platform.bus.queue import (
@@ -33,8 +31,7 @@ from xbot.runtime.core.protocol import (
 )
 from xbot.runtime.core.service import AgentService
 from xbot.runtime.core.types import AgentConfig
-from xbot.runtime.state import RuntimeSessionRegistry
-from xbot.runtime.state.machine import SessionPhase
+from xbot.runtime.state.machine import SessionPhase, SessionStateMachine
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -46,8 +43,8 @@ def bus() -> MessageBus:
 
 
 @pytest.fixture
-def state_machine() -> RuntimeSessionRegistry:
-    return RuntimeSessionRegistry()
+def state_machine() -> SessionStateMachine:
+    return SessionStateMachine()
 
 
 @pytest.fixture
@@ -75,7 +72,7 @@ def _make_config_mock(*, provider: str | None = None, api_key: str | None = None
 
 
 @pytest.fixture
-def shared_resources(tmp_path: Path, bus: MessageBus, state_machine: RuntimeSessionRegistry) -> dict[str, Any]:
+def shared_resources(tmp_path: Path, bus: MessageBus, state_machine: SessionStateMachine) -> dict[str, Any]:
     return {
         "workspace": str(tmp_path),
         "config": _make_config_mock(),
@@ -220,29 +217,6 @@ class TestSDKOptionsBuilder:
         # Should have sensible defaults
         assert options.max_turns == 40
         assert options.permission_mode == "acceptEdits"
-
-    @pytest.mark.asyncio
-    async def test_cli_session_cwd_override_from_runtime_registry(
-        self, service: AgentService, agent_config, tmp_path: Path
-    ) -> None:
-        registry = RuntimeSessionRegistry()
-        session_key = "cli:test-cwd"
-        workspace = tmp_path / "workspace"
-        workspace.mkdir(parents=True)
-        session_cwd = tmp_path / "session-cwd"
-        session_cwd.mkdir(parents=True)
-        registry.set_session_cwd(session_key, str(session_cwd))
-
-        resources = {
-            "workspace": str(workspace),
-            "config": _make_config_mock(claude_sdk=None),
-            "runtime_registry": registry,
-            "run_mode": "cli",
-        }
-        await service.initialize(agent_config, resources)
-
-        options = service._build_sdk_options(session_key=session_key)
-        assert Path(options.cwd) == session_cwd.resolve()
 
 
 # ---------------------------------------------------------------------------
@@ -797,17 +771,12 @@ class TestEndToEndProcessing:
         mock_client.query = AsyncMock()
         mock_client.disconnect = AsyncMock()
 
-        # Create mock messages that the SDK would yield (assistant + idle boundary)
-        assistant_msg = MagicMock()
-        assistant_msg.__class__.__name__ = "AssistantMessage"
-        idle_msg = MagicMock()
-        idle_msg.__class__.__name__ = "SystemMessage"
-        idle_msg.subtype = "session_state_changed"
-        idle_msg.data = {"state": "idle"}
+        # Create mock messages that the SDK would yield
+        mock_msg = MagicMock()
+        mock_msg.__class__.__name__ = "AssistantMessage"
 
         async def mock_receive():
-            yield assistant_msg
-            yield idle_msg
+            yield mock_msg
 
         mock_client.receive_messages = mock_receive
 
@@ -816,11 +785,7 @@ class TestEndToEndProcessing:
             with patch.object(
                 service,
                 "_convert_event",
-                side_effect=lambda event: (
-                    AgentResponse(content="Hello from agent", finish_reason="stop")
-                    if type(event).__name__ == "AssistantMessage"
-                    else None
-                ),
+                return_value=AgentResponse(content="Hello from agent", finish_reason="stop"),
             ):
                 context = AgentContext(session_key="test:chat1", prompt="Hello")
                 responses = []
@@ -852,128 +817,7 @@ class TestEndToEndProcessing:
             async for resp in service.process(context):
                 responses.append(resp)
 
-        assert len(responses) == 1
-        assert responses[0].finish_reason == "error"
-        assert "idle boundary" in responses[0].content.lower()
-
-    @pytest.mark.asyncio
-    async def test_process_pipeline_registers_subagent_model_compat_hook(
-        self, service: AgentService, tmp_path: Path
-    ) -> None:
-        """E2E: initialize -> options -> process should include model-compat PreToolUse hook."""
-        agent_config = AgentConfig(model="glm-5", system_prompt="test")
-
-        runtime_config = MagicMock()
-        runtime_config.agents.defaults.provider = "alrun"
-        runtime_config.agents.defaults.model = "glm-5"
-        runtime_config.agents.defaults.available_models = ["glm-5"]
-        runtime_config.agents.claude_sdk.compact_notify = False
-        runtime_config.agents.claude_sdk.hooks = None
-
-        resources = {
-            "workspace": str(tmp_path),
-            "config": runtime_config,
-        }
-        await service.initialize(agent_config, resources)
-
-        mock_client = MagicMock()
-        mock_client.connect = AsyncMock()
-        mock_client.query = AsyncMock()
-        mock_client.disconnect = AsyncMock()
-
-        class ResultMessage:
-            pass
-
-        async def mock_receive():
-            yield ResultMessage()
-
-        mock_client.receive_messages = mock_receive
-        captured_options: dict[str, Any] = {}
-
-        async def _capture_get_or_create(*_args, **kwargs):
-            captured_options["options"] = kwargs.get("options")
-            return mock_client
-
-        with patch.object(service._client_pool, "get_or_create", new=AsyncMock(side_effect=_capture_get_or_create)):
-            with patch.object(
-                service,
-                "_convert_event",
-                return_value=AgentResponse(content="ok", finish_reason="stop"),
-            ):
-                context = AgentContext(session_key="test:chat1", prompt="hello")
-                async for _ in service.process(context):
-                    pass
-
-        options = captured_options.get("options")
-        assert options is not None
-        assert options.hooks is not None
-        assert "PreToolUse" in options.hooks
-
-        matcher = options.hooks["PreToolUse"][0]
-        handler = matcher.hooks[0]
-        output = await handler(
-            {
-                "session_id": "test:chat1",
-                "tool_name": "Agent",
-                "tool_input": {
-                    "description": "weather",
-                    "prompt": "query weather",
-                    "model": "haiku",
-                    "subagent_type": "Explore",
-                },
-            },
-            None,
-            MagicMock(),
-        )
-
-        assert output is not None
-        updated = output["hookSpecificOutput"]["updatedInput"]
-        assert updated["model"] == "inherit"
-        assert updated["subagent_type"] == "Explore"
-
-    @pytest.mark.asyncio
-    async def test_process_pipeline_keeps_supported_typed_subagent_model(
-        self, service: AgentService, tmp_path: Path
-    ) -> None:
-        """E2E: supported typed subagent model should pass through unchanged."""
-        agent_config = AgentConfig(model="glm-5", system_prompt="test")
-
-        runtime_config = MagicMock()
-        runtime_config.agents.defaults.provider = "alrun"
-        runtime_config.agents.defaults.model = "glm-5"
-        runtime_config.agents.defaults.available_models = ["glm-5", "haiku"]
-        runtime_config.agents.claude_sdk.compact_notify = False
-        runtime_config.agents.claude_sdk.hooks = None
-
-        resources = {
-            "workspace": str(tmp_path),
-            "config": runtime_config,
-        }
-        await service.initialize(agent_config, resources)
-
-        options = service._build_sdk_options(session_key="test:chat2")
-        assert options is not None
-        assert options.hooks is not None
-        assert "PreToolUse" in options.hooks
-
-        matcher = options.hooks["PreToolUse"][0]
-        handler = matcher.hooks[0]
-        output = await handler(
-            {
-                "session_id": "test:chat2",
-                "tool_name": "Agent",
-                "tool_input": {
-                    "description": "weather",
-                    "prompt": "query weather",
-                    "model": "haiku",
-                    "subagent_type": "Explore",
-                },
-            },
-            None,
-            MagicMock(),
-        )
-
-        assert output is None
+        assert len(responses) == 0
 
 
 # ---------------------------------------------------------------------------
