@@ -212,6 +212,7 @@ class AgentService:
 
             self._context_builder = ContextBuilder(
                 workspace=workspace_path,
+                execution_cwd=execution_cwd_path,
                 use_reme=use_reme,
                 llm_config=llm_config,
                 enable_vector_search=enable_vector_search,

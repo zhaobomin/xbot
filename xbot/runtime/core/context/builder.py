@@ -26,6 +26,7 @@ class ContextBuilder:
     def __init__(
         self,
         workspace: Path,
+        execution_cwd: Path | None = None,
         use_reme: bool = True,
         llm_config: dict[str, Any] | None = None,
         embedding_config: dict[str, Any] | None = None,
@@ -36,6 +37,8 @@ class ContextBuilder:
 
         Args:
             workspace: Workspace directory
+            execution_cwd: Default execution working directory shown in runtime identity.
+                When omitted, falls back to workspace.
             use_reme: Use ReMe memory backend if available
             llm_config: LLM configuration for memory summarization
             embedding_config: Embedding configuration for memory vectorization
@@ -45,6 +48,7 @@ class ContextBuilder:
                 keeping identity/memory sections intact.
         """
         self.workspace = workspace
+        self.execution_cwd = execution_cwd or workspace
         self.commands = CommandsLoader(workspace)
         self._load_bootstrap_files_enabled = load_bootstrap_files
 
@@ -83,11 +87,16 @@ class ContextBuilder:
 
     def build_system_prompt(
         self,
+        workspace: Path | None = None,
+        execution_cwd: Path | None = None,
     ) -> str:
         """Build the system prompt from identity, bootstrap files, and memory."""
-        parts = [self._get_identity()]
+        effective_workspace = workspace or self.workspace
+        effective_execution_cwd = execution_cwd or self.execution_cwd
 
-        bootstrap = self._load_bootstrap_files()
+        parts = [self._get_identity(workspace=effective_workspace, execution_cwd=effective_execution_cwd)]
+
+        bootstrap = self._load_bootstrap_files(workspace=effective_workspace)
         if bootstrap:
             parts.append(bootstrap)
 
@@ -97,9 +106,12 @@ class ContextBuilder:
 
         return "\n\n---\n\n".join(parts)
 
-    def _get_identity(self) -> str:
+    def _get_identity(self, workspace: Path | None = None, execution_cwd: Path | None = None) -> str:
         """Get the core identity section."""
-        workspace_path = str(self.workspace.expanduser().resolve())
+        effective_workspace = workspace or self.workspace
+        effective_execution_cwd = execution_cwd or self.execution_cwd
+        workspace_path = str(effective_workspace.expanduser().resolve())
+        execution_cwd_path = str(effective_execution_cwd.expanduser().resolve())
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
 
@@ -124,7 +136,8 @@ You are xbot, a helpful AI assistant.
 {runtime}
 
 ## Workspace
-Your workspace is at: {workspace_path}
+Execution CWD: {execution_cwd_path}
+Workspace Assets Dir: {workspace_path}
 - Long-term memory: {workspace_path}/memory/MEMORY.md (write important facts here)
 - History log: {workspace_path}/memory/HISTORY.md (grep-searchable). Each entry starts with [YYYY-MM-DD HH:MM].
 - Custom skills: {workspace_path}/.claude/skills/{{skill-name}}/SKILL.md
@@ -149,7 +162,7 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
             lines += [f"Channel: {channel}", f"Chat ID: {chat_id}"]
         return ContextBuilder._RUNTIME_CONTEXT_TAG + "\n" + "\n".join(lines)
 
-    def _load_bootstrap_files(self) -> str:
+    def _load_bootstrap_files(self, workspace: Path | None = None) -> str:
         """Load all bootstrap files from workspace.
 
         Returns empty string when load_bootstrap_files is disabled.
@@ -157,10 +170,11 @@ Reply directly with text for conversations. Only use the 'message' tool to send 
         if not self._load_bootstrap_files_enabled:
             return ""
 
+        source_workspace = workspace or self.workspace
         parts = []
 
         for filename in self.BOOTSTRAP_FILES:
-            file_path = self.workspace / filename
+            file_path = source_workspace / filename
             if file_path.exists():
                 content = file_path.read_text(encoding="utf-8")
                 parts.append(f"## {filename}\n\n{content}")

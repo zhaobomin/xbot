@@ -380,9 +380,6 @@ class TestRunDispatch:
         mock_task.cancel = MagicMock()
         service._active_tasks[session_key] = mock_task
 
-        # Set phase to RUNNING
-        state_manager.force_transition(session_key, SessionPhase.RUNNING)
-
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="!stop")
         await service._command_handler.handle(msg, bus)
 
@@ -502,7 +499,7 @@ class TestRunDispatch:
 
     @pytest.mark.asyncio
     async def test_dispatch_phase_lifecycle(self, config, shared_resources, bus, state_manager):
-        """_dispatch should transition IDLE -> RUNNING -> IDLE."""
+        """With mocked process(), _dispatch keeps phase stable and ends at IDLE."""
         service = await self._make_service(config, shared_resources)
         session_key = "test:c1"
 
@@ -521,8 +518,8 @@ class TestRunDispatch:
         with patch.object(service, "process", side_effect=tracking_process):
             await service._dispatch(msg, bus)
 
-        # During processing, phase should have been RUNNING
-        assert SessionPhase.RUNNING in phases_seen
+        # This test mocks process(); phase transitions are owned by process().
+        assert phases_seen == [SessionPhase.IDLE]
 
         # After dispatch, phase should be IDLE
         assert state_manager.get_phase(session_key) == SessionPhase.IDLE

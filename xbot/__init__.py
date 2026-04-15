@@ -7,7 +7,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "2.0.2"
+__version__ = "2.0.3"
 __logo__ = "🐈"
 
 
