@@ -121,8 +121,12 @@ class ToolAdapter:
 
         # Cron tool - for scheduled tasks
         cron_service = self.shared_resources.get("cron_service")
+        conversation_store = self.shared_resources.get("conversation_store")
         if cron_service:
-            self._tools["cron"] = CronTool(cron_service=cron_service)
+            self._tools["cron"] = CronTool(
+                cron_service=cron_service,
+                conversation_store=conversation_store,
+            )
 
         # Web tools
         web_config = self.tools_config.web if self.tools_config else None

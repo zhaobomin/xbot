@@ -2,18 +2,26 @@
 
 from contextvars import ContextVar
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from xbot.runtime.system.cron.service import CronService
 from xbot.runtime.system.cron.types import CronJobState, CronSchedule
 from xbot.tools.base import Tool
 
+if TYPE_CHECKING:
+    from xbot.runtime.session.conversation_store import ConversationStore
+
 
 class CronTool(Tool):
     """Tool to schedule reminders and recurring tasks."""
 
-    def __init__(self, cron_service: CronService):
+    def __init__(
+        self,
+        cron_service: CronService,
+        conversation_store: "ConversationStore | None" = None,
+    ):
         self._cron = cron_service
+        self._conversation_store = conversation_store
         self._channel = ""
         self._chat_id = ""
         self._in_cron_context: ContextVar[bool] = ContextVar("cron_in_context", default=False)
@@ -213,8 +221,25 @@ class CronTool(Tool):
         return "Scheduled jobs:\n" + "\n".join(lines)
 
     def _remove_job(self, job_id: str | None) -> str:
+        """Remove a job and clean up its session file.
+
+        Args:
+            job_id: The job ID to remove.
+
+        Returns:
+            Success or error message.
+        """
         if not job_id:
             return "Error: job_id is required for remove"
+
         if self._cron.remove_job(job_id):
+            # Clean up session file for the removed job
+            if self._conversation_store:
+                session_key = f"cron:{job_id}"
+                try:
+                    self._conversation_store.delete(session_key)
+                except Exception:
+                    # Non-critical: session file may not exist
+                    pass
             return f"Removed job {job_id}"
         return f"Job {job_id} not found"
