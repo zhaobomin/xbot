@@ -236,7 +236,7 @@ async def test_on_message_falls_back_to_unknown_sender_when_open_id_missing() ->
     ("filename", "expected_msg_type"),
     [
         ("voice.opus", "audio"),
-        ("clip.mp4", "video"),
+        ("clip.mp4", "media"),
         ("report.pdf", "file"),
     ],
 )
@@ -250,6 +250,76 @@ async def test_send_uses_expected_feishu_msg_type_for_uploaded_files(
 
     def _record_send(receive_id_type: str, receive_id: str, msg_type: str, content: str) -> None:
         send_calls.append((receive_id_type, receive_id, msg_type, content))
+
+    channel = _make_feishu_channel()
+    channel._upload_file_sync = MagicMock(return_value="file_key_1")
+    channel._send_message_sync = MagicMock(side_effect=_record_send)
+
+    await channel.send(
+        OutboundMessage(
+            channel="feishu",
+            chat_id="oc_abc",
+            content="",
+            media=[str(file_path)],
+            metadata={},
+        )
+    )
+
+    channel._upload_file_sync.assert_called_once_with(str(file_path))
+    assert send_calls == [
+        (
+            "chat_id",
+            "oc_abc",
+            expected_msg_type,
+            json.dumps({"file_key": "file_key_1"}, ensure_ascii=False),
+        )
+    ]
+
+
+@pytest.mark.asyncio
+async def test_group_post_at_bot_is_treated_as_mention() -> None:
+    channel = _make_feishu_channel()
+    channel._bot_open_id = "ou_bot"
+
+    message = SimpleNamespace(
+        message_type="post",
+        content=json.dumps(
+            {
+                "content": [
+                    [
+                        {"tag": "text", "text": "hello "},
+                        {"tag": "at", "user_id": "ou_bot", "user_name": "bot"},
+                    ]
+                ]
+            }
+        ),
+        mentions=[],
+    )
+
+    assert channel._is_bot_mentioned(message) is True
+
+
+@pytest.mark.asyncio
+async def test_group_post_without_bot_at_is_not_treated_as_mention() -> None:
+    channel = _make_feishu_channel()
+    channel._bot_open_id = "ou_bot"
+
+    message = SimpleNamespace(
+        message_type="post",
+        content=json.dumps(
+            {
+                "content": [
+                    [
+                        {"tag": "text", "text": "hello "},
+                        {"tag": "at", "user_id": "ou_other", "user_name": "other"},
+                    ]
+                ]
+            }
+        ),
+        mentions=[],
+    )
+
+    assert channel._is_bot_mentioned(message) is False
 
 
 @pytest.mark.asyncio

@@ -6,6 +6,8 @@ list of card elements into groups so that each group contains at most one
 table, allowing xbot to send multiple cards instead of failing.
 """
 
+import json
+
 from xbot.channels.feishu import FeishuChannel
 
 
@@ -102,3 +104,46 @@ def test_non_table_elements_before_first_table_kept_in_first_group() -> None:
     # head + t1 in group 0; t2 in group 1
     assert result[0] == [head, t1]
     assert result[1] == [t2]
+
+
+def test_oversized_markdown_element_is_split_under_card_budget() -> None:
+    result = split([_md("a" * 120)], max_chars_per_card=180)
+
+    assert len(result) > 1
+    for group in result:
+        card = FeishuChannel._build_interactive_card(group)
+        assert len(json.dumps(card, ensure_ascii=False)) <= 180
+
+
+def test_oversized_table_is_split_by_rows_under_card_budget() -> None:
+    table = {
+        "tag": "table",
+        "columns": [{"tag": "column", "name": "c0", "display_name": "A", "width": "auto"}],
+        "rows": [{"c0": f"row-{i}"} for i in range(8)],
+        "page_size": 9,
+    }
+
+    result = split([table], max_chars_per_card=260)
+
+    assert len(result) > 1
+    for group in result:
+        assert len(group) == 1
+        assert group[0]["tag"] == "table"
+        assert len(json.dumps(FeishuChannel._build_interactive_card(group), ensure_ascii=False)) <= 260
+
+
+def test_single_oversized_table_row_falls_back_to_markdown_chunks_under_budget() -> None:
+    table = {
+        "tag": "table",
+        "columns": [{"tag": "column", "name": "c0", "display_name": "Details", "width": "auto"}],
+        "rows": [{"c0": "x" * 500}],
+        "page_size": 2,
+    }
+
+    result = split([table], max_chars_per_card=260)
+
+    assert len(result) > 1
+    assert all(group[0]["tag"] == "markdown" for group in result)
+    assert "Details:" in result[0][0]["content"]
+    for group in result:
+        assert len(json.dumps(FeishuChannel._build_interactive_card(group), ensure_ascii=False)) <= 260

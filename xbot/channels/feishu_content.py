@@ -17,6 +17,15 @@ MSG_TYPE_MAP = {
 }
 
 
+def _text_value(value: object) -> str:
+    if isinstance(value, dict):
+        text = value.get("content", "") or value.get("text", "")
+        return str(text) if text else ""
+    if isinstance(value, str):
+        return value
+    return ""
+
+
 def _extract_share_card_content(content_json: dict, msg_type: str) -> str:
     """Extract text representation from share cards and interactive messages.
 
@@ -66,13 +75,22 @@ def _extract_interactive_content(content: dict) -> list[str]:
         return parts
 
     if "title" in content:
-        title = content["title"]
-        if isinstance(title, dict):
-            title_content = title.get("content", "") or title.get("text", "")
-            if title_content:
-                parts.append(f"title: {title_content}")
-        elif isinstance(title, str):
-            parts.append(f"title: {title}")
+        title_content = _text_value(content["title"])
+        if title_content:
+            parts.append(f"title: {title_content}")
+
+    header = content.get("header", {})
+    if isinstance(header, dict):
+        header_text = _text_value(header.get("title", {}))
+        if header_text:
+            parts.append(f"title: {header_text}")
+
+    body = content.get("body", {})
+    if isinstance(body, dict):
+        body_elements = body.get("elements", [])
+        if isinstance(body_elements, list):
+            for element in body_elements:
+                parts.extend(_extract_element_content(element))
 
     for element in content.get("elements", []) if isinstance(content.get("elements"), list) else []:
         parts.extend(_extract_element_content(element))
@@ -80,14 +98,6 @@ def _extract_interactive_content(content: dict) -> list[str]:
     card = content.get("card", {})
     if card:
         parts.extend(_extract_interactive_content(card))
-
-    header = content.get("header", {})
-    if header:
-        header_title = header.get("title", {})
-        if isinstance(header_title, dict):
-            header_text = header_title.get("content", "") or header_title.get("text", "")
-            if header_text:
-                parts.append(f"title: {header_text}")
 
     return parts
 
@@ -116,20 +126,14 @@ def _extract_element_content(element: dict) -> list[str]:
             parts.append(content)
 
     elif tag == "div":
-        text = element.get("text", {})
-        if isinstance(text, dict):
-            text_content = text.get("content", "") or text.get("text", "")
-            if text_content:
-                parts.append(text_content)
-        elif isinstance(text, str):
-            parts.append(text)
+        text_content = _text_value(element.get("text", {}))
+        if text_content:
+            parts.append(text_content)
         for field in element.get("fields", []):
             if isinstance(field, dict):
-                field_text = field.get("text", {})
-                if isinstance(field_text, dict):
-                    c = field_text.get("content", "")
-                    if c:
-                        parts.append(c)
+                c = _text_value(field.get("text", {}))
+                if c:
+                    parts.append(c)
 
     elif tag == "a":
         href = element.get("href", "")
@@ -140,11 +144,9 @@ def _extract_element_content(element: dict) -> list[str]:
             parts.append(text)
 
     elif tag == "button":
-        text = element.get("text", {})
-        if isinstance(text, dict):
-            c = text.get("content", "")
-            if c:
-                parts.append(c)
+        c = _text_value(element.get("text", {}))
+        if c:
+            parts.append(c)
         url = element.get("url", "") or element.get("multi_url", {}).get("url", "")
         if url:
             parts.append(f"link: {url}")
@@ -159,8 +161,13 @@ def _extract_element_content(element: dict) -> list[str]:
 
     elif tag == "column_set":
         for col in element.get("columns", []):
-            for ce in col.get("elements", []):
-                parts.extend(_extract_element_content(ce))
+            if isinstance(col, dict):
+                for ce in col.get("elements", []):
+                    parts.extend(_extract_element_content(ce))
+
+    elif tag in ("action", "actions"):
+        for action in element.get("actions", []):
+            parts.extend(_extract_element_content(action))
 
     elif tag == "plain_text":
         content = element.get("content", "")
@@ -170,6 +177,8 @@ def _extract_element_content(element: dict) -> list[str]:
     else:
         for ne in element.get("elements", []):
             parts.extend(_extract_element_content(ne))
+        for action in element.get("actions", []):
+            parts.extend(_extract_element_content(action))
 
     return parts
 
@@ -240,6 +249,50 @@ def _extract_post_content(content_json: dict) -> tuple[str, list[str]]:
                 return text or "", imgs
 
     return "", []
+
+
+def _extract_post_mention_ids(content_json: dict) -> list[str]:
+    """Extract mentioned user identifiers from a Feishu post message."""
+
+    def _parse_block(block: dict) -> list[str]:
+        if not isinstance(block, dict) or not isinstance(block.get("content"), list):
+            return []
+        ids: list[str] = []
+        for row in block["content"]:
+            if not isinstance(row, list):
+                continue
+            for el in row:
+                if not isinstance(el, dict) or el.get("tag") != "at":
+                    continue
+                for key in ("open_id", "user_id", "union_id"):
+                    value = el.get(key)
+                    if isinstance(value, str) and value:
+                        ids.append(value)
+        return ids
+
+    root = content_json
+    if isinstance(root, dict) and isinstance(root.get("post"), dict):
+        root = root["post"]
+    if not isinstance(root, dict):
+        return []
+
+    if "content" in root:
+        ids = _parse_block(root)
+        if ids:
+            return ids
+
+    for key in ("zh_cn", "en_us", "ja_jp"):
+        if key in root:
+            ids = _parse_block(root[key])
+            if ids:
+                return ids
+    for val in root.values():
+        if isinstance(val, dict):
+            ids = _parse_block(val)
+            if ids:
+                return ids
+
+    return []
 
 
 def _extract_post_text(content_json: dict) -> str:

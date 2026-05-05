@@ -774,9 +774,14 @@ class TestEndToEndProcessing:
         # Create mock messages that the SDK would yield
         mock_msg = MagicMock()
         mock_msg.__class__.__name__ = "AssistantMessage"
+        IdleMessage = type("SystemMessage", (), {})
+        idle_msg = IdleMessage()
+        idle_msg.subtype = "session_state_changed"
+        idle_msg.data = {"state": "idle"}
 
         async def mock_receive():
             yield mock_msg
+            yield idle_msg
 
         mock_client.receive_messages = mock_receive
 
@@ -785,7 +790,9 @@ class TestEndToEndProcessing:
             with patch.object(
                 service,
                 "_convert_event",
-                return_value=AgentResponse(content="Hello from agent", finish_reason="stop"),
+                side_effect=lambda msg: None
+                if type(msg).__name__ == "SystemMessage"
+                else AgentResponse(content="Hello from agent", finish_reason="stop"),
             ):
                 context = AgentContext(session_key="test:chat1", prompt="Hello")
                 responses = []
@@ -806,8 +813,11 @@ class TestEndToEndProcessing:
         mock_client.query = AsyncMock()
 
         async def mock_receive():
-            return
-            yield  # Make it an async generator that yields nothing
+            IdleMessage = type("SystemMessage", (), {})
+            idle_msg = IdleMessage()
+            idle_msg.subtype = "session_state_changed"
+            idle_msg.data = {"state": "idle"}
+            yield idle_msg
 
         mock_client.receive_messages = mock_receive
 

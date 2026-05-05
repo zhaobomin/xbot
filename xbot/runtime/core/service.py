@@ -285,6 +285,15 @@ class AgentService:
         # Keep routing info fresh so compact hooks can always resolve targets.
         self._set_session_routing(context.session_key, context.channel, context.chat_id)
         self._set_runtime_tool_and_permission_context(context)
+        # Reset per-turn message sending marker to avoid cross-turn leakage
+        # (used by cron delivery dedup logic).
+        if self._tool_adapter is not None:
+            try:
+                message_tool = self._tool_adapter.get("message")
+                if message_tool is not None and hasattr(message_tool, "start_turn"):
+                    message_tool.start_turn()
+            except Exception as e:
+                logger.debug("Failed to reset message tool turn state for %s: %s", context.session_key, e)
         if sm:
             self._dispatch_state_event(
                 context.session_key,
@@ -1038,6 +1047,8 @@ class AgentService:
                 "tool": "Tool",
                 "skill": "Skill",
                 "mcp": "MCP",
+                "server_tool": "Server tool",
+                "server_tool_result": "Server tool result",
             }.get(kind, "Tool")
 
         def _fmt(tc: dict[str, Any]) -> str:
@@ -1916,7 +1927,7 @@ class AgentService:
             return self._convert_task_notification(event)
         elif event_type == "ResultMessage":
             return self._convert_result_message(event)
-        elif event_type == "SystemMessage":
+        elif event_type in ("SystemMessage", "MirrorErrorMessage"):
             return self._convert_system_message(event)
         elif event_type == "RateLimitEvent":
             return self._convert_rate_limit_event(event)
@@ -1942,6 +1953,20 @@ class AgentService:
                     "name": block.name,
                     "input": block.input,
                     "kind": self._classify_tool_name(block.name),
+                })
+            elif block_type == "ServerToolUseBlock":
+                tool_calls.append({
+                    "id": getattr(block, "id", ""),
+                    "name": getattr(block, "name", "server_tool"),
+                    "input": getattr(block, "input", {}),
+                    "kind": "server_tool",
+                })
+            elif block_type == "ServerToolResultBlock":
+                tool_calls.append({
+                    "id": getattr(block, "tool_use_id", ""),
+                    "name": "server_tool_result",
+                    "input": getattr(block, "content", {}),
+                    "kind": "server_tool_result",
                 })
 
         event_type = ""
@@ -2142,6 +2167,21 @@ class AgentService:
         # Extract subtype from the message
         subtype = getattr(message, "subtype", None) or ""
         message_text = getattr(message, "message", None) or ""
+
+        if subtype == "mirror_error":
+            data = getattr(message, "data", None)
+            error = getattr(message, "error", None)
+            if not error and isinstance(data, dict):
+                error = data.get("error")
+            text = message_text or (
+                f"Session mirror failed: {error}" if error else "Session mirror failed"
+            )
+            return AgentResponse(
+                content="",
+                progress_texts=[text],
+                event_type="system",
+                event_data={"subtype": subtype},
+            )
 
         if subtype in ("compact_start", "pre_compact"):
             text = message_text or "\U0001f504 Compressing context..."

@@ -110,7 +110,9 @@ class ClientPool:
         if not callable(get_info):
             return True
         try:
-            await asyncio.wait_for(get_info(), timeout=2.0)
+            result = get_info()
+            if inspect.isawaitable(result):
+                await asyncio.wait_for(result, timeout=2.0)
             return True
         except Exception as e:
             logger.warning("SDK client health check failed for %s: %s", session_key, e)

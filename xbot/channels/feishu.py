@@ -21,6 +21,7 @@ from xbot.channels.base import BaseChannel
 from xbot.channels.feishu_content import (
     MSG_TYPE_MAP,
     _extract_post_content,
+    _extract_post_mention_ids,
     _extract_share_card_content,
 )
 from xbot.platform.bus.events import OutboundMessage
@@ -315,6 +316,13 @@ class FeishuChannel(BaseChannel):
                 return True
             if not self._bot_open_id and not getattr(mid, "user_id", None) and mention_open_id.startswith("ou_"):
                 return True
+        if self._bot_open_id and getattr(message, "message_type", "") == "post":
+            try:
+                content_json = json.loads(raw_content) if raw_content else {}
+            except json.JSONDecodeError:
+                content_json = {}
+            if self._bot_open_id in _extract_post_mention_ids(content_json):
+                return True
         return False
 
     def _is_group_message_for_bot(self, message: Any) -> bool:
@@ -427,7 +435,147 @@ class FeishuChannel(BaseChannel):
         return elements or [{"tag": "markdown", "content": content}]
 
     @staticmethod
+    def _build_interactive_card(elements: list[dict]) -> dict:
+        """Build a Feishu Card Kit 2.0 interactive card."""
+        return {
+            "schema": "2.0",
+            "config": {"wide_screen_mode": True},
+            "body": {"elements": elements},
+        }
+
+    @classmethod
+    def _card_payload_len(cls, elements: list[dict]) -> int:
+        return len(json.dumps(cls._build_interactive_card(elements), ensure_ascii=False))
+
+    @classmethod
+    def _largest_fitting_prefix(cls, element: dict, text: str, max_chars_per_card: int) -> int:
+        if not text:
+            return 0
+        one_char = {**element, "content": text[:1]}
+        if cls._card_payload_len([one_char]) > max_chars_per_card:
+            return len(text)
+        low, high, best = 1, len(text), 1
+        while low <= high:
+            mid = (low + high) // 2
+            candidate = {**element, "content": text[:mid]}
+            if cls._card_payload_len([candidate]) <= max_chars_per_card:
+                best = mid
+                low = mid + 1
+            else:
+                high = mid - 1
+        return best
+
+    @classmethod
+    def _split_markdown_element_to_fit(cls, element: dict, max_chars_per_card: int) -> list[dict]:
+        content = str(element.get("content", ""))
+        if cls._card_payload_len([element]) <= max_chars_per_card:
+            return [element]
+
+        pieces = [part for part in cls._CODE_BLOCK_RE.split(content) if part]
+        refined: list[str] = []
+        for piece in pieces:
+            if piece.startswith("```"):
+                refined.append(piece)
+                continue
+            refined.extend(part for part in re.split(r"(\n{2,})", piece) if part)
+
+        chunks: list[dict] = []
+        current = ""
+        for piece in refined or [content]:
+            candidate = f"{current}{piece}" if current else piece
+            candidate_el = {**element, "content": candidate}
+            if cls._card_payload_len([candidate_el]) <= max_chars_per_card:
+                current = candidate
+                continue
+            if current:
+                chunks.append({**element, "content": current})
+                current = ""
+
+            remaining = piece
+            while remaining:
+                fit = cls._largest_fitting_prefix(element, remaining, max_chars_per_card)
+                if fit >= len(remaining):
+                    current = remaining
+                    remaining = ""
+                else:
+                    chunks.append({**element, "content": remaining[:fit]})
+                    remaining = remaining[fit:]
+
+        if current:
+            chunks.append({**element, "content": current})
+
+        return chunks or [element]
+
+    @classmethod
+    def _split_table_element_to_fit(cls, element: dict, max_chars_per_card: int) -> list[dict]:
+        if cls._card_payload_len([element]) <= max_chars_per_card:
+            return [element]
+        rows = element.get("rows", [])
+        if not isinstance(rows, list) or not rows:
+            return [element]
+
+        columns = element.get("columns", [])
+        column_labels: dict[str, str] = {}
+        if isinstance(columns, list):
+            for col in columns:
+                if not isinstance(col, dict):
+                    continue
+                name = col.get("name")
+                if not isinstance(name, str) or not name:
+                    continue
+                display_name = col.get("display_name")
+                column_labels[name] = str(display_name or name)
+
+        def _row_to_markdown_chunks(row: dict) -> list[dict]:
+            lines: list[str] = []
+            if isinstance(row, dict):
+                for key, value in row.items():
+                    label = column_labels.get(key, key)
+                    lines.append(f"**{label}:** {value}")
+            else:
+                lines.append(str(row))
+            return cls._split_markdown_element_to_fit(
+                {"tag": "markdown", "content": "\n".join(lines)},
+                max_chars_per_card,
+            )
+
+        chunks: list[dict] = []
+        current_rows: list[dict] = []
+        for row in rows:
+            single_row = {**element, "rows": [row], "page_size": 2}
+            if cls._card_payload_len([single_row]) > max_chars_per_card:
+                if current_rows:
+                    chunks.append({**element, "rows": current_rows, "page_size": len(current_rows) + 1})
+                    current_rows = []
+                chunks.extend(_row_to_markdown_chunks(row))
+                continue
+
+            candidate_rows = [*current_rows, row]
+            candidate = {**element, "rows": candidate_rows, "page_size": len(candidate_rows) + 1}
+            if current_rows and cls._card_payload_len([candidate]) > max_chars_per_card:
+                chunks.append({**element, "rows": current_rows, "page_size": len(current_rows) + 1})
+                current_rows = [row]
+                continue
+            current_rows = candidate_rows
+
+        if current_rows:
+            chunks.append({**element, "rows": current_rows, "page_size": len(current_rows) + 1})
+
+        return chunks or [element]
+
+    @classmethod
+    def _split_oversized_element(cls, element: dict, max_chars_per_card: int) -> list[dict]:
+        if cls._card_payload_len([element]) <= max_chars_per_card:
+            return [element]
+        if element.get("tag") == "markdown":
+            return cls._split_markdown_element_to_fit(element, max_chars_per_card)
+        if element.get("tag") == "table":
+            return cls._split_table_element_to_fit(element, max_chars_per_card)
+        return [element]
+
+    @classmethod
     def _split_elements_by_table_limit(
+        cls,
         elements: list[dict],
         max_tables: int = 1,
         max_chars_per_card: int = 3500,
@@ -453,14 +601,15 @@ class FeishuChannel(BaseChannel):
         if not elements:
             return [[]]
 
+        split_elements: list[dict] = []
+        for element in elements:
+            split_elements.extend(cls._split_oversized_element(element, max_chars_per_card))
+
         groups: list[list[dict]] = []
         current: list[dict] = []
         table_count = 0
-        current_chars = 0
 
-        for el in elements:
-            el_chars = len(el.get("content", ""))
-
+        for el in split_elements:
             # Check if we need to start a new card
             need_new_card = False
 
@@ -470,7 +619,7 @@ class FeishuChannel(BaseChannel):
                     need_new_card = True
 
             # Length limit check - always check before adding any element
-            if current_chars + el_chars > max_chars_per_card:
+            if current and cls._card_payload_len([*current, el]) > max_chars_per_card:
                 need_new_card = True
 
             if need_new_card:
@@ -478,12 +627,10 @@ class FeishuChannel(BaseChannel):
                     groups.append(current)
                 current = []
                 table_count = 0
-                current_chars = 0
 
             current.append(el)
             if el.get("tag") == "table":
                 table_count += 1
-            current_chars += el_chars
 
         if current:
             groups.append(current)
@@ -1022,7 +1169,7 @@ class FeishuChannel(BaseChannel):
                         if ext in self._AUDIO_EXTS:
                             media_type = "audio"
                         elif ext in self._VIDEO_EXTS:
-                            media_type = "video"
+                            media_type = "media"
                         else:
                             media_type = "file"
                         await loop.run_in_executor(
@@ -1047,7 +1194,7 @@ class FeishuChannel(BaseChannel):
                     # Complex / long content – send as interactive card
                     elements = self._build_card_elements(msg.content)
                     for chunk in self._split_elements_by_table_limit(elements):
-                        card = {"config": {"wide_screen_mode": True}, "elements": chunk}
+                        card = self._build_interactive_card(chunk)
                         await loop.run_in_executor(
                             None, _do_send,
                             "interactive", json.dumps(card, ensure_ascii=False),
@@ -1264,13 +1411,16 @@ class FeishuChannel(BaseChannel):
         formatted_code = self._format_tool_hint_lines(tool_hint)
 
         card = {
+            "schema": "2.0",
             "config": {"wide_screen_mode": True},
-            "elements": [
+            "body": {
+                "elements": [
                 {
                     "tag": "markdown",
                     "content": f"**Tool Calls**\n\n```text\n{formatted_code}\n```"
                 }
-            ]
+                ]
+            }
         }
 
         await loop.run_in_executor(

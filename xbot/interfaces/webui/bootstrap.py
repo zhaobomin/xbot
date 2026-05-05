@@ -34,9 +34,11 @@ def build_services(config, *, make_runtime) -> ServiceContainer:
         config=config,
         bus=bus,
         workspace=workspace,
+        execution_cwd=workspace,
         cron_service=cron,
         conversation_store=conversation_store,
         permission_handler=None,
+        run_mode="webui",
     )
     return ServiceContainer(
         config=config,

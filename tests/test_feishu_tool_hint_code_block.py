@@ -48,12 +48,14 @@ async def test_tool_hint_sends_code_message(mock_feishu_channel):
 
         # Parse content to verify card structure
         card = json.loads(content)
+        assert card["schema"] == "2.0"
         assert card["config"]["wide_screen_mode"] is True
-        assert len(card["elements"]) == 1
-        assert card["elements"][0]["tag"] == "markdown"
+        elements = card["body"]["elements"]
+        assert len(elements) == 1
+        assert elements[0]["tag"] == "markdown"
         # Check that code block is properly formatted with language hint
         expected_md = "**Tool Calls**\n\n```text\nweb_search(\"test query\")\n```"
-        assert card["elements"][0]["content"] == expected_md
+        assert elements[0]["content"] == expected_md
 
 
 @mark.asyncio
@@ -113,7 +115,7 @@ async def test_tool_hint_multiple_tools_in_one_message(mock_feishu_channel):
         assert msg_type == "interactive"
         # Each tool call should be on its own line
         expected_md = "**Tool Calls**\n\n```text\nweb_search(\"query\"),\nread_file(\"/path/to/file\")\n```"
-        assert content["elements"][0]["content"] == expected_md
+        assert content["body"]["elements"][0]["content"] == expected_md
 
 
 @mark.asyncio
@@ -135,4 +137,4 @@ async def test_tool_hint_keeps_commas_inside_arguments(mock_feishu_channel):
             "web_search(\"foo, bar\"),\n"
             "read_file(\"/path/to/file\")\n```"
         )
-        assert content["elements"][0]["content"] == expected_md
+        assert content["body"]["elements"][0]["content"] == expected_md
