@@ -86,36 +86,8 @@ class BaseProcess(ABC):
     # Single task execution
     # ------------------------------------------------------------------
 
-    # Soft timeout configuration
-    SOFT_TIMEOUT_BUFFER = 300  # 5 minutes - Seconds to extend when progress detected
-    ACTIVITY_THRESHOLD = 180  # 3 minutes - Seconds without output to consider "stuck"
-    MAX_EXTENSIONS = 10  # Maximum number of timeout extensions
-
-    def _estimate_timeout(self, task: TaskDefinition) -> int:
-        """Estimate timeout based on task complexity.
-
-        Args:
-            task: Task definition
-
-        Returns:
-            Estimated timeout in seconds
-        """
-        base = 60  # Minimum 1 minute
-
-        # Description length indicates complexity
-        desc_bonus = min(len(task.description or "") // 10, 120)
-
-        # Role complexity (based on agent configuration)
-        role = self.crew_config.agents.get(task.agent)
-        role_bonus = 60  # Default medium complexity
-        if role:
-            # More iterations = more complex task
-            role_bonus = min(role.max_iterations * 3, 120)
-
-        total = base + desc_bonus + role_bonus
-        logger.debug(f"[crew] Estimated timeout for '{task.name}': {total}s")
-        return total
-
+    
+    
     async def _execute_single_task(self, task: TaskDefinition) -> TaskResult:
         """Execute a single task: briefing -> run -> process output -> return result.
 
@@ -161,40 +133,18 @@ class BaseProcess(ABC):
             max_context_length=self.crew_config.max_context_length,
         )
 
-        # 5. Determine timeout mode
-        use_soft_timeout = task.timeout is None
-        # Use explicit timeout if set (including 0), otherwise estimate
-        initial_timeout = task.timeout if task.timeout is not None else self._estimate_timeout(task)
-
-        # 6. Execute with soft timeout
+        # 5. Execute task
         started = datetime.now()
         output = ""
         status = "success"
-        extended_count = 0
-        quality = "full"
 
         try:
-            output, extended_count = await self._execute_with_soft_timeout(
-                task=task,
-                prompt=prompt,
-                session_key=session_key,
-                initial_timeout=initial_timeout,
-                use_soft_timeout=use_soft_timeout,
-                media=media,
-            )
-            if extended_count > 0:
-                quality = "partial"
-                logger.info(f"[crew] Task '{task.name}' completed with {extended_count} timeout extensions")
-
+            output = await self._execute_task(task, prompt, session_key, media)
         except asyncio.CancelledError:
             logger.warning(f"[crew] Task '{task.name}' was cancelled")
             output = "Task cancelled"
             status = "cancelled"
             raise
-        except asyncio.TimeoutError:
-            logger.warning(f"[crew] Task '{task.name}' timed out after extensions")
-            output = f"Task timed out after {initial_timeout + extended_count * self.SOFT_TIMEOUT_BUFFER}s"
-            status = "failed"
         except Exception as exc:
             logger.exception(f"[crew] Task '{task.name}' failed with error")
             output = f"Task failed: {exc}"
@@ -258,152 +208,36 @@ class BaseProcess(ABC):
             structured_output=structured_output,
             truncated=truncated,
             repaired=repaired,
-            quality=quality,
-            extended_count=extended_count,
         )
 
-    async def _execute_with_soft_timeout(
+    async def _execute_task(
         self,
         task: TaskDefinition,
         prompt: str,
         session_key: str,
-        initial_timeout: int,
-        use_soft_timeout: bool,
         media: list[str] | None = None,
-    ) -> tuple[str, int]:
-        """Execute task with soft timeout and progress detection.
-
-        Uses asyncio.shield() to protect stream_task from being cancelled
-        during timeout checks, allowing the stream to continue even when
-        wait_for raises TimeoutError.
+    ) -> str:
+        """Execute task via streaming or direct call, no timeout enforcement.
 
         Args:
             task: Task definition
             prompt: Full prompt
             session_key: Session identifier
-            initial_timeout: Initial timeout in seconds
-            use_soft_timeout: If True, extend on progress; if False, hard timeout
-            media: Optional list of media file paths (images, etc.) to include
+            media: Optional list of media file paths
 
         Returns:
-            Tuple of (output, extended_count)
+            Agent output string
         """
-        import time
-
         if not self._pool_supports_native_streaming():
-            output = await asyncio.wait_for(
-                self.pool.run_task(task.agent, prompt, session_key, media),
-                timeout=initial_timeout,
-            )
-            return output, 0
+            return await self.pool.run_task(task.agent, prompt, session_key, media)
 
-        start_time = time.monotonic()
-        deadline = start_time + initial_timeout
-        extended_count = 0
-        last_activity_time: float | None = None  # None means no output yet
         output = ""
-
-        # Create the async iterator
         stream = self.pool.run_task_streaming(task.agent, prompt, session_key, media)
-
-        # Create task for first progress event
-        stream_task = asyncio.create_task(stream.__anext__())
-
-        while True:
-            current_time = time.monotonic()
-            remaining = deadline - current_time
-
-            # Calculate wait timeout (max ACTIVITY_THRESHOLD to ensure regular checks)
-            wait_timeout = max(0.1, min(remaining, self.ACTIVITY_THRESHOLD))
-
-            try:
-                # Use shield() to protect stream_task from being cancelled by wait_for
-                progress = await asyncio.wait_for(asyncio.shield(stream_task), wait_timeout)
-
-                # Got progress event
-                current_time = time.monotonic()
-
-                # Update last activity time when we get content
-                if progress.delta_content:
-                    last_activity_time = current_time
-
-                # Update output
-                output = progress.total_content
-
-                # Task completed
-                if progress.is_final:
-                    return output, extended_count
-
-                # Create new task for next progress event
-                stream_task = asyncio.create_task(stream.__anext__())
-
-            except asyncio.TimeoutError:
-                # wait_for timed out, but stream_task is NOT cancelled (shielded)
-                current_time = time.monotonic()
-
-                if use_soft_timeout and extended_count < self.MAX_EXTENSIONS:
-                    # Only extend if we've had output activity
-                    if last_activity_time is not None:
-                        time_since_activity = current_time - last_activity_time
-                        if time_since_activity < self.ACTIVITY_THRESHOLD:
-                            # Recent activity, extend timeout
-                            extended_count += 1
-                            deadline += self.SOFT_TIMEOUT_BUFFER
-                            logger.info(
-                                f"[crew] Task '{task.name}' has progress, "
-                                f"extending timeout by {self.SOFT_TIMEOUT_BUFFER}s "
-                                f"(extension #{extended_count})"
-                            )
-                            # Continue loop, stream_task is still pending (shielded)
-                            continue
-                        else:
-                            # Had output but stopped for too long
-                            logger.warning(
-                                f"[crew] Task '{task.name}' appears stuck "
-                                f"(no output for {time_since_activity:.0f}s), stopping"
-                            )
-                            # Cancel stream_task before raising
-                            stream_task.cancel()
-                            try:
-                                await stream_task
-                            except (asyncio.CancelledError, asyncio.TimeoutError):
-                                pass
-                            raise asyncio.TimeoutError()
-                    else:
-                        # Never received any output - startup failure
-                        logger.warning(
-                            f"[crew] Task '{task.name}' failed to start "
-                            f"(no output for {current_time - start_time:.0f}s), stopping"
-                        )
-                        # Cancel stream_task before raising
-                        stream_task.cancel()
-                        try:
-                            await stream_task
-                        except (asyncio.CancelledError, asyncio.TimeoutError):
-                            pass
-                        raise asyncio.TimeoutError()
-                else:
-                    # Hard timeout or max extensions reached
-                    # Cancel stream_task before raising
-                    stream_task.cancel()
-                    try:
-                        await stream_task
-                    except (asyncio.CancelledError, asyncio.TimeoutError):
-                        pass
-                    raise asyncio.TimeoutError()
-
-            except StopAsyncIteration:
-                # Stream ended normally
-                return output, extended_count
-
-            except asyncio.CancelledError:
-                # Outer cancellation - need to clean up stream_task
-                stream_task.cancel()
-                try:
-                    await stream_task
-                except (asyncio.CancelledError, asyncio.TimeoutError):
-                    pass
-                raise
+        async for progress in stream:
+            output = progress.total_content
+            if progress.is_final:
+                return output
+        return output
 
     # ------------------------------------------------------------------
     # Human intervention
@@ -616,35 +450,17 @@ class BaseProcess(ABC):
         # Transition to RUNNING for the actual redo execution
         self.state_manager.transition_task(task.name, TaskPhase.RUNNING, "redo execution started")
 
-        # Determine timeout mode (same as _execute_single_task)
-        use_soft_timeout = task.timeout is None
-        # Use explicit timeout if set (including 0), otherwise estimate
-        initial_timeout = task.timeout if task.timeout is not None else self._estimate_timeout(task)
-
-        # Initialize variables that may be overwritten by exceptions
         output = ""
-        extended_count = 0
         status = "success"
         success = True
 
         try:
-            output, extended_count = await self._execute_with_soft_timeout(
-                task=task,
-                prompt=prompt,
-                session_key=session_key,
-                initial_timeout=initial_timeout,
-                use_soft_timeout=use_soft_timeout,
-                media=media,
-            )
+            output = await self._execute_task(task, prompt, session_key, media)
         except asyncio.CancelledError:
             output = "Redo cancelled"
             status = "cancelled"
             success = False
             raise
-        except asyncio.TimeoutError:
-            output = "Redo timed out after extensions"
-            status = "failed"
-            success = False
         except Exception as exc:
             output = f"Redo failed: {exc}"
             status = "failed"
@@ -658,8 +474,6 @@ class BaseProcess(ABC):
             started_at=started,
             finished_at=datetime.now(),
             human_briefing_input=extra_briefing,
-            quality="partial" if extended_count > 0 else "full",
-            extended_count=extended_count,
         ), success
 
     # ------------------------------------------------------------------
