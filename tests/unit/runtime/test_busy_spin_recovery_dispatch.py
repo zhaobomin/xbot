@@ -58,8 +58,8 @@ async def test_dispatch_recovers_once_then_succeeds(tmp_path) -> None:
         if process_calls["count"] == 1:
             yield AgentResponse(
                 content=(
-                    "Error: [AgentService] Receive loop idle timeout (300.0s) "
-                    "before idle boundary for feishu:c1 after 8 messages"
+                    "Error: [AgentService] SDK stream ended before idle boundary "
+                    "for feishu:c1 after 8 messages"
                 ),
                 finish_reason="error",
             )
@@ -97,7 +97,7 @@ async def test_dispatch_stream_error_does_not_retry_forever(tmp_path) -> None:
         process_calls["count"] += 1
         yield AgentResponse(
             content=(
-                "Error: [AgentService] Receive loop idle timeout (300.0s) "
+                "Error: [AgentService] SDK stream ended before idle boundary "
                 "before idle boundary for feishu:c1 after 8 messages"
             ),
             finish_reason="error",
@@ -119,7 +119,7 @@ async def test_dispatch_stream_error_does_not_retry_forever(tmp_path) -> None:
     assert process_calls["count"] == 2
     assert recovery_calls["count"] == 1
     assert len(outbound) == 1
-    assert "Receive loop idle timeout" in outbound[0]
+    assert "stream ended before idle boundary" in outbound[0]
 
 
 @pytest.mark.asyncio

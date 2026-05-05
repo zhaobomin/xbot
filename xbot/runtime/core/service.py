@@ -2474,6 +2474,7 @@ class AgentService:
 
         try:
             final_result_text = ""
+            last_content_text = ""
             execution_cwd = self._resolve_execution_cwd(session_key)
             attempts = 0
             max_attempts = 2
@@ -2517,6 +2518,8 @@ class AgentService:
                         break
                     if response.event_type == "result" and response.content:
                         final_result_text = response.content
+                    elif response.event_type == "content" and response.content and not response.is_delta:
+                        last_content_text = response.content
 
                 if error_response_content and attempts == 0 and self._is_recoverable_stream_error_text(error_response_content):
                     recovered = await self._attempt_broken_session_recovery(
@@ -2527,6 +2530,9 @@ class AgentService:
                         attempts += 1
                         continue
                 break
+
+            if not final_result_text and last_content_text:
+                final_result_text = last_content_text
 
             return final_result_text
         finally:
@@ -2632,6 +2638,7 @@ class AgentService:
             )
 
             final_result_text = ""
+            last_content_text = ""
             last_usage: dict[str, Any] | None = None
             error_sent = False
             execution_cwd = self._resolve_execution_cwd(session_key)
@@ -2681,7 +2688,9 @@ class AgentService:
                             _event_type=response.event_type or "content_delta",
                         )
 
-                    # Final user-visible output only comes from ResultMessage.result
+                    # Final user-visible output: prefer ResultMessage.result,
+                    # fall back to last AssistantMessage text content (CLI >=2.1.128
+                    # may leave result=None).
                     if response.event_type == "result" and response.content:
                         final_result_text = response.content
                         await bus.publish_outbound(OutboundMessage(
@@ -2689,6 +2698,8 @@ class AgentService:
                             chat_id=msg.chat_id,
                             content=response.content,
                         ))
+                    elif response.event_type == "content" and response.content and not response.is_delta:
+                        last_content_text = response.content
 
                     # Capture process errors for potential automatic recovery.
                     if response.finish_reason == "error" and response.content:
@@ -2712,6 +2723,16 @@ class AgentService:
                         content=error_response_content,
                     ))
                 break
+
+            # Fallback: if ResultMessage.result was empty (CLI >=2.1.128 may
+            # leave result=None), publish the last text content we captured.
+            if not final_result_text and not error_sent and last_content_text:
+                final_result_text = last_content_text
+                await bus.publish_outbound(OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content=last_content_text,
+                ))
 
             # Send usage summary
             if last_usage and not error_sent:
