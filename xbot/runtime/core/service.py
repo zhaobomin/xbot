@@ -345,25 +345,13 @@ class AgentService:
 
             # ACP-style turn boundary: consume stream until explicit idle state event.
             msg_count = 0
-            idle_timeout = 300.0
             saw_idle_boundary = False
-            ended_due_to_pending_wait = False
 
             stream_iter = client.receive_messages().__aiter__()
 
-            class _SdkStreamTimeoutError(Exception):
-                """Timeout surfaced from SDK stream internals."""
-
             while True:
                 try:
-                    async def _read_next_message():
-                        try:
-                            return await stream_iter.__anext__()
-                        except TimeoutError as e:
-                            # Differentiate SDK-internal timeout from wait_for poll timeout.
-                            raise _SdkStreamTimeoutError(str(e)) from e
-
-                    message = await asyncio.wait_for(_read_next_message(), timeout=idle_timeout)
+                    message = await stream_iter.__anext__()
                 except StopAsyncIteration:
                     if sm:
                         self._dispatch_state_event(
@@ -373,38 +361,6 @@ class AgentService:
                         )
                     raise RuntimeError(
                         f"SDK stream ended before idle boundary for session {context.session_key}"
-                    )
-                except _SdkStreamTimeoutError as e:
-                    if sm:
-                        self._dispatch_state_event(
-                            context.session_key,
-                            SessionEvent.STREAM_TIMEOUT,
-                            reason="sdk_stream_timeout",
-                        )
-                    raise RuntimeError(
-                        f"SDK stream timeout error before idle boundary for {context.session_key}: {e}"
-                    ) from e
-                except TimeoutError:
-                    if self._has_pending_user_wait(context.session_key):
-                        ended_due_to_pending_wait = True
-                        logger.info(
-                            "[AgentService] receive loop timeout treated as pending wait: "
-                            "session=%s timeout=%ss messages=%s",
-                            context.session_key,
-                            idle_timeout,
-                            msg_count,
-                        )
-                        break
-                    if sm:
-                        self._dispatch_state_event(
-                            context.session_key,
-                            SessionEvent.STREAM_TIMEOUT,
-                            reason="receive_loop_idle_timeout",
-                        )
-                    raise RuntimeError(
-                        "[AgentService] Receive loop idle timeout "
-                        f"({idle_timeout}s) before idle boundary for {context.session_key} "
-                        f"after {msg_count} messages"
                     )
 
                 self._sync_sdk_session_mapping(context.session_key, message)
@@ -432,7 +388,7 @@ class AgentService:
                     break
 
             logger.info(f"[AgentService] Receive loop completed, {msg_count} messages for {context.session_key}")
-            if not saw_idle_boundary and not ended_due_to_pending_wait:
+            if not saw_idle_boundary:
                 raise RuntimeError(f"Missing idle boundary for {context.session_key}")
 
             if sm:
@@ -453,12 +409,6 @@ class AgentService:
             raise
         except Exception as e:
             logger.error(f"[AgentService] Error processing: {e}")
-            if sm and self._is_recoverable_stream_error_text(str(e)):
-                self._dispatch_state_event(
-                    context.session_key,
-                    SessionEvent.STREAM_ERROR,
-                    reason=type(e).__name__,
-                )
             yield AgentResponse(
                 content=f"Error: {e}",
                 finish_reason="error",
@@ -503,7 +453,6 @@ class AgentService:
         return any(
             marker in text
             for marker in (
-                "receive loop idle timeout",
                 "missing idle boundary",
                 "stream ended before idle boundary",
                 "stream timeout error before idle boundary",

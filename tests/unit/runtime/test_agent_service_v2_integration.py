@@ -212,30 +212,9 @@ async def test_process_stream_end_before_idle_sets_releasing(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_process_sdk_internal_timeout_sets_releasing(tmp_path) -> None:
-    service, registry = _make_service(tmp_path)
-    context = _make_context("feishu:c-sdk-timeout")
-    client = FakeClient(events=[TimeoutError("sdk timeout")])
-
-    async def _get_client(session_key: str):
-        _ = session_key
-        return client
-
-    async def _refresh(session_key: str, c: Any) -> None:
-        _ = session_key
-        _ = c
-
-    service._get_or_create_client = _get_client  # type: ignore[method-assign]
-    service._refresh_session_commands_from_client = _refresh  # type: ignore[method-assign]
-
-    responses = [r async for r in service.process(context)]
-    assert len(responses) == 1
-    assert "stream timeout error before idle boundary" in responses[0].content.lower()
-    assert registry.get_phase("feishu:c-sdk-timeout") == SessionPhase.RELEASING_CLIENT
-
-
-@pytest.mark.asyncio
-async def test_process_wait_timeout_with_pending_permission_goes_waiting_permission(tmp_path, monkeypatch) -> None:
+async def test_process_pending_permission_goes_waiting_permission(tmp_path) -> None:
+    """When a permission request is pending when the stream ends with idle boundary,
+    the session should transition to WAITING_PERMISSION."""
     service, registry = _make_service(tmp_path)
     bus = MessageBus()
     service._shared_resources["bus"] = bus
@@ -261,19 +240,6 @@ async def test_process_wait_timeout_with_pending_permission_goes_waiting_permiss
         _ = session_key
         _ = c
 
-    import xbot.runtime.core.service as service_mod
-
-    real_wait_for = service_mod.asyncio.wait_for
-
-    async def _patched_wait_for(awaitable, timeout):
-        if timeout == 300.0:
-            close_fn = getattr(awaitable, "close", None)
-            if callable(close_fn):
-                close_fn()
-            raise TimeoutError()
-        return await real_wait_for(awaitable, timeout)
-
-    monkeypatch.setattr(service_mod.asyncio, "wait_for", _patched_wait_for)
     service._get_or_create_client = _get_client  # type: ignore[method-assign]
     service._refresh_session_commands_from_client = _refresh  # type: ignore[method-assign]
 
@@ -283,7 +249,9 @@ async def test_process_wait_timeout_with_pending_permission_goes_waiting_permiss
 
 
 @pytest.mark.asyncio
-async def test_process_wait_timeout_with_pending_interaction_goes_waiting_interaction(tmp_path, monkeypatch) -> None:
+async def test_process_pending_interaction_goes_waiting_interaction(tmp_path) -> None:
+    """When an interaction request is pending when the stream ends with idle boundary,
+    the session should transition to WAITING_INTERACTION."""
     service, registry = _make_service(tmp_path)
     bus = MessageBus()
     service._shared_resources["bus"] = bus
@@ -308,61 +276,12 @@ async def test_process_wait_timeout_with_pending_interaction_goes_waiting_intera
         _ = session_key
         _ = c
 
-    import xbot.runtime.core.service as service_mod
-
-    real_wait_for = service_mod.asyncio.wait_for
-
-    async def _patched_wait_for(awaitable, timeout):
-        if timeout == 300.0:
-            close_fn = getattr(awaitable, "close", None)
-            if callable(close_fn):
-                close_fn()
-            raise TimeoutError()
-        return await real_wait_for(awaitable, timeout)
-
-    monkeypatch.setattr(service_mod.asyncio, "wait_for", _patched_wait_for)
     service._get_or_create_client = _get_client  # type: ignore[method-assign]
     service._refresh_session_commands_from_client = _refresh  # type: ignore[method-assign]
 
     responses = [r async for r in service.process(context)]
     assert responses == []
     assert registry.get_phase("feishu:c-pending-int") == SessionPhase.WAITING_INTERACTION
-
-
-@pytest.mark.asyncio
-async def test_process_wait_timeout_without_pending_returns_error(tmp_path, monkeypatch) -> None:
-    service, registry = _make_service(tmp_path)
-    context = _make_context("feishu:c-timeout")
-    client = FakeClient(events=[SystemMessage(state="idle")])
-
-    async def _get_client(session_key: str):
-        _ = session_key
-        return client
-
-    async def _refresh(session_key: str, c: Any) -> None:
-        _ = session_key
-        _ = c
-
-    import xbot.runtime.core.service as service_mod
-
-    real_wait_for = service_mod.asyncio.wait_for
-
-    async def _patched_wait_for(awaitable, timeout):
-        if timeout == 300.0:
-            close_fn = getattr(awaitable, "close", None)
-            if callable(close_fn):
-                close_fn()
-            raise TimeoutError()
-        return await real_wait_for(awaitable, timeout)
-
-    monkeypatch.setattr(service_mod.asyncio, "wait_for", _patched_wait_for)
-    service._get_or_create_client = _get_client  # type: ignore[method-assign]
-    service._refresh_session_commands_from_client = _refresh  # type: ignore[method-assign]
-
-    responses = [r async for r in service.process(context)]
-    assert len(responses) == 1
-    assert "receive loop idle timeout" in responses[0].content.lower()
-    assert registry.get_phase("feishu:c-timeout") == SessionPhase.RELEASING_CLIENT
 
 
 @pytest.mark.asyncio
@@ -526,8 +445,8 @@ async def test_process_direct_recoverable_error_auto_recovers_once(tmp_path) -> 
         if process_calls["count"] == 1:
             yield AgentResponse(
                 content=(
-                    "Error: [AgentService] Receive loop idle timeout (300.0s) "
-                    "before idle boundary for feishu:c1 after 8 messages"
+                    "Error: SDK stream ended before idle boundary "
+                    "for feishu:c1"
                 ),
                 finish_reason="error",
             )
