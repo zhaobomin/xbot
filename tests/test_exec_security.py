@@ -43,7 +43,7 @@ async def test_exec_blocks_wget_localhost():
 
 @pytest.mark.asyncio
 async def test_exec_allows_normal_commands():
-    tool = ExecTool(timeout=5)
+    tool = ExecTool()
     result = await tool.execute(command="echo hello")
     assert "hello" in result
     assert "Error" not in result.split("\n")[0]

@@ -15,15 +15,12 @@ class ExecTool(Tool):
 
     def __init__(
         self,
-        timeout: int | None = None,
         working_dir: str | Path | None = None,
         deny_patterns: list[str] | None = None,
         allow_patterns: list[str] | None = None,
         restrict_to_workspace: bool = False,
         path_append: str = "",
     ):
-        from xbot.platform.config.schema import TimeoutsConfig
-        self.timeout = timeout or int(TimeoutsConfig().shell_exec)
         self.working_dir = Path(working_dir) if working_dir else None
         self.deny_patterns = deny_patterns or [
             r"\brm\s+-[a-z]*r[a-z]*\b",      # rm -r, rm -rf, rm -rfv, rm -rfi
@@ -47,7 +44,6 @@ class ExecTool(Tool):
     def name(self) -> str:
         return "exec"
 
-    _MAX_TIMEOUT = 600
     _MAX_OUTPUT = 10_000
     _HEX_ESCAPE_RE = re.compile(r"\\x([0-9a-fA-F]{2})")
     _UNICODE_ESCAPE_RE = re.compile(r"\\u([0-9a-fA-F]{4})")
@@ -70,29 +66,17 @@ class ExecTool(Tool):
                     "type": "string",
                     "description": "Optional working directory for the command",
                 },
-                "timeout": {
-                    "type": "integer",
-                    "description": (
-                        "Timeout in seconds. Increase for long-running commands "
-                        "like compilation or installation (default 60, max 600)."
-                    ),
-                    "minimum": 1,
-                    "maximum": 600,
-                },
             },
             "required": ["command"],
         }
 
     async def execute(
-        self, command: str, working_dir: str | Path | None = None,
-        timeout: int | None = None, **kwargs: Any,
+        self, command: str, working_dir: str | Path | None = None, **kwargs: Any,
     ) -> str:
         cwd = Path(working_dir) if working_dir else self.working_dir or Path.cwd()
         guard_error = self._guard_command(command, cwd)
         if guard_error:
             return guard_error
-
-        effective_timeout = min(timeout or self.timeout, self._MAX_TIMEOUT)
 
         env = os.environ.copy()
         if self.path_append:
@@ -107,18 +91,7 @@ class ExecTool(Tool):
                 env=env,
             )
 
-            try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=effective_timeout,
-                )
-            except asyncio.TimeoutError:
-                process.kill()
-                try:
-                    await asyncio.wait_for(process.wait(), timeout=5.0)
-                except asyncio.TimeoutError:
-                    pass
-                return f"Error: Command timed out after {effective_timeout} seconds"
+            stdout, stderr = await process.communicate()
 
             output_parts = []
 
