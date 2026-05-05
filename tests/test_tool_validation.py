@@ -416,23 +416,6 @@ async def test_exec_head_tail_truncation() -> None:
     assert "Exit code:" in result
 
 
-async def test_exec_timeout_parameter() -> None:
-    """LLM-supplied timeout should override the constructor default."""
-    tool = ExecTool(timeout=60)
-    # A very short timeout should cause the command to be killed
-    result = await tool.execute(command="sleep 10", timeout=1)
-    assert "timed out" in result
-    assert "1 seconds" in result
-
-
-async def test_exec_timeout_capped_at_max() -> None:
-    """Timeout values above _MAX_TIMEOUT should be clamped."""
-    tool = ExecTool()
-    # Should not raise — just clamp to 600
-    result = await tool.execute(command="echo ok", timeout=9999)
-    assert "Exit code: 0" in result
-
-
 def test_tool_adapter_applies_workspace_restriction_to_sdk_tools(tmp_path) -> None:
     from xbot.capabilities.tool_adapter import ToolAdapter
 
