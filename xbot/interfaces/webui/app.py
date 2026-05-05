@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 import secrets
@@ -9,6 +10,7 @@ import shutil
 import unicodedata
 import zipfile
 from collections import OrderedDict
+from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
@@ -328,6 +330,8 @@ def create_app(
         print_password_banner(generated_password)
 
     app.state.auth = AuthManager(get_or_create_jwt_secret())
+    app.state.runtime_started = False
+    app.state.channel_start_task = None
     if frontend_dir is not None:
         resolved_frontend_dir = frontend_dir
     else:
@@ -383,6 +387,188 @@ def create_app(
         if index_file.exists():
             return HTMLResponse(index_file.read_text(encoding="utf-8"))
         return None
+
+    def _resolve_heartbeat_target() -> tuple[str, str] | None:
+        heartbeat_cfg = container.config.gateway.heartbeat
+        enabled_channels = set()
+        manager = container.metadata.get("channel_manager")
+        if manager is not None and hasattr(manager, "enabled_channels"):
+            enabled_channels = set(getattr(manager, "enabled_channels", []) or [])
+
+        explicit_channel = (heartbeat_cfg.channel or "").strip()
+        explicit_chat_id = (heartbeat_cfg.chat_id or "").strip()
+        if explicit_channel and explicit_chat_id and explicit_channel in enabled_channels:
+            return explicit_channel, explicit_chat_id
+
+        if not hasattr(container.conversation_store, "list_sessions"):
+            return None
+
+        for item in container.conversation_store.list_sessions():
+            key = str(item.get("key") or "")
+            if ":" not in key:
+                continue
+            channel, chat_id = key.split(":", 1)
+            if channel in {"cli", "system", "heartbeat"}:
+                continue
+            if channel.startswith("cron"):
+                continue
+            if channel in enabled_channels and chat_id:
+                return channel, chat_id
+        return None
+
+    @app.on_event("startup")
+    async def _startup_runtime() -> None:
+        if app.state.runtime_started:
+            return
+
+        if hasattr(container.agent, "initialize"):
+            await container.agent.initialize()
+
+        # Wire cron callback to real agent execution.
+        if hasattr(container.cron, "on_job"):
+            from xbot.platform.bus.events import OutboundMessage
+            from xbot.platform.utils.evaluator import evaluate_response
+            from xbot.tools.cron import CronTool
+            from xbot.tools.message import MessageTool
+
+            async def on_cron_job(job: Any) -> str | None:
+                reminder_note = (
+                    "[Scheduled Task] Timer finished.\n\n"
+                    f"Task '{job.name}' has been triggered.\n"
+                    f"Scheduled instruction: {job.payload.message}"
+                )
+
+                message_tool = container.agent.tools.get("message") if hasattr(container.agent, "tools") else None
+                if isinstance(message_tool, MessageTool):
+                    message_tool.start_turn()
+
+                cron_tool = container.agent.tools.get("cron") if hasattr(container.agent, "tools") else None
+                cron_token = None
+                if isinstance(cron_tool, CronTool):
+                    cron_token = cron_tool.set_cron_context(True)
+                try:
+                    response = await container.agent.process_managed_direct(
+                        reminder_note,
+                        session_key=f"cron:{job.id}",
+                        channel=job.payload.channel or "cli",
+                        chat_id=job.payload.to or "direct",
+                    )
+                finally:
+                    if isinstance(cron_tool, CronTool) and cron_token is not None:
+                        cron_tool.reset_cron_context(cron_token)
+
+                if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
+                    return response
+
+                if job.payload.deliver and job.payload.to and response:
+                    should_notify = await evaluate_response(
+                        response, job.payload.message, container.agent.backend.call_for_structured,
+                    )
+                    if should_notify:
+                        await container.bus.publish_outbound(OutboundMessage(
+                            channel=job.payload.channel or "cli",
+                            chat_id=job.payload.to,
+                            content=response,
+                        ))
+                return response
+
+            container.cron.on_job = on_cron_job
+
+        if hasattr(container.cron, "start"):
+            await container.cron.start()
+
+        # Wire heartbeat callbacks to runtime backend.
+        async def _heartbeat_llm_call(*args, **kwargs):
+            return await container.agent.backend.call_for_structured(*args, **kwargs)
+
+        async def _heartbeat_execute(tasks: str) -> str:
+            channel, chat_id = _resolve_heartbeat_target() or ("cli", "direct")
+
+            async def _silent(*_args, **_kwargs):
+                return None
+
+            return await container.agent.process_managed_direct(
+                tasks,
+                session_key="heartbeat",
+                channel=channel,
+                chat_id=chat_id,
+                on_progress=_silent,
+            )
+
+        async def _heartbeat_notify(response: str) -> None:
+            from xbot.platform.bus.events import OutboundMessage
+
+            target = _resolve_heartbeat_target()
+            if target is None:
+                return
+            channel, chat_id = target
+            await container.bus.publish_outbound(OutboundMessage(channel=channel, chat_id=chat_id, content=response))
+
+        container.heartbeat._llm_call = _heartbeat_llm_call
+        container.heartbeat.on_execute = _heartbeat_execute
+        container.heartbeat.on_notify = _heartbeat_notify
+
+        if hasattr(container.heartbeat, "start"):
+            await container.heartbeat.start()
+
+        manager = container.metadata.get("channel_manager")
+        if manager is not None and hasattr(manager, "start_all"):
+            app.state.channel_start_task = asyncio.create_task(
+                manager.start_all(),
+                name="webui-channel-manager",
+            )
+
+        app.state.runtime_started = True
+
+    @app.on_event("shutdown")
+    async def _shutdown_runtime() -> None:
+        if not app.state.runtime_started:
+            return
+
+        # Stop channel manager first so no outbound messages are consumed during teardown.
+        manager = container.metadata.get("channel_manager")
+        if manager is not None and hasattr(manager, "stop_all"):
+            with suppress(Exception):
+                await manager.stop_all()
+
+        task = app.state.channel_start_task
+        if task is not None:
+            if not task.done():
+                task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await task
+            else:
+                with suppress(Exception):
+                    await task
+        app.state.channel_start_task = None
+
+        heartbeat_shutdown = getattr(container.heartbeat, "shutdown", None)
+        if callable(heartbeat_shutdown):
+            with suppress(Exception):
+                await heartbeat_shutdown()
+        elif hasattr(container.heartbeat, "stop"):
+            with suppress(Exception):
+                container.heartbeat.stop()
+
+        cron_shutdown = getattr(container.cron, "shutdown", None)
+        if callable(cron_shutdown):
+            with suppress(Exception):
+                await cron_shutdown()
+        elif hasattr(container.cron, "stop"):
+            with suppress(Exception):
+                container.cron.stop()
+
+        if hasattr(container.agent, "close_mcp"):
+            with suppress(Exception):
+                await container.agent.close_mcp()
+        if hasattr(container.agent, "shutdown"):
+            with suppress(Exception):
+                await container.agent.shutdown()
+        if hasattr(container.agent, "stop"):
+            with suppress(Exception):
+                container.agent.stop()
+
+        app.state.runtime_started = False
 
     resolved_frontend = Path(app.state.frontend_dir)
     assets_dir = resolved_frontend / "assets"

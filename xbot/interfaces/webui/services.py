@@ -74,12 +74,34 @@ class ServiceContainer:
         raise RuntimeError("Channel reload not supported by this manager")
 
     def mcp_runtime_status(self) -> dict[str, dict[str, Any]]:
+        tool_names: set[str] = set()
+
+        # Legacy/local wrappers: mcp_<server>_<tool>
         tool_registry = getattr(self.agent, "tools", None)
-        tool_names = list(getattr(tool_registry, "tool_names", []) or [])
+        raw_tool_names = list(getattr(tool_registry, "tool_names", []) or [])
+        for name in raw_tool_names:
+            if isinstance(name, str) and name:
+                tool_names.add(name)
+
+        # SDK tool names discovered from active sessions: mcp__<server>__<tool>
+        shared_resources = getattr(self.agent, "_shared_resources", {})
+        runtime_registry = shared_resources.get("runtime_registry") if isinstance(shared_resources, dict) else None
+        if runtime_registry is not None and hasattr(runtime_registry, "list_keys") and hasattr(runtime_registry, "get_sdk_capabilities"):
+            for session_key in runtime_registry.list_keys():
+                caps = runtime_registry.get_sdk_capabilities(session_key)
+                for name in caps.get("tools", []):
+                    if isinstance(name, str) and name:
+                        tool_names.add(name)
+
         runtime: dict[str, dict[str, Any]] = {}
         for name, config in self.config.tools.mcp_servers.items():
-            prefix = f"mcp_{name}_"
-            tools = sorted(tool_name for tool_name in tool_names if tool_name.startswith(prefix))
+            legacy_prefix = f"mcp_{name}_"
+            sdk_prefix = f"mcp__{name}__"
+            tools = sorted(
+                tool_name
+                for tool_name in tool_names
+                if tool_name.startswith(legacy_prefix) or tool_name.startswith(sdk_prefix)
+            )
             transport = next(
                 (
                     capability.transport

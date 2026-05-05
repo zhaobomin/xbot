@@ -730,6 +730,191 @@ class TestRunDispatch:
         assert r3.event_type == "task"
         assert r3.event_data["status"] == "completed"
 
+    @pytest.mark.asyncio
+    async def test_convert_event_handles_sdk_system_subclasses(self, config, shared_resources):
+        """SDK SystemMessage subclasses should still be routed through system conversion."""
+        service = await self._make_service(config, shared_resources)
+
+        MirrorErrorMessage = type("MirrorErrorMessage", (), {})
+
+        msg = MirrorErrorMessage()
+        msg.subtype = "mirror_error"
+        msg.error = "store unavailable"
+        msg.data = {"error": "store unavailable"}
+
+        result = service._convert_event(msg)
+
+        assert result is not None
+        assert result.event_type == "system"
+        assert result.event_data == {"subtype": "mirror_error"}
+        assert result.progress_texts == ["Session mirror failed: store unavailable"]
+
+    @pytest.mark.asyncio
+    async def test_convert_assistant_message_includes_server_tool_blocks(self, config, shared_resources):
+        """Server-side tool blocks from newer SDK versions should surface as tool progress."""
+        service = await self._make_service(config, shared_resources)
+
+        AssistantMessage = type("AssistantMessage", (), {})
+        ServerToolUseBlock = type("ServerToolUseBlock", (), {})
+        ServerToolResultBlock = type("ServerToolResultBlock", (), {})
+
+        use_block = ServerToolUseBlock()
+        use_block.id = "srv-1"
+        use_block.name = "web_search"
+        use_block.input = {"query": "claude-agent-sdk"}
+
+        result_block = ServerToolResultBlock()
+        result_block.tool_use_id = "srv-1"
+        result_block.content = {"type": "web_search_result", "total_results": 3}
+
+        msg = AssistantMessage()
+        msg.content = [use_block, result_block]
+
+        result = service._convert_assistant_message(msg)
+
+        assert result is not None
+        assert result.event_type == "tool_call"
+        assert result.finish_reason == "tool_use"
+        assert result.tool_calls == [
+            {
+                "id": "srv-1",
+                "name": "web_search",
+                "input": {"query": "claude-agent-sdk"},
+                "kind": "server_tool",
+            },
+            {
+                "id": "srv-1",
+                "name": "server_tool_result",
+                "input": {"type": "web_search_result", "total_results": 3},
+                "kind": "server_tool_result",
+            },
+        ]
+
+    @pytest.mark.asyncio
+    async def test_convert_actual_claude_agent_sdk_new_message_types(self, config, shared_resources):
+        """Actual claude-agent-sdk 0.1.73 message classes should convert without adapters."""
+        from claude_agent_sdk import (
+            AssistantMessage,
+            MirrorErrorMessage,
+            ServerToolResultBlock,
+            ServerToolUseBlock,
+        )
+
+        service = await self._make_service(config, shared_resources)
+
+        mirror = MirrorErrorMessage(
+            subtype="mirror_error",
+            data={"error": "store unavailable"},
+            error="store unavailable",
+        )
+        mirror_result = service._convert_event(mirror)
+        assert mirror_result is not None
+        assert mirror_result.event_type == "system"
+        assert mirror_result.progress_texts == ["Session mirror failed: store unavailable"]
+
+        assistant = AssistantMessage(
+            content=[
+                ServerToolUseBlock(
+                    id="srv-1",
+                    name="web_search",
+                    input={"query": "claude-agent-sdk"},
+                ),
+                ServerToolResultBlock(
+                    tool_use_id="srv-1",
+                    content={"type": "web_search_result", "total_results": 3},
+                ),
+            ],
+            model="claude-sonnet-4-6",
+        )
+        assistant_result = service._convert_event(assistant)
+        assert assistant_result is not None
+        assert assistant_result.event_type == "tool_call"
+        assert assistant_result.tool_calls is not None
+        assert [tc["kind"] for tc in assistant_result.tool_calls] == [
+            "server_tool",
+            "server_tool_result",
+        ]
+
+    @pytest.mark.asyncio
+    async def test_process_converts_new_sdk_events_until_idle(self, config, shared_resources, state_manager):
+        """process() should yield new SDK event types and still stop on the idle boundary."""
+        from claude_agent_sdk import (
+            AssistantMessage,
+            MirrorErrorMessage,
+            ResultMessage,
+            ServerToolUseBlock,
+            SystemMessage,
+        )
+
+        service = await self._make_service(config, shared_resources)
+
+        async def receive_messages():
+            yield MirrorErrorMessage(
+                subtype="mirror_error",
+                data={"error": "store unavailable"},
+                error="store unavailable",
+            )
+            yield AssistantMessage(
+                content=[
+                    ServerToolUseBlock(
+                        id="srv-1",
+                        name="web_search",
+                        input={"query": "claude-agent-sdk"},
+                    )
+                ],
+                model="claude-sonnet-4-6",
+                session_id="sdk-session-3",
+            )
+            yield ResultMessage(
+                subtype="success",
+                duration_ms=1,
+                duration_api_ms=1,
+                is_error=False,
+                num_turns=1,
+                session_id="sdk-session-3",
+                result="done",
+            )
+            yield SystemMessage(
+                subtype="session_state_changed",
+                data={"state": "idle", "session_id": "sdk-session-3"},
+            )
+
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock()
+        mock_client.receive_messages = receive_messages
+        mock_client.get_server_info = AsyncMock(return_value={})
+
+        context = AgentContext(session_key="test:c1", prompt="hello", channel="test", chat_id="c1")
+        with patch.object(service, "_get_or_create_client", AsyncMock(return_value=mock_client)):
+            responses = [response async for response in service.process(context)]
+
+        assert [r.event_type for r in responses] == ["system", "tool_call", "result"]
+        assert responses[0].progress_texts == ["Session mirror failed: store unavailable"]
+        assert responses[1].tool_calls is not None
+        assert responses[1].tool_calls[0]["kind"] == "server_tool"
+        assert responses[2].content == "done"
+        assert state_manager.resolve_compact_notification_target("sdk-session-3") == ("test:c1", "test", "c1")
+
+    def test_format_tool_hint_labels_server_tools(self):
+        """Server-side tools should be distinguishable in progress hints."""
+        hint = AgentService._format_tool_hint([
+            {
+                "id": "srv-1",
+                "name": "web_search",
+                "input": {"query": "claude-agent-sdk"},
+                "kind": "server_tool",
+            },
+            {
+                "id": "srv-1",
+                "name": "server_tool_result",
+                "input": {"type": "web_search_result"},
+                "kind": "server_tool_result",
+            },
+        ])
+
+        assert "Server tool: web_search" in hint
+        assert "Server tool result: server_tool_result" in hint
+
     # --- Test 17: _convert_stream_event handles thinking_delta ---
 
     @pytest.mark.asyncio

@@ -15,12 +15,17 @@ class SessionPhase(str, Enum):
     """Unified runtime session phases."""
 
     IDLE = "idle"
+    # Legacy aliases kept for older integration tests and response handlers
+    # that still use the pre-coordinator phase vocabulary.
+    RUNNING = "running"
     ACQUIRING_CLIENT = "acquiring_client"
     SENDING_QUERY = "sending_query"
     RECEIVING_STREAM = "receiving_stream"
     WAITING_PERMISSION = "waiting_permission"
     WAITING_INTERACTION = "waiting_interaction"
     DRAINING = "draining"
+    STOPPING = "stopping"
+    ERROR = "error"
     RELEASING_CLIENT = "releasing_client"
     BROKEN = "broken"
 
@@ -119,10 +124,19 @@ _EVENT_TARGET: dict[SessionEvent, SessionPhase] = {
 
 VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
     SessionPhase.IDLE: {
+        SessionPhase.RUNNING,
         SessionPhase.ACQUIRING_CLIENT,
         SessionPhase.WAITING_PERMISSION,
         SessionPhase.WAITING_INTERACTION,
         SessionPhase.RELEASING_CLIENT,
+        SessionPhase.BROKEN,
+    },
+    SessionPhase.RUNNING: {
+        SessionPhase.IDLE,
+        SessionPhase.WAITING_PERMISSION,
+        SessionPhase.WAITING_INTERACTION,
+        SessionPhase.STOPPING,
+        SessionPhase.ERROR,
         SessionPhase.BROKEN,
     },
     SessionPhase.ACQUIRING_CLIENT: {
@@ -159,6 +173,16 @@ VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
         SessionPhase.RELEASING_CLIENT,
         SessionPhase.WAITING_PERMISSION,
         SessionPhase.WAITING_INTERACTION,
+        SessionPhase.BROKEN,
+    },
+    SessionPhase.STOPPING: {
+        SessionPhase.IDLE,
+        SessionPhase.ERROR,
+        SessionPhase.BROKEN,
+    },
+    SessionPhase.ERROR: {
+        SessionPhase.RUNNING,
+        SessionPhase.IDLE,
         SessionPhase.BROKEN,
     },
     SessionPhase.RELEASING_CLIENT: {
