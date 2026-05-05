@@ -417,20 +417,32 @@ async def test_dispatch_process_exception_returns_failure_message(tmp_path) -> N
 
 
 @pytest.mark.asyncio
-async def test_interrupt_session_disconnect_failure_transitions_to_broken(tmp_path) -> None:
+async def test_interrupt_session_calls_worker_interrupt_and_keeps_worker(tmp_path) -> None:
     service, registry = _make_service(tmp_path)
     session_key = "feishu:c-interrupt"
-    service._active_tasks[session_key] = asyncio.create_task(asyncio.sleep(10))
+    mock_client = type("Client", (), {})()
+    interrupt_called = False
 
-    async def _disconnect_fail(key: str) -> bool:
-        _ = key
-        return False
+    async def _interrupt() -> None:
+        nonlocal interrupt_called
+        interrupt_called = True
 
-    service._client_pool.disconnect = _disconnect_fail  # type: ignore[method-assign]
+    mock_client.interrupt = _interrupt
+    worker = service._create_detached_session_worker(
+        session_key=session_key,
+        client=mock_client,
+        channel="feishu",
+        chat_id="c1",
+    )
+    await worker.input_queue.put({"type": "user", "message": {"role": "user", "content": "queued"}})
+    service._session_workers[session_key] = worker
 
     result = await service.interrupt_session(session_key)
     assert result["interrupted"] is True
-    assert registry.get_phase(session_key) == SessionPhase.BROKEN
+    assert result["queued_cleared"] == 1
+    assert interrupt_called is True
+    assert service._session_workers[session_key] is worker
+    assert registry.get_phase(session_key) == SessionPhase.IDLE
 
 
 @pytest.mark.asyncio

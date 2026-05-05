@@ -1,391 +1,117 @@
-"""Tests for RuntimeSessionRegistry."""
+"""Tests for the reduced RuntimeSessionRegistry API."""
 
-import asyncio
-import time
-from unittest.mock import MagicMock
+from __future__ import annotations
 
 import pytest
 
-from xbot.runtime.state.machine import SessionPhase
+from xbot.runtime.state.machine import SessionEvent, SessionPhase
 from xbot.runtime.state.runtime_registry import RuntimeSessionRegistry
 
 
-@pytest.mark.asyncio
-async def test_get_or_create_creates_new_session():
-    """Test that get_or_create creates a new session when it doesn't exist."""
+def test_get_or_create_and_routing_resolution() -> None:
     manager = RuntimeSessionRegistry()
-    state = manager.get_or_create("slack:C12345")
+    key = "slack:C12345"
 
-    assert state.session_key == "slack:C12345"
+    assert manager.get(key) is None
+    assert manager.get_phase(key) == SessionPhase.IDLE
+    assert manager.has_session(key) is False
+
+    state = manager.get_or_create(key)
+    assert state.session_key == key
     assert state.phase == SessionPhase.IDLE
-    assert state.channel == ""
-    assert state.chat_id == ""
+    assert manager.has_session(key) is True
+
+    manager.set_routing(key, "slack", "C12345")
+    assert manager.get_routing(key) == ("slack", "C12345")
+    assert manager.get_context_by_session_key(key) == ("slack", "C12345")
+    assert manager.resolve_routing(key) == (key, "slack", "C12345")
 
 
 @pytest.mark.asyncio
-async def test_get_or_create_retrieves_existing_session():
-    """Test that get_or_create retrieves existing session."""
+async def test_sdk_session_mapping_updates_and_cleanup() -> None:
     manager = RuntimeSessionRegistry()
-    state1 = manager.get_or_create("slack:C12345")
-    state1.channel = "slack"
-    state1.chat_id = "C12345"
+    key = "slack:C12345"
 
-    state2 = manager.get_or_create("slack:C12345")
-    assert state2 is state1
-    assert state2.channel == "slack"
-    assert state2.chat_id == "C12345"
+    manager.set_routing(key, "slack", "C12345")
+    await manager.set_sdk_session_id(key, "sdk-uuid-old")
+    assert manager.resolve_sdk_session_id(key) == "sdk-uuid-old"
+    assert manager.get_by_sdk_id("sdk-uuid-old") is manager.get(key)
+    assert manager.resolve_routing("sdk-uuid-old") == (key, "slack", "C12345")
+
+    await manager.set_sdk_session_id(key, "sdk-uuid-new")
+    assert manager.get_by_sdk_id("sdk-uuid-old") is None
+    assert manager.get_by_sdk_id("sdk-uuid-new") is manager.get(key)
+
+    await manager.cleanup_session(key)
+    assert manager.get(key) is None
+    assert manager.get_by_sdk_id("sdk-uuid-new") is None
+
+
+def test_metadata_accessors_are_session_scoped() -> None:
+    manager = RuntimeSessionRegistry()
+    key = "slack:C12345"
+
+    manager.set_execution_cwd(key, "/tmp/work")
+    manager.set_workspace_dir(key, "/tmp/ws")
+    manager.set_commands(key, ["/help", "/clear"])
+    manager.set_sdk_capabilities(
+        key,
+        skills=["skill-a"],
+        tools=["tool-a"],
+        slash_commands=["/x"],
+        skill_source="sdk_only",
+    )
+    manager.set_task_id(key, "task-1")
+    manager.set_request_id(key, "req-1")
+
+    assert manager.get_execution_cwd(key) == "/tmp/work"
+    assert manager.get_workspace_dir(key) == "/tmp/ws"
+    assert manager.get_commands(key) == ["/help", "/clear"]
+    assert manager.get_sdk_capabilities(key) == {
+        "skills": ["skill-a"],
+        "tools": ["tool-a"],
+        "slash_commands": ["/x"],
+        "skill_source": "sdk_only",
+    }
+    assert manager.get_task_id(key) == "task-1"
+    assert manager.get_request_id(key) == "req-1"
+
+
+def test_phase_changes_are_event_driven() -> None:
+    manager = RuntimeSessionRegistry()
+    key = "slack:C12345"
+
+    assert manager.dispatch(key, SessionEvent.USER_MESSAGE, strict=True) is True
+    assert manager.get_phase(key) == SessionPhase.ACQUIRING_CLIENT
+    assert manager.dispatch(key, SessionEvent.CLIENT_ACQUIRED, strict=True) is True
+    assert manager.get_phase(key) == SessionPhase.SENDING_QUERY
+    assert manager.dispatch(key, SessionEvent.QUERY_SENT, strict=True) is True
+    assert manager.get_phase(key) == SessionPhase.RECEIVING_STREAM
+    assert manager.dispatch(key, SessionEvent.STREAM_IDLE_BOUNDARY, strict=True) is True
+    assert manager.get_phase(key) == SessionPhase.DRAINING
+    assert manager.dispatch(key, SessionEvent.TURN_COMPLETED, strict=True) is True
+    assert manager.get_phase(key) == SessionPhase.IDLE
+
+
+def test_invalid_transition_is_observed_without_legacy_transition_api() -> None:
+    manager = RuntimeSessionRegistry()
+    key = "slack:C12345"
+
+    manager.dispatch(key, SessionEvent.USER_MESSAGE, strict=False)
+    assert manager.dispatch(key, SessionEvent.CLIENT_ACQUIRED, strict=True) is True
+    assert manager.dispatch(key, SessionEvent.USER_MESSAGE, strict=True) is False
+
+    check = manager.check_session(key)
+    assert check["exists"] is True
+    assert check["illegal_transition_count"] == 1
 
 
 @pytest.mark.asyncio
-async def test_set_sdk_session_id_creates_mapping():
-    """Test that set_sdk_session_id creates bidirectional mapping."""
+async def test_delete_is_idempotent() -> None:
     manager = RuntimeSessionRegistry()
-    state = manager.get_or_create("slack:C12345")
-
-    await manager.set_sdk_session_id("slack:C12345", "sdk-uuid-abc-123")
-
-    assert state.sdk_session_id == "sdk-uuid-abc-123"
-    assert manager.get_by_sdk_id("sdk-uuid-abc-123") is state
-
-
-@pytest.mark.asyncio
-async def test_set_sdk_session_id_updates_mapping():
-    """Test that set_sdk_session_id updates existing mapping."""
-    manager = RuntimeSessionRegistry()
-    state = manager.get_or_create("slack:C12345")
-    await manager.set_sdk_session_id("slack:C12345", "sdk-uuid-old")
-
-    # Update to new SDK session ID
-    await manager.set_sdk_session_id("slack:C12345", "sdk-uuid-new")
-
-    assert state.sdk_session_id == "sdk-uuid-new"
-    assert manager.get_by_sdk_id("sdk-uuid-old") is None  # Old mapping removed
-    assert manager.get_by_sdk_id("sdk-uuid-new") is state
-
-
-@pytest.mark.asyncio
-async def test_set_routing():
-    """Test that set_routing updates channel and chat_id."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-
-    manager.set_routing("slack:C12345", "slack", "C12345")
-
-    state = manager.get("slack:C12345")
-    assert state.channel == "slack"
-    assert state.chat_id == "C12345"
-
-
-@pytest.mark.asyncio
-async def test_get_routing():
-    """Test that get_routing returns channel and chat_id."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-    manager.set_routing("slack:C12345", "slack", "C12345")
-
-    routing = manager.get_routing("slack:C12345")
-    assert routing == ("slack", "C12345")
-
-
-@pytest.mark.asyncio
-async def test_get_routing_returns_none_for_unknown():
-    """Test that get_routing returns None for unknown session."""
-    manager = RuntimeSessionRegistry()
-    routing = manager.get_routing("unknown:session")
-    assert routing is None
-
-
-@pytest.mark.asyncio
-async def test_resolve_routing_by_session_key():
-    """Test resolve_routing accepts session_key."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-    manager.set_routing("slack:C12345", "slack", "C12345")
-
-    result = manager.resolve_routing("slack:C12345")
-    assert result == ("slack:C12345", "slack", "C12345")
-
-
-@pytest.mark.asyncio
-async def test_resolve_routing_by_sdk_session_id():
-    """Test resolve_routing accepts sdk_session_id."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-    manager.set_routing("slack:C12345", "slack", "C12345")
-    await manager.set_sdk_session_id("slack:C12345", "sdk-uuid-abc")
-
-    result = manager.resolve_routing("sdk-uuid-abc")
-    assert result == ("slack:C12345", "slack", "C12345")
-
-
-@pytest.mark.asyncio
-async def test_resolve_routing_returns_none_for_unknown():
-    """Test resolve_routing returns None for unknown identifier."""
-    manager = RuntimeSessionRegistry()
-    result = manager.resolve_routing("unknown-id")
-    assert result is None
-
-
-@pytest.mark.asyncio
-async def test_can_start_request_returns_true_for_idle():
-    """Test can_start_request returns True for IDLE phase."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-
-    assert manager.can_start_request("slack:C12345") is True
-
-
-@pytest.mark.asyncio
-async def test_can_start_request_returns_false_for_running():
-    """Test can_start_request returns False for RUNNING phase."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-    manager.start_request("slack:C12345")
-
-    assert manager.can_start_request("slack:C12345") is False
-
-
-@pytest.mark.asyncio
-async def test_start_request_transitions_to_running():
-    """Test start_request transitions phase to RUNNING."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-
-    result = manager.start_request("slack:C12345")
-    assert result is True
-
-    state = manager.get("slack:C12345")
-    assert state.phase == SessionPhase.RUNNING
-
-
-@pytest.mark.asyncio
-async def test_start_request_returns_false_when_not_idle():
-    """Test start_request returns False when phase is not IDLE."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-    manager.start_request("slack:C12345")  # Phase = RUNNING
-
-    result = manager.start_request("slack:C12345")
-    assert result is False
-
-
-@pytest.mark.asyncio
-async def test_end_request_transitions_to_idle():
-    """Test end_request transitions phase back to IDLE."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-    manager.start_request("slack:C12345")
-
-    manager.end_request("slack:C12345")
-
-    state = manager.get("slack:C12345")
-    assert state.phase == SessionPhase.IDLE
-
-
-@pytest.mark.asyncio
-async def test_end_request_can_set_custom_phase():
-    """Test end_request can set custom phase (e.g., ERROR)."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-    manager.start_request("slack:C12345")
-
-    manager.end_request("slack:C12345", SessionPhase.ERROR)
-
-    state = manager.get("slack:C12345")
-    assert state.phase == SessionPhase.ERROR
-
-
-@pytest.mark.asyncio
-async def test_set_client():
-    """Test set_client stores client in session state."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-    mock_client = MagicMock()
-    manager.set_client("slack:C12345", mock_client)
-    state = manager.get("slack:C12345")
-    assert state.client is mock_client
-
-
-@pytest.mark.asyncio
-async def test_get_client():
-    """Test get_client retrieves client."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-    mock_client = MagicMock()
-    manager.set_client("slack:C12345", mock_client)
-    client = manager.get_client("slack:C12345")
-    assert client is mock_client
-
-
-@pytest.mark.asyncio
-async def test_has_client():
-    """Test has_client checks if session has client."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-    assert manager.has_client("slack:C12345") is False
-    mock_client = MagicMock()
-    manager.set_client("slack:C12345", mock_client)
-    assert manager.has_client("slack:C12345") is True
-
-
-@pytest.mark.asyncio
-async def test_list_client_sessions():
-    """Test list_client_sessions returns sessions with clients."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C1")
-    manager.get_or_create("slack:C2")
-    manager.get_or_create("slack:C3")
-    mock_client = MagicMock()
-    manager.set_client("slack:C1", mock_client)
-    manager.set_client("slack:C2", mock_client)
-    sessions = manager.list_client_sessions()
-    assert set(sessions) == {"slack:C1", "slack:C2"}
-
-
-@pytest.mark.asyncio
-async def test_register_task():
-    """Test register_task adds task to session."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-
-    async def dummy_task():
-        await asyncio.sleep(1)
-
-    task = asyncio.create_task(dummy_task())
-    manager.register_task("slack:C12345", task)
-    state = manager.get("slack:C12345")
-    assert task in state.tasks
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
-
-
-@pytest.mark.asyncio
-async def test_get_active_tasks():
-    """Test get_active_tasks returns session tasks."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-
-    async def dummy_task():
-        await asyncio.sleep(1)
-
-    task1 = asyncio.create_task(dummy_task())
-    task2 = asyncio.create_task(dummy_task())
-    manager.register_task("slack:C12345", task1)
-    manager.register_task("slack:C12345", task2)
-    tasks = manager.get_active_tasks("slack:C12345")
-    assert task1 in tasks
-    assert task2 in tasks
-    for t in [task1, task2]:
-        t.cancel()
-        try:
-            await t
-        except asyncio.CancelledError:
-            pass
-
-
-@pytest.mark.asyncio
-async def test_cancel_all_tasks():
-    """Test cancel_all_tasks cancels and clears session tasks."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-
-    async def dummy_task():
-        await asyncio.sleep(10)
-
-    task1 = asyncio.create_task(dummy_task())
-    task2 = asyncio.create_task(dummy_task())
-    manager.register_task("slack:C12345", task1)
-    manager.register_task("slack:C12345", task2)
-
-    count = await manager.cancel_all_tasks("slack:C12345")
-    assert count == 2
-    assert task1.cancelled() or task1.done()
-    assert task2.cancelled() or task2.done()
-    state = manager.get("slack:C12345")
-    assert len(state.tasks) == 0
-
-
-@pytest.mark.asyncio
-async def test_cleanup_session():
-    """Test cleanup_session removes session and mappings."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-    await manager.set_sdk_session_id("slack:C12345", "sdk-uuid-abc")
-
-    await manager.cleanup_session("slack:C12345")
-
-    assert manager.get("slack:C12345") is None
-    assert manager.get_by_sdk_id("sdk-uuid-abc") is None
-
-
-@pytest.mark.asyncio
-async def test_cleanup_session_is_idempotent():
-    """Second cleanup call should not raise even if session is already gone."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-
-    await manager.cleanup_session("slack:C12345")
-    await manager.cleanup_session("slack:C12345")
-
-    assert manager.get("slack:C12345") is None
-
-
-@pytest.mark.asyncio
-async def test_cleanup_session_cancels_tasks():
-    """Test cleanup_session cancels active tasks."""
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-
-    async def dummy_task():
-        await asyncio.sleep(10)
-
-    task = asyncio.create_task(dummy_task())
-    manager.register_task("slack:C12345", task)
-
-    await manager.cleanup_session("slack:C12345")
-
-    assert task.cancelled() or task.done()
-    assert manager.get("slack:C12345") is None
-
-
-@pytest.mark.asyncio
-async def test_list_stale_sessions():
-    """Test list_stale_sessions returns sessions past TTL."""
-    manager = RuntimeSessionRegistry()
-
-    state1 = manager.get_or_create("slack:C1")
-    state2 = manager.get_or_create("slack:C2")
-    state3 = manager.get_or_create("slack:C3")
-
-    state1.last_active = time.time() - 3600  # 1 hour ago (stale)
-    state2.last_active = time.time() - 60    # 1 min ago (fresh)
-    state3.last_active = time.time()         # now (fresh)
-
-    stale = manager.list_stale_sessions(ttl_seconds=300)  # 5 min TTL
-    assert stale == ["slack:C1"]
-
-
-@pytest.mark.asyncio
-async def test_transaction_set_phase_respects_validation():
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-    manager.transition("slack:C12345", SessionPhase.RUNNING, reason="start")
-
-    with pytest.raises(ValueError, match="Invalid phase transition"):
-        async with manager.transaction("slack:C12345", validate_on_commit=True) as tx:
-            tx.set_phase(SessionPhase.DELETING, reason="invalid")
-
-
-@pytest.mark.asyncio
-async def test_transaction_set_phase_can_force_when_validation_disabled():
-    manager = RuntimeSessionRegistry()
-    manager.get_or_create("slack:C12345")
-    manager.transition("slack:C12345", SessionPhase.RUNNING, reason="start")
-
-    async with manager.transaction("slack:C12345", validate_on_commit=False) as tx:
-        tx.set_phase(SessionPhase.DELETING, reason="force")
-
-    assert manager.get_phase("slack:C12345") == SessionPhase.DELETING
+    key = "slack:C12345"
+
+    manager.get_or_create(key)
+    assert await manager.delete(key) is True
+    assert await manager.delete(key) is True
+    assert manager.get(key) is None

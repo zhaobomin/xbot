@@ -437,97 +437,18 @@ class TestCheckUpstreamReady:
         assert process._check_upstream_ready(task) is False
 
 
-class TestTimeoutEstimation:
-    """Test timeout estimation logic."""
+class TestTimeoutMetadata:
+    """Timeout is retained on task definitions but not estimated by the process."""
 
-    def test_estimate_timeout_base(self) -> None:
-        """Base timeout should be at least 60 seconds."""
-        crew_config = MagicMock()
-        crew_config.agents = {
-            "agent1": AgentRole(name="agent1", description="Test", goal="Test", max_iterations=20)
-        }
-
-        process = SequentialProcess(
-            pool=MagicMock(),
-            context=MagicMock(),
-            permission_handler=MagicMock(),
-            crew_config=crew_config,
-            state_manager=MagicMock(),
-        )
-
+    def test_task_timeout_metadata_is_preserved(self) -> None:
         task = TaskDefinition(
             name="task1",
-            description="",  # Empty description
+            description="Task with operator metadata",
             agent="agent1",
+            timeout=120,
         )
 
-        timeout = process._estimate_timeout(task)
-        assert timeout >= 60  # Base minimum
-
-    def test_estimate_timeout_with_description(self) -> None:
-        """Longer description should increase timeout."""
-        crew_config = MagicMock()
-        crew_config.agents = {
-            "agent1": AgentRole(name="agent1", description="Test", goal="Test", max_iterations=20)
-        }
-
-        process = SequentialProcess(
-            pool=MagicMock(),
-            context=MagicMock(),
-            permission_handler=MagicMock(),
-            crew_config=crew_config,
-            state_manager=MagicMock(),
-        )
-
-        task_short = TaskDefinition(
-            name="task_short",
-            description="Short task",
-            agent="agent1",
-        )
-
-        task_long = TaskDefinition(
-            name="task_long",
-            description="A very long task description with many details and requirements that takes more time to process",
-            agent="agent1",
-        )
-
-        timeout_short = process._estimate_timeout(task_short)
-        timeout_long = process._estimate_timeout(task_long)
-
-        assert timeout_long > timeout_short
-
-    def test_estimate_timeout_with_iterations(self) -> None:
-        """More iterations should increase timeout."""
-        crew_config = MagicMock()
-        crew_config.agents = {
-            "agent1": AgentRole(name="agent1", description="Test", goal="Test", max_iterations=10),
-            "agent2": AgentRole(name="agent2", description="Test", goal="Test", max_iterations=50),
-        }
-
-        process = SequentialProcess(
-            pool=MagicMock(),
-            context=MagicMock(),
-            permission_handler=MagicMock(),
-            crew_config=crew_config,
-            state_manager=MagicMock(),
-        )
-
-        task_low = TaskDefinition(
-            name="task_low",
-            description="Test",
-            agent="agent1",
-        )
-
-        task_high = TaskDefinition(
-            name="task_high",
-            description="Test",
-            agent="agent2",
-        )
-
-        timeout_low = process._estimate_timeout(task_low)
-        timeout_high = process._estimate_timeout(task_high)
-
-        assert timeout_high > timeout_low
+        assert task.timeout == 120
 
 
 class TestSequentialProcessExecute:

@@ -848,7 +848,7 @@ class TestSequentialProcess:
         assert pool.run_task.call_count == 1
 
     @pytest.mark.asyncio
-    async def test_timeout_marks_task_failed(self):
+    async def test_timeout_metadata_does_not_interrupt_task(self):
         from xbot.crew.process import SequentialProcess
 
         config = _make_crew_config(
@@ -861,8 +861,8 @@ class TestSequentialProcess:
         pool = _mock_pool()
 
         async def slow_task(*args, **kwargs):
-            await asyncio.sleep(10)
-            return "never"
+            await asyncio.sleep(0.01)
+            return "completed"
 
         pool.run_task = AsyncMock(side_effect=slow_task)
         perm = _mock_permission()
@@ -873,8 +873,8 @@ class TestSequentialProcess:
             crew_config=config, state_manager=sm,
         )
         results = await proc.execute(config.tasks)
-        assert results[0].status == "failed"
-        assert "timed out" in results[0].output
+        assert results[0].status == "success"
+        assert results[0].output == "completed"
 
 
 # ============================================================================

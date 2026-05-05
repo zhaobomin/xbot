@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 
@@ -91,6 +92,19 @@ _SDK_NATIVE_TOOL_NAMES = {
 }
 
 
+@dataclass
+class SessionWorker:
+    """Owns the native streaming SDK session for one xbot session."""
+
+    session_key: str
+    client: ClaudeSDKClient
+    input_queue: asyncio.Queue
+    task: asyncio.Task | None
+    channel: str
+    chat_id: str
+    closed: bool = False
+
+
 def _progress_kind_from_event_type(event_type: str, *, tool_hint: bool = False) -> str:
     """Map event_type to progress_kind (matches v0.3.37)."""
     if tool_hint:
@@ -130,7 +144,7 @@ class AgentService:
         self._response_handlers: Any = None
         self._commands_loader: Any = None
         self._command_handler: LocalCommandHandler | None = None
-        self._active_tasks: dict[str, asyncio.Task] = {}
+        self._session_workers: dict[str, SessionWorker] = {}
         self._direct_progress_callbacks: dict[str, ProgressCallback] = {}
 
         # ReMe integration: ContextBuilder and MemoryConsolidator
@@ -613,6 +627,9 @@ class AgentService:
             await asyncio.gather(*self._async_consolidation_tasks, return_exceptions=True)
             self._async_consolidation_tasks.clear()
 
+        for session_key in list(self._session_workers.keys()):
+            await self._stop_session_worker(session_key, disconnect=True)
+
         # Disconnect all clients
         await self._client_pool.disconnect_all()
 
@@ -663,6 +680,7 @@ class AgentService:
                     e,
                 )
 
+        await self._stop_session_worker(session_key, disconnect=True)
         if drop_sdk_context and runtime_registry:
             set_sdk_impl = getattr(runtime_registry, "_set_sdk_session_id_impl", None)
             if callable(set_sdk_impl):
@@ -852,12 +870,16 @@ class AgentService:
 
     async def interrupt_session(self, session_key: str) -> dict[str, Any]:
         """Interrupt ongoing processing for a session."""
-        task = self._active_tasks.pop(session_key, None)
+        worker = self._session_workers.get(session_key)
         interrupted = False
-        if task and not task.done():
-            task.cancel()
-            interrupted = True
-        disconnected = await self._client_pool.disconnect(session_key)
+        queued_cleared = 0
+        if worker is not None and not worker.closed:
+            try:
+                await worker.client.interrupt()
+                interrupted = True
+            except Exception as e:
+                logger.warning("Failed to interrupt session worker %s: %s", session_key, e)
+            queued_cleared = self._clear_worker_queue(worker)
         # Transition to releasing/idle
         sm = self._shared_resources.get("runtime_registry")
         if sm:
@@ -868,10 +890,11 @@ class AgentService:
             )
             self._dispatch_state_event(
                 session_key,
-                SessionEvent.DISCONNECT_OK if disconnected else SessionEvent.DISCONNECT_FAILED,
-                reason="interrupt_disconnect",
+                SessionEvent.TURN_COMPLETED,
+                reason="interrupt_idle",
+                strict=False,
             )
-        return {"interrupted": interrupted, "usage": None}
+        return {"interrupted": interrupted, "queued_cleared": queued_cleared, "usage": None}
 
     def _dispatch_state_event(
         self,
@@ -2417,6 +2440,15 @@ class AgentService:
 
     async def _release_session_client(self, session_key: str, *, reason: str) -> bool:
         """Best-effort client release for a session."""
+        if session_key in self._session_workers:
+            ok = await self._stop_session_worker(session_key, disconnect=True)
+            logger.info(
+                "[AgentService] released session worker: session=%s reason=%s ok=%s",
+                session_key,
+                reason,
+                ok,
+            )
+            return ok
         try:
             ok = await self._client_pool.disconnect(session_key)
             logger.info(
@@ -2549,8 +2581,7 @@ class AgentService:
         Message routing loop:
         1. Permission/interaction responses → response_handlers
         2. Local commands (!help, !stop, etc.) → _handle_local_command
-        3. Busy sessions → reject with "processing" hint
-        4. Normal messages → _dispatch() as background task
+        3. Normal messages → native per-session SDK worker input stream
         """
         bus = self._shared_resources.get("bus")
         if bus is None:
@@ -2592,25 +2623,290 @@ class AgentService:
                     await self._command_handler.handle(msg, bus)
                     continue
 
-                # 4. Busy session detection
-                active_task = self._active_tasks.get(session_key)
-                if active_task and not active_task.done():
-                    await self._publish_event(
-                        bus, msg.channel, msg.chat_id,
-                        "\u23f3 \u6b63\u5728\u5904\u7406\u4e2d\uff0c\u8bf7\u7a0d\u5019...",
-                        _event_type="busy_reject",
-                        _progress=True,
-                        busy_reject=True,
-                        busy_reason="active_task",
-                    )
-                    continue
-
-                # 5. Dispatch as background task
-                task = asyncio.create_task(self._dispatch(msg, bus))
-                self._active_tasks[session_key] = task
+                # 4. Native Claude SDK streaming input.
+                await self._enqueue_worker_message(msg, bus)
 
             except Exception as e:
                 logger.exception("Error in run loop: %s", e)
+
+    def _create_detached_session_worker(
+        self,
+        session_key: str,
+        *,
+        client: Any,
+        channel: str,
+        chat_id: str,
+    ) -> SessionWorker:
+        """Create a SessionWorker without starting its background task."""
+        return SessionWorker(
+            session_key=session_key,
+            client=client,
+            input_queue=asyncio.Queue(),
+            task=None,
+            channel=channel,
+            chat_id=chat_id,
+        )
+
+    async def _get_or_start_session_worker(self, msg: InboundMessage, bus: Any) -> SessionWorker:
+        """Return the native SDK worker for this session, creating it when needed."""
+        session_key = msg.session_key or f"{msg.channel}:{msg.chat_id}"
+        worker = self._session_workers.get(session_key)
+        if worker is not None and not worker.closed:
+            worker.channel = msg.channel
+            worker.chat_id = msg.chat_id
+            return worker
+
+        from claude_agent_sdk import ClaudeSDKClient
+
+        options = self._build_sdk_options(session_key=session_key)
+        client = ClaudeSDKClient(options)
+        worker = self._create_detached_session_worker(
+            session_key=session_key,
+            client=client,
+            channel=msg.channel,
+            chat_id=msg.chat_id,
+        )
+        self._session_workers[session_key] = worker
+        worker.task = asyncio.create_task(
+            self._run_session_worker(worker, bus),
+            name=f"xbot-session-worker:{session_key}",
+        )
+        return worker
+
+    async def _enqueue_worker_message(self, msg: InboundMessage, bus: Any) -> SessionWorker:
+        """Convert an inbound message to an SDK user frame and enqueue it."""
+        worker = await self._get_or_start_session_worker(msg, bus)
+        worker.channel = msg.channel
+        worker.chat_id = msg.chat_id
+        prompt = self._prepare_prompt_from_message(msg)
+        frame = {
+            "type": "user",
+            "message": {"role": "user", "content": self._build_query_prompt(prompt, msg.media or [])},
+            "parent_tool_use_id": None,
+            "session_id": worker.session_key,
+        }
+        await worker.input_queue.put(frame)
+        self._set_session_routing(worker.session_key, msg.channel, msg.chat_id)
+        self._persist_user_message(worker.session_key, msg.content)
+        self._dispatch_state_event(
+            worker.session_key,
+            SessionEvent.USER_MESSAGE,
+            reason="worker_message_enqueued",
+            strict=False,
+        )
+        self._dispatch_state_event(
+            worker.session_key,
+            SessionEvent.QUERY_SENT,
+            reason="worker_message_enqueued",
+            strict=False,
+        )
+        return worker
+
+    def _prepare_prompt_from_message(self, msg: InboundMessage) -> str:
+        """Apply workspace command injection to an inbound message."""
+        prompt = msg.content
+        if self._commands_loader and self._commands_loader.is_command(prompt):
+            cmd_name = self._commands_loader.get_command_from_text(prompt)
+            if cmd_name:
+                cmd_content = self._commands_loader.load_command(cmd_name)
+                if cmd_content:
+                    prompt = cmd_content
+        return prompt
+
+    async def _worker_input_stream(self, worker: SessionWorker) -> AsyncIterator[dict[str, Any]]:
+        """Yield SDK frames from a session worker queue until closed."""
+        while not worker.closed:
+            frame = await worker.input_queue.get()
+            if frame is None:
+                break
+            yield frame
+
+    async def _run_session_worker(self, worker: SessionWorker, bus: Any) -> None:
+        """Run one native streaming SDK session until it closes or fails."""
+        try:
+            await worker.client.connect(prompt=self._worker_input_stream(worker))
+            self._dispatch_state_event(
+                worker.session_key,
+                SessionEvent.CLIENT_ACQUIRED,
+                reason="worker_client_ready",
+                strict=False,
+            )
+            try:
+                await self._refresh_session_commands_from_client(worker.session_key, worker.client)
+            except Exception as e:
+                logger.debug("Failed to refresh worker commands for %s: %s", worker.session_key, e)
+
+            async for message in worker.client.receive_messages():
+                await self._handle_worker_sdk_message(worker, message, bus)
+            worker.closed = True
+        except asyncio.CancelledError:
+            logger.info("Session worker cancelled for %s", worker.session_key)
+            worker.closed = True
+            raise
+        except Exception as e:
+            worker.closed = True
+            self._dispatch_state_event(
+                worker.session_key,
+                SessionEvent.STREAM_ERROR,
+                reason="worker_stream_error",
+                strict=False,
+            )
+            try:
+                await bus.publish_outbound(OutboundMessage(
+                    channel=worker.channel,
+                    chat_id=worker.chat_id,
+                    content=f"\u274c \u5904\u7406\u51fa\u9519: {e}",
+                ))
+            except Exception:
+                pass
+        finally:
+            if worker.closed:
+                self._session_workers.pop(worker.session_key, None)
+            try:
+                await worker.client.disconnect()
+            except Exception as e:
+                logger.debug("Worker disconnect failed for %s: %s", worker.session_key, e)
+
+    async def _handle_worker_sdk_message(self, worker: SessionWorker, message: Any, bus: Any) -> None:
+        """Convert and publish one SDK message from a session worker."""
+        self._sync_sdk_session_mapping(worker.session_key, message)
+        response = self._convert_event(message)
+        if response:
+            await self._publish_worker_response(worker, response, bus)
+
+        if self._is_idle_boundary_message(message):
+            self._dispatch_terminal_state(
+                worker.session_key,
+                sm=self._shared_resources.get("runtime_registry"),
+                reason="worker_idle_boundary",
+            )
+
+    async def _publish_worker_response(self, worker: SessionWorker, response: AgentResponse, bus: Any) -> None:
+        """Publish a converted SDK response for a session worker."""
+        execution_cwd = self._resolve_execution_cwd(worker.session_key)
+        if response.progress_texts:
+            evt_type = response.event_type or "thinking"
+            for text in response.progress_texts:
+                await self._publish_event(
+                    bus,
+                    worker.channel,
+                    worker.chat_id,
+                    text,
+                    event_data=response.event_data,
+                    _progress=True,
+                    _event_type=evt_type,
+                )
+        if response.tool_hint_text:
+            await self._publish_event(
+                bus,
+                worker.channel,
+                worker.chat_id,
+                response.tool_hint_text,
+                _tool_hint=True,
+                _progress=True,
+                _event_type="tool_hint",
+            )
+        if response.tool_calls:
+            await self._publish_event(
+                bus,
+                worker.channel,
+                worker.chat_id,
+                self._format_tool_hint(response.tool_calls, execution_cwd=execution_cwd),
+                event_data={"tool_calls": response.tool_calls},
+                _tool_hint=True,
+                _progress=True,
+                _event_type="tool_call",
+            )
+        if response.is_delta and response.delta_content:
+            await self._publish_event(
+                bus,
+                worker.channel,
+                worker.chat_id,
+                response.delta_content,
+                event_data=response.event_data,
+                _progress=True,
+                _event_type=response.event_type or "content_delta",
+            )
+        if response.event_type == "result" and response.content:
+            await bus.publish_outbound(OutboundMessage(
+                channel=worker.channel,
+                chat_id=worker.chat_id,
+                content=response.content,
+            ))
+            self._persist_assistant_message(worker.session_key, response.content)
+        if response.usage:
+            from xbot.interaction.event_formatter import format_usage_summary
+            usage_text = format_usage_summary(response.usage)
+            if usage_text:
+                await self._publish_event(
+                    bus,
+                    worker.channel,
+                    worker.chat_id,
+                    usage_text,
+                    _event_type="usage",
+                    _progress=True,
+                )
+
+    def _clear_worker_queue(self, worker: SessionWorker) -> int:
+        """Remove queued SDK frames that have not been consumed yet."""
+        cleared = 0
+        while True:
+            try:
+                worker.input_queue.get_nowait()
+                cleared += 1
+            except asyncio.QueueEmpty:
+                return cleared
+
+    async def _stop_session_worker(self, session_key: str, *, disconnect: bool) -> bool:
+        """Close and remove a session worker."""
+        worker = self._session_workers.pop(session_key, None)
+        if worker is None:
+            return False
+        worker.closed = True
+        self._clear_worker_queue(worker)
+        try:
+            worker.input_queue.put_nowait(None)
+        except Exception:
+            pass
+        task = worker.task
+        if task is not None and not task.done():
+            task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=2.0)
+            except asyncio.CancelledError:
+                pass
+            except asyncio.TimeoutError:
+                logger.warning("Timed out waiting for session worker shutdown (%s)", session_key)
+            except Exception as e:
+                logger.debug("Session worker raised during shutdown (%s): %s", session_key, e)
+        elif disconnect:
+            try:
+                await worker.client.disconnect()
+            except Exception as e:
+                logger.debug("Worker client disconnect failed for %s: %s", session_key, e)
+        return True
+
+    def _persist_user_message(self, session_key: str, content: str) -> None:
+        sess_mgr = self._shared_resources.get("conversation_store")
+        if not sess_mgr or not hasattr(sess_mgr, "get_or_create"):
+            return
+        try:
+            session = sess_mgr.get_or_create(session_key)
+            session.add_message("user", content)
+            sess_mgr.save(session)
+        except Exception as e:
+            logger.warning("Failed to persist user message: %s", e)
+
+    def _persist_assistant_message(self, session_key: str, content: str) -> None:
+        sess_mgr = self._shared_resources.get("conversation_store")
+        if not sess_mgr or not hasattr(sess_mgr, "get_or_create"):
+            return
+        try:
+            session = sess_mgr.get_or_create(session_key)
+            session.add_message("assistant", content)
+            sess_mgr.save(session)
+        except Exception as e:
+            logger.warning("Failed to persist assistant message: %s", e)
 
     async def _dispatch(self, msg: InboundMessage, bus: Any) -> None:
         """Complete processing chain for a single inbound message."""
@@ -2770,8 +3066,6 @@ class AgentService:
                 ))
             except Exception:
                 pass
-        finally:
-            self._active_tasks.pop(session_key, None)
 
     @staticmethod
     def _is_valid_compact_target(resolved_target: Any) -> bool:
@@ -3033,6 +3327,8 @@ class AgentService:
     async def close_mcp(self) -> None:
         """Close MCP connections and cleanup resources."""
         logger.info("Closing MCP connections...")
+        for session_key in list(self._session_workers.keys()):
+            await self._stop_session_worker(session_key, disconnect=True)
         await self._client_pool.disconnect_all()
 
     @property

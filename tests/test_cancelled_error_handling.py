@@ -353,16 +353,15 @@ class TestRedoTaskBugFixes:
     """Test fixes for bugs found in _redo_task method."""
 
     @pytest.mark.asyncio
-    async def test_redo_task_timeout_uses_correct_extended_count(self) -> None:
-        """When redo times out, extended_count should be 0 (not undefined)."""
+    async def test_redo_task_explicit_timeout_does_not_interrupt(self) -> None:
+        """Redo keeps timeout as metadata and returns the completed stream result."""
         from xbot.crew.agent_pool import TaskProgress
         from xbot.crew.models import AgentRole
 
         pool = MagicMock()
 
-        # Simulate a stream that takes longer than timeout
         async def slow_stream(*args, **kwargs):
-            await asyncio.sleep(10)
+            await asyncio.sleep(0.01)
             yield TaskProgress(delta_content="result", total_content="result", is_final=True)
 
         pool.run_task_streaming = slow_stream
@@ -398,7 +397,7 @@ class TestRedoTaskBugFixes:
             name="test_task",
             description="Test",
             agent="test_agent",
-            timeout=2,  # Hard timeout
+            timeout=2,
         )
 
         original_result = TaskResult(
@@ -410,14 +409,13 @@ class TestRedoTaskBugFixes:
             finished_at=datetime.now(),
         )
 
-        # Call _redo_task (which will timeout)
         result, success = await process._redo_task(task, original_result)
 
-        # Verify result is valid (no UnboundLocalError)
-        assert success is False
-        assert result.status == "failed"
-        assert result.extended_count == 0  # Should be 0, not undefined
-        assert result.quality == "full"  # extended_count == 0 means full
+        assert success is True
+        assert result.status == "success"
+        assert result.output == "result"
+        assert result.extended_count == 0
+        assert result.quality == "full"
 
     @pytest.mark.asyncio
     async def test_redo_task_exception_uses_correct_extended_count(self) -> None:
@@ -486,8 +484,8 @@ class TestRedoTaskBugFixes:
         assert result.quality == "full"
 
 
-class TestExecuteWithSoftTimeoutEdgeCases:
-    """Test edge cases in _execute_with_soft_timeout."""
+class TestExecuteTaskEdgeCases:
+    """Test edge cases in current streaming task execution."""
 
     @pytest.mark.asyncio
     async def test_cancelled_error_clean_up_stream_task(self) -> None:
@@ -542,14 +540,11 @@ class TestExecuteWithSoftTimeoutEdgeCases:
             timeout=None,
         )
 
-        # Create a task that will be cancelled
         async def run_and_cancel():
-            task_coro = process._execute_with_soft_timeout(
+            task_coro = process._execute_task(
                 task=task,
                 prompt="test",
                 session_key="test",
-                initial_timeout=60,
-                use_soft_timeout=True,
             )
             exec_task = asyncio.create_task(task_coro)
             await asyncio.sleep(0.1)  # Let it start
@@ -612,17 +607,13 @@ class TestExecuteWithSoftTimeoutEdgeCases:
             timeout=None,
         )
 
-        # Should complete without error
-        output, extended_count = await process._execute_with_soft_timeout(
+        output = await process._execute_task(
             task=task,
             prompt="test",
             session_key="test",
-            initial_timeout=60,
-            use_soft_timeout=True,
         )
 
         assert output == "partial"
-        assert extended_count == 0
 
 
 class TestStateTransitions:

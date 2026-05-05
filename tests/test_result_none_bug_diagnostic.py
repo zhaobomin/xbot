@@ -83,7 +83,6 @@ def _make_dispatch_svc():
     svc._publish_event = AsyncMock()
     svc._format_tool_hint = MagicMock(return_value="")
     svc._commands_loader = None
-    svc._active_tasks = {}
     svc._shared_resources = {}
     return svc
 

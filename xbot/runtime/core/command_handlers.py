@@ -156,18 +156,9 @@ class LocalCommandHandler:
     async def _do_stop(self, session_key: str, bus: Any) -> str:
         """Stop current processing, preserving context (matches v0.3.37 !stop)."""
         svc = self._service
-        cancelled = 0
-
-        # Cancel active dispatch task
-        task = svc._active_tasks.pop(session_key, None)
-        if await self._cancel_task_if_running(task, session_key=session_key, action="stop"):
-            cancelled += 1
-
-        # Release SDK client for this session to avoid idle client accumulation.
-        try:
-            await svc._client_pool.disconnect(session_key)
-        except Exception:
-            pass
+        result = await svc.interrupt_session(session_key)
+        interrupted = bool(result.get("interrupted"))
+        queued_cleared = int(result.get("queued_cleared") or 0)
 
         # Clear pending permission/interaction
         bus_obj = svc._shared_resources.get("bus")
@@ -182,8 +173,10 @@ class LocalCommandHandler:
 
         # Build detail list
         details: list[str] = []
-        if cancelled:
-            details.append(f"{cancelled} task(s)")
+        if interrupted:
+            details.append("current SDK turn")
+        if queued_cleared:
+            details.append(f"{queued_cleared} queued message(s)")
         if cleared_permission:
             details.append("pending permission")
         if cleared_interaction:
@@ -212,11 +205,7 @@ class LocalCommandHandler:
         """Reset session (matches v0.3.37 !reset with --soft support)."""
         svc = self._service
 
-        # Cancel active task
-        task = svc._active_tasks.pop(session_key, None)
-        cancelled = 0
-        if await self._cancel_task_if_running(task, session_key=session_key, action="reset"):
-            cancelled += 1
+        had_worker = session_key in getattr(svc, "_session_workers", {})
 
         # Clear pending requests
         cleared_permission = False
@@ -244,8 +233,8 @@ class LocalCommandHandler:
         # Build response
         parts = ["\u267b\ufe0f Session reset completed."]
         details: list[str] = []
-        if cancelled:
-            details.append(f"{cancelled} task(s)")
+        if had_worker:
+            details.append("session worker")
         if cleared_permission:
             details.append("pending permission")
         if cleared_interaction:
@@ -284,7 +273,14 @@ class LocalCommandHandler:
         phase = sm.get_phase(session_key) if sm else "N/A"
 
         # Active tasks
-        has_task = session_key in svc._active_tasks and not svc._active_tasks[session_key].done()
+        worker = getattr(svc, "_session_workers", {}).get(session_key)
+        has_worker = bool(worker and not getattr(worker, "closed", False))
+        queue_size = 0
+        if worker is not None:
+            try:
+                queue_size = worker.input_queue.qsize()
+            except Exception:
+                queue_size = 0
 
         # Pending permission / interaction
         bus_obj = svc._shared_resources.get("bus")
@@ -296,7 +292,7 @@ class LocalCommandHandler:
                 pending_interaction = bus_obj.get_pending_interaction_for_session(session_key)
 
         # SDK client status
-        has_client = svc._client_pool.has_client(session_key)
+        has_client = bool(has_worker and getattr(worker, "client", None) is not None)
 
         # SDK session ID from state manager
         sdk_session_id = ""
@@ -308,7 +304,8 @@ class LocalCommandHandler:
         lines = [
             f"Session: {session_key}",
             f"Phase: {phase}",
-            f"Active tasks: {1 if has_task else 0}",
+            f"Session worker: {'active' if has_worker else 'none'}",
+            f"Queued messages: {queue_size}",
             f"Pending permission: {pending_permission or 'none'}",
             f"Pending interaction: {pending_interaction or 'none'}",
             f"SDK session id: {sdk_session_id or 'none'}",
@@ -371,9 +368,14 @@ class LocalCommandHandler:
                 lines.append(f"  {phase_name}: {count}")
             lines.append(f"Illegal transitions: {int(snap.get('illegal_transition_total', 0))}")
 
-            # Active tasks across all sessions
-            active_tasks = len(svc._active_tasks)
-            lines.append(f"\nActive dispatch tasks: {active_tasks}")
+            # Active workers across all sessions
+            workers = getattr(svc, "_session_workers", {})
+            active_workers = sum(
+                1
+                for worker in workers.values()
+                if not getattr(worker, "closed", False)
+            )
+            lines.append(f"\nActive session workers: {active_workers}")
 
             # Client pool stats
             pool_size = len(svc._client_pool._clients) if hasattr(svc._client_pool, "_clients") else 0

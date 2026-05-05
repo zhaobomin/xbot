@@ -370,49 +370,193 @@ class TestRunDispatch:
 
     @pytest.mark.asyncio
     async def test_local_command_stop(self, config, shared_resources, bus, state_manager):
-        """!stop should cancel active task and set phase to IDLE."""
+        """!stop should interrupt the session worker and preserve it."""
         service = await self._make_service(config, shared_resources)
         session_key = "test:c1"
 
-        # Simulate an active task
-        mock_task = MagicMock()
-        mock_task.done.return_value = False
-        mock_task.cancel = MagicMock()
-        service._active_tasks[session_key] = mock_task
+        mock_client = MagicMock()
+        mock_client.interrupt = AsyncMock()
+        worker = service._create_detached_session_worker(
+            session_key=session_key,
+            client=mock_client,
+            channel="test",
+            chat_id="c1",
+        )
+        await worker.input_queue.put({"type": "user", "message": {"role": "user", "content": "queued"}})
+        service._session_workers[session_key] = worker
 
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="!stop")
         await service._command_handler.handle(msg, bus)
 
-        mock_task.cancel.assert_called_once()
+        mock_client.interrupt.assert_awaited_once()
+        assert session_key in service._session_workers
+        assert worker.input_queue.empty()
         assert state_manager.get_phase(session_key) == SessionPhase.IDLE
         assert bus.publish_outbound.call_count == 1
         assert "stopped" in bus.publish_outbound.call_args.args[0].content.lower() or \
                "stop" in bus.publish_outbound.call_args.args[0].content.lower()
 
-    # --- Test 6: Busy rejection ---
+    # --- Test 6: Native worker enqueue ---
 
     @pytest.mark.asyncio
-    async def test_busy_rejection(self, config, shared_resources, bus):
-        """When a session has an active task, new messages should be rejected."""
+    async def test_run_enqueues_same_session_messages_without_busy_reject(self, config, shared_resources, bus):
+        """Same-session messages should enter the worker FIFO instead of being busy-rejected."""
         service = await self._make_service(config, shared_resources)
         session_key = "test:c1"
+        worker = service._create_detached_session_worker(
+            session_key=session_key,
+            client=MagicMock(),
+            channel="test",
+            chat_id="c1",
+        )
+        service._session_workers[session_key] = worker
 
-        # Simulate an active task
-        mock_task = MagicMock()
-        mock_task.done.return_value = False
-        service._active_tasks[session_key] = mock_task
+        first = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="first")
+        second = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="second")
 
-        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="New question")
+        await service._enqueue_worker_message(first, bus)
+        await service._enqueue_worker_message(second, bus)
 
-        # Simulate what run() does for busy detection
-        active_task = service._active_tasks.get(session_key)
-        assert active_task and not active_task.done()
+        queued = [await worker.input_queue.get(), await worker.input_queue.get()]
+        assert [item["message"]["content"] for item in queued] == ["first", "second"]
+        assert all(item["session_id"] == session_key for item in queued)
+        assert not any(
+            call.args[0].metadata.get("busy_reject")
+            for call in bus.publish_outbound.call_args_list
+        )
 
-        await service._publish_event(bus, msg.channel, msg.chat_id, "\u23f3 \u6b63\u5728\u5904\u7406\u4e2d\uff0c\u8bf7\u7a0d\u5019...", _progress=True)
+    @pytest.mark.asyncio
+    async def test_worker_input_frame_includes_media_references(self, config, shared_resources, tmp_path):
+        """Worker input frames should use the same media prompt injection as process()."""
+        service = await self._make_service(config, shared_resources)
+        session_key = "test:c1"
+        bus = MagicMock()
+        bus.publish_outbound = AsyncMock()
+        image_path = tmp_path / "demo.png"
+        image_path.write_bytes(
+            b"\x89PNG\r\n\x1a\n"
+            b"\x00\x00\x00\rIHDR"
+            b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+            b"\x1f\x15\xc4\x89"
+            b"\x00\x00\x00\x00IEND\xaeB`\x82"
+        )
+        worker = service._create_detached_session_worker(
+            session_key=session_key,
+            client=MagicMock(),
+            channel="test",
+            chat_id="c1",
+        )
+        service._session_workers[session_key] = worker
 
-        assert bus.publish_outbound.call_count == 1
-        out = bus.publish_outbound.call_args.args[0]
-        assert out.metadata.get("_progress") is True
+        msg = InboundMessage(
+            channel="test",
+            sender_id="u1",
+            chat_id="c1",
+            content="describe",
+            media=[str(image_path)],
+        )
+        await service._enqueue_worker_message(msg, bus)
+
+        frame = await worker.input_queue.get()
+        assert frame["type"] == "user"
+        assert frame["message"]["role"] == "user"
+        assert frame["parent_tool_use_id"] is None
+        assert frame["session_id"] == session_key
+        assert "用户附加了以下图片" in frame["message"]["content"]
+        assert str(image_path) in frame["message"]["content"]
+        assert "用户请求:\ndescribe" in frame["message"]["content"]
+
+    @pytest.mark.asyncio
+    async def test_reset_session_removes_session_worker(self, config, shared_resources, bus):
+        """Reset should destroy the session worker instead of keeping runtime state."""
+        service = await self._make_service(config, shared_resources)
+        session_key = "test:c1"
+        mock_client = MagicMock()
+        mock_client.disconnect = AsyncMock()
+        worker = service._create_detached_session_worker(
+            session_key=session_key,
+            client=mock_client,
+            channel="test",
+            chat_id="c1",
+        )
+        service._session_workers[session_key] = worker
+        await service._enqueue_worker_message(
+            InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="queued"),
+            bus,
+        )
+
+        await service.reset_session(session_key)
+
+        assert session_key not in service._session_workers
+        mock_client.disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_idle_boundary_keeps_worker_alive(self, config, shared_resources, bus, state_manager):
+        """Idle boundaries should mark the session idle without closing the worker."""
+        service = await self._make_service(config, shared_resources)
+        session_key = "test:c1"
+        worker = service._create_detached_session_worker(
+            session_key=session_key,
+            client=MagicMock(),
+            channel="test",
+            chat_id="c1",
+        )
+        service._session_workers[session_key] = worker
+        idle_msg = MagicMock()
+        idle_msg.subtype = "session_state_changed"
+        idle_msg.data = {"state": "idle"}
+        idle_msg.session_id = "sdk-session"
+
+        await service._handle_worker_sdk_message(worker, idle_msg, bus)
+
+        assert service._session_workers[session_key] is worker
+        assert worker.closed is False
+        assert state_manager.get_phase(session_key) == SessionPhase.IDLE
+
+    @pytest.mark.asyncio
+    async def test_worker_stream_error_removes_worker(self, config, shared_resources, bus):
+        """A failed worker should be removed so the next message can recreate it."""
+        service = await self._make_service(config, shared_resources)
+        session_key = "test:c1"
+        mock_client = MagicMock()
+        mock_client.connect = AsyncMock()
+        mock_client.receive_messages.side_effect = RuntimeError("stream failed")
+        mock_client.disconnect = AsyncMock()
+        worker = service._create_detached_session_worker(
+            session_key=session_key,
+            client=mock_client,
+            channel="test",
+            chat_id="c1",
+        )
+        service._session_workers[session_key] = worker
+
+        await service._run_session_worker(worker, bus)
+
+        assert worker.closed is True
+        assert session_key not in service._session_workers
+        mock_client.disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_worker_publishes_multiple_results(self, config, shared_resources, bus):
+        """A single worker should publish results for multiple SDK result events."""
+        service = await self._make_service(config, shared_resources)
+        session_key = "test:c1"
+        worker = service._create_detached_session_worker(
+            session_key,
+            client=MagicMock(),
+            channel="test",
+            chat_id="c1",
+        )
+        service._session_workers[session_key] = worker
+        first = AgentResponse(content="first result", event_type="result")
+        second = AgentResponse(content="second result", event_type="result")
+
+        await service._publish_worker_response(worker, first, bus)
+        await service._publish_worker_response(worker, second, bus)
+
+        contents = [call.args[0].content for call in bus.publish_outbound.call_args_list]
+        assert "first result" in contents
+        assert "second result" in contents
 
     # --- Test 7: Permission routing ---
 
