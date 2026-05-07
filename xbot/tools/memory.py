@@ -154,22 +154,24 @@ class MemoryTool(Tool):
         store = self._get_memory_store()
 
         # Try ReMe search first
-        try:
-            results = await store.search_memory(query, max_results)
-            if results:
-                lines = [f"Found {len(results)} result(s):\n"]
-                for i, r in enumerate(results, 1):
-                    lines.append(f"### Result {i}")
-                    lines.append(f"Source: {r.get('source', 'unknown')}")
-                    lines.append(f"Score: {r.get('score', 0):.2f}")
-                    memory_text = r.get("memory", "")
-                    preview = memory_text[:500]
-                    suffix = "..." if len(memory_text) > 500 else ""
-                    lines.append(f"Content:\n{preview}{suffix}")
-                    lines.append("")
-                return "\n".join(lines)
-        except Exception as e:
-            logger.warning(f"ReMe search failed: {e}, using fallback")
+        search_memory = getattr(store, "search_memory", None)
+        if callable(search_memory):
+            try:
+                results = await search_memory(query, max_results)
+                if results:
+                    lines = [f"Found {len(results)} result(s):\n"]
+                    for i, r in enumerate(results, 1):
+                        lines.append(f"### Result {i}")
+                        lines.append(f"Source: {r.get('source', 'unknown')}")
+                        lines.append(f"Score: {r.get('score', 0):.2f}")
+                        memory_text = r.get("memory", "")
+                        preview = memory_text[:500]
+                        suffix = "..." if len(memory_text) > 500 else ""
+                        lines.append(f"Content:\n{preview}{suffix}")
+                        lines.append("")
+                    return "\n".join(lines)
+            except Exception as e:
+                logger.warning(f"ReMe search failed: {e}, using fallback")
 
         # Fallback: simple grep
         return self._fallback_search(query, max_results)

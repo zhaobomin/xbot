@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from xbot.memory.store import MemoryStore
 from xbot.tools.memory import MemoryTool
 
 
@@ -108,6 +109,18 @@ class TestMemoryToolSearch:
         result = asyncio.run(tool.execute(action="search", query="xyznonexistent123"))
 
         assert "No results" in result or "0 result" in result.lower()
+
+    def test_search_uses_fallback_without_reme_interface_warning(self, temp_workspace, caplog):
+        """Basic MemoryStore fallback should not call ReMe-only search_memory."""
+        tool = MemoryTool(
+            workspace=temp_workspace,
+            memory_store=MemoryStore(temp_workspace),
+        )
+
+        result = asyncio.run(tool.execute(action="search", query="Test User"))
+
+        assert "Test User" in result
+        assert "search_memory" not in caplog.text
 
 
 class TestMemoryToolWrite:

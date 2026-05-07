@@ -165,6 +165,10 @@ class FeishuChannel(BaseChannel):
                 logger.warning("Feishu WebSocket worker still alive after terminate; killing")
                 process.kill()
                 await asyncio.to_thread(process.join, 2)
+            with contextlib.suppress(Exception):
+                process.close()
+
+        self._close_ws_ipc_resources()
 
         # Clean up references
         self._main_loop = None
@@ -230,6 +234,15 @@ class FeishuChannel(BaseChannel):
                     "Feishu: drained and discarded %d pending events from old queue",
                     drained_count,
                 )
+        self._close_ws_ipc_resources()
+
+    def _close_ws_ipc_resources(self) -> None:
+        """Close multiprocessing IPC handles owned by the parent process."""
+        if self._ws_event_queue is not None:
+            with contextlib.suppress(Exception):
+                self._ws_event_queue.close()
+            with contextlib.suppress(Exception):
+                self._ws_event_queue.join_thread()
 
     @staticmethod
     def _namespace_from_dict(value: Any) -> Any:

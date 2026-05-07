@@ -70,6 +70,28 @@ def test_convert_result_message_with_string_result_produces_content():
     assert response.content  # truthy
 
 
+def test_convert_result_message_preserves_api_error_status():
+    """SDK 0.1.76 exposes API error HTTP status on ResultMessage."""
+    from xbot.runtime.core.service import AgentService
+
+    svc = AgentService.__new__(AgentService)
+    msg = SimpleNamespace(
+        subtype="error",
+        duration_ms=5000,
+        duration_api_ms=3000,
+        is_error=True,
+        num_turns=1,
+        session_id="test-session",
+        result=None,
+        usage=None,
+        api_error_status=429,
+    )
+
+    response = svc._convert_result_message(msg)
+
+    assert response.event_data["api_error_status"] == 429
+
+
 # ─── _dispatch fix verification ───
 
 

@@ -15,6 +15,15 @@ from xbot.runtime.state import RuntimeSessionRegistry
 from xbot.runtime.state.machine import SessionPhase
 
 
+class SystemMessage:
+    """Fake SDK SystemMessage for idle-boundary tests."""
+
+    def __init__(self, *, state: str = "idle", session_id: str = "sdk-session") -> None:
+        self.subtype = "session_state_changed"
+        self.data = {"state": state}
+        self.session_id = session_id
+
+
 class TestAgentService:
     """Tests for AgentService."""
 
@@ -502,15 +511,36 @@ class TestRunDispatch:
             chat_id="c1",
         )
         service._session_workers[session_key] = worker
-        idle_msg = MagicMock()
-        idle_msg.subtype = "session_state_changed"
-        idle_msg.data = {"state": "idle"}
-        idle_msg.session_id = "sdk-session"
+        idle_msg = SystemMessage()
 
         await service._handle_worker_sdk_message(worker, idle_msg, bus)
 
         assert service._session_workers[session_key] is worker
         assert worker.closed is False
+        assert state_manager.get_phase(session_key) == SessionPhase.IDLE
+
+    @pytest.mark.asyncio
+    async def test_worker_client_ready_does_not_regress_active_turn(self, config, shared_resources, bus, state_manager):
+        """Late worker client-ready event should not move a queued turn back to sending_query."""
+        service = await self._make_service(config, shared_resources)
+        session_key = "test:c1"
+        worker = service._create_detached_session_worker(
+            session_key=session_key,
+            client=MagicMock(),
+            channel="test",
+            chat_id="c1",
+        )
+        service._session_workers[session_key] = worker
+        await service._enqueue_worker_message(
+            InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="queued"),
+            bus,
+        )
+
+        service._dispatch_worker_client_ready(session_key)
+        idle_msg = SystemMessage()
+
+        await service._handle_worker_sdk_message(worker, idle_msg, bus)
+
         assert state_manager.get_phase(session_key) == SessionPhase.IDLE
 
     @pytest.mark.asyncio

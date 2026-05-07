@@ -2127,6 +2127,7 @@ class AgentService:
                 "stop_reason": getattr(message, "stop_reason", None),
                 "num_turns": getattr(message, "num_turns", None),
                 "total_cost_usd": getattr(message, "total_cost_usd", None),
+                "api_error_status": getattr(message, "api_error_status", None),
             },
         )
 
@@ -2725,12 +2726,7 @@ class AgentService:
         """Run one native streaming SDK session until it closes or fails."""
         try:
             await worker.client.connect(prompt=self._worker_input_stream(worker))
-            self._dispatch_state_event(
-                worker.session_key,
-                SessionEvent.CLIENT_ACQUIRED,
-                reason="worker_client_ready",
-                strict=False,
-            )
+            self._dispatch_worker_client_ready(worker.session_key)
             try:
                 await self._refresh_session_commands_from_client(worker.session_key, worker.client)
             except Exception as e:
@@ -2767,6 +2763,16 @@ class AgentService:
             except Exception as e:
                 logger.debug("Worker disconnect failed for %s: %s", worker.session_key, e)
 
+    def _dispatch_worker_client_ready(self, session_key: str) -> None:
+        """Record client acquisition only for turns still waiting on the worker client."""
+        sm = self._shared_resources.get("runtime_registry")
+        if sm and sm.get_phase(session_key) == SessionPhase.ACQUIRING_CLIENT:
+            self._dispatch_state_event(
+                session_key,
+                SessionEvent.CLIENT_ACQUIRED,
+                reason="worker_client_ready",
+            )
+
     async def _handle_worker_sdk_message(self, worker: SessionWorker, message: Any, bus: Any) -> None:
         """Convert and publish one SDK message from a session worker."""
         self._sync_sdk_session_mapping(worker.session_key, message)
@@ -2775,6 +2781,11 @@ class AgentService:
             await self._publish_worker_response(worker, response, bus)
 
         if self._is_idle_boundary_message(message):
+            self._dispatch_state_event(
+                worker.session_key,
+                SessionEvent.STREAM_IDLE_BOUNDARY,
+                reason="worker_idle_boundary",
+            )
             self._dispatch_terminal_state(
                 worker.session_key,
                 sm=self._shared_resources.get("runtime_registry"),
