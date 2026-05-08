@@ -93,6 +93,16 @@ def test_phase_changes_are_event_driven() -> None:
     assert manager.get_phase(key) == SessionPhase.IDLE
 
 
+def test_worker_idle_boundary_can_finalize_from_streaming_phase() -> None:
+    manager = RuntimeSessionRegistry()
+    key = "feishu:ou_7b48795a"
+
+    assert manager.dispatch(key, SessionEvent.QUERY_SENT, strict=False) is True
+    assert manager.get_phase(key) == SessionPhase.RECEIVING_STREAM
+    assert manager.dispatch(key, SessionEvent.TURN_COMPLETED, strict=True) is True
+    assert manager.get_phase(key) == SessionPhase.IDLE
+
+
 def test_invalid_transition_is_observed_without_legacy_transition_api() -> None:
     manager = RuntimeSessionRegistry()
     key = "slack:C12345"

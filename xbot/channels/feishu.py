@@ -5,6 +5,7 @@ import contextlib
 import importlib.util
 import json
 import multiprocessing as mp
+import multiprocessing.util as mp_util
 import os
 import queue
 import re
@@ -12,6 +13,7 @@ import threading
 import time
 import uuid
 from collections import OrderedDict
+from multiprocessing.synchronize import SemLock
 from types import SimpleNamespace
 from typing import Any, Callable, Literal
 
@@ -243,6 +245,50 @@ class FeishuChannel(BaseChannel):
                 self._ws_event_queue.close()
             with contextlib.suppress(Exception):
                 self._ws_event_queue.join_thread()
+            self._cleanup_multiprocessing_semlocks(self._ws_event_queue)
+        if self._ws_stop_event is not None:
+            self._cleanup_multiprocessing_semlocks(self._ws_stop_event)
+
+    @staticmethod
+    def _iter_multiprocessing_semaphore_names(obj: Any) -> list[str]:
+        """Return resource_tracker semaphore names held by multiprocessing IPC objects."""
+        names: list[str] = []
+        seen: set[int] = set()
+
+        def collect(value: Any) -> None:
+            if value is None or id(value) in seen:
+                return
+            seen.add(id(value))
+            semlock = getattr(value, "_semlock", None)
+            name = getattr(semlock, "name", None)
+            if name:
+                names.append(name)
+
+        for attr in ("_rlock", "_wlock", "_sem", "_flag"):
+            collect(getattr(obj, attr, None))
+
+        cond = getattr(obj, "_cond", None)
+        for attr in ("_lock", "_sleeping_count", "_woken_count", "_wait_semaphore"):
+            collect(getattr(cond, attr, None))
+
+        return names
+
+    @staticmethod
+    def _cleanup_registered_semaphore(name: str) -> None:
+        """Run the multiprocessing finalizer for a semaphore name exactly once."""
+        registry = getattr(mp_util, "_finalizer_registry", {})
+        for finalizer in list(registry.values()):
+            args = getattr(finalizer, "_args", None)
+            if args == (name,):
+                finalizer()
+                return
+        SemLock._cleanup(name)
+
+    @classmethod
+    def _cleanup_multiprocessing_semlocks(cls, obj: Any) -> None:
+        for name in cls._iter_multiprocessing_semaphore_names(obj):
+            with contextlib.suppress(Exception):
+                cls._cleanup_registered_semaphore(name)
 
     @staticmethod
     def _namespace_from_dict(value: Any) -> Any:

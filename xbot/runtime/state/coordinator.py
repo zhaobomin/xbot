@@ -145,11 +145,13 @@ VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
         SessionPhase.BROKEN,
     },
     SessionPhase.SENDING_QUERY: {
+        SessionPhase.IDLE,
         SessionPhase.RECEIVING_STREAM,
         SessionPhase.RELEASING_CLIENT,
         SessionPhase.BROKEN,
     },
     SessionPhase.RECEIVING_STREAM: {
+        SessionPhase.IDLE,
         SessionPhase.DRAINING,
         SessionPhase.RELEASING_CLIENT,
         SessionPhase.WAITING_PERMISSION,
