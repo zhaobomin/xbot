@@ -409,6 +409,55 @@ def test_read_only_management_endpoints(tmp_path: Path) -> None:
     assert heartbeat.json()["enabled"] is True
 
 
+def test_provider_extra_headers_are_masked(tmp_path: Path) -> None:
+    client, services = _build_client(tmp_path)
+    services.config.providers.custom.extra_headers = {
+        "Authorization": "Bearer provider-secret",
+        "x-api-key": "provider-api-key",
+        "X-Trace-Id": "trace-123",
+    }
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+
+    response = client.get("/api/providers", headers={"Authorization": f"Bearer {token}"})
+
+    assert response.status_code == 200
+    custom = next(item for item in response.json() if item["name"] == "custom")
+    assert custom["extra_headers"]["Authorization"].startswith("••••")
+    assert custom["extra_headers"]["x-api-key"].startswith("••••")
+    assert custom["extra_headers"]["X-Trace-Id"] == "trace-123"
+    assert "provider-secret" not in str(custom)
+    assert "provider-api-key" not in str(custom)
+
+
+def test_patch_channel_masks_secret_response_but_persists_plain_config(tmp_path: Path) -> None:
+    client, services = _build_client(tmp_path)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = client.patch(
+        "/api/channels/telegram",
+        headers=headers,
+        json={
+            "enabled": True,
+            "botToken": "telegram-token",
+            "client_secret": "channel-secret",
+            "nested": {"api_key": "nested-api-key", "label": "safe"},
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["config"]["botToken"].startswith("••••")
+    assert body["config"]["client_secret"].startswith("••••")
+    assert body["config"]["nested"]["api_key"].startswith("••••")
+    assert body["config"]["nested"]["label"] == "safe"
+    assert "telegram-token" not in str(body)
+    assert "channel-secret" not in str(body)
+    assert "nested-api-key" not in str(body)
+    assert services.config.channels.telegram["botToken"] == "telegram-token"
+    assert services.config.channels.telegram["client_secret"] == "channel-secret"
+
+
 def test_patch_agent_config_persists_and_reloads(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
     token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
@@ -851,6 +900,64 @@ def test_system_config_s3_and_workspace_transfer_endpoints(tmp_path: Path) -> No
     assert import_resp.json()["backup"] is not None
 
 
+def test_workspace_transfer_excludes_webui_backups(tmp_path: Path) -> None:
+    import io
+    import zipfile
+
+    client, services = _build_client(tmp_path)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    workspace = services.config.workspace_path
+    (workspace / "keep.txt").write_text("keep", encoding="utf-8")
+    backups_dir = workspace / ".webui" / "backups"
+    backups_dir.mkdir(parents=True)
+    (backups_dir / "old-backup.zip").write_text("old", encoding="utf-8")
+
+    export_resp = client.get("/api/config/workspace/export", headers=headers)
+    assert export_resp.status_code == 200
+    with zipfile.ZipFile(io.BytesIO(export_resp.content)) as zf:
+        assert "keep.txt" in zf.namelist()
+        assert ".webui/backups/old-backup.zip" not in zf.namelist()
+
+    archive = io.BytesIO()
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("new.txt", "new")
+    import_resp = client.post(
+        "/api/config/workspace/import",
+        headers=headers,
+        files={"file": ("backup.zip", archive.getvalue(), "application/zip")},
+    )
+
+    assert import_resp.status_code == 200
+    backup_path = Path(import_resp.json()["backup"])
+    with zipfile.ZipFile(backup_path) as zf:
+        assert "keep.txt" in zf.namelist()
+        assert ".webui/backups/old-backup.zip" not in zf.namelist()
+
+
+def test_workspace_import_rejects_unsafe_zip_members(tmp_path: Path) -> None:
+    import io
+    import zipfile
+
+    client, _services = _build_client(tmp_path)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    for member in ("../workspace2/pwn.txt", "/absolute/pwn.txt", "safe/../pwn.txt", ""):
+        archive = io.BytesIO()
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(member, "pwn")
+
+        response = client.post(
+            "/api/config/workspace/import",
+            headers=headers,
+            files={"file": ("backup.zip", archive.getvalue(), "application/zip")},
+        )
+
+        assert response.status_code == 400
+        assert "Invalid path in archive" in response.json()["detail"]
+
+
 def test_channel_reload_returns_structured_error(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
     token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
@@ -953,6 +1060,20 @@ def test_login_rate_limit_isolated_per_ip(tmp_path: Path, monkeypatch) -> None:
         json={"username": "admin", "password": "wrong-password"},
     )
     assert response.status_code == 429  # Same IP should still be blocked
+
+
+def test_login_rate_limit_does_not_count_successful_logins(tmp_path: Path) -> None:
+    from xbot.interfaces.webui.app import _MAX_ATTEMPTS_PER_IP, _clear_login_rate_limit
+
+    _clear_login_rate_limit()
+    client, _services = _build_client(tmp_path)
+
+    for _ in range(_MAX_ATTEMPTS_PER_IP + 1):
+        response = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "test-webui-password"},
+        )
+        assert response.status_code == 200
 
 
 def test_api_skills_endpoints_removed(tmp_path: Path) -> None:

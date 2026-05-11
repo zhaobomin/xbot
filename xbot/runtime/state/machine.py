@@ -5,8 +5,12 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
-from xbot.runtime.state.coordinator import SessionEvent, SessionPhase, SessionState, VALID_TRANSITIONS
-
+from xbot.runtime.state.coordinator import (
+    VALID_TRANSITIONS,
+    SessionEvent,
+    SessionPhase,
+    SessionState,
+)
 
 _LEGACY_VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
     SessionPhase.IDLE: {

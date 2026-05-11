@@ -94,6 +94,47 @@ class TestSessionFileLocking:
         result = manager._load("nonexistent:session")
         assert result is None
 
+    def test_session_paths_do_not_collide_for_similar_keys(self, tmp_path: Path) -> None:
+        """Distinct session keys should never collapse to the same JSONL path."""
+        manager = ConversationStore(tmp_path)
+
+        assert manager._get_session_path("a:b") != manager._get_session_path("a_b")
+        assert manager._get_session_path("feishu:ou_foo") != manager._get_session_path("feishu/ou:foo")
+
+    def test_load_reads_old_safe_filename_path_and_saves_to_hashed_path(self, tmp_path: Path) -> None:
+        """Existing pre-hash session files should stay readable."""
+        manager = ConversationStore(tmp_path)
+        old_path = manager.sessions_dir / "a_b.jsonl"
+        old_path.write_text(
+            '{"_type":"metadata","key":"a:b","created_at":"2026-05-11T00:00:00","last_consolidated":0}\n'
+            '{"role":"user","content":"legacy"}\n',
+            encoding="utf-8",
+        )
+
+        loaded = manager._load("a:b")
+        assert loaded is not None
+        assert loaded.messages[0]["content"] == "legacy"
+
+        manager.save(loaded)
+        assert manager._get_session_path("a:b").exists()
+
+    def test_delete_removes_new_and_old_session_paths(self, tmp_path: Path) -> None:
+        """Deleting a session should clean hashed and pre-hash compatibility files."""
+        manager = ConversationStore(tmp_path)
+        session = manager.get_or_create("a:b")
+        session.add_message("user", "new")
+        manager.save(session)
+        old_path = manager.sessions_dir / "a_b.jsonl"
+        old_lock_path = old_path.with_suffix(old_path.suffix + ".lock")
+        old_path.write_text("legacy\n", encoding="utf-8")
+        old_lock_path.write_text("", encoding="utf-8")
+
+        assert manager.delete("a:b") is True
+
+        assert not manager._get_session_path("a:b").exists()
+        assert not old_path.exists()
+        assert not old_lock_path.exists()
+
     def test_save_preserves_all_session_data(self, tmp_path: Path) -> None:
         """All session data should be preserved after save/load cycle."""
         manager = ConversationStore(tmp_path)

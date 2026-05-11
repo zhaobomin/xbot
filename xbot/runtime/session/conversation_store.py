@@ -1,8 +1,8 @@
 """Session management for conversation history."""
 
+import hashlib
 import json
 import os
-import shutil
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -146,13 +146,44 @@ class ConversationStore:
 
     def _get_session_path(self, key: str) -> Path:
         """Get the file path for a session."""
-        safe_key = safe_filename(key.replace(":", "_"))
-        return self.sessions_dir / f"{safe_key}.jsonl"
+        return self.sessions_dir / self._hashed_session_filename(key)
 
     def _get_legacy_session_path(self, key: str) -> Path:
         """Global session path (~/.xbot/sessions/)."""
+        return self.legacy_sessions_dir / self._hashed_session_filename(key)
+
+    @staticmethod
+    def _hashed_session_filename(key: str) -> str:
+        digest = hashlib.sha256(key.encode("utf-8")).hexdigest()
+        return f"{digest}.jsonl"
+
+    @staticmethod
+    def _safe_session_filename(key: str) -> str:
         safe_key = safe_filename(key.replace(":", "_"))
-        return self.legacy_sessions_dir / f"{safe_key}.jsonl"
+        return f"{safe_key}.jsonl"
+
+    def _get_old_session_path(self, key: str) -> Path:
+        return self.sessions_dir / self._safe_session_filename(key)
+
+    def _get_old_legacy_session_path(self, key: str) -> Path:
+        return self.legacy_sessions_dir / self._safe_session_filename(key)
+
+    def _session_paths_for_read(self, key: str) -> list[Path]:
+        return [
+            self._get_session_path(key),
+            self._get_old_session_path(key),
+            self._get_legacy_session_path(key),
+            self._get_old_legacy_session_path(key),
+        ]
+
+    def _session_paths_for_delete(self, key: str) -> list[Path]:
+        seen: set[Path] = set()
+        paths: list[Path] = []
+        for path in self._session_paths_for_read(key):
+            if path not in seen:
+                seen.add(path)
+                paths.append(path)
+        return paths
 
     @contextmanager
     def _file_lock(self, path: Path, exclusive: bool = True) -> Generator[None, None, None]:
@@ -228,17 +259,8 @@ class ConversationStore:
 
     def _load(self, key: str) -> ConversationSession | None:
         """Load a session from disk."""
-        path = self._get_session_path(key)
-        if not path.exists():
-            legacy_path = self._get_legacy_session_path(key)
-            if legacy_path.exists():
-                try:
-                    shutil.move(str(legacy_path), str(path))
-                    logger.info("Migrated session %s from legacy path", key)
-                except Exception:
-                    logger.exception("Failed to migrate session %s", key)
-
-        if not path.exists():
+        path = next((candidate for candidate in self._session_paths_for_read(key) if candidate.exists()), None)
+        if path is None:
             return None
 
         try:
@@ -342,15 +364,16 @@ class ConversationStore:
     def delete(self, key: str) -> bool:
         """Delete a session file and remove it from in-memory cache."""
         self.invalidate(key)
-        path = self._get_session_path(key)
-        lock_path = path.with_suffix(path.suffix + ".lock")
+        paths = self._session_paths_for_delete(key)
+        lock_paths = [path.with_suffix(path.suffix + ".lock") for path in paths]
 
-        if not path.exists() and not lock_path.exists():
+        if not any(path.exists() for path in paths) and not any(path.exists() for path in lock_paths):
             return False
 
-        with self._file_lock(path, exclusive=True):
-            path.unlink(missing_ok=True)
-        lock_path.unlink(missing_ok=True)
+        for path in paths:
+            with self._file_lock(path, exclusive=True):
+                path.unlink(missing_ok=True)
+            path.with_suffix(path.suffix + ".lock").unlink(missing_ok=True)
         return True
 
     def compact(self, session: ConversationSession) -> None:

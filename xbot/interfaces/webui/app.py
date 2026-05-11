@@ -13,7 +13,7 @@ from collections import OrderedDict
 from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from fastapi import (
@@ -115,14 +115,15 @@ _ATTEMPT_WINDOW_SECONDS = 60
 _MAX_TRACKED_IPS = 10_000
 
 
-def _check_login_rate_limit(client_ip: str) -> None:
-    """Check if IP has exceeded login rate limit."""
+def _active_login_attempts(client_ip: str) -> list[datetime]:
     now = datetime.now(UTC)
     attempts = _LOGIN_ATTEMPTS.get(client_ip, [])
+    return [a for a in attempts if now - a < timedelta(seconds=_ATTEMPT_WINDOW_SECONDS)]
 
-    # Remove expired attempts
-    attempts = [a for a in attempts if now - a < timedelta(seconds=_ATTEMPT_WINDOW_SECONDS)]
 
+def _check_login_rate_limit(client_ip: str) -> None:
+    """Check if IP has exceeded failed-login rate limit."""
+    attempts = _active_login_attempts(client_ip)
     if len(attempts) >= _MAX_ATTEMPTS_PER_IP:
         _LOGIN_ATTEMPTS[client_ip] = attempts
         raise HTTPException(
@@ -130,14 +131,21 @@ def _check_login_rate_limit(client_ip: str) -> None:
             detail=f"Too many login attempts. Try again in {_ATTEMPT_WINDOW_SECONDS} seconds.",
         )
 
-    # Record this attempt
-    attempts.append(now)
+
+def _record_failed_login(client_ip: str) -> None:
+    """Record one failed login attempt for rate limiting."""
+    attempts = _active_login_attempts(client_ip)
+    attempts.append(datetime.now(UTC))
     _LOGIN_ATTEMPTS[client_ip] = attempts
     _LOGIN_ATTEMPTS.move_to_end(client_ip)
 
-    # Evict oldest IPs when capacity exceeded
     while len(_LOGIN_ATTEMPTS) > _MAX_TRACKED_IPS:
         _LOGIN_ATTEMPTS.popitem(last=False)
+
+
+def _clear_failed_logins(client_ip: str) -> None:
+    """Clear failed login attempts after successful authentication."""
+    _LOGIN_ATTEMPTS.pop(client_ip, None)
 
 
 def _clear_login_rate_limit() -> None:
@@ -285,7 +293,7 @@ def _json_default(value: Any) -> str:
 
 
 def _sanitize_public_config(value: Any, *, field_name: str = "") -> Any:
-    sensitive_markers = ("token", "secret", "password", "key")
+    sensitive_markers = ("token", "secret", "password", "key", "authorization")
     if isinstance(value, dict):
         return {
             key: _sanitize_public_config(item, field_name=key)
@@ -296,6 +304,35 @@ def _sanitize_public_config(value: Any, *, field_name: str = "") -> Any:
     if isinstance(value, str) and any(marker in field_name.lower() for marker in sensitive_markers):
         return _mask_secret(value)
     return value
+
+
+def _should_include_workspace_path(workspace_path: Path, path: Path) -> bool:
+    try:
+        relative = path.relative_to(workspace_path)
+    except ValueError:
+        return False
+    parts = relative.parts
+    if len(parts) >= 2 and parts[0] == ".webui" and parts[1] == "backups":
+        return False
+    return not any(part.startswith(".workspace-import-") for part in parts)
+
+
+def _write_workspace_zip(zf: zipfile.ZipFile, workspace_path: Path) -> None:
+    for path in sorted(workspace_path.rglob("*")):
+        if path.is_file() and _should_include_workspace_path(workspace_path, path):
+            zf.write(path, path.relative_to(workspace_path))
+
+
+def _validate_workspace_zip_member(member: str, extracted_path: Path) -> None:
+    normalized = member.replace("\\", "/")
+    member_path = PurePosixPath(normalized)
+    if not normalized or member_path.is_absolute() or ".." in member_path.parts:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid path in archive: {member}")
+    target = (extracted_path / member_path).resolve()
+    try:
+        target.relative_to(extracted_path.resolve())
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid path in archive: {member}") from exc
 
 
 async def _safe_websocket_send_json(websocket: WebSocket, payload: dict[str, Any]) -> bool:
@@ -604,7 +641,12 @@ def create_app(
         client_ip = request.client.host if request.client else "unknown"
         _check_login_rate_limit(client_ip)
 
-        user = app.state.user_store.authenticate(body.username, body.password)
+        try:
+            user = app.state.user_store.authenticate(body.username, body.password)
+        except HTTPException:
+            _record_failed_login(client_ip)
+            raise
+        _clear_failed_logins(client_ip)
         return {
             "access_token": app.state.auth.issue_token(user),
             "token_type": "bearer",
@@ -716,7 +758,7 @@ def create_app(
                 "name": name,
                 "api_key_masked": _mask_secret(value.api_key),
                 "api_base": value.api_base,
-                "extra_headers": value.extra_headers,
+                "extra_headers": _sanitize_public_config(value.extra_headers),
                 "has_key": bool(raw_key),
                 "models": [],
                 "is_custom": name == "custom",
@@ -800,7 +842,7 @@ def create_app(
         merged.update(body)
         setattr(container.config.channels, channel_name, merged)
         container.persist_config()
-        return {"name": channel_name, "config": merged}
+        return {"name": channel_name, "config": _sanitize_public_config(merged)}
 
     @app.post("/api/channels/{channel_name}/reload")
     async def reload_channel(
@@ -1121,9 +1163,7 @@ def create_app(
         _get_user_from_auth_header(authorization)
         buf = BytesIO()
         with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
-            for path in sorted(container.config.workspace_path.rglob("*")):
-                if path.is_file():
-                    zf.write(path, path.relative_to(container.config.workspace_path))
+            _write_workspace_zip(zf, container.config.workspace_path)
         buf.seek(0)
         return StreamingResponse(
             buf,
@@ -1144,18 +1184,14 @@ def create_app(
         backups_dir.mkdir(parents=True, exist_ok=True)
         backup_path = backups_dir / f"workspace-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
         with zipfile.ZipFile(backup_path, "w", zipfile.ZIP_DEFLATED) as backup_zip:
-            for path in sorted(container.config.workspace_path.rglob("*")):
-                if path.is_file():
-                    backup_zip.write(path, path.relative_to(container.config.workspace_path))
+            _write_workspace_zip(backup_zip, container.config.workspace_path)
         workspace_path = container.config.workspace_path
         workspace_parent = workspace_path.parent
         extracted_path = workspace_parent / f".workspace-import-{secrets.token_hex(8)}"
         staged_old_path = workspace_parent / f".workspace-import-old-{secrets.token_hex(8)}"
         with zipfile.ZipFile(BytesIO(data), "r") as zf:
             for member in zf.namelist():
-                target = (workspace_path / member).resolve()
-                if not str(target).startswith(str(workspace_path.resolve())):
-                    raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=f"Invalid path in archive: {member}")
+                _validate_workspace_zip_member(member, extracted_path)
             extracted_path.mkdir(parents=True, exist_ok=True)
             try:
                 zf.extractall(extracted_path)

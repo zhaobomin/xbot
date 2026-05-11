@@ -9,7 +9,12 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from xbot.runtime.state.coordinator import SessionCoordinator, SessionEvent, SessionPhase, SessionState
+from xbot.runtime.state.coordinator import (
+    SessionCoordinator,
+    SessionEvent,
+    SessionPhase,
+    SessionState,
+)
 
 
 class RuntimeSessionRegistry:

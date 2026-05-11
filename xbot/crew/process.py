@@ -86,8 +86,6 @@ class BaseProcess(ABC):
     # Single task execution
     # ------------------------------------------------------------------
 
-    
-    
     async def _execute_single_task(self, task: TaskDefinition) -> TaskResult:
         """Execute a single task: briefing -> run -> process output -> return result.
 

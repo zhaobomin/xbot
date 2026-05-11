@@ -2601,8 +2601,6 @@ class AgentService:
                 continue
 
             try:
-                session_key = msg.session_key or f"{msg.channel}:{msg.chat_id}"
-
                 # 1. Permission response routing
                 if self._response_handlers:
                     try:
