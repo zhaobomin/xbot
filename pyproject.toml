@@ -92,8 +92,6 @@ include = [
     "xbot/**/*.py",
     "xbot/interfaces/webui/frontend/dist/**",
     "xbot/interfaces/webui/frontend/public/**",
-    "xbot/interfaces/webui/frontend-new/dist/**",
-    "xbot/interfaces/webui/frontend-new/public/**",
     "xbot/templates/**",
     "xbot/skills/**/*.md",
     "xbot/skills/**/*.sh",

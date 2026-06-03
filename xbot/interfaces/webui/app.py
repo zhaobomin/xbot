@@ -376,8 +376,7 @@ def create_app(
         module_dir = Path(__file__).parent
         frontend_candidates = (
             module_dir / "frontend" / "dist",
-            module_dir / "frontend-new" / "dist",
-            module_dir / "frontend-new" / "dev-dist",
+            module_dir / "frontend" / "dev-dist",
         )
         resolved_frontend_dir = next(
             (path for path in frontend_candidates if path.exists()),

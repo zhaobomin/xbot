@@ -334,11 +334,11 @@ def test_frontend_branding_uses_xbot_semantics() -> None:
 def test_frontend_uses_svg_brand_assets() -> None:
     files = [
         Path("xbot/interfaces/webui/frontend/index.html"),
-        Path("xbot/interfaces/webui/frontend/src/pages/Login.tsx"),
-        Path("xbot/interfaces/webui/frontend/src/components/layout/Sidebar.tsx"),
-        Path("xbot/interfaces/webui/frontend/src/components/layout/MobileTopBar.tsx"),
-        Path("xbot/interfaces/webui/frontend/src/components/chat/ChatWindow.tsx"),
-        Path("xbot/interfaces/webui/frontend/src/components/chat/MessageBubble.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/pages/login.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/components/layout/sidebar.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/components/layout/mobile-top-bar.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/components/chat/chat-window.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/components/chat/message-bubble.tsx"),
     ]
 
     for path in files:
@@ -349,19 +349,19 @@ def test_frontend_uses_svg_brand_assets() -> None:
 
 def test_frontend_uses_text_brand_mark_instead_of_logo_images() -> None:
     files = [
-        Path("xbot/interfaces/webui/frontend/src/pages/Login.tsx"),
-        Path("xbot/interfaces/webui/frontend/src/components/layout/Sidebar.tsx"),
-        Path("xbot/interfaces/webui/frontend/src/components/layout/MobileTopBar.tsx"),
-        Path("xbot/interfaces/webui/frontend/src/components/chat/ChatWindow.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/pages/login.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/components/layout/sidebar.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/components/layout/mobile-top-bar.tsx"),
+        Path("xbot/interfaces/webui/frontend/src/components/chat/chat-window.tsx"),
     ]
 
     for path in files:
         content = path.read_text(encoding="utf-8")
         assert "/logo.svg" not in content, f"stale svg logo reference in {path}"
         assert "/icon.svg" not in content, f"stale svg icon reference in {path}"
-        assert "xbot" in content, f"missing text brand mark in {path}"
+        assert "xbot" in content.lower(), f"missing text brand mark in {path}"
 
-    bubble = Path("xbot/interfaces/webui/frontend/src/components/chat/MessageBubble.tsx").read_text(encoding="utf-8")
+    bubble = Path("xbot/interfaces/webui/frontend/src/components/chat/message-bubble.tsx").read_text(encoding="utf-8")
     assert "/icon.svg" not in bubble
     assert '"x"' in bubble or "'x'" in bubble
 
