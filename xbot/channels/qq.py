@@ -1,7 +1,7 @@
 """QQ channel implementation using botpy SDK."""
 
 import asyncio
-from collections import deque
+import time
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import Field
@@ -13,6 +13,8 @@ from xbot.platform.config.schema import Base
 from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
+PROCESSED_ID_TTL_SECONDS = 10 * 60
+PROCESSED_ID_MAX_ENTRIES = 10000
 try:
     import botpy
     from botpy.message import C2CMessage, GroupMessage
@@ -79,9 +81,34 @@ class QQChannel(BaseChannel):
         super().__init__(config, bus)
         self.config: QQConfig = config
         self._client: "botpy.Client | None" = None
-        self._processed_ids: deque = deque(maxlen=1000)
+        self._processed_ids: dict[str, float] = {}
         self._msg_seq: int = 1  # 消息序列号，避免被 QQ API 去重
         self._chat_type_cache: dict[str, str] = {}
+
+    def _cleanup_processed_ids(self, now: float) -> None:
+        expired = [
+            message_id
+            for message_id, seen_at in self._processed_ids.items()
+            if now - seen_at > PROCESSED_ID_TTL_SECONDS
+        ]
+        for message_id in expired:
+            self._processed_ids.pop(message_id, None)
+        overflow = len(self._processed_ids) - (PROCESSED_ID_MAX_ENTRIES - 1)
+        if overflow > 0:
+            oldest = sorted(
+                self._processed_ids,
+                key=self._processed_ids.__getitem__,
+            )[:overflow]
+            for message_id in oldest:
+                self._processed_ids.pop(message_id, None)
+
+    def _mark_processed(self, message_id: str) -> bool:
+        now = time.monotonic()
+        self._cleanup_processed_ids(now)
+        if message_id in self._processed_ids:
+            return False
+        self._processed_ids[message_id] = now
+        return True
 
     async def start(self) -> None:
         """Start the QQ bot."""
@@ -158,9 +185,8 @@ class QQChannel(BaseChannel):
         """Handle incoming message from QQ."""
         try:
             # Dedup by message ID
-            if data.id in self._processed_ids:
+            if not self._mark_processed(str(data.id)):
                 return
-            self._processed_ids.append(data.id)
 
             content = (data.content or "").strip()
             if not content:

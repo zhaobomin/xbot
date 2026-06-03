@@ -525,3 +525,27 @@ class TestMemoryConsolidatorLocking:
         # Different sessions should have run concurrently (max_concurrent > 1)
         # Note: This test verifies the behavior, but actual concurrency depends on timing
         assert max_concurrent >= 1  # At minimum, one ran
+
+    @pytest.mark.asyncio
+    async def test_idle_locks_are_cleaned_up_when_consolidation_is_not_needed(self, tmp_path: Path) -> None:
+        """Locks for sessions that never consolidate should not remain cached forever."""
+        consolidator = MemoryConsolidator(
+            workspace=tmp_path,
+            backend=_make_mock_backend(),
+            sessions=ConversationStore(tmp_path),
+            context_window_tokens=10000,
+            build_messages=lambda **kwargs: [],
+            get_tool_definitions=lambda: [],
+        )
+
+        with patch.object(
+            consolidator,
+            'estimate_session_prompt_tokens',
+            return_value=(1000, 'mock')
+        ):
+            for index in range(25):
+                session = ConversationSession(key=f"test:idle-{index}")
+                session.messages = _make_messages(2)
+                await consolidator.maybe_consolidate_by_tokens(session)
+
+        assert consolidator._locks == {}

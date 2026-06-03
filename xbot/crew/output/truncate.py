@@ -395,7 +395,7 @@ class OutputTruncator:
 
     def _calculate_length(self, lines: list[str], start: int, end: int) -> int:
         """Calculate total length of lines from start to end."""
-        return sum(len(lines[i]) + 1 for i in range(start, end))
+        return sum(len(lines[i]) + 1 for i in range(start, end + 1))
 
 
 def truncate_output(

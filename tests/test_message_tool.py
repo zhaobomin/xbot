@@ -37,7 +37,28 @@ async def test_tool_adapter_message_tool_uses_injected_context(tmp_path) -> None
     assert len(sent) == 1
     assert sent[0].channel == "telegram"
     assert sent[0].chat_id == "chat-1"
+    assert sent[0].reply_to == "msg-1"
     assert sent[0].metadata["message_id"] == "msg-1"
+
+
+@pytest.mark.asyncio
+async def test_message_tool_sets_reply_to_from_explicit_message_id() -> None:
+    sent = []
+
+    async def _send(msg) -> None:
+        sent.append(msg)
+
+    tool = MessageTool(
+        send_callback=_send,
+        default_channel="discord",
+        default_chat_id="chat-1",
+    )
+
+    result = await tool.execute(content="hello", message_id="reply-123")
+
+    assert result == "Message sent to discord:chat-1"
+    assert sent[0].reply_to == "reply-123"
+    assert sent[0].metadata["message_id"] == "reply-123"
 
 
 @pytest.mark.asyncio

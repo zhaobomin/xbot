@@ -142,6 +142,8 @@ class BaseProcess(ABC):
             logger.warning(f"[crew] Task '{task.name}' was cancelled")
             output = "Task cancelled"
             status = "cancelled"
+            if self.state_manager.get_task_phase(task.name) == TaskPhase.RUNNING:
+                self.state_manager.transition_task(task.name, TaskPhase.FAILED, "task cancelled")
             raise
         except Exception as exc:
             logger.exception(f"[crew] Task '{task.name}' failed with error")
@@ -433,16 +435,16 @@ class BaseProcess(ABC):
         role = self.crew_config.agents[task.agent]
 
         extra_briefing = f"Previous attempt feedback: {feedback}" if feedback else None
+        session_key = f"crew:{self.crew_config.name}:{task.name}:redo:{uuid.uuid4().hex[:8]}"
         prompt, media = self.context.build_agent_context(
             task=task,
             role=role,
-            session_key=f"crew:{self.crew_config.name}:{task.name}:redo:{uuid.uuid4().hex[:8]}",
+            session_key=session_key,
             global_context=self.crew_config.global_context,
             human_briefing=extra_briefing,
             max_context_length=self.crew_config.max_context_length,
         )
 
-        session_key = f"crew:{self.crew_config.name}:{task.name}:redo:{uuid.uuid4().hex[:8]}"
         started = datetime.now()
 
         # Transition to RUNNING for the actual redo execution
@@ -546,9 +548,8 @@ class BaseProcess(ABC):
 
     def _pool_supports_native_streaming(self) -> bool:
         """Return whether the pool natively exposes streaming execution."""
-        from unittest.mock import AsyncMock
-
-        if isinstance(self.pool, AsyncMock):
+        pool_type = type(self.pool)
+        if pool_type.__module__ == "unittest.mock" and pool_type.__name__ == "AsyncMock":
             return False
         return callable(getattr(self.pool, "run_task_streaming", None))
 
@@ -821,6 +822,6 @@ class HierarchicalProcess(BaseProcess):
                             start_idx = output.find('[', i + 1)
                             break
             else:
-                return None
+                start_idx = output.find('[', start_idx + 1)
 
         return None

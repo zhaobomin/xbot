@@ -194,6 +194,17 @@ class OutputParser:
 
         Returns list of error messages, empty if valid.
         """
+        try:
+            from jsonschema import Draft202012Validator
+
+            validator = Draft202012Validator(schema)
+            return [
+                self._format_jsonschema_error(error)
+                for error in sorted(validator.iter_errors(data), key=lambda err: list(err.absolute_path))
+            ]
+        except ImportError:
+            pass
+
         errors = []
 
         def validate(obj: Any, sch: dict, path: str = "") -> None:
@@ -244,6 +255,21 @@ class OutputParser:
 
         validate(data, schema)
         return errors
+
+    @staticmethod
+    def _format_jsonschema_error(error: Any) -> str:
+        path = ".".join(str(part) for part in error.absolute_path)
+        if error.validator == "required":
+            missing = ", ".join(str(item) for item in error.validator_value if item not in error.instance)
+            target = f"{path}.{missing}" if path and missing else (path or "$")
+            return f"{target}: required property missing"
+        if error.validator == "type":
+            expected = error.validator_value
+            actual = type(error.instance).__name__
+            label = path or "$"
+            return f"{label}: expected {expected}, got {actual}"
+        label = path or "$"
+        return f"{label}: {error.message}"
 
     def _parse_markdown(self, content: str) -> ParsedOutput:
         """Parse markdown into sections."""

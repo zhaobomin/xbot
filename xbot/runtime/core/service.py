@@ -152,6 +152,7 @@ class AgentService:
         self._memory_consolidator: Any | None = None
         self._sdk_settings_file: str | None = None
         self._async_consolidation_tasks: set[asyncio.Task] = set()
+        self._async_registry_tasks: set[asyncio.Task] = set()
         self._cli_stderr_window_seconds = 5.0
         self._cli_stderr_max_warnings_per_window = 20
         self._cli_stderr_max_line_chars = 800
@@ -626,6 +627,11 @@ class AgentService:
                 task.cancel()
             await asyncio.gather(*self._async_consolidation_tasks, return_exceptions=True)
             self._async_consolidation_tasks.clear()
+        if self._async_registry_tasks:
+            for task in list(self._async_registry_tasks):
+                task.cancel()
+            await asyncio.gather(*self._async_registry_tasks, return_exceptions=True)
+            self._async_registry_tasks.clear()
 
         for session_key in list(self._session_workers.keys()):
             await self._stop_session_worker(session_key, disconnect=True)
@@ -1354,7 +1360,7 @@ class AgentService:
                 elif hasattr(runtime_registry, "set_sdk_session_id"):
                     result = runtime_registry.set_sdk_session_id(session_key, None)
                     if asyncio.iscoroutine(result):
-                        asyncio.create_task(result)
+                        self._track_async_registry_update(result, session_key)
             except Exception as e:
                 logger.debug("Failed to clear runtime sdk_session_id for %s: %s", session_key, e)
 
@@ -1557,7 +1563,7 @@ class AgentService:
                     api_key = api_key.get_secret_value()
                 if api_key:  # Only set if non-empty
                     env["ANTHROPIC_API_KEY"] = str(api_key)
-                    logger.info(f"[AgentService] Set ANTHROPIC_API_KEY (length: {len(api_key)})")
+                    logger.info("[AgentService] Set ANTHROPIC_API_KEY")
 
             api_base = getattr(provider_config, "api_base", None)
             if api_base:
@@ -3177,7 +3183,7 @@ class AgentService:
             try:
                 result = set_sdk(session_key, str(sdk_session_id))
                 if asyncio.iscoroutine(result):
-                    asyncio.create_task(result)
+                    self._track_async_registry_update(result, session_key)
                 self._persist_sdk_session_id_to_store(session_key, str(sdk_session_id))
             except Exception as e:
                 logger.debug("Failed to sync sdk_session_id for %s: %s", session_key, e)
@@ -3229,9 +3235,25 @@ class AgentService:
                 runtime_registry.get_or_create(session_key)
                 result = set_sdk(session_key, sdk_session_id)
                 if asyncio.iscoroutine(result):
-                    asyncio.create_task(result)
+                    self._track_async_registry_update(result, session_key)
             except Exception:
                 pass
+
+    def _track_async_registry_update(self, coro: Any, session_key: str) -> None:
+        """Track async runtime-registry fallbacks so exceptions are consumed."""
+        task = asyncio.create_task(coro, name=f"sdk-session-registry-update:{session_key}")
+        self._async_registry_tasks.add(task)
+
+        def _on_done(done_task: asyncio.Task) -> None:
+            self._async_registry_tasks.discard(done_task)
+            try:
+                done_task.result()
+            except asyncio.CancelledError:
+                logger.debug("Async sdk_session_id update cancelled for %s", session_key)
+            except Exception as e:
+                logger.warning("Async sdk_session_id update failed for %s: %s", session_key, e)
+
+        task.add_done_callback(_on_done)
 
     def _persist_sdk_session_id_to_store(self, session_key: str, sdk_session_id: str | None) -> None:
         """Persist sdk_session_id in conversation store metadata for restart recovery."""

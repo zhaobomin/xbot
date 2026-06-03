@@ -43,6 +43,49 @@ async def test_on_group_message_routes_to_group_chat_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_duplicate_message_id_is_suppressed_within_ttl_even_after_many_messages(monkeypatch) -> None:
+    channel = QQChannel(
+        QQConfig(app_id="app", secret="secret", allow_from=["*"]),
+        MessageBus(max_queue_size=2005),
+    )
+    monkeypatch.setattr("xbot.channels.qq.time.monotonic", lambda: 1000.0)
+
+    first = SimpleNamespace(
+        id="dup",
+        content="hello",
+        author=SimpleNamespace(id="user1", user_openid="user1"),
+    )
+    await channel._on_message(first, is_group=False)
+
+    for index in range(100, 1101):
+        data = SimpleNamespace(
+            id=f"msg-{index}",
+            content="noise",
+            author=SimpleNamespace(id=f"user-{index}", user_openid=f"user-{index}"),
+        )
+        await channel._on_message(data, is_group=False)
+
+    duplicate = SimpleNamespace(
+        id="dup",
+        content="again",
+        author=SimpleNamespace(id="user1", user_openid="user1"),
+    )
+    await channel._on_message(duplicate, is_group=False)
+
+    assert channel.bus.inbound_size == 1002
+
+
+def test_processed_message_cache_has_capacity_bound(monkeypatch) -> None:
+    channel = QQChannel(QQConfig(app_id="app", secret="secret", allow_from=["*"]), MessageBus())
+    monkeypatch.setattr("xbot.channels.qq.time.monotonic", lambda: 1000.0)
+
+    for index in range(10050):
+        assert channel._mark_processed(f"msg-{index}") is True
+
+    assert len(channel._processed_ids) <= 10000
+
+
+@pytest.mark.asyncio
 async def test_send_group_message_uses_plain_text_group_api_with_msg_seq() -> None:
     channel = QQChannel(QQConfig(app_id="app", secret="secret", allow_from=["*"]), MessageBus())
     channel._client = _FakeClient()

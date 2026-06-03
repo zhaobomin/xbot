@@ -163,7 +163,7 @@ class HealthCheckService:
         channels = self._status.get("channels", [])
 
         ready = (
-            agent_status in ("running", "unknown")  # unknown = not yet initialized
+            agent_status == "running"
             and len(channels) > 0
         )
 

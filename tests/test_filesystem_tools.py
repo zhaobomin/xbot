@@ -115,6 +115,13 @@ class TestFindMatch:
         match, count = _find_match(content, old_text)
         assert count == 2
 
+    def test_line_trim_counts_all_fuzzy_candidates_with_different_indent(self):
+        content = "  a\n  b\n    a\n    b\n"
+        old_text = "a\nb"
+        match, count = _find_match(content, old_text)
+        assert match == "  a\n  b"
+        assert count == 2
+
     def test_empty_old_text(self):
         match, count = _find_match("hello", "")
         # Empty string is always "in" any string via exact match
@@ -362,6 +369,25 @@ class TestWorkspaceRestriction:
         assert "Error" in result
         assert "outside" in result.lower()
         assert skill_file.read_text() == "# Weather\nOriginal content."
+
+    @pytest.mark.asyncio
+    async def test_replace_all_replaces_all_fuzzy_match_variants(self, tmp_path):
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        target = workspace / "sample.py"
+        target.write_text("  a\n  b\n    a\n    b\n", encoding="utf-8")
+
+        tool = EditFileTool(workspace=workspace, allowed_dir=workspace)
+
+        result = await tool.execute(
+            path=str(target),
+            old_text="a\nb",
+            new_text="x\ny",
+            replace_all=True,
+        )
+
+        assert "Successfully edited" in result
+        assert target.read_text(encoding="utf-8") == "x\ny\nx\ny\n"
 
 
 class TestWriteFileTool:

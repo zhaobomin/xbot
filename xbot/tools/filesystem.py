@@ -210,25 +210,26 @@ def _find_match(content: str, old_text: str) -> tuple[str | None, int]:
     if old_text in content:
         return old_text, content.count(old_text)
 
+    candidates = _find_fuzzy_match_fragments(content, old_text)
+    if candidates:
+        return candidates[0], len(candidates)
+    return None, 0
+
+
+def _find_fuzzy_match_fragments(content: str, old_text: str) -> list[str]:
+    """Return all line-trimmed match fragments in their original formatting."""
     old_lines = old_text.splitlines()
     if not old_lines:
-        return None, 0
+        return []
     stripped_old = [line.strip() for line in old_lines]
     content_lines = content.splitlines()
 
-    candidates = []
+    candidates: list[str] = []
     for i in range(len(content_lines) - len(stripped_old) + 1):
         window = content_lines[i : i + len(stripped_old)]
         if [line.strip() for line in window] == stripped_old:
             candidates.append("\n".join(window))
-
-    if candidates:
-        # Count how many candidates are identical to the first match,
-        # since content.replace() uses exact string matching.
-        first = candidates[0]
-        exact_count = content.count(first)
-        return first, exact_count
-    return None, 0
+    return candidates
 
 
 class EditFileTool(_FsTool):
@@ -285,7 +286,15 @@ class EditFileTool(_FsTool):
                 )
 
             norm_new = new_text.replace("\r\n", "\n")
-            new_content = content.replace(match, norm_new) if replace_all else content.replace(match, norm_new, 1)
+            if replace_all:
+                if old_text.replace("\r\n", "\n") in content:
+                    new_content = content.replace(match, norm_new)
+                else:
+                    new_content = content
+                    for fragment in dict.fromkeys(_find_fuzzy_match_fragments(content, old_text.replace("\r\n", "\n"))):
+                        new_content = new_content.replace(fragment, norm_new)
+            else:
+                new_content = content.replace(match, norm_new, 1)
             if uses_crlf:
                 new_content = new_content.replace("\n", "\r\n")
 

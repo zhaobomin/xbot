@@ -1,6 +1,7 @@
 """Tests for health check service."""
 
 import asyncio
+import json
 from unittest.mock import MagicMock
 
 import pytest
@@ -119,6 +120,18 @@ class TestHealthCheckService:
         result = await service._check_all()
         assert result.healthy is False
         assert len(result.components) == 2
+
+    @pytest.mark.asyncio
+    async def test_ready_rejects_unknown_agent_status(self, service: HealthCheckService) -> None:
+        """Readiness should not pass before the agent is confirmed running."""
+        service.update_status("agent", "unknown")
+        service.update_status("channels", ["dingtalk"])
+
+        response = await service._handle_ready(MagicMock())
+        body = json.loads(response.text)
+
+        assert response.status == 503
+        assert body["ready"] is False
 
     @pytest.mark.asyncio
     async def test_start_stop(self, service: HealthCheckService) -> None:

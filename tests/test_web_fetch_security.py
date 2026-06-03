@@ -223,3 +223,68 @@ async def test_web_fetch_jina_request_encodes_full_target_url():
     data = json.loads(result)
     assert state["requested_url"] == expected
     assert data["finalUrl"] == target
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_jina_keeps_legacy_positional_max_chars():
+    tool = WebFetchTool(web_config=WebToolsConfig(disable_security_checks=True))
+    target = "https://example.com/article"
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": {
+                    "title": "Title",
+                    "content": "x" * 200,
+                    "url": target,
+                }
+            }
+
+    async def _fake_get(self, url, **kwargs):
+        return FakeResponse()
+
+    with patch("httpx.AsyncClient.get", _fake_get):
+        result = await tool._fetch_jina(target, 20)
+
+    data = json.loads(result)
+    assert data["truncated"] is True
+    assert data["text"].endswith("x")
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_jina_honors_text_extract_mode():
+    tool = WebFetchTool(web_config=WebToolsConfig(disable_security_checks=True))
+    target = "https://example.com/article"
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": {
+                    "title": "Title",
+                    "content": "# Heading\n\n[link](https://example.com)\n\n**bold**",
+                    "url": target,
+                }
+            }
+
+    async def _fake_get(self, url, **kwargs):
+        return FakeResponse()
+
+    with patch("httpx.AsyncClient.get", _fake_get):
+        result = await tool.execute(url=target, extractMode="text")
+
+    data = json.loads(result)
+    assert data["extractor"] == "jina"
+    assert "# Heading" not in data["text"]
+    assert "[link]" not in data["text"]
+    assert "Heading" in data["text"]
+    assert "bold" in data["text"]

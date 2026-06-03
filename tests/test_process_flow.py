@@ -616,6 +616,12 @@ class TestHierarchicalProcessPlanParsing:
         result = HierarchicalProcess._parse_plan(output)
         assert result == ["task1", "task[2]"]
 
+    def test_parse_plan_recovers_after_unclosed_array_prefix(self) -> None:
+        """Parser should keep scanning after an unclosed bracket prefix."""
+        output = 'noise [unfinished text trailing ["task1", "task2"]'
+        result = HierarchicalProcess._parse_plan(output)
+        assert result == ["task1", "task2"]
+
 
 class TestProgressHelper:
     """Test progress callback helper."""

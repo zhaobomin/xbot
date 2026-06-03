@@ -440,6 +440,24 @@ def test_agent_default_creates_new_session_each_run(monkeypatch, tmp_path: Path)
     assert seen_session_keys[0] != seen_session_keys[1]
 
 
+def test_generate_cli_session_key_uses_utc(monkeypatch) -> None:
+    from datetime import datetime, timezone
+
+    from xbot.interfaces.cli import commands
+
+    class FakeDateTime:
+        @classmethod
+        def now(cls, tz=None):
+            if tz is timezone.utc:
+                return datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+            return datetime(1999, 12, 31, 23, 59, 59)
+
+    monkeypatch.setattr(commands, "datetime", FakeDateTime)
+    monkeypatch.setattr(commands, "uuid4", lambda: type("FakeUUID", (), {"hex": "abcdef1234567890"})())
+
+    assert commands._generate_cli_session_key() == "cli:20260102-030405-abcdef12"
+
+
 def test_agent_rejects_conflicting_resume_flags(monkeypatch, tmp_path: Path) -> None:
     config = Config()
     config.agents.defaults.workspace = str(tmp_path / "workspace")

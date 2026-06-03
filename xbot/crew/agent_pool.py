@@ -64,11 +64,9 @@ class AgentPool:
             try:
                 agents_config = self._build_role_config(role)
 
-                # 更新 shared_resources 中的 config，确保 model 设置生效
                 from copy import deepcopy
                 updated_config = deepcopy(self.xbot_config)
-                if role.model and role.model != "inherit":
-                    updated_config.agents.defaults.model = role.model
+                updated_config.agents = agents_config
 
                 shared_resources: dict[str, Any] = {
                     "workspace": str(workspace),

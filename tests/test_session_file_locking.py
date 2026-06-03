@@ -157,8 +157,8 @@ class TestSessionFileLocking:
         assert loaded.metadata.get("custom_field") == "custom_value"
         assert loaded.last_consolidated == 1
 
-    def test_lock_file_is_created_and_cleaned(self, tmp_path: Path) -> None:
-        """Lock files should be created during operations and cleaned up."""
+    def test_lock_file_is_preserved_after_save(self, tmp_path: Path) -> None:
+        """Lock files should be preserved so fcntl waiters keep locking the same inode."""
         manager = ConversationStore(tmp_path)
         session_key = "test:lockfile"
 
@@ -168,15 +168,14 @@ class TestSessionFileLocking:
 
         # Lock file path
         session_path = manager._get_session_path(session_key)
-        _ = session_path.with_suffix(".jsonl.lock")
+        lock_path = session_path.with_suffix(".jsonl.lock")
 
-        # Lock file may or may not exist after operation
-        # (it's cleaned up after use but the file itself might remain empty)
-        # The important thing is that it doesn't block future operations
+        assert lock_path.exists(), "Lock file should remain after save to avoid split lock inodes"
 
         # Should be able to save again without issues
         session.add_message("user", "another message")
         manager.save(session)  # Should not hang or fail
+        assert lock_path.exists(), "Lock file should remain stable after later saves"
 
     def test_corrupt_session_file_handled_gracefully(self, tmp_path: Path) -> None:
         """Loading a corrupt session file should not crash."""

@@ -49,6 +49,7 @@ _TRANSIENT_ERROR_MARKERS = (
     "server error",
     "temporarily unavailable",
 )
+_UNSET = object()
 
 
 class HeartbeatService:
@@ -85,6 +86,21 @@ class HeartbeatService:
         self._task: asyncio.Task | None = None
         self._running_tick: asyncio.Task | None = None  # Track current tick task
         self._task_registry = ServiceTaskRegistry(error_reporter=self._report_task_error)
+
+    def configure_callbacks(
+        self,
+        *,
+        llm_call: Callable[..., Awaitable[Any]] | None | object = _UNSET,
+        on_execute: Callable[[str], Coroutine[Any, Any, str]] | None | object = _UNSET,
+        on_notify: Callable[[str], Coroutine[Any, Any, None]] | None | object = _UNSET,
+    ) -> None:
+        """Configure runtime callbacks used by heartbeat execution."""
+        if llm_call is not _UNSET and llm_call is not None:
+            self._llm_call = llm_call
+        if on_execute is not _UNSET:
+            self.on_execute = on_execute
+        if on_notify is not _UNSET:
+            self.on_notify = on_notify
 
     @staticmethod
     def _report_task_error(owner: str, task_name: str, exc: BaseException) -> None:

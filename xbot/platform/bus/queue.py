@@ -366,6 +366,7 @@ class MessageBus:
         except asyncio.TimeoutError:
             async with self._interaction_lock:
                 self._pending_interaction_responses.pop(request_id, None)
+                self._interaction_results.pop(request_id, None)
                 self._interaction_requests.pop(request_id, None)
                 to_remove = [k for k, v in self._session_pending_interactions.items() if v == request_id]
                 for k in to_remove:
@@ -432,17 +433,37 @@ class MessageBus:
         """
         return self._session_pending_requests.get(session_key)
 
+    async def aget_pending_request_for_session(self, session_key: str) -> str | None:
+        """异步获取指定会话的 pending request_id（带锁保护）。"""
+        async with self._permission_lock:
+            return self._session_pending_requests.get(session_key)
+
     def get_pending_interaction_for_session(self, session_key: str) -> str | None:
         """获取指定会话的 pending 通用交互 request_id。"""
         return self._session_pending_interactions.get(session_key)
+
+    async def aget_pending_interaction_for_session(self, session_key: str) -> str | None:
+        """异步获取指定会话的 pending 通用交互 request_id（带锁保护）。"""
+        async with self._interaction_lock:
+            return self._session_pending_interactions.get(session_key)
 
     def get_interaction_request(self, request_id: str) -> InteractionRequest | None:
         """获取通用交互请求详情。"""
         return self._interaction_requests.get(request_id)
 
+    async def aget_interaction_request(self, request_id: str) -> InteractionRequest | None:
+        """异步获取通用交互请求详情（带锁保护）。"""
+        async with self._interaction_lock:
+            return self._interaction_requests.get(request_id)
+
     def has_pending_permission_request(self, request_id: str) -> bool:
         """检查是否有等待中的权限请求。"""
         return request_id in self._pending_permission_responses
+
+    async def ahas_pending_permission_request(self, request_id: str) -> bool:
+        """异步检查是否有等待中的权限请求（带锁保护）。"""
+        async with self._permission_lock:
+            return request_id in self._pending_permission_responses
 
     def clear_permission_request(self, request_id: str) -> None:
         """清除权限请求状态。

@@ -72,3 +72,4 @@ def test_capability_catalog_tool_classification() -> None:
     assert catalog.classify_tool_name("read_file") == "tool"
     assert catalog.classify_tool_name("mcp_docs_search") == "mcp"
     assert catalog.classify_tool_name("github_search", assume_unknown_mcp=True) == "mcp"
+    assert catalog.classify_tool_name("definitely_not_registered") == "unknown"

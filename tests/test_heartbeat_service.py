@@ -18,6 +18,33 @@ class DummyCaller:
         return LLMResponse(content="", tool_calls=[])
 
 
+def test_configure_callbacks_preserves_omitted_callbacks(tmp_path) -> None:
+    async def llm_call(*args, **kwargs) -> LLMResponse:
+        return LLMResponse(content="", tool_calls=[])
+
+    async def replacement_llm_call(*args, **kwargs) -> LLMResponse:
+        return LLMResponse(content="replacement", tool_calls=[])
+
+    async def on_execute(tasks: str) -> str:
+        return tasks
+
+    async def on_notify(message: str) -> None:
+        return None
+
+    service = HeartbeatService(
+        workspace=tmp_path,
+        llm_call=llm_call,
+        on_execute=on_execute,
+        on_notify=on_notify,
+    )
+
+    service.configure_callbacks(llm_call=replacement_llm_call)
+
+    assert service._llm_call is replacement_llm_call
+    assert service.on_execute is on_execute
+    assert service.on_notify is on_notify
+
+
 @pytest.mark.asyncio
 async def test_start_is_idempotent(tmp_path) -> None:
     llm_call = DummyCaller([])

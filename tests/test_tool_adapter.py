@@ -1,6 +1,8 @@
 """Tests for tool adapter."""
 
 import asyncio
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -119,6 +121,33 @@ class TestToolAdapterRegistration:
         adapter._register_xbot_tools()
 
         assert "cron" in adapter._tools
+
+    def test_ensure_core_tools_registered_is_thread_safe(self, workspace: Path) -> None:
+        """Concurrent ensures should only perform one core registration."""
+        adapter = ToolAdapter(str(workspace))
+        register_calls = 0
+        register_calls_lock = threading.Lock()
+        original_register = adapter._register_xbot_tools
+
+        def slow_register() -> None:
+            nonlocal register_calls
+            with register_calls_lock:
+                register_calls += 1
+            time.sleep(0.02)
+            original_register()
+
+        adapter._register_xbot_tools = slow_register
+        threads = [
+            threading.Thread(target=adapter._ensure_core_tools_registered)
+            for _ in range(8)
+        ]
+
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join()
+
+        assert register_calls == 1
 
     def test_get_tool_after_registration(self, workspace: Path) -> None:
         """Test getting tool after registration."""

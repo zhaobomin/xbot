@@ -127,8 +127,7 @@ class NanobotDingTalkHandler(CallbackHandler):
             logger.info("Received DingTalk message from %s (%s): %s", sender_name, sender_id, content)
 
             # Forward to Nanobot via _on_message (non-blocking).
-            # Store reference to prevent GC before task completes.
-            task = asyncio.create_task(
+            self.channel._create_tracked_task(
                 self.channel._on_message(
                     content,
                     sender_id,
@@ -136,10 +135,9 @@ class NanobotDingTalkHandler(CallbackHandler):
                     conversation_type,
                     conversation_id,
                     media=file_paths or None,
-                )
+                ),
+                name=f"dingtalk-inbound:{sender_id}",
             )
-            self.channel._background_tasks.add(task)
-            task.add_done_callback(self.channel._background_tasks.discard)
 
             return AckMessage.STATUS_OK, "OK"
 
@@ -240,14 +238,10 @@ class DingTalkChannel(BaseChannel):
     async def stop(self) -> None:
         """Stop the DingTalk bot."""
         self._running = False
-        # Close the shared HTTP client
+        await self._cancel_background_tasks()
         if self._http:
             await self._http.aclose()
             self._http = None
-        # Cancel outstanding background tasks
-        for task in self._background_tasks:
-            task.cancel()
-        self._background_tasks.clear()
 
     async def _get_access_token(self) -> str | None:
         """Get or refresh Access Token."""

@@ -349,6 +349,20 @@ class TestMessageBusPermission:
         assert bus.get_pending_request_for_session("telegram:456") == "req-123"
         assert bus.get_pending_request_for_session("telegram:789") is None
 
+    @pytest.mark.asyncio
+    async def test_async_pending_permission_accessors_use_lock(self, bus):
+        async with bus._permission_lock:
+            read_task = asyncio.create_task(bus.aget_pending_request_for_session("telegram:456"))
+            has_task = asyncio.create_task(bus.ahas_pending_permission_request("req-123"))
+            await asyncio.sleep(0)
+            assert not read_task.done()
+            assert not has_task.done()
+            bus._session_pending_requests["telegram:456"] = "req-123"
+            bus._pending_permission_responses["req-123"] = asyncio.Event()
+
+        assert await read_task == "req-123"
+        assert await has_task is True
+
     def test_has_pending_permission_request(self, bus):
         assert bus.has_pending_permission_request("req-123") is False
         bus._pending_permission_responses["req-123"] = asyncio.Event()

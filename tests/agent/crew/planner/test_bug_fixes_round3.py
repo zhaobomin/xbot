@@ -231,6 +231,25 @@ class TestRoleSelectorJSONParsing:
         # Should fall back to text parsing
         assert len(result) >= 1
 
+    def test_llm_selection_empty_match_falls_back_to_heuristic(self, selector, sample_roles):
+        """LLM role names that match no candidates should still select a fallback role."""
+        analysis = GoalAnalysis(
+            summary="Analyze code",
+            required_capabilities=[Capability.ANALYZE],
+            complexity="simple",
+            estimated_tasks=1,
+            suggested_process="sequential",
+        )
+
+        selected = selector._select_roles(
+            analysis,
+            sample_roles,
+            llm_response='["missing_role"]',
+        )
+
+        assert len(selected) >= 1
+        assert selected[0].name == "agent1"
+
 
 class TestCrewPlannerNameGeneration:
     """Tests for crew name generation."""

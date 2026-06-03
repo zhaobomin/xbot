@@ -1,6 +1,7 @@
 """Tests for config loader."""
 
 import json
+from contextvars import copy_context
 from pathlib import Path
 
 import pytest
@@ -48,6 +49,20 @@ class TestConfigPath:
         assert result == custom_path
 
         # Reset
+        set_config_path(None)
+
+    def test_config_path_is_context_local(self, tmp_path):
+        """Config path overrides should not leak across independent contexts."""
+        first_path = tmp_path / "first" / "config.json"
+        second_path = tmp_path / "second" / "config.json"
+
+        set_config_path(first_path)
+        context = copy_context()
+        set_config_path(second_path)
+
+        assert get_config_path() == second_path
+        assert context.run(get_config_path) == first_path
+
         set_config_path(None)
 
 

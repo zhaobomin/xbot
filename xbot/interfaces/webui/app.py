@@ -50,6 +50,7 @@ from xbot.runtime.system.cron.types import CronPayload, CronSchedule
 # Valid name pattern: alphanumeric, dashes, underscores. Must start with letter/number.
 # Max 64 characters.
 _VALID_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
+_WS_CHAT_MAX_CONTENT_CHARS = 1_000_000
 
 
 def validate_safe_name(name: str, field_name: str = "name", *, allow_dots: bool = False) -> str:
@@ -541,9 +542,17 @@ def create_app(
             channel, chat_id = target
             await container.bus.publish_outbound(OutboundMessage(channel=channel, chat_id=chat_id, content=response))
 
-        container.heartbeat._llm_call = _heartbeat_llm_call
-        container.heartbeat.on_execute = _heartbeat_execute
-        container.heartbeat.on_notify = _heartbeat_notify
+        configure_heartbeat = getattr(container.heartbeat, "configure_callbacks", None)
+        if callable(configure_heartbeat):
+            configure_heartbeat(
+                llm_call=_heartbeat_llm_call,
+                on_execute=_heartbeat_execute,
+                on_notify=_heartbeat_notify,
+            )
+        else:
+            container.heartbeat._llm_call = _heartbeat_llm_call
+            container.heartbeat.on_execute = _heartbeat_execute
+            container.heartbeat.on_notify = _heartbeat_notify
 
         if hasattr(container.heartbeat, "start"):
             await container.heartbeat.start()
@@ -851,7 +860,7 @@ def create_app(
     ) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
         try:
-            result = container.reload_channel(channel_name)
+            result = await container.reload_channel(channel_name)
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -863,7 +872,7 @@ def create_app(
     async def reload_all_channels(authorization: str | None = Header(default=None)) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
         try:
-            return container.reload_all_channels()
+            return await container.reload_all_channels()
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -1356,6 +1365,20 @@ def create_app(
                 if message.get("type") != "message":
                     continue
                 content = message.get("content", "")
+                if not isinstance(content, str):
+                    await _safe_websocket_send_json(websocket, {
+                        "type": "error",
+                        "error": "Message content must be a string",
+                        "session_key": session_key,
+                    })
+                    return
+                if len(content) > _WS_CHAT_MAX_CONTENT_CHARS:
+                    await _safe_websocket_send_json(websocket, {
+                        "type": "error",
+                        "error": f"Message too large; max {_WS_CHAT_MAX_CONTENT_CHARS} characters",
+                        "session_key": session_key,
+                    })
+                    return
 
                 async def _on_progress(
                     text: str,

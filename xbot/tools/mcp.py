@@ -268,7 +268,10 @@ async def _connect_single_mcp_server(
         try:
             await _safe_close_stack(conn.stack, name)
         except Exception:
-            pass
+            logger.exception(
+                "MCP server '%s': failed to clean up connection stack after connection failure",
+                name,
+            )
 
     return conn
 

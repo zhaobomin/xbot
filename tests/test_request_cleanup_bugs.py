@@ -198,6 +198,24 @@ class TestInteractionRequestCleanup:
             assert "int_timeout" not in bus._interaction_requests
 
     @pytest.mark.asyncio
+    async def test_interaction_result_cleaned_on_timeout(self) -> None:
+        """Stale interaction result entries should be cleaned on timeout."""
+        bus = MessageBus()
+        async with bus._interaction_lock:
+            bus._interaction_results["int_timeout_result"] = InteractionResponse(
+                request_id="int_timeout_result",
+                session_key="session_int_timeout",
+                action="reply",
+                content="stale",
+            )
+
+        result = await bus.wait_interaction_response("int_timeout_result", timeout=0.01)
+        assert result.action == "cancel"
+
+        async with bus._interaction_lock:
+            assert "int_timeout_result" not in bus._interaction_results
+
+    @pytest.mark.asyncio
     async def test_clear_interaction_request_cleans_all_dicts(self) -> None:
         """clear_interaction_request should clean all related dicts."""
         bus = MessageBus()

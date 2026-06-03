@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import inspect
 from pathlib import Path
 from typing import Any, Callable
 
@@ -55,21 +56,25 @@ class ServiceContainer:
         status = manager.get_status()
         return status if isinstance(status, dict) else {}
 
-    def reload_channel(self, name: str) -> dict[str, Any]:
+    async def reload_channel(self, name: str) -> dict[str, Any]:
         manager = self.metadata.get("channel_manager")
         if manager is None:
             raise RuntimeError("Channel manager unavailable")
         if hasattr(manager, "reload_channel"):
             result = manager.reload_channel(name)
+            if inspect.isawaitable(result):
+                result = await result
             return result if isinstance(result, dict) else {"name": name, "reloaded": True}
         raise RuntimeError("Channel reload not supported by this manager")
 
-    def reload_all_channels(self) -> dict[str, Any]:
+    async def reload_all_channels(self) -> dict[str, Any]:
         manager = self.metadata.get("channel_manager")
         if manager is None:
             raise RuntimeError("Channel manager unavailable")
         if hasattr(manager, "reload_all"):
             result = manager.reload_all()
+            if inspect.isawaitable(result):
+                result = await result
             return result if isinstance(result, dict) else {"ok": True}
         raise RuntimeError("Channel reload not supported by this manager")
 

@@ -69,6 +69,61 @@ class TestAgentService:
         assert service._initialized is False
 
     @pytest.mark.asyncio
+    async def test_sync_sdk_session_mapping_tracks_async_registry_errors(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Async registry fallback failures should be consumed and logged."""
+
+        class AsyncOnlyRegistry:
+            async def set_sdk_session_id(self, session_key: str, sdk_id: str | None) -> None:
+                raise RuntimeError(f"failed to persist {session_key}:{sdk_id}")
+
+        class SdkMessage:
+            session_id = "sdk-1"
+
+        service = AgentService()
+        shared_resources = dict(shared_resources)
+        shared_resources["runtime_registry"] = AsyncOnlyRegistry()
+        await service.initialize(config, shared_resources)
+
+        service._sync_sdk_session_mapping("session-1", SdkMessage())
+        assert service._async_registry_tasks
+
+        await asyncio.gather(*list(service._async_registry_tasks), return_exceptions=True)
+
+        assert not service._async_registry_tasks
+        assert "Async sdk_session_id update failed for session-1" in caplog.text
+
+    def test_build_env_config_does_not_log_api_key_length(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """API key logs should not expose key length metadata."""
+        runtime_config = MagicMock()
+        runtime_config.agents.defaults.provider = "anthropic"
+        provider_config = MagicMock()
+        provider_config.api_key = "sk-test-secret-value"
+        provider_config.api_base = None
+        runtime_config.providers.anthropic = provider_config
+
+        service = AgentService()
+        service._config = config
+        service._shared_resources = {**shared_resources, "config": runtime_config}
+
+        caplog.set_level("INFO")
+        env = service._build_env_config()
+
+        assert env["ANTHROPIC_API_KEY"] == "sk-test-secret-value"
+        assert "Set ANTHROPIC_API_KEY" in caplog.text
+        assert "length" not in caplog.text
+        assert "20" not in caplog.text
+
+    @pytest.mark.asyncio
     async def test_process_returns_response(
         self,
         config: AgentConfig,

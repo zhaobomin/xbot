@@ -3,6 +3,8 @@
 from datetime import datetime
 from unittest.mock import MagicMock
 
+import pytest
+
 from xbot.crew.context import CrewExecutionContext
 from xbot.crew.models import (
     AgentRole,
@@ -552,6 +554,40 @@ class TestLLMRepairCallable:
 
         result = orchestrator._get_llm_repair_callable()
         assert result is None
+
+    def test_llm_repair_timeout_raises_instead_of_returning_empty_string(self, monkeypatch) -> None:
+        """If the repair worker is still alive after join, return a timeout error."""
+        from xbot.platform.config.schema import Config
+
+        crew_config = MagicMock()
+        crew_config.workspace = "/tmp/test_crew"
+        orchestrator = CrewOrchestrator(
+            crew_config,
+            Config(),
+            MockPermissionHandler(),
+        )
+
+        class FakeThread:
+            def __init__(self, target, daemon=False):
+                self.target = target
+                self.daemon = daemon
+
+            def start(self):
+                return None
+
+            def join(self, timeout=None):
+                return None
+
+            def is_alive(self):
+                return True
+
+        monkeypatch.setattr("threading.Thread", FakeThread)
+
+        repair = orchestrator._get_llm_repair_callable()
+        assert repair is not None
+
+        with pytest.raises(TimeoutError, match="timed out"):
+            repair("repair prompt")
 
 
 class TestOrchestratorInit:

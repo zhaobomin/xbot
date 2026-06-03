@@ -181,6 +181,37 @@ class TestJsonSchemaValidation:
         assert result.valid is True
         assert result.structured == {"name": "test", "count": 5}
 
+    def test_schema_enum_min_length_and_pattern(self) -> None:
+        """Common JSON Schema keywords should be enforced."""
+        parser = OutputParser()
+        schema = {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["ok", "failed"]},
+                "name": {"type": "string", "minLength": 3},
+                "ticket": {"type": "string", "pattern": r"^BUG-\d+$"},
+            },
+            "required": ["status", "name", "ticket"],
+        }
+
+        valid = parser.parse(
+            '{"status": "ok", "name": "bot", "ticket": "BUG-123"}',
+            OutputFormat.JSON,
+            schema=schema,
+        )
+        invalid = parser.parse(
+            '{"status": "maybe", "name": "bo", "ticket": "TASK-123"}',
+            OutputFormat.JSON,
+            schema=schema,
+        )
+
+        assert valid.valid is True
+        assert invalid.valid is False
+        assert invalid.error is not None
+        assert "status" in invalid.error
+        assert "name" in invalid.error
+        assert "ticket" in invalid.error
+
     def test_missing_required_property(self) -> None:
         """Missing required property should fail validation."""
         parser = OutputParser()

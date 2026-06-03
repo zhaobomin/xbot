@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -26,21 +27,19 @@ from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
 
-# Global variable to store current config path (for multi-instance support)
-_current_config_path: Path | None = None
+# Context-local config path for multi-instance support.
+_current_config_path: ContextVar[Path | None] = ContextVar("xbot_current_config_path", default=None)
 
 
-def set_config_path(path: Path) -> None:
+def set_config_path(path: Path | None) -> None:
     """Set the current config path (used to derive data directory)."""
-    global _current_config_path
-    _current_config_path = path
+    _current_config_path.set(path)
 
 
 def get_config_path() -> Path:
     """Get the configuration file path."""
-    if _current_config_path:
-        return _current_config_path
-    return Path.home() / ".xbot" / "config.json"
+    path = _current_config_path.get()
+    return path if path is not None else Path.home() / ".xbot" / "config.json"
 
 
 def get_config_dir() -> Path:

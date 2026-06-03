@@ -117,7 +117,7 @@ class CapabilityCatalog:
             return "tool"
         if assume_unknown_mcp:
             return "mcp"
-        return "tool"
+        return "unknown"
 
     def build_summary(self, *, mcp_servers: dict[str, Any] | None = None) -> str:
         builtin = sorted(self.builtin_tool_names())

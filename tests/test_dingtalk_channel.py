@@ -177,6 +177,82 @@ async def test_handler_processes_file_message(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_handler_uses_channel_tracked_task(monkeypatch) -> None:
+    bus = MessageBus()
+    channel = DingTalkChannel(
+        DingTalkConfig(client_id="app", client_secret="secret", allow_from=["user1"]),
+        bus,
+    )
+    handler = NanobotDingTalkHandler(channel)
+    created: list[str | None] = []
+
+    class _FakeChatbotMessage:
+        text = SimpleNamespace(content="hello")
+        extensions = {}
+        sender_staff_id = "user1"
+        sender_id = "fallback-user"
+        sender_nick = "Alice"
+        message_type = "text"
+
+        @staticmethod
+        def from_dict(_data):
+            return _FakeChatbotMessage()
+
+    def fake_create_tracked_task(coro, name=None):
+        created.append(name)
+        task = asyncio.create_task(coro, name=name)
+        channel._track_task(task)
+        return task
+
+    monkeypatch.setattr(dingtalk_module, "ChatbotMessage", _FakeChatbotMessage)
+    monkeypatch.setattr(dingtalk_module, "AckMessage", SimpleNamespace(STATUS_OK="OK"))
+    monkeypatch.setattr(channel, "_create_tracked_task", fake_create_tracked_task)
+
+    status, body = await handler.process(
+        SimpleNamespace(
+            data={
+                "conversationType": "1",
+                "text": {"content": "hello"},
+            }
+        )
+    )
+
+    await asyncio.gather(*list(channel._background_tasks), return_exceptions=True)
+
+    assert (status, body) == ("OK", "OK")
+    assert created == ["dingtalk-inbound:user1"]
+
+
+@pytest.mark.asyncio
+async def test_stop_cancels_background_tasks_before_closing_http() -> None:
+    channel = DingTalkChannel(
+        DingTalkConfig(client_id="app", client_secret="secret", allow_from=["*"]),
+        MessageBus(),
+    )
+    events: list[str] = []
+
+    class _ClosableHttp:
+        async def aclose(self):
+            events.append("http_closed")
+
+    async def background_worker():
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            events.append("task_cancelled")
+            raise
+
+    channel._http = _ClosableHttp()
+    channel._background_tasks.add(asyncio.create_task(background_worker()))
+    await asyncio.sleep(0)
+
+    await channel.stop()
+    await asyncio.sleep(0)
+
+    assert events == ["task_cancelled", "http_closed"]
+
+
+@pytest.mark.asyncio
 async def test_download_dingtalk_file(tmp_path, monkeypatch) -> None:
     """Test the two-step file download flow (get URL then download content)."""
     channel = DingTalkChannel(

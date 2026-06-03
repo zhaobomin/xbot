@@ -56,7 +56,7 @@ class ToolAdapter:
         self._tool_context: dict[str, Any] = {}
         # These locks protect synchronous registry/context mutations triggered by MCP plumbing.
         # They must never be held across an await.
-        self._tools_lock = threading.Lock()
+        self._tools_lock = threading.RLock()
         self._context_lock = threading.Lock()
         # Flag to track if core tools are registered (for idempotency)
         self._core_tools_registered = False
@@ -75,9 +75,12 @@ class ToolAdapter:
         # Ensure xbot core tools are always registered.
         self._ensure_core_tools_registered()
 
-        # Convert to MCP tools
+        # Convert to MCP tools from a stable snapshot. Registration may be
+        # triggered from SDK plumbing on multiple threads.
         mcp_tools = []
-        for tool_name, tool_instance in self._tools.items():
+        with self._tools_lock:
+            tool_items = list(self._tools.items())
+        for tool_name, tool_instance in tool_items:
             try:
                 mcp_tool = self._adapt_tool(tool_name, tool_instance)
                 mcp_tools.append(mcp_tool)
@@ -101,6 +104,11 @@ class ToolAdapter:
 
         SDK-native tools (filesystem/shell) are intentionally excluded.
         """
+        with self._tools_lock:
+            self._register_xbot_tools_unlocked()
+
+    def _register_xbot_tools_unlocked(self) -> None:
+        """Register xbot extension tools while the caller holds _tools_lock."""
 
         # Message tool - for sending messages to channels
         bus = self.shared_resources.get("bus")
@@ -151,17 +159,16 @@ class ToolAdapter:
 
     def _ensure_core_tools_registered(self) -> None:
         """Ensure core xbot tools are registered."""
-        if self._core_tools_registered:
-            logger.debug("[ToolAdapter] Core tools already registered")
-            return
+        with self._tools_lock:
+            if self._core_tools_registered:
+                logger.debug("[ToolAdapter] Core tools already registered")
+                return
 
-        # Check if web_search is registered (a reliable indicator of full registration)
-        if "web_search" not in self._tools:
-            logger.info("[ToolAdapter] Core tools not registered, calling _register_xbot_tools")
-            self._register_xbot_tools()
-            self._core_tools_registered = True
-        else:
-            # Core tools are already registered
+            # Check if web_search is registered (a reliable indicator of full registration)
+            if "web_search" not in self._tools:
+                logger.info("[ToolAdapter] Core tools not registered, calling _register_xbot_tools")
+                self._register_xbot_tools()
+
             self._core_tools_registered = True
 
     def _adapt_tool(self, tool_name: str, tool_instance: Any) -> Any:
@@ -245,7 +252,8 @@ class ToolAdapter:
                 "message": {"channel": channel, "chat_id": chat_id, "message_id": message_id, "session_key": session_key},
                 "cron": {"channel": channel, "chat_id": chat_id, "session_key": session_key},
             }.items():
-                tool = self._tools.get(name)
+                with self._tools_lock:
+                    tool = self._tools.get(name)
                 if tool and hasattr(tool, "set_context"):
                     tool.set_context(**args)
                 if tool and hasattr(tool, "set_active_session"):
@@ -260,7 +268,8 @@ class ToolAdapter:
         Returns:
             Tool instance or None
         """
-        return self._tools.get(canonical_tool_name(name))
+        with self._tools_lock:
+            return self._tools.get(canonical_tool_name(name))
 
     def get(self, name: str) -> Any | None:
         """Registry-compatible alias used by gateway/runtime integrations."""
@@ -271,7 +280,8 @@ class ToolAdapter:
         with self._context_lock:
             self._tool_context.pop(session_key, None)
             for tool_name in ("message", "cron"):
-                tool = self._tools.get(tool_name)
+                with self._tools_lock:
+                    tool = self._tools.get(tool_name)
                 if tool and hasattr(tool, "clear_context"):
                     try:
                         tool.clear_context(session_key)

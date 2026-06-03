@@ -128,6 +128,22 @@ class _FakeHeartbeatService:
         }
 
 
+class _StrictHeartbeatService(_FakeHeartbeatService):
+    def __init__(self) -> None:
+        super().__init__()
+        self.configured_callbacks: tuple[object, object, object] | None = None
+
+    def __setattr__(self, name: str, value) -> None:
+        if getattr(self, "_initialized", False) and name == "_llm_call":
+            raise AttributeError("_llm_call is private; use configure_callbacks")
+        super().__setattr__(name, value)
+        if name == "_running":
+            super().__setattr__("_initialized", True)
+
+    def configure_callbacks(self, *, llm_call, on_execute, on_notify) -> None:
+        self.configured_callbacks = (llm_call, on_execute, on_notify)
+
+
 class _FakeChannelManager:
     def __init__(self) -> None:
         self.reload_calls: list[str] = []
@@ -150,6 +166,16 @@ class _FakeChannelManager:
         if self.failures:
             raise RuntimeError("reload-all failed")
         return {"reloaded": True, "count": 2}
+
+
+class _AsyncReloadChannelManager(_FakeChannelManager):
+    async def reload_channel(self, name: str) -> dict[str, object]:
+        self.reload_calls.append(name)
+        return {"name": name, "reloaded": True, "async": True}
+
+    async def reload_all(self) -> dict[str, object]:
+        self.reload_calls.append("*")
+        return {"reloaded": True, "count": 2, "async": True}
 
 
 class _ClosingWebSocket:
@@ -689,6 +715,29 @@ def test_websocket_chat_uses_internal_cli_session_mapping(tmp_path: Path) -> Non
     assert services.agent.calls[0]["session_key"] == "cli:web-admin-abc123"
 
 
+def test_session_key_mapping_avoids_colon_replacement_collisions() -> None:
+    from xbot.interfaces.webui.session_keys import to_internal_session_key
+
+    assert to_internal_session_key("web:admin:abc123") == "cli:web-admin-abc123"
+    assert to_internal_session_key("foo:bar") != to_internal_session_key("foo-bar")
+
+
+def test_websocket_chat_rejects_oversized_message(tmp_path: Path) -> None:
+    client, services = _build_client(tmp_path)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+
+    with client.websocket_connect(f"/ws/chat?token={token}&session=web:admin:huge") as ws:
+        session_info = ws.receive_json()
+        assert session_info["type"] == "session_info"
+
+        ws.send_json({"type": "message", "content": "x" * (1_000_001)})
+        error = ws.receive_json()
+
+    assert error["type"] == "error"
+    assert "too large" in error["error"]
+    assert services.agent.calls == []
+
+
 def test_websocket_disconnect_during_progress_does_not_crash(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
     token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
@@ -831,6 +880,75 @@ def test_frontend_compatibility_mutations(tmp_path: Path) -> None:
     assert cron_toggle.status_code == 200
     assert users.status_code == 200
     assert users.json()[0]["username"] == "admin"
+
+
+def test_channel_reload_accepts_async_manager(tmp_path: Path) -> None:
+    from xbot.interfaces.webui.app import _clear_login_rate_limit, create_app
+    from xbot.interfaces.webui.services import ServiceContainer
+
+    _clear_login_rate_limit()
+    import xbot.interfaces.webui.auth as auth_module
+    auth_module.PASSWORD_FILE = tmp_path / "webui-data" / "password"
+    auth_module.PASSWORD_FILE.parent.mkdir(parents=True, exist_ok=True)
+    set_password("test-webui-password")
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+    workspace = config.workspace_path
+    workspace.mkdir(parents=True, exist_ok=True)
+    manager = _AsyncReloadChannelManager()
+    services_container = ServiceContainer(
+        config=config,
+        bus=MessageBus(),
+        agent=_FakeRuntime(),
+        conversation_store=ConversationStore(workspace),
+        cron=_FakeCronService(),
+        heartbeat=_FakeHeartbeatService(),
+        metadata={"channel_manager": manager},
+    )
+    client = TestClient(create_app(services_container, data_dir=tmp_path / "webui-data"))
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    reload_channel = client.post("/api/channels/telegram/reload", headers=headers)
+    reload_all = client.post("/api/channels/reload-all", headers=headers)
+
+    assert reload_channel.status_code == 200
+    assert reload_channel.json() == {"name": "telegram", "reloaded": True, "async": True}
+    assert reload_all.status_code == 200
+    assert reload_all.json() == {"reloaded": True, "count": 2, "async": True}
+    assert manager.reload_calls == ["telegram", "*"]
+
+
+def test_startup_configures_heartbeat_via_public_api(tmp_path: Path) -> None:
+    from xbot.interfaces.webui.app import _clear_login_rate_limit, create_app
+    from xbot.interfaces.webui.services import ServiceContainer
+
+    _clear_login_rate_limit()
+    import xbot.interfaces.webui.auth as auth_module
+    auth_module.PASSWORD_FILE = tmp_path / "webui-data" / "password"
+    auth_module.PASSWORD_FILE.parent.mkdir(parents=True, exist_ok=True)
+    set_password("test-webui-password")
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+    workspace = config.workspace_path
+    workspace.mkdir(parents=True, exist_ok=True)
+    heartbeat = _StrictHeartbeatService()
+    services_container = ServiceContainer(
+        config=config,
+        bus=MessageBus(),
+        agent=_FakeRuntime(),
+        conversation_store=ConversationStore(workspace),
+        cron=_FakeCronService(),
+        heartbeat=heartbeat,
+        metadata={},
+    )
+
+    with TestClient(create_app(services_container, data_dir=tmp_path / "webui-data")):
+        pass
+
+    assert heartbeat.configured_callbacks is not None
 
 
 def test_system_config_compatibility_endpoints(tmp_path: Path) -> None:

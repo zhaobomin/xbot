@@ -172,6 +172,13 @@ def _make_fake_session(tool_names: list[str]) -> SimpleNamespace:
     return SimpleNamespace(initialize=initialize, list_tools=list_tools)
 
 
+def _make_failing_session() -> SimpleNamespace:
+    async def initialize() -> None:
+        raise RuntimeError("initialize failed")
+
+    return SimpleNamespace(initialize=initialize)
+
+
 @pytest.mark.asyncio
 async def test_connect_mcp_servers_enabled_tools_supports_raw_names(
     fake_mcp_runtime: dict[str, object | None],
@@ -344,3 +351,35 @@ async def test_connect_mcp_servers_suppresses_known_sse_close_bug(
         await stack.aclose()
 
     assert registry.tool_names == ["mcp_test_demo"]
+
+
+@pytest.mark.asyncio
+async def test_failed_connection_logs_stack_cleanup_errors(
+    fake_mcp_runtime: dict[str, object | None], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake_mcp_runtime["session"] = _make_failing_session()
+
+    from xbot.tools import mcp as mcp_module
+
+    async def _raise_cleanup_error(_stack: AsyncExitStack, _server_name: str) -> None:
+        raise RuntimeError("cleanup failed")
+
+    cleanup_logs: list[str] = []
+
+    def _exception(message: str, *args: object) -> None:
+        cleanup_logs.append(message % args if args else message)
+
+    monkeypatch.setattr(mcp_module, "_safe_close_stack", _raise_cleanup_error)
+    monkeypatch.setattr(mcp_module.logger, "exception", _exception)
+
+    registry = ToolRegistry()
+
+    result = await mcp_module._connect_single_mcp_server(
+        "test",
+        MCPServerConfig(command="fake"),
+        registry,
+    )
+
+    assert result.connected is False
+    assert result.error == "RuntimeError: initialize failed"
+    assert cleanup_logs == ["MCP server 'test': failed to clean up connection stack after connection failure"]

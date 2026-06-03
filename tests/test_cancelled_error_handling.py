@@ -7,13 +7,14 @@ See: https://docs.python.org/3/library/asyncio-exceptions.html#asyncio.Cancelled
 """
 
 import asyncio
+import builtins
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from xbot.crew.agent_pool import AgentPool
-from xbot.crew.models import CrewConfig, ProcessType, TaskDefinition, TaskResult
+from xbot.crew.models import AgentRole, CrewConfig, ProcessType, TaskDefinition, TaskResult
 from xbot.crew.orchestrator import CrewOrchestrator
 from xbot.crew.process import SequentialProcess
 from xbot.crew.state import CrewStateManager, TaskPhase
@@ -219,9 +220,148 @@ class TestProcessCancelledError:
         with pytest.raises(asyncio.CancelledError):
             await process._execute_single_task(task)
 
+    @pytest.mark.asyncio
+    async def test_execute_single_task_marks_running_task_failed_before_reraising_cancelled(self) -> None:
+        """Cancelled task execution should not leave state stuck in RUNNING."""
+        class PoolWithoutStreaming:
+            async def run_task(self, *args, **kwargs):
+                raise asyncio.CancelledError()
+
+        pool = PoolWithoutStreaming()
+
+        context = MagicMock()
+        context.build_agent_context = MagicMock(return_value=("test prompt", None))
+
+        crew_config = CrewConfig(
+            name="test_crew",
+            agents={
+                "test_agent": AgentRole(
+                    name="test_agent",
+                    description="Test agent",
+                    goal="Test",
+                )
+            },
+            tasks=[],
+            workspace="/tmp/test_crew",
+        )
+        crew_config.output.enabled = False
+
+        state_manager = CrewStateManager(
+            task_names=["test_task"],
+            task_definitions=[],
+        )
+        state_manager.transition_task("test_task", TaskPhase.QUEUED)
+        state_manager.transition_task("test_task", TaskPhase.RUNNING)
+
+        process = SequentialProcess(
+            pool=pool,
+            context=context,
+            permission_handler=MockPermissionHandler(),
+            crew_config=crew_config,
+            state_manager=state_manager,
+        )
+
+        task = TaskDefinition(
+            name="test_task",
+            agent="test_agent",
+            description="Test task",
+        )
+
+        with pytest.raises(asyncio.CancelledError):
+            await process._execute_single_task(task)
+
+        assert state_manager.get_task_phase("test_task") == TaskPhase.FAILED
+
+    def test_pool_supports_native_streaming_does_not_import_unittest_mock(self) -> None:
+        """Production streaming detection should not depend on unittest.mock.AsyncMock."""
+        class PoolWithStreaming:
+            async def run_task_streaming(self, *args, **kwargs):
+                yield None
+
+        crew_config = CrewConfig(
+            name="test_crew",
+            agents={
+                "test_agent": AgentRole(
+                    name="test_agent",
+                    description="Test agent",
+                    goal="Test",
+                )
+            },
+            tasks=[],
+            workspace="/tmp/test_crew",
+        )
+        crew_config.output.enabled = False
+
+        process = SequentialProcess(
+            pool=PoolWithStreaming(),
+            context=MagicMock(),
+            permission_handler=MockPermissionHandler(),
+            crew_config=crew_config,
+            state_manager=CrewStateManager(task_names=[], task_definitions=[]),
+        )
+
+        real_import = builtins.__import__
+
+        def _blocked_import(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "unittest.mock":
+                raise AssertionError("production code imported unittest.mock")
+            return real_import(name, globals, locals, fromlist, level)
+
+        with patch.object(builtins, "__import__", _blocked_import):
+            assert process._pool_supports_native_streaming() is True
+
 
 class TestAgentPoolCancelledError:
     """Test agent pool handles CancelledError during shutdown."""
+
+    @pytest.mark.asyncio
+    async def test_initialize_uses_same_role_config_for_agent_and_shared_config(self, monkeypatch) -> None:
+        """Role overrides should not diverge between AgentConfig and shared Config."""
+        from xbot.platform.config.schema import Config
+
+        captured: list[tuple[object, object]] = []
+
+        class FakeService:
+            def __init__(self, agent_config, shared_resources):
+                captured.append((agent_config, shared_resources["config"]))
+
+            async def initialize(self) -> None:
+                return None
+
+        monkeypatch.setattr("xbot.runtime.core.service.AgentService", FakeService)
+
+        xbot_config = Config()
+        xbot_config.agents.defaults.model = "global-model"
+        xbot_config.agents.claude_sdk.max_turns = 40
+
+        crew_config = CrewConfig(
+            name="test_crew",
+            agents={
+                "writer": AgentRole(
+                    name="writer",
+                    description="Write",
+                    goal="Write",
+                    model="role-model",
+                    max_iterations=7,
+                )
+            },
+            tasks=[],
+            workspace="/tmp/test_crew",
+        )
+
+        pool = AgentPool(
+            crew_config=crew_config,
+            xbot_config=xbot_config,
+            permission_handler=MagicMock(),
+        )
+
+        await pool.initialize()
+
+        assert len(captured) == 1
+        agent_config, shared_config = captured[0]
+        assert agent_config.model == "role-model"
+        assert shared_config.agents.defaults.model == "role-model"
+        assert shared_config.agents.claude_sdk.max_turns == 7
 
     @pytest.mark.asyncio
     async def test_shutdown_continues_on_cancelled_error(self) -> None:
@@ -416,6 +556,64 @@ class TestRedoTaskBugFixes:
         assert result.output == "result"
         assert result.extended_count == 0
         assert result.quality == "full"
+
+    @pytest.mark.asyncio
+    async def test_redo_task_reuses_context_session_key_for_execution(self) -> None:
+        """Redo prompt context and execution should share the same session key."""
+        from xbot.crew.agent_pool import TaskProgress
+        from xbot.crew.models import AgentRole
+
+        captured_execution_session_keys: list[str] = []
+        pool = MagicMock()
+
+        async def stream(agent, prompt, session_key, media):
+            captured_execution_session_keys.append(session_key)
+            yield TaskProgress(delta_content="redo", total_content="redo", is_final=True)
+
+        pool.run_task_streaming = stream
+
+        crew_config = MagicMock()
+        crew_config.name = "crew1"
+        crew_config.agents = {
+            "test_agent": AgentRole(name="test_agent", description="Test", goal="Test")
+        }
+        crew_config.global_context = ""
+        crew_config.max_context_length = 4000
+        crew_config.output.max_output_size = 100000
+
+        state_manager = CrewStateManager(task_names=["test_task"], task_definitions=[])
+        state_manager.force_task_phase("test_task", TaskPhase.AWAITING_REVIEW)
+
+        context = MagicMock()
+        context.build_agent_context = MagicMock(return_value=("redo prompt", None))
+
+        permission_handler = MagicMock()
+        permission_handler.request_interaction = AsyncMock(return_value=MagicMock(content="feedback"))
+
+        process = SequentialProcess(
+            pool=pool,
+            context=context,
+            permission_handler=permission_handler,
+            crew_config=crew_config,
+            state_manager=state_manager,
+        )
+
+        task = TaskDefinition(name="test_task", description="Test", agent="test_agent")
+        original_result = TaskResult(
+            task_name="test_task",
+            agent_name="test_agent",
+            output="original output",
+            status="success",
+            started_at=datetime.now(),
+            finished_at=datetime.now(),
+        )
+
+        result, success = await process._redo_task(task, original_result)
+
+        context_session_key = context.build_agent_context.call_args.kwargs["session_key"]
+        assert success is True
+        assert result.output == "redo"
+        assert captured_execution_session_keys == [context_session_key]
 
     @pytest.mark.asyncio
     async def test_redo_task_exception_uses_correct_extended_count(self) -> None:

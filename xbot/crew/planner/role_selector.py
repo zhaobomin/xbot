@@ -116,7 +116,10 @@ class RoleSelector:
         Uses LLM response if provided, otherwise uses heuristic selection.
         """
         if llm_response:
-            return self._parse_llm_selection(llm_response, candidates)
+            selected = self._parse_llm_selection(llm_response, candidates)
+            if selected:
+                return selected
+            logger.warning("LLM role selection matched no candidate roles; falling back to heuristic selection")
 
         # Heuristic selection: pick roles with highest capability coverage
         return self._heuristic_selection(analysis, candidates)

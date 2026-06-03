@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from base64 import urlsafe_b64encode
+
 
 def to_internal_session_key(web_session_key: str) -> str:
     normalized = (web_session_key or "").strip()
@@ -12,4 +14,5 @@ def to_internal_session_key(web_session_key: str) -> str:
     if normalized.startswith("web:"):
         suffix = normalized[4:].replace(":", "-")
         return f"cli:web-{suffix}"
-    return f"cli:{normalized.replace(':', '-')}"
+    encoded = urlsafe_b64encode(normalized.encode("utf-8")).decode("ascii").rstrip("=")
+    return f"cli:webkey-{encoded}"

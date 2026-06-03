@@ -356,6 +356,8 @@ class CrewOrchestrator:
                 t = threading.Thread(target=_thread_target, daemon=True)
                 t.start()
                 t.join(timeout=120)  # 2-minute hard timeout for repair
+                if t.is_alive():
+                    raise TimeoutError("LLM repair timed out after 120s")
                 if exception:
                     raise exception[0]
                 return result[0] if result else ""

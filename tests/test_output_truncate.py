@@ -78,6 +78,16 @@ class TestNoTruncationNeeded:
         assert result.truncated is False
         assert result.content == content
 
+
+class TestLengthCalculation:
+    """Regression tests for line range length accounting."""
+
+    def test_calculate_length_includes_end_line(self) -> None:
+        truncator = OutputTruncator()
+        lines = ["```python", "print('hello')", "```"]
+
+        assert truncator._calculate_length(lines, 0, 2) == sum(len(line) + 1 for line in lines)
+
     def test_empty_content(self) -> None:
         """Empty content should not be truncated."""
         truncator = OutputTruncator()

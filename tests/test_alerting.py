@@ -41,6 +41,7 @@ class TestAlertService:
     def test_init(self, service: AlertService) -> None:
         """Test service initialization."""
         assert service.config.chat_id == "test_chat"
+        assert service._rate_lock is None
 
     @pytest.mark.asyncio
     async def test_reserve_alert_slot_disabled(self, mock_bus) -> None:

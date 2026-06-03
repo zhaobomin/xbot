@@ -129,6 +129,7 @@ class MessageTool(Tool):
             channel=channel,
             chat_id=chat_id,
             content=content,
+            reply_to=message_id,
             media=media or [],
             metadata={
                 "message_id": message_id,

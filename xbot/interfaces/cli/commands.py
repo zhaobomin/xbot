@@ -148,7 +148,7 @@ def _normalize_exec_cwd(cwd: Path | str) -> str:
 
 
 def _generate_cli_session_key() -> str:
-    ts = datetime.now().strftime("%Y%m%d-%H%M%S")
+    ts = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     return f"cli:{ts}-{uuid4().hex[:8]}"
 
 

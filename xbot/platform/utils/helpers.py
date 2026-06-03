@@ -13,6 +13,7 @@ import tiktoken
 from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
+_TIKTOKEN_ENCODING: Any | None = None
 
 
 def detect_image_mime(data: bytes) -> str | None:
@@ -186,13 +187,20 @@ def build_assistant_message(
     return msg
 
 
+def _get_tiktoken_encoding() -> Any:
+    global _TIKTOKEN_ENCODING
+    if _TIKTOKEN_ENCODING is None:
+        _TIKTOKEN_ENCODING = tiktoken.get_encoding("cl100k_base")
+    return _TIKTOKEN_ENCODING
+
+
 def estimate_prompt_tokens(
     messages: list[dict[str, Any]],
     tools: list[dict[str, Any]] | None = None,
 ) -> int:
     """Estimate prompt tokens with tiktoken."""
     try:
-        enc = tiktoken.get_encoding("cl100k_base")
+        enc = _get_tiktoken_encoding()
         parts: list[str] = []
         for msg in messages:
             content = msg.get("content")

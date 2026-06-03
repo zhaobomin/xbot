@@ -60,6 +60,24 @@ class TestClientPool:
             mock_client.disconnect.assert_called_once()
 
     @pytest.mark.asyncio
+    async def test_disconnect_returns_true_after_force_disconnect(self, pool: ClientPool) -> None:
+        """Forced cleanup should still count as a successful disconnect."""
+        with patch("claude_agent_sdk.ClaudeSDKClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock()
+            mock_client.disconnect = AsyncMock(side_effect=RuntimeError("stuck"))
+            mock_client.terminate = None
+            mock_client.kill = None
+            mock_client.close = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            await pool.get_or_create("session:force", options=MagicMock())
+
+            assert await pool.disconnect("session:force") is True
+            assert "session:force" not in pool.snapshot()["clients"]
+            mock_client.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
     async def test_disconnect_all(self, pool: ClientPool) -> None:
         """Test disconnecting all clients."""
         with patch("claude_agent_sdk.ClaudeSDKClient") as mock_client_class:

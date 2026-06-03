@@ -53,6 +53,15 @@ def _normalize(text: str) -> str:
     return re.sub(r'\n{3,}', '\n\n', text).strip()
 
 
+def _strip_markdown(text: str) -> str:
+    """Convert simple markdown content to readable plain text."""
+    text = re.sub(r'!\[([^\]]*)\]\([^)]+\)', r'\1', text)
+    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+    text = re.sub(r'^\s{0,3}#{1,6}\s*', '', text, flags=re.M)
+    text = re.sub(r'[*_`~]+', '', text)
+    return _normalize(text)
+
+
 def _validate_url(url: str) -> tuple[bool, str]:
     """Validate URL scheme/domain. Does NOT check resolved IPs (use _validate_url_safe for that)."""
     try:
@@ -360,7 +369,7 @@ class WebFetchTool(Tool):
         use_jina = bool(getattr(self.web_config, "web_fetch_use_jina", self.use_jina))
         result = None
         if use_jina:
-            result = await self._fetch_jina(url, max_chars)
+            result = await self._fetch_jina(url, extract_mode, max_chars)
             if result is None:
                 logger.debug("WebFetch: Jina failed, falling back to readability for '%s'", url)
         if result is None:
@@ -369,9 +378,18 @@ class WebFetchTool(Tool):
         logger.debug("WebFetch: completed for '%s', result_len=%s", url, len(result))
         return result
 
-    async def _fetch_jina(self, url: str, max_chars: int) -> str | None:
+    async def _fetch_jina(
+        self,
+        url: str,
+        extract_mode: str | int = "markdown",
+        max_chars: int | None = None,
+    ) -> str | None:
         """Try fetching via Jina Reader API. Returns None on failure."""
         try:
+            if isinstance(extract_mode, int):
+                max_chars = extract_mode if max_chars is None else max_chars
+                extract_mode = "markdown"
+            max_chars = max_chars or self.max_chars
             headers = {"Accept": "application/json", "User-Agent": USER_AGENT}
             jina_key = os.environ.get("JINA_API_KEY", "")
             if jina_key:
@@ -391,7 +409,9 @@ class WebFetchTool(Tool):
                 return None
 
             if title:
-                text = f"# {title}\n\n{text}"
+                text = f"# {title}\n\n{text}" if extract_mode == "markdown" else f"{title}\n\n{text}"
+            if extract_mode == "text":
+                text = _strip_markdown(text)
             truncated = len(text) > max_chars
             if truncated:
                 text = text[:max_chars]

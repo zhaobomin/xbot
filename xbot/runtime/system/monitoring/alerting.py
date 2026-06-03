@@ -62,14 +62,19 @@ class AlertService:
         self._alert_count = 0
         self._hour_start = time.time()
         self._last_alert_time: dict[str, float] = {}
-        self._rate_lock = asyncio.Lock()
+        self._rate_lock: asyncio.Lock | None = None
+
+    def _get_rate_lock(self) -> asyncio.Lock:
+        if self._rate_lock is None:
+            self._rate_lock = asyncio.Lock()
+        return self._rate_lock
 
     async def _reserve_alert_slot(self, rule_name: str) -> bool:
         """Reserve an alert slot atomically to enforce rate limits."""
         if not self.config.enabled:
             return False
 
-        async with self._rate_lock:
+        async with self._get_rate_lock():
             # Reset hourly counter
             now = time.time()
             if now - self._hour_start > 3600:
@@ -145,7 +150,7 @@ class AlertService:
             return True
 
         except Exception as e:
-            async with self._rate_lock:
+            async with self._get_rate_lock():
                 self._alert_count = max(0, self._alert_count - 1)
                 self._last_alert_time.pop(title, None)
             logger.error(f"Failed to send alert: {e}")
