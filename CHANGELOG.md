@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.0.16 (2026-06-03)
+
+- Upgraded `claude-agent-sdk` from `0.2.82` to `0.2.88`.
+- Pulled in bundled Claude Code CLI updates from `2.1.142` to `2.1.161` via the SDK upgrade for newer model/runtime compatibility.
+- Included the upstream Trio `session_store` compatibility fix so store-backed SDK flows no longer crash under Trio runtimes.
+
 ## v2.0.0 (2026-04-14)
 
 - Runtime session state machine fully replaced with `SessionCoordinator` as the only write path.
