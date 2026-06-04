@@ -4,14 +4,11 @@ import { useTheme } from "next-themes";
 import { useAuthStore } from "../../stores/auth-store";
 import { cn } from "../../lib/utils";
 import {
-    LayoutDashboard,
-    MessageSquare,
-    Radio,
-    Puzzle,
-    Clock,
-    Settings,
-    Users,
-    FileJson,
+    isNavItemActive,
+    PRIMARY_NAV_ITEMS,
+    type AppNavItem,
+} from "../../lib/navigation";
+import {
     Sun,
     Moon,
     Languages,
@@ -19,7 +16,8 @@ import {
     KeyRound,
     PanelLeftClose,
     PanelLeftOpen,
-    Sparkles,
+    Bot,
+    Settings,
 } from "lucide-react";
 import {
     DropdownMenu,
@@ -39,33 +37,14 @@ import {
 } from "../ui/tooltip";
 import { useState } from "react";
 import { ChangePasswordDialog } from "./change-password-dialog";
-
-interface NavItem {
-    path: string;
-    label: string;
-    icon: React.ElementType;
-}
-
-const GENERAL_ITEMS: NavItem[] = [
-    { path: "/dashboard", label: "nav.dashboard", icon: LayoutDashboard },
-    { path: "/chat", label: "nav.chat", icon: MessageSquare },
-];
-
-const ADMIN_ITEMS: NavItem[] = [
-    { path: "/settings", label: "nav.settings", icon: Settings },
-    { path: "/channels", label: "nav.channels", icon: Radio },
-    { path: "/tools", label: "nav.tools", icon: Puzzle },
-    { path: "/users", label: "nav.users", icon: Users },
-    { path: "/cron", label: "nav.cron", icon: Clock },
-    { path: "/system-config", label: "nav.systemConfig", icon: FileJson },
-];
+import { SessionList } from "../business/session-list";
 
 function NavLink({
     item,
     active,
     collapsed,
 }: {
-    item: NavItem;
+    item: AppNavItem;
     active: boolean;
     collapsed: boolean;
 }) {
@@ -76,27 +55,26 @@ function NavLink({
         <Link
             to={item.path}
             className={cn(
-                "group relative flex items-center text-sm font-medium transition-all duration-200",
+                "group relative flex items-center text-sm font-medium transition-colors duration-150",
                 collapsed
                     ? "justify-center py-2.5 mx-auto w-10 rounded-lg"
                     : "gap-3 px-3 py-2 rounded-lg mx-1",
                 active
                     ? collapsed
-                        ? "bg-primary/12 text-primary"
-                        : "bg-primary/10 text-primary font-semibold"
+                        ? "bg-[hsl(var(--sidebar-active-bg))] text-[hsl(var(--sidebar-active-fg))]"
+                        : "bg-[hsl(var(--sidebar-active-bg))] text-[hsl(var(--sidebar-active-fg))] font-semibold"
                     : cn(
                         "text-[hsl(var(--sidebar-fg))]",
-                        "hover:bg-[hsl(var(--sidebar-hover-bg))] hover:translate-x-0.5"
+                        "hover:bg-[hsl(var(--sidebar-hover-bg))]"
                     )
             )}
         >
-            {/* Active indicator bar - expanded only */}
             {active && !collapsed && (
-                <span className="absolute left-0 top-1/2 -translate-y-1/2 h-[60%] w-[3px] rounded-full bg-primary" />
+                <span className="absolute left-0 top-1/2 h-[60%] w-[3px] -translate-y-1/2 rounded-full bg-primary" />
             )}
             <Icon
                 className={cn(
-                    "h-4 w-4 shrink-0 transition-colors duration-200",
+                    "h-4 w-4 shrink-0 transition-colors duration-150",
                     active
                         ? "text-primary"
                         : "text-[hsl(var(--sidebar-muted))] group-hover:text-[hsl(var(--sidebar-fg))]"
@@ -134,9 +112,13 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
     const isAdmin = user?.role === "admin";
     const [showChangePwd, setShowChangePwd] = useState(false);
 
-    const isActive = (item: NavItem) =>
-        location.pathname === item.path ||
-        (item.path !== "/dashboard" && location.pathname.startsWith(item.path));
+    const navItems = PRIMARY_NAV_ITEMS.filter((item) => (!item.adminOnly || isAdmin) && item.path !== "/sessions");
+    const isActive = (item: AppNavItem) => isNavItemActive(location.pathname, item);
+    const settingsActive =
+        location.pathname === "/settings" ||
+        location.pathname.startsWith("/settings/") ||
+        location.pathname === "/users" ||
+        location.pathname === "/system-config";
 
     const LANG_LABELS: Record<string, string> = { zh: "中文", en: "English" };
     const currentLangLabel = LANG_LABELS[i18n.language] ?? "English";
@@ -153,7 +135,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                     boxShadow: "var(--sidebar-edge-shadow)",
                 }}
             >
-                {/* Logo + collapse toggle */}
                 <div
                     className={cn(
                         "group flex h-14 shrink-0 items-center",
@@ -163,7 +144,7 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                     {!collapsed && (
                         <div className="flex h-9 items-center gap-2">
                             <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                                <Sparkles className="h-3.5 w-3.5" />
+                                <Bot className="h-3.5 w-3.5" />
                             </div>
                             <span className="text-lg font-semibold tracking-tight text-foreground">
                                 XBot
@@ -171,8 +152,8 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                         </div>
                     )}
                     {collapsed && (
-                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground shadow-sm">
-                            <Sparkles className="h-4 w-4" />
+                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+                            <Bot className="h-4 w-4" />
                         </div>
                     )}
                     {!collapsed && (
@@ -190,7 +171,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                     )}
                 </div>
 
-                {/* Expand button for collapsed state */}
                 {collapsed && (
                     <div className="flex justify-center pb-1">
                         <button
@@ -206,20 +186,19 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                     </div>
                 )}
 
-                {/* Nav */}
-                <nav className="flex-1 overflow-y-auto px-2 py-3">
-                    {/* General section */}
+                <nav className="flex-1 flex flex-col min-h-0 px-2 py-3">
+                    {/* 工作区 */}
                     <div className="mb-2">
                         {!collapsed && (
                             <p
                                 className="mb-2 px-4 text-xs font-semibold uppercase tracking-[0.15em]"
                                 style={{ color: "hsl(var(--sidebar-section-label))" }}
                             >
-                                {t("nav.section.general")}
+                                {t("nav.section.workspace")}
                             </p>
                         )}
                         <div className="space-y-1">
-                            {GENERAL_ITEMS.map((item) => (
+                            {navItems.map((item) => (
                                 <NavLink
                                     key={item.path}
                                     item={item}
@@ -230,62 +209,53 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                         </div>
                     </div>
 
-                    {/* Admin section */}
-                    {isAdmin && (
-                        <div className={cn("mt-6 pt-4", collapsed && "mt-4 pt-2")}>
-                            {/* Gradient separator */}
-                            <div
-                                className={cn("mx-3 mb-3 h-px", collapsed && "mx-2 mb-2")}
-                                style={{
-                                    background:
-                                        "linear-gradient(to right, transparent, hsl(var(--sidebar-border)), transparent)",
-                                }}
-                            />
-                            {!collapsed && (
-                                <p
-                                    className="mb-2 px-4 text-xs font-semibold uppercase tracking-[0.15em]"
-                                    style={{ color: "hsl(var(--sidebar-section-label))" }}
-                                >
-                                    {t("nav.section.admin")}
-                                </p>
-                            )}
-                            <div className="space-y-1">
-                                {ADMIN_ITEMS.map((item) => (
-                                    <NavLink
-                                        key={item.path}
-                                        item={item}
-                                        active={isActive(item)}
-                                        collapsed={collapsed}
-                                    />
-                                ))}
-                            </div>
-                        </div>
-                    )}
+                    {/* 会话列表 */}
+                    <div className="flex-1 flex flex-col min-h-0">
+                        {!collapsed && (
+                            <p
+                                className="mb-2 px-4 text-xs font-semibold uppercase tracking-[0.15em]"
+                                style={{ color: "hsl(var(--sidebar-section-label))" }}
+                            >
+                                {t("nav.sessionList")}
+                            </p>
+                        )}
+                        {!collapsed && <SessionList />}
+                    </div>
                 </nav>
 
-                {/* Bottom: user + theme toggle */}
                 <div className="shrink-0 px-2 pb-3">
-                    {/* Gradient top border */}
-                    <div
-                        className="mx-2 mb-3 h-px"
-                        style={{
-                            background:
-                                "linear-gradient(to right, transparent, hsl(var(--sidebar-border)), transparent)",
-                        }}
-                    />
+                    <div className="mx-2 mb-3 h-px bg-border" />
 
                     {collapsed ? (
                         <div className="flex flex-col items-center gap-1.5">
+                            {isAdmin && (
+                                <Tooltip delayDuration={0}>
+                                    <TooltipTrigger asChild>
+                                        <Link
+                                            to="/settings"
+                                            className={cn(
+                                                "flex h-8 w-8 items-center justify-center rounded-lg transition-colors duration-150",
+                                                settingsActive
+                                                    ? "bg-[hsl(var(--sidebar-active-bg))] text-[hsl(var(--sidebar-active-fg))]"
+                                                    : "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]"
+                                            )}
+                                        >
+                                            <Settings className="h-3.5 w-3.5" />
+                                        </Link>
+                                    </TooltipTrigger>
+                                    <TooltipContent side="right">
+                                        {t("nav.settings")}
+                                    </TooltipContent>
+                                </Tooltip>
+                            )}
                             <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                    <button
-                                        title={user?.username}
-                                        className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 ring-2 ring-primary/10 shadow-sm hover:ring-primary/25 transition-all duration-200"
-                                    >
-                                        <span className="text-xs font-bold text-primary">
-                                            {user?.username?.[0]?.toUpperCase() ?? "?"}
-                                        </span>
-                                    </button>
+                                <DropdownMenuTrigger
+                                    title={user?.username}
+                                    className="flex h-8 w-8 items-center justify-center rounded-full border bg-background transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+                                >
+                                    <span className="text-xs font-semibold text-foreground">
+                                        {user?.username?.[0]?.toUpperCase() ?? "?"}
+                                    </span>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent side="right" align="end" className="w-48">
                                     <DropdownMenuSub>
@@ -325,22 +295,20 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                                 </DropdownMenuContent>
                             </DropdownMenu>
                             <Tooltip delayDuration={0}>
-                                <TooltipTrigger asChild>
-                                    <button
-                                        onClick={() =>
-                                            setTheme(resolvedTheme === "dark" ? "light" : "dark")
-                                        }
-                                        className={cn(
-                                            "flex h-8 w-8 items-center justify-center rounded-lg transition-all duration-200",
-                                            "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]"
-                                        )}
-                                    >
-                                        {resolvedTheme === "dark" ? (
-                                            <Sun className="h-3.5 w-3.5" />
-                                        ) : (
-                                            <Moon className="h-3.5 w-3.5" />
-                                        )}
-                                    </button>
+                                <TooltipTrigger
+                                    onClick={() =>
+                                        setTheme(resolvedTheme === "dark" ? "light" : "dark")
+                                    }
+                                    className={cn(
+                                        "flex h-8 w-8 items-center justify-center rounded-lg transition-colors duration-150",
+                                        "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]"
+                                    )}
+                                >
+                                    {resolvedTheme === "dark" ? (
+                                        <Sun className="h-3.5 w-3.5" />
+                                    ) : (
+                                        <Moon className="h-3.5 w-3.5" />
+                                    )}
                                 </TooltipTrigger>
                                 <TooltipContent side="right">
                                     {resolvedTheme === "dark"
@@ -353,22 +321,20 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                         <div className="space-y-0.5">
                             {/* User row */}
                             <DropdownMenu>
-                                <DropdownMenuTrigger asChild>
-                                    <button
-                                        className={cn(
-                                            "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-200",
-                                            "text-[hsl(var(--sidebar-fg))] hover:bg-[hsl(var(--sidebar-hover-bg))]"
-                                        )}
-                                    >
-                                        <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/15 ring-2 ring-primary/10 shadow-sm">
-                                            <span className="text-xs font-bold text-primary">
-                                                {user?.username?.[0]?.toUpperCase() ?? "?"}
-                                            </span>
-                                        </div>
-                                        <span className="flex-1 truncate text-left">
-                                            {user?.username}
+                                <DropdownMenuTrigger
+                                    className={cn(
+                                        "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150",
+                                        "text-[hsl(var(--sidebar-fg))] hover:bg-[hsl(var(--sidebar-hover-bg))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+                                    )}
+                                >
+                                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border bg-background">
+                                        <span className="text-xs font-semibold text-foreground">
+                                            {user?.username?.[0]?.toUpperCase() ?? "?"}
                                         </span>
-                                    </button>
+                                    </div>
+                                    <span className="flex-1 truncate text-left">
+                                        {user?.username}
+                                    </span>
                                 </DropdownMenuTrigger>
                                 <DropdownMenuContent side="right" align="end" className="w-48">
                                     <DropdownMenuSub>
@@ -408,27 +374,42 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                                 </DropdownMenuContent>
                             </DropdownMenu>
 
-                            {/* Theme toggle row */}
-                            <button
-                                onClick={() =>
-                                    setTheme(resolvedTheme === "dark" ? "light" : "dark")
-                                }
-                                className={cn(
-                                    "flex w-full items-center gap-3 rounded-lg px-3 py-1.5 text-sm transition-all duration-200",
-                                    "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]"
+                            <div className="grid grid-cols-2 gap-1">
+                                <button
+                                    onClick={() =>
+                                        setTheme(resolvedTheme === "dark" ? "light" : "dark")
+                                    }
+                                    className={cn(
+                                        "flex items-center gap-2 rounded-lg px-3 py-2 text-sm transition-colors duration-150",
+                                        "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]"
+                                    )}
+                                >
+                                    {resolvedTheme === "dark" ? (
+                                        <Sun className="h-4 w-4" />
+                                    ) : (
+                                        <Moon className="h-4 w-4" />
+                                    )}
+                                    <span className="truncate">
+                                        {resolvedTheme === "dark"
+                                            ? t("common.lightMode")
+                                            : t("common.darkMode")}
+                                    </span>
+                                </button>
+                                {isAdmin && (
+                                    <Link
+                                        to="/settings"
+                                        className={cn(
+                                            "flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150",
+                                            settingsActive
+                                                ? "bg-[hsl(var(--sidebar-active-bg))] text-[hsl(var(--sidebar-active-fg))]"
+                                                : "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]"
+                                        )}
+                                    >
+                                        <Settings className="h-4 w-4" />
+                                        <span>{t("nav.settings")}</span>
+                                    </Link>
                                 )}
-                            >
-                                {resolvedTheme === "dark" ? (
-                                    <Sun className="h-4 w-4" />
-                                ) : (
-                                    <Moon className="h-4 w-4" />
-                                )}
-                                <span>
-                                    {resolvedTheme === "dark"
-                                        ? t("common.lightMode")
-                                        : t("common.darkMode")}
-                                </span>
-                            </button>
+                            </div>
                         </div>
                     )}
                 </div>

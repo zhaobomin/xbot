@@ -2,19 +2,23 @@
   "nav": {
     "dashboard": "Dashboard",
     "chat": "Chat",
+    "sessionList": "Sessions",
     "providers": "Providers",
     "channels": "Channels",
     "mcp": "MCP Servers",
     "skills": "Skills",
     "tools": "Tools",
     "cron": "Cron Jobs",
-    "settings": "Agents",
+    "automation": "Automation",
+    "integrations": "Integrations",
+    "settings": "Settings",
     "systemConfig": "System Config",
     "users": "Users",
     "collapse": "Collapse menu",
     "expand": "Expand menu",
     "more": "More",
     "section": {
+      "workspace": "Workspace",
       "general": "General",
       "admin": "Admin"
     },
@@ -50,7 +54,32 @@
     "stopped": "Stopped",
     "error": "Error",
     "active": "Active",
-    "manageChannels": "Manage Channels →"
+    "manageChannels": "Manage Channels →",
+    "description": "A compact operational view for gateway health, sessions, channels, and scheduled work.",
+    "gatewayHealth": "Gateway health",
+    "gatewayDetail": "API reachable",
+    "online": "Online",
+    "degraded": "Degraded",
+    "activeSessions": "active sessions",
+    "runningChannels": "Running channels",
+    "scheduledTasks": "Scheduled tasks",
+    "recentIssues": "Recent warnings",
+    "recentIssuesDesc": "Channel errors and runtime warnings that need attention.",
+    "noWarnings": "No warnings",
+    "noWarningsDesc": "All visible runtime surfaces look healthy.",
+    "quickActions": "Quick actions",
+    "openChat": "Open Chat"
+  },
+  "integrations": {
+    "description": "Manage channels, tools, MCP servers, and model providers from one place.",
+    "channelsDesc": "Messaging surfaces and inbound/outbound runtime status.",
+    "toolsDesc": "Skills and built-in tools available to the agent.",
+    "mcpDesc": "External MCP servers and runtime tool inventory.",
+    "providersDesc": "Model provider credentials, base URLs, and model lists.",
+    "configureProviders": "Configure providers",
+    "channelWarnings": "Some channels need attention",
+    "enabled": "enabled",
+    "availableTools": "available tools"
   },
   "chat": {
     "title": "Chat",
@@ -456,7 +485,8 @@
     "german": "Deutsch",
     "french": "Français",
     "optional": "Optional",
-    "dismiss": "Dismiss"
+    "dismiss": "Dismiss",
+    "manage": "Manage"
   },
   "pwa": {
     "updateAvailable": "A new version is available",

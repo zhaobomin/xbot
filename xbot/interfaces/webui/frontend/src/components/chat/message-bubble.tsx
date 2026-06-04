@@ -112,25 +112,25 @@ function SubAgentProgressBlock({ message }: { message: ChatMessage }) {
             className={cn(
                 "rounded-lg border text-xs overflow-hidden",
                 isError
-                    ? "border-red-200/70 bg-red-50/40 dark:border-red-800/40 dark:bg-red-950/15"
-                    : "border-indigo-200/60 bg-indigo-50/40 dark:border-indigo-800/30 dark:bg-indigo-950/20"
+                    ? "border-destructive/40 bg-destructive/10"
+                    : "border-border bg-muted/30"
             )}
         >
             <button
                 onClick={() => isLong && setOpen((v) => !v)}
                 className={cn(
                     "flex w-full items-center gap-2 px-3 py-1.5 text-left rounded-lg transition-colors",
-                    isLong && "hover:bg-indigo-100/50 dark:hover:bg-indigo-900/30 cursor-pointer",
+                    isLong && "hover:bg-muted cursor-pointer",
                     !isLong && "cursor-default"
                 )}
             >
-                <Bot className="h-3 w-3 shrink-0 text-indigo-400 dark:text-indigo-400" />
-                <span className="font-medium text-indigo-500/80 dark:text-indigo-400/80 truncate max-w-[80px]">
+                <Bot className="h-3 w-3 shrink-0 text-muted-foreground" />
+                <span className="font-medium text-muted-foreground truncate max-w-[80px]">
                     {label}
                 </span>
                 <span className="text-muted-foreground/50">·</span>
                 {isError ? (
-                    <XCircle className="h-3 w-3 shrink-0 text-red-500" />
+                    <XCircle className="h-3 w-3 shrink-0 text-destructive" />
                 ) : (
                     <CheckCircle2 className="h-3 w-3 shrink-0 text-success" />
                 )}
@@ -151,12 +151,12 @@ function SubAgentProgressBlock({ message }: { message: ChatMessage }) {
                     ))}
             </button>
             {(open || !isLong) && hint.length > 80 && (
-                <div className="border-t border-indigo-200/40 dark:border-indigo-800/30 px-3 py-2">
+                <div className="border-t px-3 py-2">
                     <pre
                         className={cn(
                             "max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs leading-relaxed",
                             isError
-                                ? "text-red-700/80 dark:text-red-300/70"
+                                ? "text-destructive"
                                 : "text-muted-foreground/80"
                         )}
                     >
@@ -178,7 +178,7 @@ function ToolResultBlock({ message }: { message: ChatMessage }) {
             className={cn(
                 "rounded-lg border text-xs overflow-hidden",
                 isError
-                    ? "border-red-200/70 bg-red-50/40 dark:border-red-800/40 dark:bg-red-950/15"
+                    ? "border-destructive/40 bg-destructive/10"
                     : "border-border/60 bg-muted/30 dark:bg-muted/20"
             )}
         >
@@ -191,7 +191,7 @@ function ToolResultBlock({ message }: { message: ChatMessage }) {
                 )}
             >
                 {isError ? (
-                    <XCircle className="h-3 w-3 shrink-0 text-red-500" />
+                    <XCircle className="h-3 w-3 shrink-0 text-destructive" />
                 ) : (
                     <CheckCircle2 className="h-3 w-3 shrink-0 text-success" />
                 )}
@@ -217,7 +217,7 @@ function ToolResultBlock({ message }: { message: ChatMessage }) {
                         className={cn(
                             "max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs leading-relaxed",
                             isError
-                                ? "text-red-700/80 dark:text-red-300/70"
+                                ? "text-destructive"
                                 : "text-muted-foreground/80"
                         )}
                     >
@@ -253,25 +253,25 @@ function SubAgentToolBlock({ message }: { message: ChatMessage }) {
             className={cn(
                 "rounded-lg border text-xs overflow-hidden",
                 isError
-                    ? "border-red-200/70 bg-red-50/40 dark:border-red-800/40 dark:bg-red-950/15"
-                    : "border-indigo-200/60 bg-indigo-50/30 dark:border-indigo-800/40 dark:bg-indigo-950/15"
+                    ? "border-destructive/40 bg-destructive/10"
+                    : "border-border bg-muted/30"
             )}
         >
             <button
                 onClick={() => isLong && setOpen((v) => !v)}
                 className={cn(
                     "flex w-full items-center gap-2 px-3 py-1.5 text-left rounded-lg transition-colors",
-                    isLong && "hover:bg-indigo-100/40 dark:hover:bg-indigo-900/20 cursor-pointer",
+                    isLong && "hover:bg-muted cursor-pointer",
                     !isLong && "cursor-default"
                 )}
             >
-                <Bot className="h-3 w-3 shrink-0 text-indigo-400/80" />
-                <span className="font-medium text-indigo-500/80 dark:text-indigo-400/80 truncate max-w-[120px]">
+                <Bot className="h-3 w-3 shrink-0 text-muted-foreground" />
+                <span className="font-medium text-muted-foreground truncate max-w-[120px]">
                     ⤹ {label}
                 </span>
                 <span className="text-muted-foreground/40">·</span>
                 {isError ? (
-                    <XCircle className="h-3 w-3 shrink-0 text-red-500" />
+                    <XCircle className="h-3 w-3 shrink-0 text-destructive" />
                 ) : (
                     <CheckCircle2 className="h-3 w-3 shrink-0 text-success" />
                 )}
@@ -296,12 +296,12 @@ function SubAgentToolBlock({ message }: { message: ChatMessage }) {
                     ))}
             </button>
             {(open || !isLong) && displayContent.length > 60 && (
-                <div className="border-t border-indigo-200/40 dark:border-indigo-800/30 px-3 py-2">
+                <div className="border-t px-3 py-2">
                     <pre
                         className={cn(
                             "max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs leading-relaxed",
                             isError
-                                ? "text-red-700/80 dark:text-red-300/70"
+                                ? "text-destructive"
                                 : "text-muted-foreground/80"
                         )}
                     >
@@ -434,8 +434,8 @@ export function MessageBubble({ message, onRevoke }: MessageBubbleProps) {
                     className={cn(
                         "mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-bold select-none",
                         isUser
-                            ? "bg-primary/15 text-primary shadow-sm"
-                            : "bg-muted text-foreground/70 shadow-sm"
+                            ? "bg-foreground text-background"
+                            : "bg-muted text-foreground/70"
                     )}
                 >
                     {isUser ? user?.username?.[0]?.toUpperCase() ?? "U" : "x"}
@@ -449,7 +449,7 @@ export function MessageBubble({ message, onRevoke }: MessageBubbleProps) {
                     )}
                 >
                     {isUser ? (
-                        <div className="rounded-2xl rounded-tr-sm bg-primary/12 border border-primary/15 px-4 py-2.5 text-sm leading-relaxed text-foreground">
+                        <div className="rounded-xl rounded-tr-sm border bg-muted px-4 py-2.5 text-sm leading-relaxed text-foreground">
                             <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
                                 {message.content}
                             </span>
@@ -467,7 +467,7 @@ export function MessageBubble({ message, onRevoke }: MessageBubbleProps) {
                                             "[&_p]:leading-relaxed [&_p]:my-1 [&_p]:[overflow-wrap:anywhere]",
                                             "[&_pre]:rounded-xl [&_pre]:bg-zinc-100 dark:[&_pre]:bg-zinc-900 [&_pre]:text-zinc-900 dark:[&_pre]:text-zinc-100 [&_pre]:p-4 [&_pre]:text-xs [&_pre]:ring-1 [&_pre]:ring-border/50 [&_pre]:overflow-x-auto",
                                             "[&_code:not(pre_code)]:rounded [&_code:not(pre_code)]:bg-muted [&_code:not(pre_code)]:px-1.5 [&_code:not(pre_code)]:py-0.5 [&_code:not(pre_code)]:text-xs [&_code:not(pre_code)]:font-mono [&_code:not(pre_code)]:text-foreground",
-                                            "[&_blockquote]:border-l-2 [&_blockquote]:border-l-primary/60 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-muted-foreground",
+                                            "[&_blockquote]:border-l-2 [&_blockquote]:border-l-border [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-muted-foreground",
                                             "[&_table]:text-xs [&_table]:w-full [&_table]:overflow-x-auto [&_th]:bg-muted/60 [&_th]:px-3 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-medium [&_td]:px-3 [&_td]:py-1.5 [&_td]:border-t [&_td]:border-border/40 [&_tr:nth-child(even)]:bg-muted/20",
                                             "[&_ul]:my-2 [&_ol]:my-2 [&_li]:my-0.5",
                                             "[&_a]:text-primary [&_a]:no-underline hover:[&_a]:underline"

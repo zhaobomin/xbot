@@ -1,15 +1,61 @@
+import {
+    Building2,
+    Compass,
+    Mail,
+    MessageCircle,
+    MessageSquare,
+    Monitor,
+    Send,
+    Slack,
+    Globe,
+    type LucideIcon,
+} from "lucide-react";
+
+/**
+ * Emoji-based icon map for quick reference (used in chat page).
+ * Kept for backward compatibility.
+ */
 export const CHANNEL_ICONS: Record<string, string> = {
-    weixin: "\ud83d\udc9a",
-    wecom: "\ud83c\udfe2",
-    web: "\ud83d\udcac",
-    telegram: "\u2708\ufe0f",
-    whatsapp: "\ud83d\udcac",
-    discord: "\ud83c\udfae",
-    feishu: "\ud83d\udc26",
-    dingtalk: "\ud83d\udd14",
-    email: "\ud83d\udce7",
-    slack: "\u26a1",
-    qq: "\ud83d\udc27",
-    matrix: "\ud83d\udd37",
-    mochat: "\ud83d\udcbc",
+    weixin: "💚",
+    wecom: "🏢",
+    web: "💬",
+    telegram: "✈️",
+    whatsapp: "💬",
+    discord: "🎮",
+    feishu: "🐦",
+    dingtalk: "🔔",
+    email: "📧",
+    slack: "⚡",
+    qq: "🐧",
+    matrix: "🔷",
+    mochat: "💼",
 };
+
+/**
+ * Lucide icon map for channel types — cleaner, consistent with the UI.
+ * Each entry maps a channel name to a Lucide icon component.
+ */
+const CHANNEL_LUCIDE: Record<string, LucideIcon> = {
+    weixin: MessageCircle,    // WeChat green → message circle
+    wecom: Building2,         // Enterprise WeChat → building
+    web: Monitor,             // Web UI → monitor
+    telegram: Send,           // Telegram paper airplane → send
+    whatsapp: MessageSquare,  // WhatsApp → message square
+    discord: Compass,         // Discord → compass (gaming/communication)
+    feishu: Send,             // Feishu → send (dove/flight → send)
+    dingtalk: MessageSquare,  // DingTalk → message square
+    email: Mail,              // Email → mail
+    slack: Slack,             // Slack → slack logo
+    qq: MessageCircle,        // QQ → message circle
+    matrix: Globe,            // Matrix → globe (decentralized network)
+    mochat: MessageCircle,    // MoChat → message circle
+};
+
+/**
+ * Get the Lucide icon component for a channel key.
+ * Falls back to MessageCircle for unknown channels.
+ */
+export function getChannelIcon(key: string): LucideIcon {
+    const channel = key.split(":")[0] ?? "web";
+    return CHANNEL_LUCIDE[channel] ?? Monitor;
+}

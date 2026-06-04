@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
 import api from "../lib/api";
@@ -25,6 +25,7 @@ import { User, Lock, Languages } from "lucide-react";
 export default function Login() {
     const { t, i18n } = useTranslation();
     const navigate = useNavigate();
+    const [searchParams] = useSearchParams();
     const setAuth = useAuthStore((s) => s.setAuth);
     const [username, setUsername] = useState("");
     const [password, setPassword] = useState("");
@@ -43,7 +44,9 @@ export default function Login() {
             const res = await api.post("/auth/login", { username, password });
             const { access_token, user } = res.data;
             setAuth(user, access_token);
-            navigate("/dashboard");
+            const next = searchParams.get("next");
+            const safeNext = next?.startsWith("/") && !next.startsWith("//") ? next : "/chat";
+            navigate(safeNext, { replace: true });
         } catch {
             setError(t("auth.loginFailed"));
         } finally {
@@ -59,11 +62,9 @@ export default function Login() {
             {/* Language switcher */}
             <div className="absolute top-4 right-4">
                 <DropdownMenu>
-                    <DropdownMenuTrigger asChild>
-                        <Button variant="outline" size="sm" className="gap-2">
-                            <Languages className="h-4 w-4" />
-                            {getLanguageLabel()}
-                        </Button>
+                    <DropdownMenuTrigger className="inline-flex h-8 items-center justify-center gap-2 whitespace-nowrap rounded-md border border-border bg-card px-3 text-xs font-medium text-foreground transition-colors hover:bg-secondary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30">
+                        <Languages className="h-4 w-4" />
+                        {getLanguageLabel()}
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
                         {Object.entries(LANG_LABELS).map(([code, label]) => (

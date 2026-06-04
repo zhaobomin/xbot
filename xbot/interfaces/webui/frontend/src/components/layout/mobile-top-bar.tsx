@@ -61,13 +61,11 @@ export function MobileTopBar() {
                     </button>
 
                     <DropdownMenu>
-                        <DropdownMenuTrigger asChild>
-                            <button
-                                title={user?.username}
-                                className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 text-xs font-bold text-primary transition-colors hover:bg-primary/25"
-                            >
-                                {user?.username?.[0]?.toUpperCase() ?? "?"}
-                            </button>
+                        <DropdownMenuTrigger
+                            title={user?.username}
+                            className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/15 text-xs font-bold text-primary transition-colors hover:bg-primary/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
+                        >
+                            {user?.username?.[0]?.toUpperCase() ?? "?"}
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end" className="w-48">
                             <div className={cn("px-2 py-1.5 text-xs text-muted-foreground")}>

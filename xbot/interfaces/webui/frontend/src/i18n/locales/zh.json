@@ -2,12 +2,15 @@
   "nav": {
     "dashboard": "仪表板",
     "chat": "会话",
+    "sessionList": "会话列表",
     "providers": "模型提供商",
     "channels": "通道",
     "mcp": "MCP 服务器",
     "skills": "技能",
     "tools": "工具",
-    "settings": "代理",
+    "automation": "自动化",
+    "integrations": "集成",
+    "settings": "设置",
     "users": "用户",
     "cron": "定时任务",
     "systemConfig": "系统配置",
@@ -15,6 +18,7 @@
     "expand": "展开菜单",
     "more": "更多",
     "section": {
+      "workspace": "工作区",
       "general": "通用",
       "admin": "管理"
     },
@@ -50,7 +54,32 @@
     "stopped": "已停止",
     "error": "错误",
     "active": "活跃",
-    "manageChannels": "管理通道 →"
+    "manageChannels": "管理通道 →",
+    "description": "集中查看网关健康、会话、通道和定时任务运行状态。",
+    "gatewayHealth": "网关健康",
+    "gatewayDetail": "API 可访问",
+    "online": "在线",
+    "degraded": "降级",
+    "activeSessions": "活跃会话",
+    "runningChannels": "运行通道",
+    "scheduledTasks": "计划任务",
+    "recentIssues": "近期告警",
+    "recentIssuesDesc": "需要关注的通道错误和运行时告警。",
+    "noWarnings": "暂无告警",
+    "noWarningsDesc": "当前可见运行面状态正常。",
+    "quickActions": "快捷操作",
+    "openChat": "进入会话"
+  },
+  "integrations": {
+    "description": "在一个入口管理通道、工具、MCP 服务器和模型提供商。",
+    "channelsDesc": "消息通道以及收发运行状态。",
+    "toolsDesc": "Agent 可用的技能和内置工具。",
+    "mcpDesc": "外部 MCP 服务器和运行时工具清单。",
+    "providersDesc": "模型提供商凭证、Base URL 和模型列表。",
+    "configureProviders": "配置模型提供商",
+    "channelWarnings": "部分通道需要处理",
+    "enabled": "已启用",
+    "availableTools": "可用工具"
   },
   "chat": {
     "title": "会话",
@@ -460,7 +489,8 @@
     "german": "Deutsch",
     "french": "Français",
     "optional": "可选",
-    "dismiss": "忽略"
+    "dismiss": "忽略",
+    "manage": "管理"
   },
   "pwa": {
     "updateAvailable": "发现新版本，点击立即更新",

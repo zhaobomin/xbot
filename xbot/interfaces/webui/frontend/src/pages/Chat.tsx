@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { useLocation, useNavigate } from "react-router-dom";
 import { ChatWindow } from "../components/chat/chat-window";
 import { useChatStore, type ChatMessage } from "../stores/chat-store";
 import { useSessions, useSessionMessages } from "../hooks/use-sessions";
@@ -9,6 +10,7 @@ import { useIsMobile } from "../hooks/use-is-mobile";
 import { nanoid } from "nanoid";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { StatusDot } from "../components/business/status-dot";
 import {
     Dialog,
     DialogContent,
@@ -27,7 +29,10 @@ function channelOf(key: string): string {
 
 export default function Chat() {
     const { t } = useTranslation();
+    const location = useLocation();
+    const navigate = useNavigate();
     const user = useAuthStore((s) => s.user);
+    const sessionsOnly = location.pathname === "/sessions";
     const isMobile = useIsMobile();
     const mobileShowChat = useChatStore((s) => s.mobileShowChat);
     const setMobileShowChat = useChatStore((s) => s.setMobileShowChat);
@@ -152,11 +157,13 @@ export default function Chat() {
         loadedKeyRef.current = key;
         loadedCountRef.current = 0;
         setCurrentSession(key);
+        if (sessionsOnly) navigate("/chat");
         if (isMobile) setMobileShowChat(true);
     };
 
     const switchSession = (key: string) => {
         setCurrentSession(key);
+        if (sessionsOnly) navigate("/chat");
         if (isMobile) setMobileShowChat(true);
     };
 
@@ -168,23 +175,24 @@ export default function Chat() {
             )}
         >
             {/* Session sidebar */}
-            <aside
+            {(sessionsOnly || isMobile) && (
+                <aside
                 className={cn(
                     "flex shrink-0 flex-col overflow-hidden",
                     isMobile
                         ? cn(
                             "w-full flex-1 min-h-0 pt-14 bg-background",
-                            mobileShowChat && "hidden"
+                            mobileShowChat && !sessionsOnly && "hidden"
                         )
-                        : "w-56 min-w-0 rounded-xl border border-border bg-card"
+                        : "min-w-0 flex-1 rounded-xl border bg-card"
                 )}
                 style={
                     isMobile
                         ? undefined
                         : {
-                            width: "14rem",
+                            width: sessionsOnly ? "100%" : "16rem",
                             minWidth: 0,
-                            maxWidth: "14rem",
+                            maxWidth: sessionsOnly ? "none" : "16rem",
                             boxShadow: "var(--shadow-card)",
                         }
                 }
@@ -215,7 +223,7 @@ export default function Chat() {
                             onChange={(e) => setSearch(e.target.value)}
                             placeholder={t("chat.searchSessions")}
                             className={cn(
-                                "border-0 bg-muted/60 focus-visible:ring-1",
+                                "border bg-background focus-visible:ring-1",
                                 isMobile
                                     ? "h-10 pl-10 text-base rounded-xl"
                                     : "h-7 pl-6 text-xs"
@@ -252,14 +260,14 @@ export default function Chat() {
                                         "group relative flex cursor-pointer items-center gap-3 transition-colors",
                                         isMobile
                                             ? "px-3 py-3 rounded-xl"
-                                            : "px-2 py-1.5 border-l-2 rounded-r-md",
+                                            : "px-2.5 py-2 rounded-lg border",
                                         active
                                             ? isMobile
-                                                ? "bg-primary/10 text-primary"
-                                                : "border-primary text-primary bg-muted/50"
+                                                ? "bg-muted text-foreground"
+                                                : "border-foreground/20 bg-muted/60 text-foreground"
                                             : isMobile
                                                 ? "hover:bg-muted/60"
-                                                : "border-transparent hover:bg-muted/60"
+                                                : "border-transparent hover:border-border hover:bg-muted/40"
                                     )}
                                     onClick={() => switchSession(s.key)}
                                 >
@@ -267,7 +275,7 @@ export default function Chat() {
                                         className={cn(
                                             "flex shrink-0 items-center justify-center rounded-full leading-none",
                                             isMobile ? "h-11 w-11 text-xl" : "h-6 w-6 text-sm",
-                                            active ? "bg-primary/15 text-primary" : "bg-muted text-muted-foreground"
+                                            active ? "bg-background text-foreground ring-1 ring-border" : "bg-muted text-muted-foreground"
                                         )}
                                     >
                                         {CHANNEL_ICONS[channel] ?? "\ud83d\udcac"}
@@ -285,9 +293,7 @@ export default function Chat() {
                                             <span
                                                 className={cn(
                                                     "shrink-0 text-[10px] leading-snug",
-                                                    active
-                                                        ? "text-primary/70"
-                                                        : "text-muted-foreground/70"
+                                                    "text-muted-foreground/70"
                                                 )}
                                             >
                                                 {formatDate(s.updated_at)}
@@ -297,22 +303,11 @@ export default function Chat() {
                                             className={cn(
                                                 "mt-0.5 truncate leading-snug",
                                                 isMobile ? "text-xs" : "text-[10px]",
-                                                active
-                                                    ? "text-primary/70"
-                                                    : "text-muted-foreground"
+                                                "text-muted-foreground"
                                             )}
                                         >
                                             {sessionBusy ? (
-                                                <span className="inline-flex items-center gap-1">
-                                                    <span className="flex gap-0.5">
-                                                        <span className="h-1 w-1 rounded-full bg-primary animate-bounce [animation-delay:0ms]" />
-                                                        <span className="h-1 w-1 rounded-full bg-primary animate-bounce [animation-delay:150ms]" />
-                                                        <span className="h-1 w-1 rounded-full bg-primary animate-bounce [animation-delay:300ms]" />
-                                                    </span>
-                                                    <span className="text-primary/70">
-                                                        Processing...
-                                                    </span>
-                                                </span>
+                                                <StatusDot tone="info" label="Processing..." pulse />
                                             ) : (
                                                 s.last_message || "\u2014"
                                             )}
@@ -371,17 +366,18 @@ export default function Chat() {
                         onClick={newChat}
                         title={t("chat.newChat")}
                         className="fixed bottom-20 right-5 z-30 flex h-14 w-14 items-center justify-center rounded-full bg-primary text-primary-foreground shadow-lg transition-transform active:scale-95 hover:bg-primary/90"
-                        style={{ boxShadow: "0 4px 20px rgba(0,0,0,0.18)" }}
                     >
                         <Plus className="h-6 w-6" />
                     </button>
                 )}
-            </aside>
+                </aside>
+            )}
 
             {/* Chat area */}
-            <div
+            {!sessionsOnly && (
+                <div
                 className={cn(
-                    "flex flex-col bg-card overflow-hidden",
+                    "flex flex-col overflow-hidden bg-card",
                     isMobile
                         ? cn(
                             "w-full flex-1 min-h-0",
@@ -417,7 +413,8 @@ export default function Chat() {
                     </div>
                 )}
                 <ChatWindow />
-            </div>
+                </div>
+            )}
 
             <Dialog open={!!deleteKey} onOpenChange={(open) => !open && setDeleteKey(null)}>
                 <DialogContent className="max-w-sm">

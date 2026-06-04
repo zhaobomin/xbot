@@ -10,13 +10,13 @@ export function ToolCallCard({ tool }: ToolCallCardProps) {
     const [open, setOpen] = useState(false);
 
     return (
-        <div className="rounded-md border border-violet-200/60 bg-violet-50/40 dark:border-violet-900/40 dark:bg-violet-950/15 text-xs">
+        <div className="rounded-md border bg-muted/30 text-xs">
             <button
-                className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-violet-100/40 dark:hover:bg-violet-900/20 rounded-md transition-colors"
+                className="flex w-full items-center gap-2 rounded-md px-3 py-1.5 text-left transition-colors hover:bg-muted"
                 onClick={() => setOpen((v) => !v)}
             >
-                <Wrench className="h-3 w-3 shrink-0 text-violet-500 dark:text-violet-400" />
-                <span className="font-mono font-medium text-violet-700 dark:text-violet-400">
+                <Wrench className="h-3 w-3 shrink-0 text-muted-foreground" />
+                <span className="font-mono font-medium text-foreground/80">
                     {tool.name}
                 </span>
                 {open ? (
@@ -26,23 +26,23 @@ export function ToolCallCard({ tool }: ToolCallCardProps) {
                 )}
             </button>
             {open && (
-                <div className="border-t border-violet-200/50 dark:border-violet-900/30 px-3 py-2 space-y-2">
+                <div className="space-y-2 border-t px-3 py-2">
                     {tool.input && (
                         <div>
-                            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-violet-500/70">
+                            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                                 Input
                             </div>
-                            <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs text-violet-900/80 dark:text-violet-200/70">
+                            <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs text-muted-foreground">
                                 {tool.input}
                             </pre>
                         </div>
                     )}
                     {tool.output && (
                         <div>
-                            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-violet-500/70">
+                            <div className="mb-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
                                 Output
                             </div>
-                            <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs text-violet-900/80 dark:text-violet-200/70">
+                            <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-xs text-muted-foreground">
                                 {tool.output}
                             </pre>
                         </div>

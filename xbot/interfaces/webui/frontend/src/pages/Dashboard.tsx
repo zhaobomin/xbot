@@ -1,23 +1,16 @@
-import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
+import { useTranslation } from "react-i18next";
+import { Activity, AlertCircle, ArrowRight, Clock, MessageSquare, Radio, Server } from "lucide-react";
+import { PageHeader } from "../components/business/page-header";
+import { StatusDot } from "../components/business/status-dot";
+import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
+import { Button } from "../components/ui/button";
+import { Card, CardContent } from "../components/ui/card";
+import { Skeleton } from "../components/ui/skeleton";
 import { useChannels } from "../hooks/use-channels";
 import { useCronJobs } from "../hooks/use-cron";
 import { useSessions } from "../hooks/use-sessions";
-import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Skeleton } from "../components/ui/skeleton";
-import { Badge } from "../components/ui/badge";
-import {
-    Radio,
-    Clock,
-    MessageSquare,
-    AlertCircle,
-    CheckCircle2,
-    XCircle,
-} from "lucide-react";
 import { cn } from "../lib/utils";
-import { SectionHeader } from "../components/business/section-header";
-import { EmptyState } from "../components/business/empty-state";
-import { Inbox } from "lucide-react";
 
 export default function Dashboard() {
     const { t } = useTranslation();
@@ -25,75 +18,84 @@ export default function Dashboard() {
     const { data: cron, isLoading: loadingCron } = useCronJobs();
     const { data: sessions, isLoading: loadingSessions } = useSessions();
 
-    const runningChannels = channels?.filter((c) => c.running).length ?? 0;
+    const runningChannels = channels?.filter((channel) => channel.running).length ?? 0;
     const totalChannels = channels?.length ?? 0;
-    const enabledCron = cron?.filter((j) => j.enabled).length ?? 0;
+    const channelErrors = channels?.filter((channel) => channel.error) ?? [];
+    const enabledCron = cron?.filter((job) => job.enabled).length ?? 0;
+    const totalCron = cron?.length ?? 0;
     const totalSessions = sessions?.length ?? 0;
+    const hasDataError = channelErrors.length > 0;
 
-    const stats = [
+    const overview = [
         {
-            label: t("dashboard.channels"),
-            value: loadingChannels ? null : `${runningChannels} / ${totalChannels}`,
-            icon: Radio,
-            sub: t("dashboard.running"),
-            iconColor: "text-violet-500",
-            iconBg: "bg-violet-50 dark:bg-violet-950/50",
-            topBorder: "border-t-violet-400/60",
-        },
-        {
-            label: t("dashboard.cronJobs"),
-            value: loadingCron ? null : `${enabledCron}`,
-            icon: Clock,
-            sub: t("dashboard.active"),
-            iconColor: "text-amber-500",
-            iconBg: "bg-amber-50 dark:bg-amber-950/50",
-            topBorder: "border-t-amber-400/60",
+            label: t("dashboard.gatewayHealth"),
+            value: hasDataError ? t("dashboard.degraded") : t("dashboard.online"),
+            detail: t("dashboard.gatewayDetail"),
+            icon: Server,
+            loading: loadingChannels || loadingCron || loadingSessions,
+            tone: hasDataError ? "warning" : "success",
         },
         {
             label: t("dashboard.sessions"),
-            value: loadingSessions ? null : `${totalSessions}`,
+            value: `${totalSessions}`,
+            detail: t("dashboard.activeSessions"),
             icon: MessageSquare,
-            sub: t("dashboard.active"),
-            iconColor: "text-emerald-500",
-            iconBg: "bg-emerald-50 dark:bg-emerald-950/50",
-            topBorder: "border-t-emerald-400/60",
+            loading: loadingSessions,
+            tone: totalSessions > 0 ? "success" : "muted",
         },
-    ];
+        {
+            label: t("dashboard.runningChannels"),
+            value: `${runningChannels} / ${totalChannels}`,
+            detail: t("dashboard.running"),
+            icon: Radio,
+            loading: loadingChannels,
+            tone: runningChannels > 0 ? "success" : "muted",
+        },
+        {
+            label: t("dashboard.scheduledTasks"),
+            value: `${enabledCron} / ${totalCron}`,
+            detail: t("dashboard.active"),
+            icon: Clock,
+            loading: loadingCron,
+            tone: enabledCron > 0 ? "success" : "muted",
+        },
+    ] as const;
 
     return (
         <div className="space-y-6">
-            <SectionHeader title={t("nav.dashboard")} />
+            <PageHeader
+                title={t("nav.dashboard")}
+                description={t("dashboard.description")}
+                actions={
+                    <Button asChild>
+                        <Link to="/chat">
+                            <MessageSquare className="mr-2 h-4 w-4" />
+                            {t("dashboard.openChat")}
+                        </Link>
+                    </Button>
+                }
+            />
 
-            {/* Stat cards */}
-            <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-                {stats.map((stat) => {
-                    const Icon = stat.icon;
+            <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+                {overview.map((item) => {
+                    const Icon = item.icon;
                     return (
-                        <Card key={stat.label} className={cn("overflow-hidden border-t-2 transition-all duration-200 hover:shadow-card-hover", stat.topBorder)}>
-                            <CardContent className="p-3 sm:p-5">
-                                <div className="flex items-start justify-between gap-2">
-                                    <div className="min-w-0">
-                                        <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground leading-snug truncate">
-                                            {stat.label}
+                        <Card key={item.label}>
+                            <CardContent className="p-4">
+                                <div className="flex items-start justify-between gap-3">
+                                    <div className="min-w-0 space-y-2">
+                                        <p className="text-xs font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                                            {item.label}
                                         </p>
-                                        {stat.value === null ? (
-                                            <Skeleton className="mt-1.5 h-7 w-12" />
+                                        {item.loading ? (
+                                            <Skeleton className="h-8 w-20" />
                                         ) : (
-                                            <div className="mt-1 text-2xl font-bold tracking-tighter sm:text-3xl">
-                                                {stat.value}
-                                            </div>
+                                            <div className="text-2xl font-semibold tracking-tight">{item.value}</div>
                                         )}
-                                        <p className="mt-0.5 text-xs text-muted-foreground">
-                                            {stat.sub}
-                                        </p>
+                                        <StatusDot tone={item.tone} label={item.detail} />
                                     </div>
-                                    <div
-                                        className={cn(
-                                            "flex h-8 w-8 shrink-0 items-center justify-center rounded-lg",
-                                            stat.iconBg
-                                        )}
-                                    >
-                                        <Icon className={cn("h-4 w-4", stat.iconColor)} />
+                                    <div className="flex h-9 w-9 items-center justify-center rounded-lg border bg-background">
+                                        <Icon className="h-4 w-4 text-muted-foreground" />
                                     </div>
                                 </div>
                             </CardContent>
@@ -102,103 +104,62 @@ export default function Dashboard() {
                 })}
             </div>
 
-            {/* Channel cards */}
-            <Card>
-                <CardHeader className="flex flex-row items-center justify-between px-3 py-2.5 sm:px-6 sm:pb-3">
-                    <CardTitle className="text-sm sm:text-base">
-                        {t("dashboard.channels")}
-                    </CardTitle>
-                    <Link
-                        to="/channels"
-                        className="text-xs text-muted-foreground hover:text-foreground transition-colors"
-                    >
-                        {t("dashboard.manageChannels")}
-                    </Link>
-                </CardHeader>
-                <CardContent className="px-3 pb-3 sm:px-6">
-                    {loadingChannels ? (
-                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                            {[...Array(4)].map((_, i) => (
-                                <Skeleton key={i} className="h-16 w-full" />
-                            ))}
+            <div className="grid gap-4 lg:grid-cols-[1fr_320px]">
+                <Card>
+                    <CardContent className="space-y-3 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                            <div>
+                                <h2 className="text-base font-semibold">{t("dashboard.recentIssues")}</h2>
+                                <p className="text-sm text-muted-foreground">{t("dashboard.recentIssuesDesc")}</p>
+                            </div>
+                            <Activity className="h-4 w-4 text-muted-foreground" />
                         </div>
-                    ) : !channels || channels.length === 0 ? (
-                        <EmptyState icon={Inbox} title={t("common.noData")} />
-                    ) : (
-                        <div className="grid grid-cols-2 gap-2 sm:grid-cols-2 lg:grid-cols-3">
-                            {channels.map((ch) => {
-                                const isRunning = ch.running;
-                                const hasError = !!ch.error;
-                                return (
-                                    <div
-                                        key={ch.name}
-                                        className={cn(
-                                            "rounded-lg border p-3 flex flex-col gap-2 transition-all duration-200 hover:shadow-sm",
-                                            hasError
-                                                ? "border-destructive/40 bg-destructive/5"
-                                                : isRunning
-                                                    ? "border-success/30 bg-success/5"
-                                                    : "border-border bg-muted/30"
-                                        )}
-                                    >
-                                        <div className="flex items-start justify-between gap-2">
-                                            <span className="font-mono text-sm font-semibold leading-tight break-all">
-                                                {t(`channels.names.${ch.name}`, {
-                                                    defaultValue: ch.name,
-                                                })}
-                                            </span>
-                                            {hasError ? (
-                                                <AlertCircle className="h-4 w-4 text-destructive shrink-0 mt-0.5" />
-                                            ) : isRunning ? (
-                                                <CheckCircle2 className="h-4 w-4 text-success shrink-0 mt-0.5" />
-                                            ) : (
-                                                <XCircle className="h-4 w-4 text-muted-foreground shrink-0 mt-0.5" />
-                                            )}
+                        {channelErrors.length === 0 ? (
+                            <Alert variant="success">
+                                <AlertTitle>{t("dashboard.noWarnings")}</AlertTitle>
+                                <AlertDescription>{t("dashboard.noWarningsDesc")}</AlertDescription>
+                            </Alert>
+                        ) : (
+                            <div className="space-y-2">
+                                {channelErrors.slice(0, 4).map((channel) => (
+                                    <Alert key={channel.name} variant="destructive">
+                                        <div className="flex gap-2">
+                                            <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                                            <div>
+                                                <AlertTitle>{channel.name}</AlertTitle>
+                                                <AlertDescription className="line-clamp-2">{channel.error}</AlertDescription>
+                                            </div>
                                         </div>
-                                        <div className="flex items-center gap-1.5 flex-wrap">
-                                            <Badge
-                                                variant={ch.enabled ? "default" : "secondary"}
-                                                className="text-xs px-1.5 py-0"
-                                            >
-                                                {ch.enabled
-                                                    ? t("channels.enabled")
-                                                    : t("channels.disabled")}
-                                            </Badge>
-                                            {hasError ? (
-                                                <Badge
-                                                    variant="destructive"
-                                                    className="text-xs px-1.5 py-0"
-                                                >
-                                                    {t("dashboard.error")}
-                                                </Badge>
-                                            ) : (
-                                                <Badge
-                                                    variant={isRunning ? "default" : "secondary"}
-                                                    className={cn(
-                                                        "text-xs px-1.5 py-0",
-                                                        isRunning
-                                                            ? "bg-success hover:bg-success/90 text-success-foreground"
-                                                            : ""
-                                                    )}
-                                                >
-                                                    {isRunning
-                                                        ? t("dashboard.running")
-                                                        : t("dashboard.stopped")}
-                                                </Badge>
-                                            )}
-                                        </div>
-                                        {hasError && (
-                                            <p className="text-xs text-destructive leading-tight line-clamp-2">
-                                                {ch.error}
-                                            </p>
-                                        )}
-                                    </div>
-                                );
-                            })}
-                        </div>
-                    )}
-                </CardContent>
-            </Card>
+                                    </Alert>
+                                ))}
+                            </div>
+                        )}
+                    </CardContent>
+                </Card>
+
+                <Card>
+                    <CardContent className="space-y-2 p-4">
+                        <h2 className="text-base font-semibold">{t("dashboard.quickActions")}</h2>
+                        {[
+                            ["/integrations", t("nav.integrations")],
+                            ["/cron", t("nav.automation")],
+                            ["/settings", t("nav.settings")],
+                        ].map(([href, label]) => (
+                            <Button
+                                key={href}
+                                asChild
+                                variant="ghost"
+                                className={cn("w-full justify-between")}
+                            >
+                                <Link to={href}>
+                                    {label}
+                                    <ArrowRight className="h-4 w-4" />
+                                </Link>
+                            </Button>
+                        ))}
+                    </CardContent>
+                </Card>
+            </div>
         </div>
     );
 }

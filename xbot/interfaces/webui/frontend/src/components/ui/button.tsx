@@ -1,5 +1,4 @@
 import * as React from "react";
-import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -39,17 +38,28 @@ export interface ButtonProps
 
 const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
     ({ className, variant, size, asChild = false, isLoading, children, disabled, ...props }, ref) => {
-        const Comp = asChild ? Slot : "button";
+        const classes = cn(buttonVariants({ variant, size, className }));
+        if (asChild) {
+            const childArray = React.Children.toArray(children);
+            const child = childArray.find(React.isValidElement);
+            if (!child) return null;
+            return React.cloneElement(child, {
+                className: cn(classes, (child.props as { className?: string }).className),
+                ref,
+                ...props,
+            } as React.HTMLAttributes<HTMLElement>);
+        }
+
         return (
-            <Comp
-                className={cn(buttonVariants({ variant, size, className }))}
+            <button
+                className={classes}
                 ref={ref}
                 disabled={disabled || isLoading}
                 {...props}
             >
                 {isLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
                 {children}
-            </Comp>
+            </button>
         );
     }
 );
