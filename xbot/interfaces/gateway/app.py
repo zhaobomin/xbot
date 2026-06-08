@@ -492,6 +492,11 @@ def create_app(
             if ":" not in key:
                 continue
             channel, chat_id = key.split(":", 1)
+            if channel == "im":
+                provider, sep, provider_chat_id = chat_id.partition(":")
+                if sep and provider in enabled_channels and provider_chat_id:
+                    return provider, provider_chat_id
+                continue
             if channel in {"cli", "system", "heartbeat"}:
                 continue
             if channel.startswith("cron"):

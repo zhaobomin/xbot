@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Outlet, useLocation } from "react-router-dom";
-import { Sidebar } from "./sidebar";
+import { Sidebar } from "./Sidebar";
 import { MobileBottomTabs } from "./mobile-bottom-tabs";
 import { MobileTopBar } from "./mobile-top-bar";
 import { useIsMobile } from "../../hooks/use-is-mobile";

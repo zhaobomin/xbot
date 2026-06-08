@@ -2,13 +2,13 @@ import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import AppLayout from "./components/layout/app-layout";
 
-const Dashboard = lazy(() => import("./pages/dashboard"));
-const Chat = lazy(() => import("./pages/chat"));
-const Channels = lazy(() => import("./pages/channels"));
+const Dashboard = lazy(() => import("./pages/Dashboard"));
+const Chat = lazy(() => import("./pages/Chat"));
+const Channels = lazy(() => import("./pages/Channels"));
 const Integrations = lazy(() => import("./pages/integrations"));
-const Tools = lazy(() => import("./pages/tools"));
+const Tools = lazy(() => import("./pages/Tools"));
 const CronJobs = lazy(() => import("./pages/cron-jobs"));
-const Settings = lazy(() => import("./pages/settings"));
+const Settings = lazy(() => import("./pages/Settings"));
 const SystemConfig = lazy(() => import("./pages/system-config"));
 const Connection = lazy(() => import("./pages/connection"));
 

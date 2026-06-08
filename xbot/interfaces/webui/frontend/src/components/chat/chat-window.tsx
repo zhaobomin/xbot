@@ -4,6 +4,7 @@ import { nanoid } from "nanoid";
 import { useQueryClient } from "@tanstack/react-query";
 import { useChatStore } from "../../stores/chat-store";
 import { ChatWebSocket, type WsMessage } from "../../lib/ws";
+import { isWritableClientSession } from "../../lib/client-runtime";
 import { MessageBubble } from "./message-bubble";
 import { ChatInput } from "./chat-input";
 import { useRevokeMessage } from "../../hooks/use-sessions";
@@ -30,6 +31,7 @@ export function ChatWindow() {
     });
     const isWaiting = sessionState.isWaiting;
     const progressText = sessionState.progressText;
+    const readOnly = !isWritableClientSession(currentSessionKey);
 
     const visibleMessages = showToolMessages
         ? messages
@@ -212,6 +214,7 @@ export function ChatWindow() {
 
     const handleSend = useCallback(
         (content: string) => {
+            if (readOnly) return;
             if (!wsRef.current?.isConnected) {
                 wsRef.current?.connect();
             }
@@ -226,7 +229,7 @@ export function ChatWindow() {
             setProgress(t("chat.thinking"), key);
             wsRef.current?.send(content, currentSessionKey ?? undefined);
         },
-        [addMessage, currentSessionKey, setProgress, setWaiting, t]
+        [addMessage, currentSessionKey, readOnly, setProgress, setWaiting, t]
     );
 
     const handleStop = useCallback(() => {
@@ -339,12 +342,13 @@ export function ChatWindow() {
             </div>
             <ChatInput
                 onSend={handleSend}
-                disabled={isWaiting}
+                disabled={isWaiting || readOnly}
                 onStop={handleStop}
                 isWaiting={isWaiting}
                 isConnected={isConnected}
                 showToolMessages={showToolMessages}
                 onToggleToolMessages={toggleToolMessages}
+                readOnly={readOnly}
             />
         </div>
     );

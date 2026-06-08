@@ -149,6 +149,7 @@ class _FakeChannelManager:
     def __init__(self) -> None:
         self.reload_calls: list[str] = []
         self.failures: dict[str, str] = {}
+        self.enabled_channels = ["telegram", "slack"]
         self.start_calls = 0
         self.stop_calls = 0
 
@@ -826,7 +827,7 @@ def test_write_management_endpoints(tmp_path: Path) -> None:
     assert services.heartbeat.enabled is True
     assert services.heartbeat.interval_s == 120
 
-def test_websocket_chat_uses_internal_cli_session_mapping(tmp_path: Path) -> None:
+def test_websocket_chat_preserves_web_session_namespace(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
     token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
 
@@ -843,7 +844,7 @@ def test_websocket_chat_uses_internal_cli_session_mapping(tmp_path: Path) -> Non
         assert done["type"] == "done"
         assert done["content"] == "echo:hi"
 
-    assert services.agent.calls[0]["session_key"] == "cli:web-admin-abc123"
+    assert services.agent.calls[0]["session_key"] == "web:admin:abc123"
 
 
 def test_websocket_chat_honors_message_session_key(tmp_path: Path) -> None:
@@ -863,14 +864,16 @@ def test_websocket_chat_honors_message_session_key(tmp_path: Path) -> None:
         assert done["session_key"] == "web:admin:new"
         assert done["content"] == "echo:hi"
 
-    assert services.agent.calls[0]["session_key"] == "cli:web-admin-new"
+    assert services.agent.calls[0]["session_key"] == "web:admin:new"
 
 
 def test_session_key_mapping_avoids_colon_replacement_collisions() -> None:
     from xbot.interfaces.webui.session_keys import to_internal_session_key
 
-    assert to_internal_session_key("web:admin:abc123") == "cli:web-admin-abc123"
-    assert to_internal_session_key("foo:bar") != to_internal_session_key("foo-bar")
+    assert to_internal_session_key("web:admin:abc123") == "web:admin:abc123"
+    assert to_internal_session_key("app:admin:abc123") == "app:admin:abc123"
+    assert to_internal_session_key("im:telegram:456") == "im:telegram:456"
+    assert to_internal_session_key("cli:direct") == "cli:direct"
 
 
 def test_websocket_chat_rejects_oversized_message(tmp_path: Path) -> None:
@@ -922,7 +925,7 @@ def test_websocket_disconnect_during_progress_does_not_crash(tmp_path: Path) -> 
         ws.send_json({"type": "message", "content": "bye"})
         ws.close()
 
-    assert services.agent.calls[0]["session_key"] == "cli:web-admin-drop"
+    assert services.agent.calls[0]["session_key"] == "web:admin:drop"
 
 
 def test_safe_websocket_send_swallows_disconnect_errors() -> None:
@@ -1100,6 +1103,47 @@ def test_startup_configures_heartbeat_via_public_api(tmp_path: Path) -> None:
         pass
 
     assert heartbeat.configured_callbacks is not None
+
+
+def test_heartbeat_resolves_im_session_to_provider_channel(tmp_path: Path) -> None:
+    from xbot.interfaces.webui.app import _clear_login_rate_limit, create_app
+    from xbot.interfaces.webui.services import ServiceContainer
+
+    _clear_login_rate_limit()
+    import xbot.interfaces.webui.auth as auth_module
+    auth_module.PASSWORD_FILE = tmp_path / "webui-data" / "password"
+    auth_module.PASSWORD_FILE.parent.mkdir(parents=True, exist_ok=True)
+    set_password("test-webui-password")
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+    workspace = config.workspace_path
+    workspace.mkdir(parents=True, exist_ok=True)
+    conversation_store = ConversationStore(workspace)
+    session = conversation_store.get_or_create("im:telegram:456")
+    session.messages = [{"role": "user", "content": "hello"}]
+    conversation_store.save(session)
+    heartbeat = _StrictHeartbeatService()
+    bus = MessageBus()
+    services_container = ServiceContainer(
+        config=config,
+        bus=bus,
+        agent=_FakeRuntime(),
+        conversation_store=conversation_store,
+        cron=_FakeCronService(),
+        heartbeat=heartbeat,
+        metadata={"channel_manager": _FakeChannelManager()},
+    )
+
+    with TestClient(create_app(services_container, data_dir=tmp_path / "webui-data")):
+        assert heartbeat.configured_callbacks is not None
+        _llm_call, _on_execute, on_notify = heartbeat.configured_callbacks
+        asyncio.run(on_notify("heartbeat ok"))
+
+    outbound = asyncio.run(asyncio.wait_for(bus.consume_outbound(), timeout=1.0))
+    assert outbound.channel == "telegram"
+    assert outbound.chat_id == "456"
+    assert outbound.content == "heartbeat ok"
 
 
 def test_system_config_compatibility_endpoints(tmp_path: Path) -> None:

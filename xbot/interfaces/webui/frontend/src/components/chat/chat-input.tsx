@@ -34,6 +34,7 @@ interface ChatInputProps {
     isConnected?: boolean;
     showToolMessages?: boolean;
     onToggleToolMessages?: () => void;
+    readOnly?: boolean;
 }
 
 export function ChatInput({
@@ -44,6 +45,7 @@ export function ChatInput({
     isConnected = true,
     showToolMessages = false,
     onToggleToolMessages,
+    readOnly = false,
 }: ChatInputProps) {
     const { t } = useTranslation();
     const [value, setValue] = useState("");
@@ -126,7 +128,7 @@ export function ChatInput({
     const handleSend = useCallback(() => {
         const text = value.trim();
         const readyAttachments = attachments.filter((a) => a.url && !a.uploading);
-        if ((!text && readyAttachments.length === 0) || disabled || isUploading)
+        if ((!text && readyAttachments.length === 0) || disabled || readOnly || isUploading)
             return;
 
         let content = text;
@@ -144,7 +146,7 @@ export function ChatInput({
             textareaRef.current.style.height = "52px";
             textareaRef.current.style.overflowY = "hidden";
         }
-    }, [value, attachments, disabled, isUploading, onSend]);
+    }, [value, attachments, disabled, readOnly, isUploading, onSend]);
 
     const removeAttachment = (id: string) =>
         setAttachments((prev) => prev.filter((a) => a.id !== id));
@@ -209,7 +211,7 @@ export function ChatInput({
                         placeholder={t("chat.placeholder")}
                         rows={1}
                         className="resize-none border-0 bg-transparent px-4 py-3.5 shadow-none focus-visible:ring-0 text-base leading-relaxed w-full"
-                        disabled={!isWaiting && disabled}
+                        disabled={readOnly || (!isWaiting && disabled)}
                     />
                     <div className="flex items-center justify-between px-3 pb-2">
                         <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -226,7 +228,7 @@ export function ChatInput({
                                 size="icon"
                                 className="h-6 w-6 ml-1"
                                 onClick={() => fileInputRef.current?.click()}
-                                disabled={isWaiting}
+                                disabled={isWaiting || readOnly}
                                 title={t("chat.uploadAttachment")}
                             >
                                 <Paperclip className="h-3.5 w-3.5" />
@@ -264,7 +266,7 @@ export function ChatInput({
                         </div>
                         <div className="flex items-center gap-2">
                             <span className="text-xs text-muted-foreground">
-                                {isWaiting ? "" : t("chat.hint")}
+                                {readOnly ? "只读" : isWaiting ? "" : t("chat.hint")}
                             </span>
                             {isWaiting ? (
                                 <Button
@@ -280,7 +282,7 @@ export function ChatInput({
                                 <Button
                                     size="sm"
                                     onClick={handleSend}
-                                    disabled={!canSend || disabled}
+                                    disabled={!canSend || disabled || readOnly}
                                     className="h-8 gap-1.5 rounded-xl px-3"
                                 >
                                     <Send className="h-3.5 w-3.5" />

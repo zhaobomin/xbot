@@ -6,6 +6,7 @@ import { useAuthStore } from "../../stores/auth-store";
 import { useChatStore } from "../../stores/chat-store";
 import { cn, formatDate } from "../../lib/utils";
 import { getChannelIcon } from "../../lib/channel-icons";
+import { createClientSessionKey, getClientSessionPrefix, isDesktopApp } from "../../lib/client-runtime";
 import { Button } from "../ui/button";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "../ui/dialog";
 import { MessageSquare, Plus, Trash2 } from "lucide-react";
@@ -25,26 +26,32 @@ export function SessionList() {
 
     const [deleteKey, setDeleteKey] = useState<string | null>(null);
 
+    const desktopApp = isDesktopApp();
     const isAdmin = user?.role === "admin";
-    const myPrefix = `web:${user?.id}:`;
+    const myPrefix = getClientSessionPrefix(user?.id);
 
     const mySessions = useMemo(
         () =>
-            isAdmin
+            isAdmin && !desktopApp
                 ? (sessions ?? []).slice().sort((a, b) =>
                     (b.updated_at ?? "").localeCompare(a.updated_at ?? "")
                 )
                 : (sessions?.filter((s) => s.key.startsWith(myPrefix)) ?? []),
-        [isAdmin, myPrefix, sessions]
+        [desktopApp, isAdmin, myPrefix, sessions]
     );
 
     useEffect(() => {
-        if (mySessions.length === 0) return;
+        if (mySessions.length === 0) {
+            if (!currentSessionKey?.startsWith(myPrefix)) {
+                setCurrentSession(createClientSessionKey(user?.id));
+            }
+            return;
+        }
         const keyExists = currentSessionKey && mySessions.some((s) => s.key === currentSessionKey);
         if (!keyExists && !currentSessionKey?.startsWith(myPrefix)) {
             setCurrentSession(mySessions[0].key);
         }
-    }, [mySessions, currentSessionKey, setCurrentSession, myPrefix]);
+    }, [mySessions, currentSessionKey, setCurrentSession, myPrefix, user?.id]);
 
     const displaySessions = useMemo(() => {
         const isLocalNew =
@@ -68,7 +75,7 @@ export function SessionList() {
         const hexId = Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) =>
             b.toString(16).padStart(2, "0")
         ).join("");
-        const key = `web:${user?.id}:${hexId}`;
+        const key = createClientSessionKey(user?.id, hexId);
         setCurrentSession(key);
         navigate("/chat");
     };

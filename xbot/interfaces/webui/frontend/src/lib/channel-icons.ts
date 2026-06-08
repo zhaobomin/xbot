@@ -18,6 +18,7 @@ import {
 export const CHANNEL_ICONS: Record<string, string> = {
     weixin: "💚",
     wecom: "🏢",
+    im: "💬",
     web: "💬",
     telegram: "✈️",
     whatsapp: "💬",
@@ -38,6 +39,7 @@ export const CHANNEL_ICONS: Record<string, string> = {
 const CHANNEL_LUCIDE: Record<string, LucideIcon> = {
     weixin: MessageCircle,    // WeChat green → message circle
     wecom: Building2,         // Enterprise WeChat → building
+    im: MessageCircle,        // Unified external IM namespace
     web: Monitor,             // Web UI → monitor
     telegram: Send,           // Telegram paper airplane → send
     whatsapp: MessageSquare,  // WhatsApp → message square

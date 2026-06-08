@@ -22,6 +22,7 @@ import {
 import { ArrowLeft, MessageSquare, Plus, Search, Trash2 } from "lucide-react";
 import { cn, formatDate } from "../lib/utils";
 import { CHANNEL_ICONS } from "../lib/channel-icons";
+import { createClientSessionKey, getClientSessionPrefix, isDesktopApp } from "../lib/client-runtime";
 
 function channelOf(key: string): string {
     return key.split(":")[0] ?? "web";
@@ -95,31 +96,37 @@ export default function Chat() {
         }
     }, [currentSessionKey, historyLoaded, sessionMsgs, setMessages]);
 
+    const desktopApp = isDesktopApp();
     const isAdmin = user?.role === "admin";
-    const myPrefix = `web:${user?.id}:`;
+    const myPrefix = getClientSessionPrefix(user?.id);
     const [search, setSearch] = useState("");
     const [deleteKey, setDeleteKey] = useState<string | null>(null);
     const mySessions = useMemo(
         () =>
-            isAdmin
+            isAdmin && !desktopApp
                 ? (sessions ?? [])
                     .slice()
                     .sort((a, b) =>
                         (b.updated_at ?? "").localeCompare(a.updated_at ?? "")
                     )
                 : (sessions?.filter((s) => s.key.startsWith(myPrefix)) ?? []),
-        [isAdmin, myPrefix, sessions]
+        [desktopApp, isAdmin, myPrefix, sessions]
     );
 
     useEffect(() => {
-        if (mySessions.length === 0) return;
+        if (mySessions.length === 0) {
+            if (!currentSessionKey?.startsWith(myPrefix)) {
+                setCurrentSession(createClientSessionKey(user?.id));
+            }
+            return;
+        }
         const keyExists =
             currentSessionKey &&
             mySessions.some((s) => s.key === currentSessionKey);
         if (!keyExists && !currentSessionKey?.startsWith(myPrefix)) {
             setCurrentSession(mySessions[0].key);
         }
-    }, [mySessions, currentSessionKey, setCurrentSession, myPrefix]);
+    }, [mySessions, currentSessionKey, setCurrentSession, myPrefix, user?.id]);
 
     const displaySessions = useMemo(() => {
         const isLocalNew =
@@ -156,7 +163,7 @@ export default function Chat() {
         const hexId = Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) =>
             b.toString(16).padStart(2, "0")
         ).join("");
-        const key = `web:${user?.id}:${hexId}`;
+        const key = createClientSessionKey(user?.id, hexId);
         loadedKeyRef.current = key;
         loadedCountRef.current = 0;
         setCurrentSession(key);

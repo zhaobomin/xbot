@@ -11,6 +11,25 @@ from xbot.platform.bus.queue import (
     PermissionRequest,
     PermissionResponse,
 )
+from xbot.platform.bus.events import InboundMessage
+
+
+def test_im_channel_inbound_message_uses_im_session_namespace():
+    msg = InboundMessage(channel="telegram", sender_id="u1", chat_id="456", content="hello")
+
+    assert msg.session_key == "im:telegram:456"
+
+
+def test_im_channel_thread_override_uses_im_session_namespace():
+    msg = InboundMessage(
+        channel="slack",
+        sender_id="u1",
+        chat_id="C1",
+        content="hello",
+        session_key_override="slack:C1:thread:1",
+    )
+
+    assert msg.session_key == "im:slack:C1:thread:1"
 
 
 class TestPermissionRequest:
