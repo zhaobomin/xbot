@@ -29,8 +29,10 @@ from fastapi import (
 )
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, SecretStr
 
+from xbot import __version__
 from xbot.interfaces.gateway.auth import (
     AuthManager,
     UserStore,
@@ -380,6 +382,19 @@ def create_app(
     health_router: Any = None,
 ) -> FastAPI:
     app = FastAPI(title="xbot WebUI", version="0.1.0")
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=[
+            "http://tauri.localhost",
+            "https://tauri.localhost",
+            "tauri://localhost",
+            "http://localhost:5174",
+            "http://127.0.0.1:5174",
+        ],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     resolved_data_dir = (data_dir or container.data_dir or (container.config.workspace_path / ".webui")).resolve()
     resolved_data_dir.mkdir(parents=True, exist_ok=True)
@@ -725,6 +740,14 @@ def create_app(
                 "cron_jobs": int(cron_status.get("jobs", 0)),
             },
             "heartbeat": container.heartbeat_status(),
+        }
+
+    @app.get("/api/desktop/ping")
+    async def desktop_ping() -> dict[str, Any]:
+        return {
+            "ok": True,
+            "name": "xbot",
+            "version": __version__,
         }
 
     @app.get("/api/sessions")

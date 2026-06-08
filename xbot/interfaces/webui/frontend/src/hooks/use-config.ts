@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import api from "../lib/api";
 import i18n from "../i18n";
+import { useGatewayBaseUrl } from "../stores/gateway-store";
 
 export interface AgentSettings {
     model: string;
@@ -24,8 +25,9 @@ export interface GatewayConfig {
 }
 
 export function useAgentSettings() {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<AgentSettings>({
-        queryKey: ["config", "agent"],
+        queryKey: ["config", gatewayBaseUrl, "agent"],
         queryFn: () => api.get("/config/agent").then((r) => r.data),
     });
 }
@@ -42,8 +44,9 @@ export function useUpdateAgentSettings() {
 }
 
 export function useGatewayConfig() {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<GatewayConfig>({
-        queryKey: ["config", "gateway"],
+        queryKey: ["config", gatewayBaseUrl, "gateway"],
         queryFn: () => api.get("/config/gateway").then((r) => r.data),
     });
 }
@@ -61,8 +64,9 @@ export function useUpdateGatewayConfig() {
 }
 
 export function useWorkspaceFile(name: string) {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<{ name: string; content: string }>({
-        queryKey: ["config", "workspace-file", name],
+        queryKey: ["config", gatewayBaseUrl, "workspace-file", name],
         queryFn: () => api.get(`/config/workspace-file/${name}`).then((r) => r.data),
         enabled: !!name,
     });
@@ -121,8 +125,9 @@ export function useImportWorkspace() {
 }
 
 export function useRawConfig() {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<{ content: string }>({
-        queryKey: ["config", "raw"],
+        queryKey: ["config", gatewayBaseUrl, "raw"],
         queryFn: () => api.get("/config/raw").then((r) => r.data),
     });
 }
@@ -160,8 +165,9 @@ export interface S3Config {
 }
 
 export function useS3Config() {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<S3Config>({
-        queryKey: ["config", "s3"],
+        queryKey: ["config", gatewayBaseUrl, "s3"],
         queryFn: () => api.get("/config/s3").then((r) => r.data),
     });
 }
@@ -194,8 +200,9 @@ export async function uploadFile(file: File): Promise<string> {
 }
 
 export function useLogs(lines: number = 500, keyword: string = "") {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<{ content: string; path?: string }>({
-        queryKey: ["config", "logs", lines, keyword],
+        queryKey: ["config", gatewayBaseUrl, "logs", lines, keyword],
         queryFn: () =>
             api
                 .get(

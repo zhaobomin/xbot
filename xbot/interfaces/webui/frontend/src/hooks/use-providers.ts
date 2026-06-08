@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import api from "../lib/api";
 import i18n from "../i18n";
+import { useGatewayBaseUrl } from "../stores/gateway-store";
 
 export interface ProviderInfo {
     name: string;
@@ -34,8 +35,9 @@ export function getProviderDefaultBaseUrl(name: string): string {
 }
 
 export function useProviders() {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<ProviderInfo[]>({
-        queryKey: ["providers"],
+        queryKey: ["providers", gatewayBaseUrl],
         queryFn: () => api.get("/providers").then((r) => r.data),
     });
 }

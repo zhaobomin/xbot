@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient, keepPreviousData } from "@tansta
 import { toast } from "sonner";
 import api from "../lib/api";
 import i18n from "../i18n";
+import { useGatewayBaseUrl } from "../stores/gateway-store";
 
 export type CronScheduleKind = "at" | "every" | "cron";
 
@@ -48,8 +49,9 @@ export interface CronJobRequest {
 }
 
 export function useCronJobs() {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<CronJob[]>({
-        queryKey: ["cron", "jobs"],
+        queryKey: ["cron", gatewayBaseUrl, "jobs"],
         queryFn: () => api.get("/cron/jobs").then((r) => r.data),
         refetchInterval: 30000,
     });
@@ -128,8 +130,9 @@ export function useCronSessions(params?: {
 }) {
     const jobId = params?.jobId ?? null;
     const search = params?.search ?? null;
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<CronSession[]>({
-        queryKey: ["cron", "sessions", { jobId, search }],
+        queryKey: ["cron", gatewayBaseUrl, "sessions", { jobId, search }],
         queryFn: () => {
             const qp = new URLSearchParams();
             if (jobId) qp.set("job_id", jobId);
@@ -145,8 +148,9 @@ export function useCronSessions(params?: {
 }
 
 export function useCronSessionMessages(key: string | null) {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<CronSessionMessage[]>({
-        queryKey: ["cron", "sessions", key, "messages"],
+        queryKey: ["cron", gatewayBaseUrl, "sessions", key, "messages"],
         queryFn: () =>
             api
                 .get(`/cron/sessions/${encodeURIComponent(key!)}/messages`)

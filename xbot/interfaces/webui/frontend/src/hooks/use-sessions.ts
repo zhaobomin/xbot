@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import api from "../lib/api";
 import i18n from "../i18n";
+import { useGatewayBaseUrl } from "../stores/gateway-store";
 
 export interface SessionInfo {
     key: string;
@@ -22,15 +23,17 @@ export interface MessageInfo {
 }
 
 export function useSessions() {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<SessionInfo[]>({
-        queryKey: ["sessions"],
+        queryKey: ["sessions", gatewayBaseUrl],
         queryFn: () => api.get("/sessions").then((r) => r.data),
     });
 }
 
 export function useSessionMessages(key: string) {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<MessageInfo[]>({
-        queryKey: ["sessions", key, "messages"],
+        queryKey: ["sessions", gatewayBaseUrl, key, "messages"],
         queryFn: () =>
             api.get(`/sessions/${encodeURIComponent(key)}/messages`).then((r) => r.data),
         enabled: !!key,
@@ -38,8 +41,9 @@ export function useSessionMessages(key: string) {
 }
 
 export function useSessionMemory(key: string) {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<MessageInfo[]>({
-        queryKey: ["sessions", key, "memory"],
+        queryKey: ["sessions", gatewayBaseUrl, key, "memory"],
         queryFn: () =>
             api.get(`/sessions/${encodeURIComponent(key)}/memory`).then((r) => r.data),
         enabled: !!key,

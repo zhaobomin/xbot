@@ -10,12 +10,14 @@ const Tools = lazy(() => import("./pages/tools"));
 const CronJobs = lazy(() => import("./pages/cron-jobs"));
 const Settings = lazy(() => import("./pages/settings"));
 const SystemConfig = lazy(() => import("./pages/system-config"));
+const Connection = lazy(() => import("./pages/connection"));
 
 export default function App() {
     return (
         <Suspense fallback={null}>
             <Routes>
                 <Route path="/login" element={<Navigate to="/chat" replace />} />
+                <Route path="/connection" element={<Connection />} />
                 <Route
                     path="/"
                     element={<AppLayout />}

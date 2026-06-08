@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import api from "../lib/api";
 import i18n from "../i18n";
+import { useGatewayBaseUrl } from "../stores/gateway-store";
 
 export interface MCPServer {
     name: string;
@@ -16,8 +17,9 @@ export interface MCPServer {
 }
 
 export function useMCPServers() {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<MCPServer[]>({
-        queryKey: ["mcp", "servers"],
+        queryKey: ["mcp", gatewayBaseUrl, "servers"],
         queryFn: () => api.get("/mcp/servers").then((r) => r.data),
     });
 }
@@ -75,8 +77,9 @@ export interface MCPServerRuntime {
 }
 
 export function useMCPRuntime() {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<MCPServerRuntime[]>({
-        queryKey: ["mcp", "runtime"],
+        queryKey: ["mcp", gatewayBaseUrl, "runtime"],
         queryFn: () => api.get("/mcp/servers/runtime").then((r) => r.data),
         refetchInterval: 15000,
     });

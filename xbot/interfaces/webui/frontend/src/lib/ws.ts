@@ -1,4 +1,7 @@
 import { useAuthStore } from "../stores/auth-store";
+import { getGatewayWebSocketUrl, useGatewayStore } from "../stores/gateway-store";
+
+export { getGatewayWebSocketUrl, useGatewayStore };
 
 export type WsMessageType = "session_info" | "progress" | "subagent_progress" | "done" | "error" | "revoke_ok";
 
@@ -28,9 +31,7 @@ export class ChatWebSocket {
     constructor(onMessage: MessageHandler, onStatusChange?: StatusHandler) {
         this.onMessage = onMessage;
         this.onStatusChange = onStatusChange ?? null;
-        const proto = window.location.protocol === "https:" ? "wss" : "ws";
-        const host = window.location.host;
-        this.url = `${proto}://${host}/ws/chat`;
+        this.url = getGatewayWebSocketUrl();
     }
 
     connect(sessionKey?: string) {
@@ -41,6 +42,7 @@ export class ChatWebSocket {
         this.shouldReconnect = true;
 
         const params = new URLSearchParams();
+        this.url = getGatewayWebSocketUrl();
         if (token) params.set("token", token);
         if (this.sessionKey) params.set("session", this.sessionKey);
         const query = params.toString();

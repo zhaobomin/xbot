@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import api from "../lib/api";
 import i18n from "../i18n";
+import { useGatewayBaseUrl } from "../stores/gateway-store";
 
 export interface SkillInfo {
     name: string;
@@ -19,15 +20,17 @@ export interface SkillContent {
 }
 
 export function useSkills() {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<SkillInfo[]>({
-        queryKey: ["skills"],
+        queryKey: ["skills", gatewayBaseUrl],
         queryFn: () => api.get("/skills").then((r) => r.data),
     });
 }
 
 export function useSkillContent(name: string) {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<SkillContent>({
-        queryKey: ["skills", name],
+        queryKey: ["skills", gatewayBaseUrl, name],
         queryFn: () => api.get(`/skills/${name}`).then((r) => r.data),
         enabled: !!name,
     });

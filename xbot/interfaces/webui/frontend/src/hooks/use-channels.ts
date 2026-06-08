@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import api from "../lib/api";
 import i18n from "../i18n";
+import { useGatewayBaseUrl } from "../stores/gateway-store";
 
 export interface ChannelStatus {
     name: string;
@@ -22,8 +23,9 @@ export interface WeixinQrStatusData {
 }
 
 export function useChannels() {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<ChannelStatus[]>({
-        queryKey: ["channels"],
+        queryKey: ["channels", gatewayBaseUrl],
         queryFn: () => api.get("/channels").then((r) => r.data),
     });
 }
@@ -81,8 +83,9 @@ export function useWeixinQrStart() {
 }
 
 export function useWeixinQrStatus(qrcodeId: string | null) {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useQuery<WeixinQrStatusData>({
-        queryKey: ["weixin-qr-status", qrcodeId],
+        queryKey: ["weixin-qr-status", gatewayBaseUrl, qrcodeId],
         queryFn: () =>
             api.get(`/channels/weixin/qr/status?qrcode_id=${qrcodeId}`).then((r) => r.data),
         enabled: !!qrcodeId,

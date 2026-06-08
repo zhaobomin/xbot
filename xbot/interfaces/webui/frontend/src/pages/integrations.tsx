@@ -14,16 +14,33 @@ import { useSkills } from "../hooks/useSkills";
 
 export default function Integrations() {
     const { t } = useTranslation();
-    const { data: channels, isLoading: loadingChannels } = useChannels();
-    const { data: providers, isLoading: loadingProviders } = useProviders();
-    const { data: mcpRuntime, isLoading: loadingMcp } = useMCPRuntime();
-    const { data: skills, isLoading: loadingSkills } = useSkills();
+    const {
+        data: channels,
+        isLoading: loadingChannels,
+        isError: channelsError,
+    } = useChannels();
+    const {
+        data: providers,
+        isLoading: loadingProviders,
+        isError: providersError,
+    } = useProviders();
+    const {
+        data: mcpRuntime,
+        isLoading: loadingMcp,
+        isError: mcpError,
+    } = useMCPRuntime();
+    const {
+        data: skills,
+        isLoading: loadingSkills,
+        isError: skillsError,
+    } = useSkills();
 
     const runningChannels = channels?.filter((channel) => channel.running).length ?? 0;
     const channelErrors = channels?.filter((channel) => channel.error) ?? [];
     const configuredProviders = providers?.filter((provider) => provider.has_key).length ?? 0;
     const runningMcp = mcpRuntime?.filter((server) => server.running).length ?? 0;
     const totalSkills = skills?.length ?? 0;
+    const gatewayError = channelsError || providersError || mcpError || skillsError;
 
     const sections = [
         {
@@ -85,6 +102,18 @@ export default function Integrations() {
                     <AlertDescription>
                         {channelErrors.slice(0, 2).map((channel) => channel.name).join(", ")}
                         {channelErrors.length > 2 ? ` +${channelErrors.length - 2}` : ""}
+                    </AlertDescription>
+                </Alert>
+            )}
+
+            {gatewayError && (
+                <Alert variant="destructive">
+                    <AlertTitle>Gateway data unavailable</AlertTitle>
+                    <AlertDescription className="flex flex-wrap items-center gap-2">
+                        <span>Some integration data could not be loaded from the configured gateway.</span>
+                        <Button asChild variant="outline" size="sm">
+                            <Link to="/connection">Check connection</Link>
+                        </Button>
                     </AlertDescription>
                 </Alert>
             )}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -402,6 +403,78 @@ def test_frontend_streams_content_delta_into_assistant_message() -> None:
     assert "assistantMsgIdRef.current = assistantId" in chat_window
 
 
+def test_frontend_uses_configurable_gateway_url() -> None:
+    api = Path("xbot/interfaces/webui/frontend/src/lib/api.ts").read_text(encoding="utf-8")
+    ws = Path("xbot/interfaces/webui/frontend/src/lib/ws.ts").read_text(encoding="utf-8")
+    app_tsx = Path("xbot/interfaces/webui/frontend/src/App.tsx").read_text(encoding="utf-8")
+
+    assert "useGatewayStore" in api
+    assert "getGatewayApiBaseUrl" in api
+    assert "useGatewayStore" in ws
+    assert "getGatewayWebSocketUrl" in ws
+    assert 'path="/connection"' in app_tsx
+
+
+def test_frontend_data_queries_are_scoped_to_gateway_url() -> None:
+    frontend_dir = Path("xbot/interfaces/webui/frontend/src")
+    gateway_store = (frontend_dir / "stores" / "gateway-store.ts").read_text(encoding="utf-8")
+    assert "function useGatewayBaseUrl" in gateway_store
+
+    for relative in [
+        "hooks/use-sessions.ts",
+        "hooks/use-channels.ts",
+        "hooks/use-providers.ts",
+        "hooks/use-mcp.ts",
+        "hooks/use-skills.ts",
+        "hooks/useSkills.ts",
+    ]:
+        source = (frontend_dir / relative).read_text(encoding="utf-8")
+        assert "useGatewayBaseUrl" in source, relative
+        assert "gatewayBaseUrl" in source, relative
+        assert "queryKey:" in source, relative
+
+
+def test_connection_page_clears_stale_gateway_query_cache() -> None:
+    connection_tsx = Path("xbot/interfaces/webui/frontend/src/pages/connection.tsx").read_text(encoding="utf-8")
+
+    assert "useQueryClient" in connection_tsx
+    assert "queryClient.clear()" in connection_tsx
+
+
+def test_integrations_page_surfaces_api_errors() -> None:
+    integrations_tsx = Path("xbot/interfaces/webui/frontend/src/pages/integrations.tsx").read_text(encoding="utf-8")
+
+    assert "isError:" in integrations_tsx
+    assert "gatewayError" in integrations_tsx
+    assert 'to="/connection"' in integrations_tsx
+
+
+def test_desktop_tauri_scaffold_points_to_webui_dist() -> None:
+    package_json = Path("desktop/package.json").read_text(encoding="utf-8")
+    tauri_conf = Path("desktop/src-tauri/tauri.conf.json").read_text(encoding="utf-8")
+    main_rs = Path("desktop/src-tauri/src/main.rs").read_text(encoding="utf-8")
+
+    assert "@tauri-apps/cli" in package_json
+    assert "xbot/interfaces/webui/frontend/dist" in tauri_conf
+    assert "http://localhost:5174" in tauri_conf
+    assert "tauri::Builder::default()" in main_rs
+
+
+def test_desktop_tauri_declares_macos_app_icon() -> None:
+    tauri_conf = json.loads(Path("desktop/src-tauri/tauri.conf.json").read_text(encoding="utf-8"))
+    icons = tauri_conf["bundle"]["icon"]
+
+    assert "icons/icon.icns" in icons
+    assert Path("desktop/src-tauri/icons/icon.icns").exists()
+    icon_png = Path("desktop/src-tauri/icons/icon.png")
+    assert icon_png.exists()
+    png = icon_png.read_bytes()
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    assert png[12:16] == b"IHDR"
+    assert png[24] == 8
+    assert png[25] == 6
+
+
 def test_admin_login_and_change_password(tmp_path: Path) -> None:
     client, _services = _build_client(tmp_path)
 
@@ -472,6 +545,25 @@ def test_read_only_management_endpoints(tmp_path: Path) -> None:
     assert "secret" not in telegram["config"]["botToken"]
     assert any(item["name"] == "demo" for item in mcp.json())
     assert heartbeat.json()["enabled"] is True
+
+
+def test_desktop_ping_endpoint_and_cors_preflight(tmp_path: Path) -> None:
+    client, _services = _build_client(tmp_path)
+
+    ping = client.get("/api/desktop/ping")
+    preflight = client.options(
+        "/api/desktop/ping",
+        headers={
+            "Origin": "http://tauri.localhost",
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert ping.status_code == 200
+    assert ping.json()["name"] == "xbot"
+    assert ping.json()["ok"] is True
+    assert preflight.status_code == 200
+    assert preflight.headers["access-control-allow-origin"] == "http://tauri.localhost"
 
 
 def test_provider_extra_headers_are_masked(tmp_path: Path) -> None:
@@ -1253,13 +1345,32 @@ def test_login_rate_limit_does_not_count_successful_logins(tmp_path: Path) -> No
         assert response.status_code == 200
 
 
-def test_api_skills_endpoints_removed(tmp_path: Path) -> None:
+def test_api_skills_endpoints_available(tmp_path: Path) -> None:
     client, _services = _build_client(tmp_path)
     token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
-    assert client.get("/api/skills", headers=headers).status_code == 404
-    assert client.post("/api/skills", headers=headers, json={"name": "demo", "content": "# Demo"}).status_code == 404
-    assert client.get("/api/skills/demo", headers=headers).status_code == 404
-    assert client.put("/api/skills/demo", headers=headers, json={"content": "# Demo"}).status_code == 404
-    assert client.delete("/api/skills/demo", headers=headers).status_code == 404
+    list_response = client.get("/api/skills", headers=headers)
+    create_response = client.post(
+        "/api/skills",
+        headers=headers,
+        json={"name": "demo", "content": "# Demo\n\nTest skill."},
+    )
+    get_response = client.get("/api/skills/demo", headers=headers)
+    update_response = client.put(
+        "/api/skills/demo",
+        headers=headers,
+        json={"content": "# Demo\n\nUpdated skill."},
+    )
+    toggle_response = client.post("/api/skills/demo/toggle", headers=headers, json={"enabled": False})
+    delete_response = client.delete("/api/skills/demo", headers=headers)
+
+    assert list_response.status_code == 200
+    assert create_response.status_code == 201
+    assert get_response.status_code == 200
+    assert get_response.json()["content"] == "# Demo\n\nTest skill."
+    assert update_response.status_code == 200
+    assert toggle_response.status_code == 200
+    assert toggle_response.json()["enabled"] is False
+    assert delete_response.status_code == 200
+    assert delete_response.json()["ok"] is True
