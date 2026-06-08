@@ -42,7 +42,6 @@ from xbot.crew.cli.plan_cmd import crew_plan, crew_run_dynamic
 from xbot.crew.cli.role_cmd import app as roles_app
 from xbot.interaction.permission import CLIPermissionHandler, InteractivePermissionHandler
 from xbot.interaction.progress_coalescer import ProgressCoalescer
-from xbot.interfaces.webui.cli import webui_app
 from xbot.platform.config.paths import get_data_dir, get_workspace_path
 from xbot.platform.config.schema import Config
 from xbot.platform.logging.core import configure_logging, get_logger, set_package_logging_enabled
@@ -811,6 +810,8 @@ def gateway(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
     config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
     health_port: int | None = typer.Option(None, "--health-port", help="Health check HTTP port (default: gateway_port - 710)"),
+    webui_port: int | None = typer.Option(None, "--webui-port", help="WebUI HTTP port (default: 18780)"),
+    no_webui: bool = typer.Option(False, "--no-webui", help="Disable WebUI (headless mode)"),
 ):
     """Start the xbot gateway."""
     from xbot.channels.manager import ChannelManager
@@ -982,7 +983,36 @@ def gateway(
     console.print(f"[green]✓[/green] Heartbeat: every {hb_cfg.interval_s}s")
     console.print(f"[green]✓[/green] Health check: http://{config.gateway.host}:{health_port}/health")
 
+    # Build WebUI app if enabled
+    webui_app = None
+    if not no_webui:
+        from contextlib import suppress as _suppress
+        from xbot.interfaces.gateway.app import create_app
+        from xbot.interfaces.gateway.services import ServiceContainer
+        from xbot.platform.config.loader import save_config
+        from xbot.runtime.system.monitoring.health import create_health_router
+
+        webui_port = webui_port or 18780
+
+        # Build ServiceContainer reusing gateway services
+        webui_container = ServiceContainer(
+            config=config,
+            bus=bus,
+            agent=agent,
+            conversation_store=conversation_store,
+            cron=cron,
+            heartbeat=heartbeat,
+            save_config=save_config,
+            data_dir=config.workspace_path / ".webui",
+            metadata={"channel_manager": channels},
+        )
+
+        webui_app = create_app(webui_container, skip_lifecycle=True, health_router=create_health_router(health))
+
+        console.print(f"[green]✓[/green] WebUI: http://{config.gateway.host}:{webui_port}")
+
     async def run():
+        from contextlib import suppress as _suppress
         from xbot.runtime.system.monitoring.alerting import AlertConfig, init_alert_service
 
         # Initialize alert service
@@ -993,11 +1023,18 @@ def gateway(
         )
         alert = init_alert_service(bus, alert_config)
 
+        server = None
+        server_task = None
+
         try:
-            # Start health check service
+            # Start health check service (aiohttp fallback if no webui)
             health.update_status("agent", "initializing")
             health.update_status("channels", channels.enabled_channels)
-            await health.start()
+
+            if no_webui:
+                await health.start()  # fallback: aiohttp on separate port
+            else:
+                health.update_status("webui", f"port {webui_port}")
 
             await agent.initialize()
             health.update_status("agent", "running")
@@ -1006,10 +1043,24 @@ def gateway(
             health.update_status("cron", cron.status())
 
             await heartbeat.start()
-            await asyncio.gather(
-                agent.run(),
-                channels.start_all(),
-            )
+
+            # Start uvicorn if WebUI enabled
+            if webui_app is not None:
+                import uvicorn
+                uvicorn_config = uvicorn.Config(
+                    webui_app,
+                    host=config.gateway.host,
+                    port=webui_port,
+                    log_level="info" if not verbose else "debug",
+                )
+                server = uvicorn.Server(uvicorn_config)
+                server_task = asyncio.create_task(server.serve())
+
+            # Main loop
+            tasks = [agent.run(), channels.start_all()]
+            if server_task:
+                tasks.append(server_task)
+            await asyncio.gather(*tasks)
         except KeyboardInterrupt:
             console.print("\nShutting down...")
         except asyncio.CancelledError:
@@ -1021,6 +1072,13 @@ def gateway(
             # Send critical alert
             await alert.alert_critical(e, "Gateway crashed unexpectedly")
         finally:
+            # Stop uvicorn gracefully
+            if server_task and not server_task.done():
+                if server:
+                    server.should_exit = True
+                with _suppress(asyncio.CancelledError):
+                    await server_task
+
             await agent.close_mcp()
             heartbeat_shutdown = getattr(heartbeat, "shutdown", None)
             if callable(heartbeat_shutdown):
@@ -1034,7 +1092,8 @@ def gateway(
                 cron.stop()
             agent.stop()
             await channels.stop_all()
-            await health.stop()
+            if no_webui:
+                await health.stop()  # aiohttp needs manual stop
 
     asyncio.run(run())
 
@@ -2683,8 +2742,6 @@ def _print_crew_result(result: Any) -> None:
 
 provider_app = typer.Typer(help="Manage providers")
 app.add_typer(provider_app, name="provider")
-
-app.add_typer(webui_app, name="webui")
 
 
 _LOGIN_HANDLERS: dict[str, Callable] = {}

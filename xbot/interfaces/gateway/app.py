@@ -31,15 +31,15 @@ from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, SecretStr
 
-from xbot.interfaces.webui.auth import (
+from xbot.interfaces.gateway.auth import (
     AuthManager,
     UserStore,
     ensure_password_file,
     get_or_create_jwt_secret,
     print_password_banner,
 )
-from xbot.interfaces.webui.services import ServiceContainer
-from xbot.interfaces.webui.session_keys import to_internal_session_key
+from xbot.interfaces.gateway.services import ServiceContainer
+from xbot.interfaces.gateway.session_keys import to_internal_session_key
 from xbot.platform.config.schema import MCPServerConfig, ProviderConfig
 from xbot.runtime.system.cron.types import CronPayload, CronSchedule
 
@@ -376,6 +376,8 @@ def create_app(
     *,
     data_dir: Path | None = None,
     frontend_dir: Path | None = None,
+    skip_lifecycle: bool = False,
+    health_router: Any = None,
 ) -> FastAPI:
     app = FastAPI(title="xbot WebUI", version="0.1.0")
 
@@ -396,10 +398,11 @@ def create_app(
     if frontend_dir is not None:
         resolved_frontend_dir = frontend_dir
     else:
-        module_dir = Path(__file__).parent
+        # Frontend static files are in the webui/ directory (sibling to gateway/)
+        webui_dir = Path(__file__).parent.parent / "webui"
         frontend_candidates = (
-            module_dir / "frontend" / "dist",
-            module_dir / "frontend" / "dev-dist",
+            webui_dir / "frontend" / "dist",
+            webui_dir / "frontend" / "dev-dist",
         )
         resolved_frontend_dir = next(
             (path for path in frontend_candidates if path.exists()),
@@ -484,6 +487,9 @@ def create_app(
 
     @app.on_event("startup")
     async def _startup_runtime() -> None:
+        if skip_lifecycle:
+            # Gateway manages lifecycle externally
+            return
         if app.state.runtime_started:
             return
 
@@ -594,6 +600,9 @@ def create_app(
 
     @app.on_event("shutdown")
     async def _shutdown_runtime() -> None:
+        if skip_lifecycle:
+            # Gateway manages lifecycle externally
+            return
         if not app.state.runtime_started:
             return
 
@@ -635,6 +644,10 @@ def create_app(
                 container.agent.stop()
 
         app.state.runtime_started = False
+
+    # Include health router BEFORE static file routes to ensure health endpoints take priority
+    if health_router is not None:
+        app.include_router(health_router)
 
     resolved_frontend = Path(app.state.frontend_dir)
     assets_dir = resolved_frontend / "assets"

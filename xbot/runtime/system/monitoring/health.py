@@ -238,3 +238,57 @@ def create_health_service(
         HealthCheckService instance
     """
     return HealthCheckService(port=port, host=host)
+
+
+def create_health_router(health: "HealthCheckService") -> Any:
+    """Create a FastAPI router with health check endpoints.
+
+    This allows mounting health check endpoints on the main FastAPI app
+    instead of running a separate aiohttp server.
+
+    Args:
+        health: HealthCheckService instance
+
+    Returns:
+        FastAPI APIRouter with /health, /health/live, /health/ready, /status endpoints
+    """
+    from fastapi import APIRouter
+    from fastapi.responses import JSONResponse
+
+    router = APIRouter(tags=["health"])
+
+    @router.get("/health")
+    async def health_check():
+        """Full health check endpoint."""
+        result = await health._check_all()
+        status_code = 200 if result.healthy else 503
+        return JSONResponse(result.to_dict(), status_code=status_code)
+
+    @router.get("/health/live")
+    async def liveness():
+        """Liveness probe - always returns 200 if service is running."""
+        return {"status": "alive"}
+
+    @router.get("/health/ready")
+    async def readiness():
+        """Readiness probe - checks critical components."""
+        agent_status = health._status.get("agent", "unknown")
+        channels = health._status.get("channels", [])
+        ready = agent_status == "running" and len(channels) > 0
+        result = {
+            "ready": ready,
+            "agent": agent_status,
+            "channels": channels,
+        }
+        return JSONResponse(result, status_code=200 if ready else 503)
+
+    @router.get("/status")
+    async def detailed_status():
+        """Detailed status endpoint."""
+        return {
+            "uptime_seconds": round(time.time() - health._start_time, 2),
+            "start_time": datetime.fromtimestamp(health._start_time, timezone.utc).isoformat().replace("+00:00", "Z"),
+            **health._status,
+        }
+
+    return router
