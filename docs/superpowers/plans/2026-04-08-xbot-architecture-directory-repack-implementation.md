@@ -24,7 +24,7 @@
 
 1. Functional feature changes.
 2. API redesign.
-3. Cross-repo migration of auxiliary modules (`memory-ingest`, `mcp`, `bridge`).
+3. Cross-repo migration of auxiliary modules (`mcp`, `bridge`).
 
 ---
 

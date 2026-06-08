@@ -36,11 +36,10 @@ import {
 // ── Providers tab ─────────────────────────────────────────────────────────────
 
 const PROVIDER_ICONS: Record<string, string> = {
-    anthropic: "\uD83D\uDFE0", openai: "\uD83D\uDFE2", openrouter: "\uD83D\uDD35", deepseek: "\uD83D\uDC0B",
-    volcengine: "\uD83C\uDF0B", volcengine_coding_plan: "\uD83C\uDF0B", byteplus: "\uD83D\uDFE3", byteplus_coding_plan: "\uD83D\uDFE3",
-    groq: "\u26A1", zhipu: "\uD83E\uDDE0", dashscope: "\u2601\uFE0F",
-    vllm: "\uD83D\uDDA5\uFE0F", ollama: "\uD83E\uDD99", gemini: "\uD83D\uDC8E", moonshot: "\uD83C\uDF19", minimax: "\uD83D\uDD2E",
-    aihubmix: "\uD83C\uDFA8\uFE0F", siliconflow: "\uD83D\uDCA7", azure_openai: "\uD83E\uDE9F", custom: "\u2699\uFE0F",
+    anthropic: "\uD83D\uDFE0",  // \uD83D\uDFE0
+    aliyun_coding_plan: "\uD83C\uDF0B",  // \uD83C\uDF0B
+    alrun: "\uD83D\uDE80",  // \uD83D\uDE80
+    custom: "\u2699\uFE0F",  // \u2699\uFE0F \u81EA\u5B9A\u4E49\u4F9B\u5E94\u5546\u9ED8\u8BA4\u56FE\u6807
 };
 
 type ProviderDraft = Partial<{ api_key: string; api_base: string; extra_headers: string }>;
@@ -178,7 +177,7 @@ function ProvidersTab() {
         }
     };
 
-    if (isLoading) return <div className="space-y-2">{[...Array(5)].map((_, i) => <Skeleton key={i} className="h-14 w-full" />)}</div>;
+    if (isLoading) return <div className="space-y-2">{[...Array(3)].map((_, i) => <Skeleton key={i} className="h-14 w-full" />)}</div>;
 
     return (
         <div className="space-y-4">

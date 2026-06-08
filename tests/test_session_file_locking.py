@@ -118,6 +118,26 @@ class TestSessionFileLocking:
         manager.save(loaded)
         assert manager._get_session_path("a:b").exists()
 
+    def test_list_sessions_deduplicates_old_and_hashed_paths(self, tmp_path: Path) -> None:
+        """Session list should not show both compatibility and canonical files."""
+        manager = ConversationStore(tmp_path)
+        old_path = manager.sessions_dir / "a_b.jsonl"
+        old_path.write_text(
+            '{"_type":"metadata","key":"a:b","created_at":"2026-05-11T00:00:00","updated_at":"2026-05-11T00:00:00","last_consolidated":0}\n'
+            '{"role":"user","content":"legacy"}\n',
+            encoding="utf-8",
+        )
+
+        session = manager.get_or_create("a:b")
+        session.add_message("user", "current")
+        manager.save(session)
+
+        sessions = manager.list_sessions()
+
+        matching = [item for item in sessions if item["key"] == "a:b"]
+        assert len(matching) == 1
+        assert matching[0]["path"] == str(manager._get_session_path("a:b"))
+
     def test_delete_removes_new_and_old_session_paths(self, tmp_path: Path) -> None:
         """Deleting a session should clean hashed and pre-hash compatibility files."""
         manager = ConversationStore(tmp_path)

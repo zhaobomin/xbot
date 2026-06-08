@@ -5,8 +5,11 @@ export type WsMessageType = "session_info" | "progress" | "subagent_progress" | 
 export interface WsMessage {
     type: WsMessageType;
     content?: string;
+    error?: string;
     session_key?: string;
     tool_hint?: boolean;
+    event_type?: string;
+    event_data?: unknown;
     index?: number;
 }
 
@@ -32,14 +35,16 @@ export class ChatWebSocket {
 
     connect(sessionKey?: string) {
         const token = useAuthStore.getState().token;
-        if (!token) return;
 
         if (sessionKey) this.sessionKey = sessionKey;
 
         this.shouldReconnect = true;
 
-        let wsUrl = `${this.url}?token=${encodeURIComponent(token)}`;
-        if (this.sessionKey) wsUrl += `&session=${encodeURIComponent(this.sessionKey)}`;
+        const params = new URLSearchParams();
+        if (token) params.set("token", token);
+        if (this.sessionKey) params.set("session", this.sessionKey);
+        const query = params.toString();
+        const wsUrl = query ? `${this.url}?${query}` : this.url;
         this.ws = new WebSocket(wsUrl);
 
         this.ws.onopen = () => {

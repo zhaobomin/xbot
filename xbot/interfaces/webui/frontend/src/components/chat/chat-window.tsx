@@ -17,6 +17,7 @@ export function ChatWindow() {
         messages,
         showToolMessages,
         addMessage,
+        appendAssistantText,
         setWaiting,
         setProgress,
         setCurrentSession,
@@ -92,13 +93,36 @@ export function ChatWindow() {
         (msg: WsMessage) => {
             const msgSessionKey = msg.session_key;
             const currentKey = useChatStore.getState().currentSessionKey;
+            const isCurrentSession = !msgSessionKey || msgSessionKey === currentKey;
 
             if (msg.type === "session_info") {
                 if (msg.session_key && msg.session_key !== currentKey) {
                     setCurrentSession(msg.session_key);
                 }
             } else if (msg.type === "progress") {
-                if (msg.content?.trim()) {
+                const targetKey = msgSessionKey || currentKey || "";
+
+                if (msg.event_type === "content_delta") {
+                    setProgress("", targetKey);
+                    if (isCurrentSession && msg.content) {
+                        let assistantId = assistantMsgIdRef.current;
+                        if (!assistantId) {
+                            assistantId = nanoid();
+                            assistantMsgIdRef.current = assistantId;
+                            addMessage({
+                                id: assistantId,
+                                role: "assistant",
+                                content: "",
+                                timestamp: new Date().toISOString(),
+                                isStreaming: true,
+                            });
+                        }
+                        appendAssistantText(assistantId, msg.content);
+                    }
+                    return;
+                }
+
+                if (isCurrentSession && msg.content?.trim()) {
                     if (msg.tool_hint) {
                         addMessage({
                             id: nanoid(),
@@ -115,10 +139,9 @@ export function ChatWindow() {
                         });
                     }
                 }
-                const targetKey = msgSessionKey || currentKey || "";
                 setProgress(msg.content ?? "", targetKey);
             } else if (msg.type === "subagent_progress") {
-                if (!msgSessionKey || msgSessionKey === currentKey) {
+                if (isCurrentSession) {
                     if (msg.content?.trim()) {
                         addMessage({
                             id: nanoid(),
@@ -134,6 +157,7 @@ export function ChatWindow() {
                 setProgress("", targetKey);
                 setWaiting(false, targetKey);
 
+                const streamingAssistantId = assistantMsgIdRef.current;
                 if (assistantMsgIdRef.current) {
                     useChatStore
                         .getState()
@@ -141,7 +165,7 @@ export function ChatWindow() {
                     assistantMsgIdRef.current = null;
                 }
 
-                if (!msgSessionKey || msgSessionKey === currentKey) {
+                if (isCurrentSession && !streamingAssistantId) {
                     if (msg.content?.trim()) {
                         addMessage({
                             id: nanoid(),
@@ -163,11 +187,11 @@ export function ChatWindow() {
                 setProgress("", targetKey);
                 setWaiting(false, targetKey);
 
-                if (!msgSessionKey || msgSessionKey === currentKey) {
+                if (isCurrentSession) {
                     addMessage({
                         id: nanoid(),
                         role: "assistant",
-                        content: `⚠️ ${msg.content ?? t("common.error")}`,
+                        content: `⚠️ ${msg.content ?? msg.error ?? t("common.error")}`,
                         timestamp: new Date().toISOString(),
                     });
                 }
@@ -179,7 +203,7 @@ export function ChatWindow() {
                 qc.invalidateQueries({ queryKey: ["sessions"] });
             }
         },
-        [addMessage, qc, setCurrentSession, setProgress, setWaiting, t]
+        [addMessage, appendAssistantText, qc, setCurrentSession, setProgress, setWaiting, t]
     );
 
     useEffect(() => {

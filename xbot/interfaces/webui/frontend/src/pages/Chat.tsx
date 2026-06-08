@@ -129,7 +129,9 @@ export default function Chat() {
             return [
                 {
                     key: currentSessionKey,
+                    channel: channelOf(currentSessionKey),
                     updated_at: new Date().toISOString(),
+                    first_message: undefined,
                     last_message: undefined,
                 },
                 ...mySessions,
@@ -144,8 +146,9 @@ export default function Chat() {
         return displaySessions.filter((s) => {
             const parts = s.key.split(":");
             const label = (parts[parts.length - 1] ?? s.key).toLowerCase();
+            const first = (s.first_message ?? "").toLowerCase();
             const preview = (s.last_message ?? "").toLowerCase();
-            return label.includes(q) || preview.includes(q);
+            return label.includes(q) || first.includes(q) || preview.includes(q);
         });
     }, [displaySessions, search]);
 
@@ -239,7 +242,7 @@ export default function Chat() {
                         )}
                     >
                         {filteredSessions.map((s) => {
-                            const channel = channelOf(s.key);
+                            const channel = s.channel ?? channelOf(s.key);
                             const isWeb = channel === "web";
                             const parts = s.key.split(":");
                             const rawLabel = isWeb
@@ -247,9 +250,10 @@ export default function Chat() {
                                 : (parts[parts.length - 1] ?? s.key);
                             const maxLen = isMobile ? 28 : 14;
                             const label =
-                                rawLabel.length > maxLen
+                                s.first_message ||
+                                (rawLabel.length > maxLen
                                     ? rawLabel.slice(0, maxLen) + "..."
-                                    : rawLabel;
+                                    : rawLabel);
                             const active = s.key === currentSessionKey;
                             const sessionBusy =
                                 sessionStates[s.key]?.isWaiting ?? false;
@@ -309,7 +313,7 @@ export default function Chat() {
                                             {sessionBusy ? (
                                                 <StatusDot tone="info" label="Processing..." pulse />
                                             ) : (
-                                                s.last_message || "\u2014"
+                                                `${channel} · ${s.last_message || s.key}`
                                             )}
                                         </p>
                                     </div>

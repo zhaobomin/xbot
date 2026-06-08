@@ -71,9 +71,9 @@
     "openChat": "进入会话"
   },
   "integrations": {
-    "description": "在一个入口管理通道、工具、MCP 服务器和模型提供商。",
+    "description": "在一个入口管理通道、技能、MCP 服务器和模型提供商。",
     "channelsDesc": "消息通道以及收发运行状态。",
-    "toolsDesc": "Agent 可用的技能和内置工具。",
+    "skillsDesc": "Agent 可用的技能和内置工具。",
     "mcpDesc": "外部 MCP 服务器和运行时工具清单。",
     "providersDesc": "模型提供商凭证、Base URL 和模型列表。",
     "configureProviders": "配置模型提供商",
@@ -292,7 +292,8 @@
     "type": "类型",
     "available": "可用",
     "unavailable": "不可用",
-    "enabled": "启用"
+    "enabled": "启用",
+    "total": "总计"
   },
   "cron": {
     "title": "定时任务",

@@ -71,9 +71,9 @@
     "openChat": "Open Chat"
   },
   "integrations": {
-    "description": "Manage channels, tools, MCP servers, and model providers from one place.",
+    "description": "Manage channels, skills, MCP servers, and model providers from one place.",
     "channelsDesc": "Messaging surfaces and inbound/outbound runtime status.",
-    "toolsDesc": "Skills and built-in tools available to the agent.",
+    "skillsDesc": "Skills and built-in tools available to the agent.",
     "mcpDesc": "External MCP servers and runtime tool inventory.",
     "providersDesc": "Model provider credentials, base URLs, and model lists.",
     "configureProviders": "Configure providers",
@@ -290,7 +290,8 @@
     "type": "Type",
     "available": "Available",
     "unavailable": "Unavailable",
-    "enabled": "Enabled"
+    "enabled": "Enabled",
+    "total": "Total"
   },
   "cron": {
     "title": "Cron Jobs",

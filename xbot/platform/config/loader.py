@@ -311,4 +311,69 @@ def _migrate_config(data: dict) -> dict:
     exec_cfg = tools.get("exec", {})
     if "restrictToWorkspace" in exec_cfg and "restrictToWorkspace" not in tools:
         tools["restrictToWorkspace"] = exec_cfg.pop("restrictToWorkspace")
+
+    # Migrate agents.defaults.availableModels → providers.{name}.models
+    agents = data.get("agents", {})
+    defaults = agents.get("defaults", {})
+    available_models = defaults.get("availableModels") or defaults.get("available_models")
+
+    if available_models and isinstance(available_models, list) and len(available_models) > 0:
+        # Get current provider name
+        provider_name = defaults.get("provider", "auto")
+        if provider_name == "auto":
+            # Try to infer from existing provider config
+            providers = data.get("providers", {})
+            # Check customProviders first
+            custom_providers = providers.get("customProviders", {})
+            for name, cfg in custom_providers.items():
+                if isinstance(cfg, dict) and cfg.get("apiKey"):
+                    provider_name = name
+                    break
+            # If still auto, check fixed providers
+            if provider_name == "auto":
+                for name in ["anthropic", "aliyunCodingPlan", "alrun"]:
+                    cfg = providers.get(name, {})
+                    if isinstance(cfg, dict) and cfg.get("apiKey"):
+                        provider_name = name
+                        break
+
+        # Convert provider name to the format used in config
+        # e.g., "aliyun_coding_plan" → "aliyunCodingPlan"
+        config_provider_name = provider_name
+        if "_" in provider_name:
+            parts = provider_name.split("_")
+            config_provider_name = parts[0] + "".join(p.capitalize() for p in parts[1:])
+
+        # Ensure providers section exists
+        if "providers" not in data:
+            data["providers"] = {}
+
+        providers = data["providers"]
+
+        # Determine where to put the models
+        if config_provider_name in providers:
+            # Fixed provider
+            if "models" not in providers[config_provider_name]:
+                providers[config_provider_name]["models"] = available_models
+        elif "customProviders" in providers and config_provider_name in providers["customProviders"]:
+            # Custom provider
+            if "models" not in providers["customProviders"][config_provider_name]:
+                providers["customProviders"][config_provider_name]["models"] = available_models
+        else:
+            # Provider not found, create in customProviders
+            if "customProviders" not in providers:
+                providers["customProviders"] = {}
+            providers["customProviders"][config_provider_name] = {
+                "apiKey": "",
+                "apiBase": None,
+                "extraHeaders": None,
+                "models": available_models
+            }
+
+        # Remove old field
+        if "availableModels" in defaults:
+            del defaults["availableModels"]
+        if "available_models" in defaults:
+            del defaults["available_models"]
+
     return data

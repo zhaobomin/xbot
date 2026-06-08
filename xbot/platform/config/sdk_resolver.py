@@ -98,7 +98,14 @@ def resolve_sdk_provider_and_model(
 
 def _has_api_key(config: "Config", provider_name: str) -> bool:
     provider_attr = provider_name.replace("-", "_")
+
+    # 先检查固定供应商
     provider_config = getattr(config.providers, provider_attr, None)
+
+    # 如果不在固定供应商中，检查 custom_providers
+    if not provider_config and hasattr(config.providers, 'custom_providers'):
+        provider_config = config.providers.custom_providers.get(provider_attr)
+
     if not provider_config:
         return False
     api_key = getattr(provider_config, "api_key", None)

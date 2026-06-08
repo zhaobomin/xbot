@@ -51,6 +51,10 @@ def validate_config(config: Config) -> None:
     provider_attr = provider_name.replace("-", "_")
     provider_config = getattr(config.providers, provider_attr, None)
 
+    # Fallback: check custom_providers
+    if not provider_config and hasattr(config.providers, 'custom_providers'):
+        provider_config = config.providers.custom_providers.get(provider_attr)
+
     if not provider_config:
         raise ConfigurationError(
             f"API key not configured for provider '{provider_name}'. "

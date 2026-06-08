@@ -1,2 +1,0 @@
-# Every 4 hours
-0 */4 * * * /Users/zhaobomin/Documents/projects/thirdpart/xbot/.venv/bin/memory-ingest run --config /Users/zhaobomin/Documents/projects/thirdpart/xbot/memory-ingest/memory-ingest.toml.example >> /Users/zhaobomin/.memory-ingest/cron.log 2>&1

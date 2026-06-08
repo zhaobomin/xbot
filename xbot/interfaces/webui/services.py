@@ -125,3 +125,57 @@ class ServiceContainer:
                 "error": None if tools else ("disabled" if not enabled else "configured but disconnected"),
             }
         return runtime
+
+    def primary_skill_root(self) -> Path:
+        """Return the primary skill directory for read/write operations."""
+        # Use workspace skills directory for user-created skills
+        workspace_path = getattr(self.config, "workspace_path", None)
+        if workspace_path:
+            return Path(workspace_path) / "skills"
+        # Fallback to package skills directory
+        return Path(__file__).parent.parent.parent / "skills"
+
+    def list_skills(self) -> list[dict[str, Any]]:
+        """List all available skills from both builtin and workspace directories."""
+        skills: list[dict[str, Any]] = []
+        seen_names: set[str] = set()
+
+        # 1. Builtin skills (read-only)
+        builtin_dir = Path(__file__).parent.parent.parent / "skills"
+        if builtin_dir.exists():
+            for skill_dir in sorted(builtin_dir.iterdir()):
+                if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
+                    name = skill_dir.name
+                    if name not in seen_names:
+                        seen_names.add(name)
+                        skills.append({
+                            "name": name,
+                            "source": "builtin",
+                            "path": str(skill_dir / "SKILL.md"),
+                            "description": name,
+                            "available": True,
+                            "enabled": True,
+                            "unavailable_reason": None,
+                            "type": "builtin",
+                        })
+
+        # 2. Workspace skills (user-created, read-write)
+        workspace_skills = self.primary_skill_root()
+        if workspace_skills.exists() and workspace_skills != builtin_dir:
+            for skill_dir in sorted(workspace_skills.iterdir()):
+                if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
+                    name = skill_dir.name
+                    if name not in seen_names:
+                        seen_names.add(name)
+                        skills.append({
+                            "name": name,
+                            "source": "workspace",
+                            "path": str(skill_dir / "SKILL.md"),
+                            "description": name,
+                            "available": True,
+                            "enabled": True,
+                            "unavailable_reason": None,
+                            "type": "workspace",
+                        })
+
+        return skills

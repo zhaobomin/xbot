@@ -162,6 +162,15 @@ class ConversationStore:
         safe_key = safe_filename(key.replace(":", "_"))
         return f"{safe_key}.jsonl"
 
+    @staticmethod
+    def _message_preview(content: Any, *, max_chars: int = 80) -> str:
+        if not isinstance(content, str):
+            return ""
+        preview = " ".join(content.strip().split())
+        if len(preview) <= max_chars:
+            return preview
+        return f"{preview[:max_chars].rstrip()}..."
+
     def _get_old_session_path(self, key: str) -> Path:
         return self.sessions_dir / self._safe_session_filename(key)
 
@@ -404,24 +413,57 @@ class ConversationStore:
         Returns:
             List of session info dicts.
         """
-        sessions = []
+        sessions_by_key: dict[str, dict[str, Any]] = {}
 
         for path in self.sessions_dir.glob("*.jsonl"):
             try:
-                # Read just the metadata line
+                first_message = ""
+                last_message = ""
                 with open(path, encoding="utf-8") as f:
                     first_line = f.readline().strip()
                     if first_line:
                         data = json.loads(first_line)
                         if data.get("_type") == "metadata":
                             key = data.get("key") or path.stem.replace("_", ":", 1)
-                            sessions.append({
+                            for line in f:
+                                line = line.strip()
+                                if not line:
+                                    continue
+                                msg = json.loads(line)
+                                if msg.get("_type") == "metadata":
+                                    continue
+                                content = self._message_preview(msg.get("content"))
+                                if not content:
+                                    continue
+                                if msg.get("role") == "user" and not first_message:
+                                    first_message = content
+                                last_message = content
+                            item = {
                                 "key": key,
+                                "channel": key.split(":", 1)[0],
+                                "first_message": first_message,
+                                "last_message": last_message,
                                 "created_at": data.get("created_at"),
                                 "updated_at": data.get("updated_at"),
                                 "path": str(path)
-                            })
+                            }
+                            current = sessions_by_key.get(key)
+                            if current is None or self._prefer_session_list_item(item, current):
+                                sessions_by_key[key] = item
             except Exception:
                 continue
 
-        return sorted(sessions, key=lambda x: x.get("updated_at", ""), reverse=True)
+        return sorted(sessions_by_key.values(), key=lambda x: x.get("updated_at", ""), reverse=True)
+
+    def _prefer_session_list_item(self, candidate: dict[str, Any], current: dict[str, Any]) -> bool:
+        """Return True when candidate is the better list representative for the same key."""
+        candidate_updated = str(candidate.get("updated_at") or "")
+        current_updated = str(current.get("updated_at") or "")
+        if candidate_updated != current_updated:
+            return candidate_updated > current_updated
+
+        key = str(candidate.get("key") or "")
+        canonical_path = str(self._get_session_path(key))
+        if candidate.get("path") == canonical_path and current.get("path") != canonical_path:
+            return True
+        return False

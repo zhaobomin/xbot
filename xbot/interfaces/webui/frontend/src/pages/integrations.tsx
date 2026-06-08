@@ -1,6 +1,6 @@
 import { Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
-import { ArrowRight, Bot, Puzzle, Radio, Server, SlidersHorizontal } from "lucide-react";
+import { ArrowRight, Bot, Sparkles, Radio, Server, SlidersHorizontal } from "lucide-react";
 import { PageHeader } from "../components/business/page-header";
 import { StatusDot } from "../components/business/status-dot";
 import { Alert, AlertDescription, AlertTitle } from "../components/ui/alert";
@@ -10,20 +10,31 @@ import { Skeleton } from "../components/ui/skeleton";
 import { useChannels } from "../hooks/use-channels";
 import { useMCPRuntime } from "../hooks/use-mcp";
 import { useProviders } from "../hooks/use-providers";
+import { useSkills } from "../hooks/useSkills";
 
 export default function Integrations() {
     const { t } = useTranslation();
     const { data: channels, isLoading: loadingChannels } = useChannels();
     const { data: providers, isLoading: loadingProviders } = useProviders();
     const { data: mcpRuntime, isLoading: loadingMcp } = useMCPRuntime();
+    const { data: skills, isLoading: loadingSkills } = useSkills();
 
     const runningChannels = channels?.filter((channel) => channel.running).length ?? 0;
     const channelErrors = channels?.filter((channel) => channel.error) ?? [];
     const configuredProviders = providers?.filter((provider) => provider.has_key).length ?? 0;
     const runningMcp = mcpRuntime?.filter((server) => server.running).length ?? 0;
-    const totalMcpTools = mcpRuntime?.reduce((sum, server) => sum + (server.tool_count ?? 0), 0) ?? 0;
+    const totalSkills = skills?.length ?? 0;
 
     const sections = [
+        {
+            title: t("nav.providers"),
+            description: t("integrations.providersDesc"),
+            href: "/settings?tab=providers",
+            icon: Bot,
+            loading: loadingProviders,
+            status: `${configuredProviders} / ${providers?.length ?? 0}`,
+            statusLabel: t("providers.configured"),
+        },
         {
             title: t("nav.channels"),
             description: t("integrations.channelsDesc"),
@@ -34,13 +45,13 @@ export default function Integrations() {
             statusLabel: t("dashboard.running"),
         },
         {
-            title: t("nav.tools"),
-            description: t("integrations.toolsDesc"),
-            href: "/tools",
-            icon: Puzzle,
-            loading: loadingMcp,
-            status: `${totalMcpTools}`,
-            statusLabel: t("integrations.availableTools"),
+            title: t("nav.skills"),
+            description: t("integrations.skillsDesc"),
+            href: "/tools?tab=skills",
+            icon: Sparkles,
+            loading: loadingSkills,
+            status: `${totalSkills}`,
+            statusLabel: t("skills.total"),
         },
         {
             title: t("nav.mcp"),
@@ -50,15 +61,6 @@ export default function Integrations() {
             loading: loadingMcp,
             status: `${runningMcp} / ${mcpRuntime?.length ?? 0}`,
             statusLabel: t("dashboard.running"),
-        },
-        {
-            title: t("nav.providers"),
-            description: t("integrations.providersDesc"),
-            href: "/settings?tab=providers",
-            icon: Bot,
-            loading: loadingProviders,
-            status: `${configuredProviders} / ${providers?.length ?? 0}`,
-            statusLabel: t("providers.configured"),
         },
     ];
 

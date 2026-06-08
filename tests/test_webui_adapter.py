@@ -148,6 +148,14 @@ class _FakeChannelManager:
     def __init__(self) -> None:
         self.reload_calls: list[str] = []
         self.failures: dict[str, str] = {}
+        self.start_calls = 0
+        self.stop_calls = 0
+
+    async def start_all(self) -> None:
+        self.start_calls += 1
+
+    async def stop_all(self) -> None:
+        self.stop_calls += 1
 
     def get_status(self) -> dict[str, dict[str, object]]:
         return {
@@ -254,6 +262,18 @@ def test_webui_root_serves_html(tmp_path: Path) -> None:
     assert "<div id=\"root\"></div>" in response.text or "xbot WebUI" in response.text
 
 
+def test_webui_lifespan_does_not_start_channel_manager(tmp_path: Path) -> None:
+    client, services = _build_client(tmp_path)
+    manager = services.metadata["channel_manager"]
+
+    with client:
+        response = client.get("/")
+
+    assert response.status_code == 200
+    assert manager.start_calls == 0
+    assert manager.stop_calls == 0
+
+
 def test_webui_serves_frontend_dist_when_present(tmp_path: Path) -> None:
     from xbot.interfaces.webui.app import create_app
     from xbot.interfaces.webui.services import ServiceContainer
@@ -334,7 +354,6 @@ def test_frontend_branding_uses_xbot_semantics() -> None:
 def test_frontend_uses_svg_brand_assets() -> None:
     files = [
         Path("xbot/interfaces/webui/frontend/index.html"),
-        Path("xbot/interfaces/webui/frontend/src/pages/login.tsx"),
         Path("xbot/interfaces/webui/frontend/src/components/layout/sidebar.tsx"),
         Path("xbot/interfaces/webui/frontend/src/components/layout/mobile-top-bar.tsx"),
         Path("xbot/interfaces/webui/frontend/src/components/chat/chat-window.tsx"),
@@ -347,9 +366,8 @@ def test_frontend_uses_svg_brand_assets() -> None:
         assert "/icon.png" not in content, f"stale png icon reference in {path}"
 
 
-def test_frontend_uses_text_brand_mark_instead_of_logo_images() -> None:
+def test_frontend_uses_xbot_svg_brand_assets() -> None:
     files = [
-        Path("xbot/interfaces/webui/frontend/src/pages/login.tsx"),
         Path("xbot/interfaces/webui/frontend/src/components/layout/sidebar.tsx"),
         Path("xbot/interfaces/webui/frontend/src/components/layout/mobile-top-bar.tsx"),
         Path("xbot/interfaces/webui/frontend/src/components/chat/chat-window.tsx"),
@@ -357,13 +375,31 @@ def test_frontend_uses_text_brand_mark_instead_of_logo_images() -> None:
 
     for path in files:
         content = path.read_text(encoding="utf-8")
-        assert "/logo.svg" not in content, f"stale svg logo reference in {path}"
-        assert "/icon.svg" not in content, f"stale svg icon reference in {path}"
         assert "xbot" in content.lower(), f"missing text brand mark in {path}"
+
+    sidebar = Path("xbot/interfaces/webui/frontend/src/components/layout/sidebar.tsx").read_text(encoding="utf-8")
+    mobile_top_bar = Path("xbot/interfaces/webui/frontend/src/components/layout/mobile-top-bar.tsx").read_text(encoding="utf-8")
+    index = Path("xbot/interfaces/webui/frontend/index.html").read_text(encoding="utf-8")
+    assert "/xbot-logo.svg?v=xbot-logo-20260604b" in sidebar
+    assert "/xbot-logo.svg?v=xbot-logo-20260604b" in mobile_top_bar
+    assert "/icon.svg?v=xbot-cat-20260604" in sidebar
+    assert "/icon.svg" in index
+    assert "XBot" in sidebar
+    assert "XBot" in mobile_top_bar
 
     bubble = Path("xbot/interfaces/webui/frontend/src/components/chat/message-bubble.tsx").read_text(encoding="utf-8")
     assert "/icon.svg" not in bubble
     assert '"x"' in bubble or "'x'" in bubble
+
+
+def test_frontend_streams_content_delta_into_assistant_message() -> None:
+    ws = Path("xbot/interfaces/webui/frontend/src/lib/ws.ts").read_text(encoding="utf-8")
+    chat_window = Path("xbot/interfaces/webui/frontend/src/components/chat/chat-window.tsx").read_text(encoding="utf-8")
+
+    assert "event_type?: string" in ws
+    assert 'msg.event_type === "content_delta"' in chat_window
+    assert "appendAssistantText" in chat_window
+    assert "assistantMsgIdRef.current = assistantId" in chat_window
 
 
 def test_admin_login_and_change_password(tmp_path: Path) -> None:
@@ -425,6 +461,9 @@ def test_read_only_management_endpoints(tmp_path: Path) -> None:
     assert dashboard.status_code == 200
     assert dashboard.json()["runtime"]["backend_type"] == "claude_sdk"
     assert sessions.json()[0]["key"] == "cli:web-admin-1"
+    assert sessions.json()[0]["channel"] == "cli"
+    assert sessions.json()[0]["first_message"] == "hello"
+    assert sessions.json()[0]["last_message"] == "world"
     assert messages.json()[0]["role"] == "user"
     assert any(item["name"] == "anthropic" for item in providers.json())
     assert any(item["name"] == "telegram" for item in channels.json())
@@ -713,6 +752,26 @@ def test_websocket_chat_uses_internal_cli_session_mapping(tmp_path: Path) -> Non
         assert done["content"] == "echo:hi"
 
     assert services.agent.calls[0]["session_key"] == "cli:web-admin-abc123"
+
+
+def test_websocket_chat_honors_message_session_key(tmp_path: Path) -> None:
+    client, services = _build_client(tmp_path)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+
+    with client.websocket_connect(f"/ws/chat?token={token}&session=web:admin:old") as ws:
+        session_info = ws.receive_json()
+        assert session_info["type"] == "session_info"
+        assert session_info["session_key"] == "web:admin:old"
+
+        ws.send_json({"type": "message", "content": "hi", "session_key": "web:admin:new"})
+        progress = ws.receive_json()
+        done = ws.receive_json()
+
+        assert progress["session_key"] == "web:admin:new"
+        assert done["session_key"] == "web:admin:new"
+        assert done["content"] == "echo:hi"
+
+    assert services.agent.calls[0]["session_key"] == "cli:web-admin-new"
 
 
 def test_session_key_mapping_avoids_colon_replacement_collisions() -> None:

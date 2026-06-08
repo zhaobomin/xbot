@@ -31,12 +31,13 @@ class AgentDefaults(Base):
     """Default agent configuration."""
 
     workspace: str = "~/.xbot/workspace"
-    model: str = "claude-sonnet-4-5"
+    model: str = ""  # 空字符串表示使用供应商的第一个模型
     provider: str = (
-        "auto"  # Provider name (e.g. "anthropic", "openrouter") or "auto" for auto-detection
+        "auto"  # Provider name (e.g. "anthropic", "alrun") or "auto" for auto-detection
     )
-    # 可用模型列表，用于动态切换。为空时只用 model 字段
-    available_models: list[str] = Field(default_factory=list)
+    # available_models 已废弃，模型列表现在从 providers.{name}.models 读取
+    # 保留此字段以兼容旧配置，但运行时不再使用
+    available_models: list[str] = Field(default_factory=list, exclude=True)
     max_tokens: int = 8192
     context_window_tokens: int = 65_536
     temperature: float = 0.1
@@ -201,42 +202,21 @@ class ProviderConfig(Base):
     api_key: SecretStr = SecretStr("")
     api_base: str | None = None
     extra_headers: dict[str, str] | None = None  # Custom headers (e.g. APP-Code for AiHubMix)
+    models: list[str] = Field(default_factory=list)  # Available models list
 
 
 class ProvidersConfig(Base):
-    """Configuration for LLM providers."""
+    """Configuration for LLM providers.
 
-    custom: ProviderConfig = Field(default_factory=ProviderConfig)  # Any OpenAI-compatible endpoint
-    azure_openai: ProviderConfig = Field(default_factory=ProviderConfig)  # Azure OpenAI (model = deployment name)
+    Only Anthropic Messages API compatible providers are supported.
+    """
+
     anthropic: ProviderConfig = Field(default_factory=ProviderConfig)
-    openai: ProviderConfig = Field(default_factory=ProviderConfig)
-    openrouter: ProviderConfig = Field(default_factory=ProviderConfig)
-    deepseek: ProviderConfig = Field(default_factory=ProviderConfig)
-    groq: ProviderConfig = Field(default_factory=ProviderConfig)
-    zhipu: ProviderConfig = Field(default_factory=ProviderConfig)
-    dashscope: ProviderConfig = Field(default_factory=ProviderConfig)
-    vllm: ProviderConfig = Field(default_factory=ProviderConfig)
-    ollama: ProviderConfig = Field(default_factory=ProviderConfig)  # Ollama local models
-    gemini: ProviderConfig = Field(default_factory=ProviderConfig)
-    moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
-    minimax: ProviderConfig = Field(default_factory=ProviderConfig)
-    aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
-    siliconflow: ProviderConfig = Field(default_factory=ProviderConfig)  # SiliconFlow (硅基流动)
-    volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine (火山引擎)
-    volcengine_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine Coding Plan
-    byteplus: ProviderConfig = Field(default_factory=ProviderConfig)  # BytePlus (VolcEngine international)
-    byteplus_coding_plan: ProviderConfig = Field(default_factory=ProviderConfig)  # BytePlus Coding Plan
-    openai_codex: ProviderConfig = Field(default_factory=ProviderConfig)  # OpenAI Codex (OAuth)
-    github_copilot: ProviderConfig = Field(default_factory=ProviderConfig)  # Github Copilot (OAuth)
 
-    # Claude SDK 兼容供应商 (Anthropic Messages API 兼容)
-    aliyun_coding_plan: ProviderConfig = Field(
-        default_factory=ProviderConfig,
-        description="阿里云 Coding Plan (Anthropic 兼容, 仅 Claude SDK Agent)"
-    )
-    alrun: ProviderConfig = Field(
-        default_factory=ProviderConfig,
-        description="Alrun API 网关 (Anthropic 兼容, 仅 Claude SDK Agent)"
+    # 自定义供应商 (用户动态添加)
+    custom_providers: dict[str, ProviderConfig] = Field(
+        default_factory=dict,
+        description="用户自定义的 Anthropic 兼容供应商"
     )
 
 

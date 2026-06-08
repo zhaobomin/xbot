@@ -1,7 +1,6 @@
 import { useLocation, Link } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { useTheme } from "next-themes";
-import { useAuthStore } from "../../stores/auth-store";
 import { cn } from "../../lib/utils";
 import {
     isNavItemActive,
@@ -11,32 +10,16 @@ import {
 import {
     Sun,
     Moon,
-    Languages,
-    LogOut,
-    KeyRound,
     PanelLeftClose,
     PanelLeftOpen,
-    Bot,
     Settings,
 } from "lucide-react";
-import {
-    DropdownMenu,
-    DropdownMenuContent,
-    DropdownMenuItem,
-    DropdownMenuSeparator,
-    DropdownMenuSub,
-    DropdownMenuSubContent,
-    DropdownMenuSubTrigger,
-    DropdownMenuTrigger,
-} from "../ui/dropdown-menu";
 import {
     Tooltip,
     TooltipContent,
     TooltipProvider,
     TooltipTrigger,
 } from "../ui/tooltip";
-import { useState } from "react";
-import { ChangePasswordDialog } from "./change-password-dialog";
 import { SessionList } from "../business/session-list";
 
 function NavLink({
@@ -104,24 +87,16 @@ interface SidebarProps {
 }
 
 export function Sidebar({ collapsed, onToggle }: SidebarProps) {
-    const { t, i18n } = useTranslation();
+    const { t } = useTranslation();
     const { resolvedTheme, setTheme } = useTheme();
     const location = useLocation();
-    const user = useAuthStore((s) => s.user);
-    const clearAuth = useAuthStore((s) => s.clearAuth);
-    const isAdmin = user?.role === "admin";
-    const [showChangePwd, setShowChangePwd] = useState(false);
 
-    const navItems = PRIMARY_NAV_ITEMS.filter((item) => (!item.adminOnly || isAdmin) && item.path !== "/sessions");
+    const navItems = PRIMARY_NAV_ITEMS.filter((item) => item.path !== "/sessions");
     const isActive = (item: AppNavItem) => isNavItemActive(location.pathname, item);
     const settingsActive =
         location.pathname === "/settings" ||
         location.pathname.startsWith("/settings/") ||
-        location.pathname === "/users" ||
         location.pathname === "/system-config";
-
-    const LANG_LABELS: Record<string, string> = { zh: "中文", en: "English" };
-    const currentLangLabel = LANG_LABELS[i18n.language] ?? "English";
 
     return (
         <TooltipProvider>
@@ -142,19 +117,25 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                     )}
                 >
                     {!collapsed && (
-                        <div className="flex h-9 items-center gap-2">
-                            <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                                <Bot className="h-3.5 w-3.5" />
-                            </div>
-                            <span className="text-lg font-semibold tracking-tight text-foreground">
-                                XBot
-                            </span>
-                        </div>
+                        <Link
+                            to="/chat"
+                            className="flex h-11 items-center rounded-xl px-1 transition-opacity hover:opacity-90"
+                        >
+                            <img
+                                src="/xbot-logo.svg?v=xbot-logo-20260604b"
+                                alt="XBot"
+                                className="h-9 w-auto"
+                            />
+                        </Link>
                     )}
                     {collapsed && (
-                        <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                            <Bot className="h-4 w-4" />
-                        </div>
+                        <Link to="/chat" className="flex h-8 w-8 items-center justify-center">
+                            <img
+                                src="/icon.svg?v=xbot-cat-20260604"
+                                alt="XBot"
+                                className="h-8 w-8 rounded-lg"
+                            />
+                        </Link>
                     )}
                     {!collapsed && (
                         <button
@@ -228,72 +209,6 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
 
                     {collapsed ? (
                         <div className="flex flex-col items-center gap-1.5">
-                            {isAdmin && (
-                                <Tooltip delayDuration={0}>
-                                    <TooltipTrigger asChild>
-                                        <Link
-                                            to="/settings"
-                                            className={cn(
-                                                "flex h-8 w-8 items-center justify-center rounded-lg transition-colors duration-150",
-                                                settingsActive
-                                                    ? "bg-[hsl(var(--sidebar-active-bg))] text-[hsl(var(--sidebar-active-fg))]"
-                                                    : "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]"
-                                            )}
-                                        >
-                                            <Settings className="h-3.5 w-3.5" />
-                                        </Link>
-                                    </TooltipTrigger>
-                                    <TooltipContent side="right">
-                                        {t("nav.settings")}
-                                    </TooltipContent>
-                                </Tooltip>
-                            )}
-                            <DropdownMenu>
-                                <DropdownMenuTrigger
-                                    title={user?.username}
-                                    className="flex h-8 w-8 items-center justify-center rounded-full border bg-background transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-                                >
-                                    <span className="text-xs font-semibold text-foreground">
-                                        {user?.username?.[0]?.toUpperCase() ?? "?"}
-                                    </span>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent side="right" align="end" className="w-48">
-                                    <DropdownMenuSub>
-                                        <DropdownMenuSubTrigger>
-                                            <Languages className="mr-2 h-4 w-4" />
-                                            {currentLangLabel}
-                                        </DropdownMenuSubTrigger>
-                                        <DropdownMenuSubContent>
-                                            {Object.entries(LANG_LABELS).map(([code, label]) => (
-                                                <DropdownMenuItem
-                                                    key={code}
-                                                    onClick={() => i18n.changeLanguage(code)}
-                                                    className={
-                                                        i18n.language === code
-                                                            ? "font-semibold text-primary"
-                                                            : ""
-                                                    }
-                                                >
-                                                    {label}
-                                                </DropdownMenuItem>
-                                            ))}
-                                        </DropdownMenuSubContent>
-                                    </DropdownMenuSub>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem onClick={() => setShowChangePwd(true)}>
-                                        <KeyRound className="mr-2 h-4 w-4" />
-                                        {t("auth.changePassword")}
-                                    </DropdownMenuItem>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem
-                                        onClick={clearAuth}
-                                        className="text-destructive focus:text-destructive"
-                                    >
-                                        <LogOut className="mr-2 h-4 w-4" />
-                                        {t("auth.logout")}
-                                    </DropdownMenuItem>
-                                </DropdownMenuContent>
-                            </DropdownMenu>
                             <Tooltip delayDuration={0}>
                                 <TooltipTrigger
                                     onClick={() =>
@@ -316,64 +231,27 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                                         : t("common.darkMode")}
                                 </TooltipContent>
                             </Tooltip>
+                            <Tooltip delayDuration={0}>
+                                <TooltipTrigger asChild>
+                                    <Link
+                                        to="/settings"
+                                        className={cn(
+                                            "flex h-8 w-8 items-center justify-center rounded-lg transition-colors duration-150",
+                                            settingsActive
+                                                ? "bg-[hsl(var(--sidebar-active-bg))] text-[hsl(var(--sidebar-active-fg))]"
+                                                : "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]"
+                                        )}
+                                    >
+                                        <Settings className="h-3.5 w-3.5" />
+                                    </Link>
+                                </TooltipTrigger>
+                                <TooltipContent side="right">
+                                    {t("nav.settings")}
+                                </TooltipContent>
+                            </Tooltip>
                         </div>
                     ) : (
                         <div className="space-y-0.5">
-                            {/* User row */}
-                            <DropdownMenu>
-                                <DropdownMenuTrigger
-                                    className={cn(
-                                        "flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150",
-                                        "text-[hsl(var(--sidebar-fg))] hover:bg-[hsl(var(--sidebar-hover-bg))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/30"
-                                    )}
-                                >
-                                    <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border bg-background">
-                                        <span className="text-xs font-semibold text-foreground">
-                                            {user?.username?.[0]?.toUpperCase() ?? "?"}
-                                        </span>
-                                    </div>
-                                    <span className="flex-1 truncate text-left">
-                                        {user?.username}
-                                    </span>
-                                </DropdownMenuTrigger>
-                                <DropdownMenuContent side="right" align="end" className="w-48">
-                                    <DropdownMenuSub>
-                                        <DropdownMenuSubTrigger>
-                                            <Languages className="mr-2 h-4 w-4" />
-                                            {currentLangLabel}
-                                        </DropdownMenuSubTrigger>
-                                        <DropdownMenuSubContent>
-                                            {Object.entries(LANG_LABELS).map(([code, label]) => (
-                                                <DropdownMenuItem
-                                                    key={code}
-                                                    onClick={() => i18n.changeLanguage(code)}
-                                                    className={
-                                                        i18n.language === code
-                                                            ? "font-semibold text-primary"
-                                                            : ""
-                                                    }
-                                                >
-                                                    {label}
-                                                </DropdownMenuItem>
-                                            ))}
-                                        </DropdownMenuSubContent>
-                                    </DropdownMenuSub>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem onClick={() => setShowChangePwd(true)}>
-                                        <KeyRound className="mr-2 h-4 w-4" />
-                                        {t("auth.changePassword")}
-                                    </DropdownMenuItem>
-                                    <DropdownMenuSeparator />
-                                    <DropdownMenuItem
-                                        onClick={clearAuth}
-                                        className="text-destructive focus:text-destructive"
-                                    >
-                                        <LogOut className="mr-2 h-4 w-4" />
-                                        {t("auth.logout")}
-                                    </DropdownMenuItem>
-                                </DropdownMenuContent>
-                            </DropdownMenu>
-
                             <div className="grid grid-cols-2 gap-1">
                                 <button
                                     onClick={() =>
@@ -395,29 +273,22 @@ export function Sidebar({ collapsed, onToggle }: SidebarProps) {
                                             : t("common.darkMode")}
                                     </span>
                                 </button>
-                                {isAdmin && (
-                                    <Link
-                                        to="/settings"
-                                        className={cn(
-                                            "flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150",
-                                            settingsActive
-                                                ? "bg-[hsl(var(--sidebar-active-bg))] text-[hsl(var(--sidebar-active-fg))]"
-                                                : "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]"
-                                        )}
-                                    >
-                                        <Settings className="h-4 w-4" />
-                                        <span>{t("nav.settings")}</span>
-                                    </Link>
-                                )}
+                                <Link
+                                    to="/settings"
+                                    className={cn(
+                                        "flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors duration-150",
+                                        settingsActive
+                                            ? "bg-[hsl(var(--sidebar-active-bg))] text-[hsl(var(--sidebar-active-fg))]"
+                                            : "text-[hsl(var(--sidebar-muted))] hover:bg-[hsl(var(--sidebar-hover-bg))] hover:text-[hsl(var(--sidebar-fg))]"
+                                    )}
+                                >
+                                    <Settings className="h-4 w-4" />
+                                    <span>{t("nav.settings")}</span>
+                                </Link>
                             </div>
                         </div>
                     )}
                 </div>
-
-                <ChangePasswordDialog
-                    open={showChangePwd}
-                    onClose={() => setShowChangePwd(false)}
-                />
             </aside>
         </TooltipProvider>
     );

@@ -23,7 +23,7 @@ export const PRIMARY_NAV_ITEMS: AppNavItem[] = [
         label: "nav.integrations",
         icon: Plug,
         adminOnly: true,
-        aliases: ["/channels", "/tools", "/mcp", "/providers"],
+        aliases: ["/channels", "/tools", "/mcp", "/skills", "/providers"],
     },
 ];
 

@@ -46,13 +46,6 @@ class ChannelManager:
         """Initialize channels discovered via pkgutil scan + entry_points plugins."""
         from xbot.channels.registry import discover_all
 
-        groq_key_secret = self.config.providers.groq.api_key
-        groq_key = (
-            groq_key_secret.get_secret_value()
-            if hasattr(groq_key_secret, "get_secret_value")
-            else str(groq_key_secret or "")
-        )
-
         for name, cls in discover_all().items():
             section = getattr(self.config.channels, name, None)
             if section is None:
@@ -66,7 +59,6 @@ class ChannelManager:
                 continue
             try:
                 channel = cls(section, self.bus)
-                channel.transcription_api_key = groq_key
                 self.channels[name] = channel
                 logger.info("%s channel enabled", cls.display_name)
             except Exception as e:

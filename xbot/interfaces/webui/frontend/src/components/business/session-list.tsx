@@ -51,7 +51,13 @@ export function SessionList() {
             currentSessionKey?.startsWith(myPrefix) && !mySessions.some((s) => s.key === currentSessionKey);
         if (isLocalNew && currentSessionKey) {
             return [
-                { key: currentSessionKey, updated_at: new Date().toISOString(), last_message: undefined },
+                {
+                    key: currentSessionKey,
+                    channel: currentSessionKey.split(":")[0] ?? "web",
+                    updated_at: new Date().toISOString(),
+                    first_message: undefined,
+                    last_message: undefined,
+                },
                 ...mySessions,
             ];
         }
@@ -77,10 +83,12 @@ export function SessionList() {
             {/* Session items */}
             <div className="flex-1 min-h-0 overflow-y-auto space-y-0.5 px-1">
                 {displaySessions.map((s) => {
-                    const isWeb = s.key.split(":")[0] === "web";
+                    const channel = s.channel ?? s.key.split(":")[0] ?? "web";
+                    const isWeb = channel === "web";
                     const parts = s.key.split(":");
                     const rawLabel = isWeb ? (parts[2] ?? s.key) : (parts[parts.length - 1] ?? s.key);
-                    const label = rawLabel.length > 14 ? rawLabel.slice(0, 14) + "..." : rawLabel;
+                    const fallbackLabel = rawLabel.length > 14 ? rawLabel.slice(0, 14) + "..." : rawLabel;
+                    const label = s.first_message || fallbackLabel;
                     const active = s.key === currentSessionKey;
                     const sessionBusy = sessionStates[s.key]?.isWaiting ?? false;
                     const ChannelIcon = getChannelIcon(s.key);
@@ -104,17 +112,12 @@ export function SessionList() {
                                 <ChannelIcon className="h-3.5 w-3.5" />
                             </div>
                             <div className="min-w-0 flex-1 overflow-hidden">
-                                <div className="flex items-baseline justify-between gap-1">
-                                    <span className="truncate font-medium leading-snug text-xs">{label}</span>
-                                    <span className="shrink-0 text-[10px] leading-snug text-muted-foreground/70">
-                                        {formatDate(s.updated_at)}
-                                    </span>
-                                </div>
+                                <span className="block truncate font-medium leading-snug text-xs">{label}</span>
                                 <p className="mt-0.5 truncate leading-snug text-[10px] text-muted-foreground">
                                     {sessionBusy ? (
                                         <StatusDot tone="info" label="Processing..." pulse />
                                     ) : (
-                                        s.last_message || "—"
+                                        `${channel} · ${formatDate(s.updated_at)}`
                                     )}
                                 </p>
                             </div>

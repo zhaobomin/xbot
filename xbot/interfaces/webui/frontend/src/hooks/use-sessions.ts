@@ -5,8 +5,10 @@ import i18n from "../i18n";
 
 export interface SessionInfo {
     key: string;
+    channel?: string;
     created_at: string;
     updated_at: string;
+    first_message?: string;
     last_message?: string;
 }
 

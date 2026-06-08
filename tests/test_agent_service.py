@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from xbot.platform.bus.events import InboundMessage
+from xbot.platform.config.schema import Config, ProviderConfig
 from xbot.runtime.core.protocol import AgentContext, AgentResponse
 from xbot.runtime.core.service import AgentService
 from xbot.runtime.core.types import AgentConfig
@@ -54,6 +55,21 @@ class TestAgentService:
         await service.initialize(config, shared_resources)
 
         assert service._initialized is True
+
+    def test_effective_model_uses_runtime_config_with_agent_config(self, tmp_path: Path) -> None:
+        """AgentConfig constructor path should still read provider defaults from runtime Config."""
+        runtime_config = Config()
+        runtime_config.agents.defaults.provider = "alrun"
+        runtime_config.agents.defaults.model = ""
+        runtime_config.providers.custom_providers["alrun"] = ProviderConfig(models=["qwen3-coder-next"])
+
+        service = AgentService(
+            AgentConfig(model="", system_prompt=""),
+            {"workspace": str(tmp_path), "config": runtime_config},
+        )
+        service._shared_resources = {"workspace": str(tmp_path), "config": runtime_config}
+
+        assert service._get_effective_model() == "qwen3-coder-next"
 
     @pytest.mark.asyncio
     async def test_shutdown(

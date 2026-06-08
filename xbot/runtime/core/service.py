@@ -1436,7 +1436,7 @@ class AgentService:
 
         options = ClaudeAgentOptions(
             cwd=execution_cwd,
-            model=self._config.model,
+            model=self._get_effective_model(),
             system_prompt=system_prompt,
             resume=resume_session,
             mcp_servers=mcp_servers if mcp_servers else None,
@@ -1516,6 +1516,45 @@ class AgentService:
                 logger.debug("Failed to resolve workspace dir override for %s: %s", session_key, e)
         return workspace_expanded
 
+    def _get_effective_model(self) -> str:
+        """Get the effective model to use.
+
+        Priority:
+        1. agents.defaults.model (if explicitly set)
+        2. providers.{current_provider}.models[0]
+        3. Hardcoded default
+        """
+        config = self._shared_resources.get("config")
+        defaults = getattr(getattr(config, "agents", None), "defaults", None)
+        providers = getattr(config, "providers", None)
+
+        # 1. If user explicitly set model, use it
+        if defaults is not None and getattr(defaults, "model", None):
+            return defaults.model
+
+        # 2. Try to get first model from current provider
+        if defaults is not None and providers is not None:
+            provider_name = getattr(defaults, "provider", "auto")
+            if provider_name != "auto":
+                provider_attr = provider_name.replace("-", "_")
+
+                # Check fixed providers
+                provider_config = getattr(providers, provider_attr, None)
+
+                # Check custom_providers
+                if not provider_config and hasattr(providers, 'custom_providers'):
+                    provider_config = providers.custom_providers.get(provider_attr)
+
+                if provider_config and hasattr(provider_config, 'models') and provider_config.models:
+                    return provider_config.models[0]
+
+        configured_model = getattr(self._config, "model", None) if self._config else None
+        if configured_model:
+            return configured_model
+
+        # 3. Hardcoded default
+        return "claude-sonnet-4-5"
+
     def _build_env_config(self) -> dict[str, str]:
         """Build environment configuration for SDK.
 
@@ -1553,6 +1592,12 @@ class AgentService:
             if provider_config:
                 logger.info(f"[AgentService] Found provider config via attr: {attr_name}")
                 break
+
+        # Fallback: check custom_providers
+        if not provider_config and hasattr(providers, 'custom_providers'):
+            provider_config = providers.custom_providers.get(provider_name)
+            if provider_config:
+                logger.info(f"[AgentService] Found provider config in custom_providers: {provider_name}")
 
         if provider_config:
             # Handle SecretStr type for api_key
@@ -1848,7 +1893,9 @@ class AgentService:
         get_provider_name = getattr(config, "get_provider_name", None)
         if callable(get_provider_name):
             try:
-                model_name = self._config.model if self._config else None
+                model_name = getattr(defaults, "model", None)
+                if not model_name and self._config is not None:
+                    model_name = getattr(self._config, "model", None)
                 resolved = get_provider_name(model_name)
                 if isinstance(resolved, str) and resolved:
                     return resolved
@@ -1866,8 +1913,10 @@ class AgentService:
         defaults = getattr(getattr(config, "agents", None), "defaults", None)
 
         supported: set[str] = {"inherit"}
-        available_models = list(getattr(defaults, "available_models", []) or [])
-        for model_name in available_models:
+
+        # 从当前供应商配置读取模型列表
+        provider_models = self._get_provider_models(config)
+        for model_name in provider_models:
             if not isinstance(model_name, str):
                 continue
             normalized = model_name.strip().lower()
@@ -1883,11 +1932,56 @@ class AgentService:
             supported.add(configured_model)
 
         # Anthropic native provider usually accepts alias models even if
-        # available_models is not explicitly configured.
-        if not available_models and normalized_provider == "anthropic":
+        # models is not explicitly configured.
+        if not provider_models and normalized_provider == "anthropic":
             supported.update({"haiku", "sonnet", "opus"})
 
         return supported
+
+    def _get_provider_models(self, config: Any) -> list[str]:
+        """从当前供应商配置读取模型列表。
+
+        Args:
+            config: 配置对象
+
+        Returns:
+            模型列表，未配置时返回空列表
+        """
+        if not config:
+            return []
+
+        providers = getattr(config, "providers", None)
+        if not providers:
+            return []
+
+        # 获取当前供应商名称
+        defaults = getattr(getattr(config, "agents", None), "defaults", None)
+        if not defaults:
+            return []
+
+        provider_name = getattr(defaults, "provider", "auto")
+        if provider_name == "auto":
+            # 使用配置的模型推断供应商
+            model = getattr(defaults, "model", "")
+            if model:
+                from xbot.platform.providers.registry import find_by_model
+                spec = find_by_model(model)
+                if spec:
+                    provider_name = spec.name
+
+        provider_attr = provider_name.replace("-", "_")
+
+        # 先检查固定供应商
+        provider_config = getattr(providers, provider_attr, None)
+
+        # 再检查 custom_providers
+        if not provider_config and hasattr(providers, 'custom_providers'):
+            provider_config = providers.custom_providers.get(provider_attr)
+
+        if provider_config and hasattr(provider_config, 'models'):
+            return list(provider_config.models or [])
+
+        return []
 
     def _convert_event(self, event: Any) -> AgentResponse | None:
         """Convert SDK event to AgentResponse."""
@@ -2572,6 +2666,11 @@ class AgentService:
 
             if not final_result_text and last_content_text:
                 final_result_text = last_content_text
+
+            # Persist messages to conversation store
+            self._persist_user_message(session_key, content)
+            if final_result_text:
+                self._persist_assistant_message(session_key, final_result_text)
 
             return final_result_text
         finally:
@@ -3526,7 +3625,7 @@ class AgentService:
                 else:
                     anthropic_tool_choice = tool_choice
 
-        model = self._config.model if self._config else "claude-sonnet-4-20250514"
+        model = self._get_effective_model()
 
         payload: dict[str, Any] = {
             "model": model,
