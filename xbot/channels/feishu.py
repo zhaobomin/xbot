@@ -192,8 +192,46 @@ class FeishuChannel(BaseChannel):
             return False, "lark client not initialized"
         return True, "ok"
 
+    def _kill_stale_ws_workers(self) -> None:
+        """Kill any stale feishu worker processes left over from previous runs.
+
+        When the gateway is force-killed (SIGKILL), worker subprocesses may
+        survive as orphans (ppid becomes 1).  If not cleaned up, the stale
+        worker will also hold a WebSocket connection to Feishu, causing
+        message delivery issues.
+        """
+        import signal
+        import subprocess
+
+        try:
+            # Find all python processes that are multiprocessing workers
+            result = subprocess.run(
+                ["pgrep", "-f", "spawn_main.*feishu"],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                for line in result.stdout.strip().split("\n"):
+                    pid = line.strip()
+                    if not pid:
+                        continue
+                    try:
+                        pid_int = int(pid)
+                        # Don't kill ourselves
+                        if pid_int == os.getpid():
+                            continue
+                        logger.info("Killing stale feishu worker process: %s", pid)
+                        os.kill(pid_int, signal.SIGTERM)
+                    except (ValueError, ProcessLookupError, PermissionError):
+                        pass
+        except Exception as exc:
+            logger.debug("Error checking for stale workers: %s", exc)
+
     def _start_ws_worker(self) -> None:
         from xbot.channels.feishu_ws_worker import run_feishu_ws_worker
+
+        # Kill any orphaned worker processes from previous gateway runs
+        self._kill_stale_ws_workers()
 
         # Clean up old resources before starting new worker
         self._cleanup_ws_resources()

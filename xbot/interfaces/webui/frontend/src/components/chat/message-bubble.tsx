@@ -3,6 +3,7 @@ import ReactMarkdown from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import { cn } from "../../lib/utils";
+import { isDesktopApp } from "../../lib/client-runtime";
 import type { ChatMessage } from "../../stores/chat-store";
 import { ToolCallCard } from "./tool-call-card";
 import { ThinkingBlock } from "./thinking-block";
@@ -119,9 +120,18 @@ function safeMarkdownHref(href?: string): string | undefined {
 
 function handleMarkdownLinkClick(event: React.MouseEvent<HTMLAnchorElement>, href: string) {
     if (!isExternalHref(href)) return;
-    const opened = window.open(href, "_blank", "noopener,noreferrer");
-    if (opened) {
-        event.preventDefault();
+    // 阻止默认导航（桌面端 webview 会导航当前页面，浏览器端会重复打开）
+    event.preventDefault();
+    if (isDesktopApp()) {
+        // 桌面端：用 Tauri shell 在系统浏览器打开，失败时回退到 window.open
+        import("@tauri-apps/plugin-shell")
+            .then(({ open }) => open(href))
+            .catch(() => {
+                window.open(href, "_blank", "noopener,noreferrer");
+            });
+    } else {
+        // 浏览器端：直接新开标签页
+        window.open(href, "_blank", "noopener,noreferrer");
     }
 }
 
@@ -156,10 +166,13 @@ function MarkdownContent({
                             return <span>{children}</span>;
                         }
                         const external = isExternalHref(safeHref);
+                        // 桌面端：不设 target="_blank"（webview 会拦截并再开一个窗口），统一由 Tauri shell 打开
+                        // 浏览器端：用 target="_blank" 在新标签页打开
+                        const desktop = external && isDesktopApp();
                         return (
                             <a
                                 href={safeHref}
-                                target={external ? "_blank" : undefined}
+                                target={desktop ? undefined : "_blank"}
                                 rel={external ? "noopener noreferrer" : undefined}
                                 onClick={external ? (event) => handleMarkdownLinkClick(event, safeHref) : undefined}
                             >
