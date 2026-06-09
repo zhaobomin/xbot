@@ -17,7 +17,12 @@ export function getClientSessionPrefix(userId?: string | null): string {
     return `${getClientSessionNamespace()}:${userId ?? "admin"}:`;
 }
 
-export function createClientSessionKey(userId?: string | null, id = "default"): string {
+export function createClientSessionId(): string {
+    const bytes = crypto.getRandomValues(new Uint8Array(6));
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export function createClientSessionKey(userId?: string | null, id = createClientSessionId()): string {
     return `${getClientSessionPrefix(userId)}${id}`;
 }
 

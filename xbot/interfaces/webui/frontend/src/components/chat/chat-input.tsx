@@ -52,6 +52,8 @@ export function ChatInput({
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
+    const isComposingRef = useRef(false);
+    const compositionEndedAtRef = useRef(0);
 
     const MAX_TEXTAREA_H = 240;
     useLayoutEffect(() => {
@@ -117,10 +119,23 @@ export function ChatInput({
     );
 
     const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-        if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
+        if (e.key !== "Enter" || e.shiftKey) return;
+
+        const nativeEvent = e.nativeEvent as KeyboardEvent;
+        const justEndedComposition = Date.now() - compositionEndedAtRef.current < 180;
+        const isComposing =
+            isComposingRef.current ||
+            nativeEvent.isComposing ||
+            nativeEvent.keyCode === 229 ||
+            justEndedComposition;
+
+        if (isComposing) {
             e.preventDefault();
-            handleSend();
+            return;
         }
+
+        e.preventDefault();
+        handleSend();
     };
 
     const isUploading = attachments.some((a) => a.uploading);
@@ -157,14 +172,14 @@ export function ChatInput({
         !isUploading;
 
     return (
-        <div className="px-4 pb-4 pt-2">
-            <div className="w-full">
+        <div className="shrink-0 border-t border-border/30 bg-card/95 px-4 py-3 backdrop-blur md:px-8">
+            <div className="mx-auto w-full max-w-7xl">
                 <div
                     className={cn(
-                        "relative flex flex-col rounded-2xl border border-border/60 bg-card/95 backdrop-blur-xl shadow-soft transition-all",
+                        "relative flex flex-col rounded-xl border border-border/35 bg-background/70 transition-all",
                         isWaiting
                             ? "border-primary/40"
-                            : "focus-within:border-primary/60 focus-within:ring-1 focus-within:ring-primary/10"
+                            : "focus-within:border-primary/30 focus-within:ring-1 focus-within:ring-primary/10"
                     )}
                 >
                     {attachments.length > 0 && (
@@ -207,10 +222,17 @@ export function ChatInput({
                         value={value}
                         onChange={(e) => setValue(e.target.value)}
                         onKeyDown={handleKeyDown}
+                        onCompositionStart={() => {
+                            isComposingRef.current = true;
+                        }}
+                        onCompositionEnd={() => {
+                            isComposingRef.current = false;
+                            compositionEndedAtRef.current = Date.now();
+                        }}
                         onPaste={handlePaste}
                         placeholder={t("chat.placeholder")}
                         rows={1}
-                        className="resize-none border-0 bg-transparent px-4 py-3.5 shadow-none focus-visible:ring-0 text-base leading-relaxed w-full"
+                        className="w-full resize-none border-0 bg-transparent px-4 py-3 shadow-none focus-visible:ring-0 text-base leading-relaxed"
                         disabled={readOnly || (!isWaiting && disabled)}
                     />
                     <div className="flex items-center justify-between px-3 pb-2">

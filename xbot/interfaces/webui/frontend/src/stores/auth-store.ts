@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { persist } from "zustand/middleware";
 
 export interface UserInfo {
     id: string;
@@ -16,10 +17,13 @@ interface AuthState {
 const DEFAULT_USER: UserInfo = { id: "admin", username: "admin", role: "admin" };
 
 export const useAuthStore = create<AuthState>()(
-    (set) => ({
+    persist(
+        (set) => ({
         user: DEFAULT_USER,
         token: null,
         setAuth: (user, token) => set({ user, token }),
         clearAuth: () => set({ user: DEFAULT_USER, token: null }),
-    })
+        }),
+        { name: "xbot-auth" }
+    )
 );

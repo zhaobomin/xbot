@@ -41,7 +41,7 @@ from xbot.interfaces.gateway.auth import (
     print_password_banner,
 )
 from xbot.interfaces.gateway.services import ServiceContainer
-from xbot.interfaces.gateway.session_keys import to_internal_session_key
+from xbot.interfaces.gateway.session_keys import runtime_route_from_session_key, to_internal_session_key
 from xbot.platform.config.schema import MCPServerConfig, ProviderConfig
 from xbot.runtime.system.cron.types import CronPayload, CronSchedule
 
@@ -410,6 +410,7 @@ def create_app(
     app.state.auth = AuthManager(get_or_create_jwt_secret())
     app.state.runtime_started = False
     app.state.channel_start_task = None
+    app.state.webui_active_tasks = {}
     if frontend_dir is not None:
         resolved_frontend_dir = frontend_dir
     else:
@@ -445,17 +446,11 @@ def create_app(
     else:
         app.state.s3_config = dict(default_s3_config)
 
-    def _default_webui_user() -> dict[str, Any]:
-        return {"id": "admin", "username": "admin", "role": "admin"}
-
     def _get_user_from_auth_header(authorization: str | None) -> dict[str, Any]:
         if not authorization or not authorization.startswith("Bearer "):
-            return _default_webui_user()
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing token")
         token = authorization.removeprefix("Bearer ").strip()
-        try:
-            payload = app.state.auth.decode_token(token)
-        except HTTPException:
-            return _default_webui_user()
+        payload = app.state.auth.decode_token(token)
         return {
             "id": payload["sub"],
             "username": payload["username"],
@@ -464,6 +459,32 @@ def create_app(
 
     async def _current_user(authorization: str | None = Header(default=None)) -> dict[str, Any]:
         return _get_user_from_auth_header(authorization)
+
+    def _session_namespace(session_key: str) -> str:
+        return (session_key or "").split(":", 1)[0]
+
+    def _ensure_writable_client_session(session_key: str, user_id: str) -> str:
+        internal_session_key = to_internal_session_key(session_key)
+        namespace, sep, rest = internal_session_key.partition(":")
+        if namespace not in {"web", "app"}:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This session is read-only from WebUI/App",
+            )
+        owner, owner_sep, _session_id = rest.partition(":")
+        if not sep or not owner_sep or owner != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot modify another client's session",
+            )
+        return internal_session_key
+
+    async def _send_read_only_session_error(websocket: WebSocket, session_key: str) -> None:
+        await _safe_websocket_send_json(websocket, {
+            "type": "error",
+            "error": "This session is read-only from WebUI/App",
+            "session_key": session_key,
+        })
 
     def _frontend_index_response() -> HTMLResponse | None:
         resolved_frontend = Path(app.state.frontend_dir)
@@ -766,7 +787,9 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> list[dict[str, Any]]:
         _get_user_from_auth_header(authorization)
-        session = container.conversation_store.get_or_create(session_key)
+        session = container.conversation_store.get(session_key)
+        if session is None:
+            return []
         return session.messages
 
     @app.get("/api/sessions/{session_key:path}/memory")
@@ -792,8 +815,9 @@ def create_app(
     ) -> dict[str, int]:
         from datetime import datetime
 
-        _get_user_from_auth_header(authorization)
-        session = container.conversation_store.get_or_create(session_key)
+        user = _get_user_from_auth_header(authorization)
+        internal_session_key = _ensure_writable_client_session(session_key, str(user["id"]))
+        session = container.conversation_store.get_or_create(internal_session_key)
         if index < 0 or index >= len(session.messages):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid message index")
         del session.messages[index]
@@ -803,15 +827,11 @@ def create_app(
 
     @app.delete("/api/sessions/{session_key:path}")
     async def delete_session(session_key: str, authorization: str | None = Header(default=None)) -> dict[str, bool]:
-        _get_user_from_auth_header(authorization)
-        internal_session_key = to_internal_session_key(session_key)
-        removed = container.conversation_store.delete(session_key)
-        if internal_session_key != session_key:
-            removed = container.conversation_store.delete(internal_session_key) or removed
+        user = _get_user_from_auth_header(authorization)
+        internal_session_key = _ensure_writable_client_session(session_key, str(user["id"]))
+        removed = container.conversation_store.delete(internal_session_key)
         try:
             await container.agent.reset_session(internal_session_key, drop_sdk_context=True)
-            if internal_session_key != session_key:
-                await container.agent.reset_session(session_key, drop_sdk_context=True)
         except Exception:
             # Keep delete API best-effort for runtime cleanup.
             pass
@@ -821,6 +841,22 @@ def create_app(
     async def providers(authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
         _get_user_from_auth_header(authorization)
         provider_list = []
+
+        # Legacy WebUI compatibility: expose the historical `custom` provider
+        # first, while storing it in the new custom_providers map.
+        container.config.providers.custom
+
+        for name, value in container.config.providers.custom_providers.items():
+            raw_key = value.api_key.get_secret_value() if hasattr(value.api_key, "get_secret_value") else ""
+            provider_list.append({
+                "name": name,
+                "api_key_masked": _mask_secret(value.api_key),
+                "api_base": value.api_base,
+                "extra_headers": _sanitize_public_config(value.extra_headers),
+                "has_key": bool(raw_key),
+                "models": list(value.models) if value.models else [],
+                "is_custom": True,
+            })
 
         # 1. 固定供应商 (只有 anthropic)
         fixed_names = ["anthropic"]
@@ -835,19 +871,6 @@ def create_app(
                 "has_key": bool(raw_key),
                 "models": list(value.models) if value.models else [],
                 "is_custom": False,
-            })
-
-        # 2. 自定义供应商
-        for name, value in container.config.providers.custom_providers.items():
-            raw_key = value.api_key.get_secret_value() if hasattr(value.api_key, "get_secret_value") else ""
-            provider_list.append({
-                "name": name,
-                "api_key_masked": _mask_secret(value.api_key),
-                "api_base": value.api_base,
-                "extra_headers": _sanitize_public_config(value.extra_headers),
-                "has_key": bool(raw_key),
-                "models": list(value.models) if value.models else [],
-                "is_custom": True,
             })
 
         return provider_list
@@ -906,6 +929,7 @@ def create_app(
 
         # 查找供应商
         fixed_names = {"anthropic"}
+        container.config.providers.custom
         if safe_name in fixed_names:
             provider = getattr(container.config.providers, safe_name)
         elif safe_name in container.config.providers.custom_providers:
@@ -1527,27 +1551,143 @@ def create_app(
     @app.websocket("/ws/chat")
     async def ws_chat(websocket: WebSocket) -> None:
         token = websocket.query_params.get("token", "")
-        user_id = "admin"
-        if token:
-            with suppress(HTTPException):
-                payload = app.state.auth.decode_token(token)
-                user_id = str(payload.get("sub") or user_id)
+        try:
+            payload = app.state.auth.decode_token(token)
+        except HTTPException:
+            await websocket.close(code=1008)
+            return
+        user_id = str(payload.get("sub") or "admin")
         session_key = websocket.query_params.get("session") or f"web:{user_id}:default"
         await websocket.accept()
         if not await _safe_websocket_send_json(websocket, {"type": "session_info", "session_key": session_key}):
             return
 
+        active_tasks: dict[str, asyncio.Task] = app.state.webui_active_tasks
+        owned_task_keys: set[str] = set()
+
+        async def _run_agent_turn(active_session_key: str, content: str) -> None:
+            async def _on_progress(
+                text: str,
+                *,
+                tool_hint: bool = False,
+                event_type: str = "progress",
+                event_data: dict[str, Any] | None = None,
+            ) -> None:
+                await _safe_websocket_send_json(websocket, {
+                    "type": "progress",
+                    "content": text,
+                    "tool_hint": tool_hint,
+                    "event_type": event_type,
+                    "event_data": event_data,
+                    "session_key": active_session_key,
+                })
+
+            internal_session_key = to_internal_session_key(active_session_key)
+            runtime_channel, runtime_chat_id = runtime_route_from_session_key(
+                internal_session_key,
+                user_id,
+            )
+            before_session = container.conversation_store.get(internal_session_key)
+            before_count = len(before_session.messages) if before_session is not None else 0
+
+            try:
+                response = await container.agent.process_managed_direct(
+                    content=content,
+                    session_key=internal_session_key,
+                    channel=runtime_channel,
+                    chat_id=runtime_chat_id,
+                    on_progress=_on_progress,
+                )
+                after_session = container.conversation_store.get(internal_session_key)
+                after_count = len(after_session.messages) if after_session is not None else 0
+                if after_count <= before_count:
+                    session = container.conversation_store.get_or_create(internal_session_key)
+                    session.add_message("user", content)
+                    if response:
+                        session.add_message("assistant", response)
+                    container.conversation_store.save(session)
+                elif response and after_session is not None:
+                    last_role = after_session.messages[-1].get("role") if after_session.messages else None
+                    if last_role == "user":
+                        after_session.add_message("assistant", response)
+                        container.conversation_store.save(after_session)
+                await _safe_websocket_send_json(websocket, {
+                    "type": "done",
+                    "content": response,
+                    "session_key": active_session_key,
+                })
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                logger.exception("WebUI chat task failed for %s", active_session_key)
+                await _safe_websocket_send_json(websocket, {
+                    "type": "error",
+                    "error": str(exc),
+                    "session_key": active_session_key,
+                })
+            finally:
+                active_tasks.pop(active_session_key, None)
+                owned_task_keys.discard(active_session_key)
+
         try:
             while True:
                 message = await websocket.receive_json()
-                if message.get("type") != "message":
-                    continue
+                message_type = message.get("type")
                 message_session_key = message.get("session_key")
                 active_session_key = (
                     message_session_key
                     if isinstance(message_session_key, str) and message_session_key
                     else session_key
                 )
+                if message_type == "cancel":
+                    task = active_tasks.pop(active_session_key, None)
+                    if task is not None and not task.done():
+                        task.cancel()
+                        with suppress(asyncio.CancelledError):
+                            await task
+                    await _safe_websocket_send_json(websocket, {
+                        "type": "cancel_ok",
+                        "session_key": active_session_key,
+                    })
+                    continue
+                if message_type == "revoke":
+                    index = message.get("index")
+                    if not isinstance(index, int):
+                        await _safe_websocket_send_json(websocket, {
+                            "type": "error",
+                            "error": "Message index must be an integer",
+                            "session_key": active_session_key,
+                        })
+                        continue
+                    try:
+                        internal_session_key = _ensure_writable_client_session(active_session_key, user_id)
+                    except HTTPException:
+                        await _send_read_only_session_error(websocket, active_session_key)
+                        continue
+                    session = container.conversation_store.get_or_create(internal_session_key)
+                    if index < 0 or index >= len(session.messages):
+                        await _safe_websocket_send_json(websocket, {
+                            "type": "error",
+                            "error": "Invalid message index",
+                            "session_key": active_session_key,
+                        })
+                        continue
+                    del session.messages[index]
+                    session.updated_at = datetime.now()
+                    container.conversation_store.save(session)
+                    await _safe_websocket_send_json(websocket, {
+                        "type": "revoke_ok",
+                        "index": index,
+                        "session_key": active_session_key,
+                    })
+                    continue
+                if message_type != "message":
+                    continue
+                try:
+                    _ensure_writable_client_session(active_session_key, user_id)
+                except HTTPException:
+                    await _send_read_only_session_error(websocket, active_session_key)
+                    continue
                 content = message.get("content", "")
                 if not isinstance(content, str):
                     await _safe_websocket_send_json(websocket, {
@@ -1564,36 +1704,23 @@ def create_app(
                     })
                     return
 
-                async def _on_progress(
-                    text: str,
-                    *,
-                    tool_hint: bool = False,
-                    event_type: str = "progress",
-                    event_data: dict[str, Any] | None = None,
-                ) -> None:
+                task = active_tasks.get(active_session_key)
+                if task is not None and not task.done():
                     await _safe_websocket_send_json(websocket, {
-                        "type": "progress",
-                        "content": text,
-                        "tool_hint": tool_hint,
-                        "event_type": event_type,
-                        "event_data": event_data,
+                        "type": "error",
+                        "error": "A message is already running for this session",
                         "session_key": active_session_key,
                     })
-
-                response = await container.agent.process_managed_direct(
-                    content=content,
-                    session_key=to_internal_session_key(active_session_key),
-                    channel="web",
-                    chat_id=user_id,
-                    on_progress=_on_progress,
+                    continue
+                active_tasks[active_session_key] = asyncio.create_task(
+                    _run_agent_turn(active_session_key, content)
                 )
-                if not await _safe_websocket_send_json(websocket, {
-                    "type": "done",
-                    "content": response,
-                    "session_key": active_session_key,
-                }):
-                    return
+                owned_task_keys.add(active_session_key)
         except WebSocketDisconnect:
+            for key in list(owned_task_keys):
+                task = active_tasks.pop(key, None)
+                if task is not None and not task.done():
+                    task.cancel()
             return
 
     @app.get("/{full_path:path}", response_class=HTMLResponse)

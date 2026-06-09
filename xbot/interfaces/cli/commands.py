@@ -1098,6 +1098,31 @@ def gateway(
     asyncio.run(run())
 
 
+webui_app = typer.Typer(help="Manage WebUI")
+app.add_typer(webui_app, name="webui")
+
+
+@webui_app.command("serve")
+def webui_serve(
+    port: int | None = typer.Option(None, "--port", "-p", help="WebUI HTTP port (default: 18780)"),
+    gateway_port: int | None = typer.Option(None, "--gateway-port", help="Gateway port"),
+    workspace: str | None = typer.Option(None, "--workspace", "-w", help="Workspace directory"),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    config: str | None = typer.Option(None, "--config", "-c", help="Path to config file"),
+    health_port: int | None = typer.Option(None, "--health-port", help="Health check HTTP port"),
+):
+    """Start the integrated gateway WebUI."""
+    gateway(
+        port=gateway_port,
+        workspace=workspace,
+        verbose=verbose,
+        config=config,
+        health_port=health_port,
+        webui_port=port,
+        no_webui=False,
+    )
+
+
 
 
 # ============================================================================

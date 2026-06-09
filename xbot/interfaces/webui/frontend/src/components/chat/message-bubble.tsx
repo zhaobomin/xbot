@@ -99,6 +99,100 @@ function CodeBlock({ children, className }: { children: ReactNode; className?: s
     );
 }
 
+function isExternalHref(href: string): boolean {
+    try {
+        const base = typeof window !== "undefined" ? window.location.href : "http://localhost";
+        const url = new URL(href, base);
+        return ["http:", "https:", "mailto:", "tel:"].includes(url.protocol);
+    } catch {
+        return false;
+    }
+}
+
+function safeMarkdownHref(href?: string): string | undefined {
+    if (!href) return undefined;
+    if (href.startsWith("#") || href.startsWith("/") || href.startsWith("./") || href.startsWith("../")) {
+        return href;
+    }
+    return isExternalHref(href) ? href : undefined;
+}
+
+function handleMarkdownLinkClick(event: React.MouseEvent<HTMLAnchorElement>, href: string) {
+    if (!isExternalHref(href)) return;
+    const opened = window.open(href, "_blank", "noopener,noreferrer");
+    if (opened) {
+        event.preventDefault();
+    }
+}
+
+function MarkdownContent({
+    content,
+    className,
+}: {
+    content: string;
+    className?: string;
+}) {
+    return (
+        <div
+            className={cn(
+                "prose prose-sm max-w-none dark:prose-invert break-words",
+                "[&_p]:leading-relaxed [&_p]:my-1 [&_p]:[overflow-wrap:anywhere]",
+                "[&_pre]:rounded-xl [&_pre]:bg-zinc-100 dark:[&_pre]:bg-zinc-900 [&_pre]:text-zinc-900 dark:[&_pre]:text-zinc-100 [&_pre]:p-4 [&_pre]:text-xs [&_pre]:ring-1 [&_pre]:ring-border/50 [&_pre]:overflow-x-auto",
+                "[&_code:not(pre_code)]:rounded [&_code:not(pre_code)]:bg-muted [&_code:not(pre_code)]:px-1.5 [&_code:not(pre_code)]:py-0.5 [&_code:not(pre_code)]:text-xs [&_code:not(pre_code)]:font-mono [&_code:not(pre_code)]:text-foreground",
+                "[&_blockquote]:border-l-2 [&_blockquote]:border-l-border [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-muted-foreground",
+                "[&_th]:bg-muted/60 [&_th]:px-3 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-medium [&_td]:px-3 [&_td]:py-1.5 [&_td]:border-t [&_td]:border-border/40 [&_tr:nth-child(even)]:bg-muted/20",
+                "[&_ul]:my-2 [&_ol]:my-2 [&_li]:my-0.5",
+                "[&_a]:text-primary [&_a]:no-underline hover:[&_a]:underline",
+                className
+            )}
+        >
+            <ReactMarkdown
+                remarkPlugins={[remarkGfm]}
+                rehypePlugins={[rehypeHighlight]}
+                components={{
+                    a({ href, children }) {
+                        const safeHref = safeMarkdownHref(href);
+                        if (!safeHref) {
+                            return <span>{children}</span>;
+                        }
+                        const external = isExternalHref(safeHref);
+                        return (
+                            <a
+                                href={safeHref}
+                                target={external ? "_blank" : undefined}
+                                rel={external ? "noopener noreferrer" : undefined}
+                                onClick={external ? (event) => handleMarkdownLinkClick(event, safeHref) : undefined}
+                            >
+                                {children}
+                            </a>
+                        );
+                    },
+                    pre({ children }) {
+                        const child = children as React.ReactElement<{ className?: string; children?: ReactNode }>;
+                        const codeProps = child?.props;
+                        return (
+                            <CodeBlock className={codeProps?.className}>
+                                {codeProps?.children}
+                            </CodeBlock>
+                        );
+                    },
+                    table({ children }) {
+                        return (
+                            <div className="my-3 overflow-x-auto rounded-lg border border-border/50">
+                                <table className="m-0 w-full min-w-max text-xs">
+                                    {children}
+                                </table>
+                            </div>
+                        );
+                    },
+                }}
+            >
+                {content}
+            </ReactMarkdown>
+        </div>
+    );
+}
+
 function SubAgentProgressBlock({ message }: { message: ChatMessage }) {
     const isError = message.content.startsWith("Error:");
     const match = message.content.match(/^\[↳ (.+?)\] (.+)$/);
@@ -444,15 +538,16 @@ export function MessageBubble({ message, onRevoke }: MessageBubbleProps) {
                 {/* Content */}
                 <div
                     className={cn(
-                        "flex min-w-0 max-w-2xl flex-col gap-1",
-                        isUser ? "items-end" : "items-start"
+                        "flex min-w-0 flex-col gap-1",
+                        isUser ? "max-w-2xl items-end" : "flex-1 items-start"
                     )}
                 >
                     {isUser ? (
                         <div className="rounded-xl rounded-tr-sm border bg-muted px-4 py-2.5 text-sm leading-relaxed text-foreground">
-                            <span className="whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-                                {message.content}
-                            </span>
+                            <MarkdownContent
+                                content={message.content ?? ""}
+                                className="prose-p:my-0 prose-ul:my-1 prose-ol:my-1"
+                            />
                         </div>
                     ) : (
                         <div className="w-full min-w-0 space-y-2 [overflow-wrap:anywhere]">
@@ -460,44 +555,7 @@ export function MessageBubble({ message, onRevoke }: MessageBubbleProps) {
                                 part.type === "thinking" ? (
                                     <ThinkingBlock key={i} content={part.content} />
                                 ) : part.content.trim() ? (
-                                    <div
-                                        key={i}
-                                        className={cn(
-                                            "prose prose-sm max-w-none dark:prose-invert break-words",
-                                            "[&_p]:leading-relaxed [&_p]:my-1 [&_p]:[overflow-wrap:anywhere]",
-                                            "[&_pre]:rounded-xl [&_pre]:bg-zinc-100 dark:[&_pre]:bg-zinc-900 [&_pre]:text-zinc-900 dark:[&_pre]:text-zinc-100 [&_pre]:p-4 [&_pre]:text-xs [&_pre]:ring-1 [&_pre]:ring-border/50 [&_pre]:overflow-x-auto",
-                                            "[&_code:not(pre_code)]:rounded [&_code:not(pre_code)]:bg-muted [&_code:not(pre_code)]:px-1.5 [&_code:not(pre_code)]:py-0.5 [&_code:not(pre_code)]:text-xs [&_code:not(pre_code)]:font-mono [&_code:not(pre_code)]:text-foreground",
-                                            "[&_blockquote]:border-l-2 [&_blockquote]:border-l-border [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-muted-foreground",
-                                            "[&_table]:text-xs [&_table]:w-full [&_table]:overflow-x-auto [&_th]:bg-muted/60 [&_th]:px-3 [&_th]:py-1.5 [&_th]:text-left [&_th]:font-medium [&_td]:px-3 [&_td]:py-1.5 [&_td]:border-t [&_td]:border-border/40 [&_tr:nth-child(even)]:bg-muted/20",
-                                            "[&_ul]:my-2 [&_ol]:my-2 [&_li]:my-0.5",
-                                            "[&_a]:text-primary [&_a]:no-underline hover:[&_a]:underline"
-                                        )}
-                                    >
-                                        <ReactMarkdown
-                                            remarkPlugins={[remarkGfm]}
-                                            rehypePlugins={[rehypeHighlight]}
-                                            components={{
-                                                a({ href, children }) {
-                                                    return (
-                                                        <a href={href} target="_blank" rel="noopener noreferrer">
-                                                            {children}
-                                                        </a>
-                                                    );
-                                                },
-                                                pre({ children }) {
-                                                    const child = children as React.ReactElement<{ className?: string; children?: ReactNode }>;
-                                                    const codeProps = child?.props;
-                                                    return (
-                                                        <CodeBlock className={codeProps?.className}>
-                                                            {codeProps?.children}
-                                                        </CodeBlock>
-                                                    );
-                                                },
-                                            }}
-                                        >
-                                            {part.content}
-                                        </ReactMarkdown>
-                                    </div>
+                                    <MarkdownContent key={i} content={part.content} />
                                 ) : null
                             )}
                             {message.toolCalls?.map((tool) => (

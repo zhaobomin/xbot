@@ -42,10 +42,24 @@ class ChannelManager:
     def _report_task_error(owner: str, task_name: str, exc: BaseException) -> None:
         logger.error("Background task failed for owner=%s task=%s: %s", owner, task_name, exc)
 
+    def _transcription_api_key(self) -> str:
+        providers = getattr(self.config, "providers", None)
+        groq = getattr(providers, "groq", None)
+        if groq is None:
+            custom_providers = getattr(providers, "custom_providers", {}) or {}
+            groq = custom_providers.get("groq")
+        if groq is None:
+            return ""
+        api_key = getattr(groq, "api_key", "")
+        if hasattr(api_key, "get_secret_value"):
+            return api_key.get_secret_value()
+        return api_key or ""
+
     def _init_channels(self) -> None:
         """Initialize channels discovered via pkgutil scan + entry_points plugins."""
         from xbot.channels.registry import discover_all
 
+        transcription_api_key = self._transcription_api_key()
         for name, cls in discover_all().items():
             section = getattr(self.config.channels, name, None)
             if section is None:
@@ -59,6 +73,7 @@ class ChannelManager:
                 continue
             try:
                 channel = cls(section, self.bus)
+                channel.transcription_api_key = transcription_api_key
                 self.channels[name] = channel
                 logger.info("%s channel enabled", cls.display_name)
             except Exception as e:

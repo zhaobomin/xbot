@@ -64,11 +64,12 @@ export function useDeleteSession() {
 
 export function useRevokeMessage() {
     const qc = useQueryClient();
+    const gatewayBaseUrl = useGatewayBaseUrl();
     return useMutation({
         mutationFn: ({ key, index }: { key: string; index: number }) =>
             api.delete(`/sessions/${encodeURIComponent(key)}/messages/${index}`).then((r) => r.data),
         onSuccess: (_data, vars) => {
-            qc.invalidateQueries({ queryKey: ["sessions", vars.key, "messages"] });
+            qc.invalidateQueries({ queryKey: ["sessions", gatewayBaseUrl, vars.key, "messages"] });
             qc.invalidateQueries({ queryKey: ["sessions"] });
             toast.success(i18n.t("chat.messageRevoked", "Message revoked"));
         },

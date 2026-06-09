@@ -53,7 +53,7 @@ export const useChatStore = create<ChatState>()(
         (set, get) => ({
             currentSessionKey: null,
             messages: [],
-            showToolMessages: false,
+            showToolMessages: true,
             mobileShowChat: false,
             sessionStates: {},
 
@@ -125,6 +125,15 @@ export const useChatStore = create<ChatState>()(
         }),
         {
             name: "xbot-chat",
+            version: 1,
+            migrate: (persistedState) => {
+                const state = persistedState as Partial<Pick<ChatState, "currentSessionKey" | "messages" | "showToolMessages">>;
+                return {
+                    currentSessionKey: state.currentSessionKey ?? null,
+                    messages: state.messages ?? [],
+                    showToolMessages: true,
+                };
+            },
             partialize: (state) => ({
                 currentSessionKey: state.currentSessionKey,
                 messages: state.messages,

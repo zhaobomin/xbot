@@ -219,6 +219,15 @@ class ProvidersConfig(Base):
         description="用户自定义的 Anthropic 兼容供应商"
     )
 
+    @property
+    def custom(self) -> ProviderConfig:
+        """Compatibility alias for the legacy `providers.custom` config."""
+        return self.custom_providers.setdefault("custom", ProviderConfig())
+
+    @custom.setter
+    def custom(self, value: ProviderConfig) -> None:
+        self.custom_providers["custom"] = value
+
 
 class HeartbeatConfig(Base):
     """Heartbeat service configuration."""

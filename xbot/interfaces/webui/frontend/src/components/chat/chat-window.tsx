@@ -3,16 +3,32 @@ import { useTranslation } from "react-i18next";
 import { nanoid } from "nanoid";
 import { useQueryClient } from "@tanstack/react-query";
 import { useChatStore } from "../../stores/chat-store";
+import { useGatewayBaseUrl } from "../../stores/gateway-store";
 import { ChatWebSocket, type WsMessage } from "../../lib/ws";
 import { isWritableClientSession } from "../../lib/client-runtime";
 import { MessageBubble } from "./message-bubble";
 import { ChatInput } from "./chat-input";
 import { useRevokeMessage } from "../../hooks/use-sessions";
-import { ArrowDown } from "lucide-react";
+import { ArrowDown, Eye, Monitor } from "lucide-react";
+import { getChannelIcon } from "../../lib/channel-icons";
+import { StatusDot } from "../business/status-dot";
+
+function sessionTitle(sessionKey?: string | null): string {
+    if (!sessionKey) return "default";
+    const parts = sessionKey.split(":");
+    const namespace = parts[0];
+    if ((namespace === "web" || namespace === "app") && parts[2]) return parts[2];
+    return parts[parts.length - 1] || sessionKey;
+}
+
+function sessionNamespace(sessionKey?: string | null): string {
+    return sessionKey?.split(":")[0] || "app";
+}
 
 export function ChatWindow() {
     const { t } = useTranslation();
     const qc = useQueryClient();
+    const gatewayBaseUrl = useGatewayBaseUrl();
     const {
         currentSessionKey,
         messages,
@@ -32,6 +48,9 @@ export function ChatWindow() {
     const isWaiting = sessionState.isWaiting;
     const progressText = sessionState.progressText;
     const readOnly = !isWritableClientSession(currentSessionKey);
+    const namespace = sessionNamespace(currentSessionKey);
+    const title = sessionTitle(currentSessionKey);
+    const ChannelIcon = getChannelIcon(currentSessionKey ?? "app:default");
 
     const visibleMessages = showToolMessages
         ? messages
@@ -181,7 +200,7 @@ export function ChatWindow() {
                 qc.invalidateQueries({ queryKey: ["sessions"] });
                 if (targetKey) {
                     qc.invalidateQueries({
-                        queryKey: ["sessions", targetKey, "messages"],
+                        queryKey: ["sessions", gatewayBaseUrl, targetKey, "messages"],
                     });
                 }
             } else if (msg.type === "error") {
@@ -200,12 +219,12 @@ export function ChatWindow() {
             } else if (msg.type === "revoke_ok") {
                 const targetKey = msgSessionKey || currentKey || "";
                 qc.invalidateQueries({
-                    queryKey: ["sessions", targetKey, "messages"],
+                    queryKey: ["sessions", gatewayBaseUrl, targetKey, "messages"],
                 });
                 qc.invalidateQueries({ queryKey: ["sessions"] });
             }
         },
-        [addMessage, appendAssistantText, qc, setCurrentSession, setProgress, setWaiting, t]
+        [addMessage, appendAssistantText, gatewayBaseUrl, qc, setCurrentSession, setProgress, setWaiting, t]
     );
 
     useEffect(() => {
@@ -282,16 +301,52 @@ export function ChatWindow() {
     }, []);
 
     return (
-        <div className="flex flex-1 min-h-0 flex-col">
+        <div className="flex flex-1 min-h-0 flex-col bg-card">
+            <div className="hidden h-14 shrink-0 items-center justify-between border-b border-border/40 bg-card px-6 md:flex">
+                <div className="flex min-w-0 items-center gap-3">
+                    <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-muted/70 text-muted-foreground">
+                        <ChannelIcon className="h-4 w-4" />
+                    </div>
+                    <div className="min-w-0">
+                        <div className="truncate text-sm font-semibold text-foreground">
+                            {title}
+                        </div>
+                        <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
+                            <span className="uppercase">{namespace}</span>
+                            {readOnly && (
+                                <>
+                                    <span className="h-1 w-1 rounded-full bg-border" />
+                                    <span className="inline-flex items-center gap-1">
+                                        <Eye className="h-3 w-3" />
+                                        只读
+                                    </span>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </div>
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                    <StatusDot
+                        tone={isConnected ? "success" : "danger"}
+                        label={isConnected ? "已连接" : "未连接"}
+                    />
+                    {isWaiting && (
+                        <span className="rounded-md border border-border px-2 py-1 text-muted-foreground">
+                            运行中
+                        </span>
+                    )}
+                    {!currentSessionKey && <Monitor className="h-4 w-4" />}
+                </div>
+            </div>
             <div className="relative flex-1 min-h-0">
                 <div
                     ref={scrollContainerRef}
-                    className="h-full overflow-y-auto overflow-x-hidden px-4 py-6"
+                    className="h-full overflow-y-auto overflow-x-hidden bg-card px-4 py-6 md:px-8"
                 >
                     {messages.length === 0 ? (
-                        <div className="flex h-full min-h-[300px] flex-col items-center justify-center gap-5">
-                            <div className="flex h-20 w-20 items-center justify-center rounded-2xl bg-muted ring-1 ring-border/50">
-                                <span className="text-3xl text-primary select-none leading-none">
+                        <div className="mx-auto flex min-h-[360px] max-w-7xl flex-col items-center justify-center gap-4 pt-[8vh]">
+                            <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-muted/70 ring-1 ring-border/40">
+                                <span className="text-2xl text-primary select-none leading-none">
                                     ✦
                                 </span>
                             </div>
@@ -303,22 +358,22 @@ export function ChatWindow() {
                             </div>
                         </div>
                     ) : (
-                        <div className="space-y-5">
+                        <div className="mx-auto max-w-7xl space-y-5">
                             {visibleMessages.map((msg) => (
                                 <MessageBubble
                                     key={msg.id}
                                     message={msg}
-                                    onRevoke={handleRevoke}
+                                    onRevoke={readOnly ? undefined : handleRevoke}
                                 />
                             ))}
                         </div>
                     )}
                     {isWaiting && progressText && (
-                        <div className="mt-4 flex items-start gap-3 px-4">
-                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-xs font-bold text-foreground/70 shadow-sm">
+                        <div className="mx-auto mt-4 flex max-w-7xl items-start gap-3 px-1">
+                            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted/70 text-xs font-bold text-foreground/70">
                                 x
                             </div>
-                            <div className="rounded-2xl rounded-tl-sm bg-muted px-4 py-2.5 text-sm text-muted-foreground flex items-center gap-2">
+                            <div className="flex items-center gap-2 rounded-xl bg-muted/70 px-4 py-2.5 text-sm text-muted-foreground">
                                 <span className="flex gap-1">
                                     <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:0ms]" />
                                     <span className="h-1.5 w-1.5 rounded-full bg-current animate-bounce [animation-delay:150ms]" />
@@ -333,7 +388,7 @@ export function ChatWindow() {
                 {showScrollBtn && (
                     <button
                         onClick={scrollToBottom}
-                        className="absolute bottom-3 left-1/2 -translate-x-1/2 z-10 flex h-8 w-8 items-center justify-center rounded-full bg-background/95 border border-border shadow-md text-muted-foreground hover:text-foreground backdrop-blur-sm transition-all duration-200"
+                        className="absolute bottom-3 left-1/2 z-10 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border border-border/50 bg-card/95 text-muted-foreground shadow-sm backdrop-blur-sm transition-all duration-200 hover:text-foreground"
                         aria-label="Scroll to bottom"
                     >
                         <ArrowDown className="h-4 w-4" />

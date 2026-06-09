@@ -51,6 +51,37 @@ class _FakeRuntime:
         return "backend=claude_sdk | workspace=/tmp/workspace"
 
 
+class _CancellableRuntime(_FakeRuntime):
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancelled = False
+
+    async def process_managed_direct(
+        self,
+        content: str,
+        session_key: str = "cli:direct",
+        channel: str = "cli",
+        chat_id: str = "direct",
+        on_progress=None,
+        media: list[str] | None = None,
+    ) -> str:
+        self.calls.append({
+            "content": content,
+            "session_key": session_key,
+            "channel": channel,
+            "chat_id": chat_id,
+            "media": media or [],
+        })
+        if on_progress is not None:
+            await on_progress("thinking", tool_hint=False, event_type="thinking", event_data=None)
+        try:
+            await asyncio.sleep(60)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        return "not-cancelled"
+
+
 class _FakeCronService:
     def __init__(self) -> None:
         self.jobs: dict[str, CronJob] = {}
@@ -416,6 +447,17 @@ def test_frontend_uses_configurable_gateway_url() -> None:
     assert 'path="/connection"' in app_tsx
 
 
+def test_frontend_restores_auth_routes() -> None:
+    auth_store = Path("xbot/interfaces/webui/frontend/src/stores/auth-store.ts").read_text(encoding="utf-8")
+    app_tsx = Path("xbot/interfaces/webui/frontend/src/App.tsx").read_text(encoding="utf-8")
+    login_tsx = Path("xbot/interfaces/webui/frontend/src/pages/login.tsx").read_text(encoding="utf-8")
+
+    assert 'path="/login"' in app_tsx
+    assert "PrivateRoute" in app_tsx
+    assert "persist(" in auth_store
+    assert 'api.post("/auth/login"' in login_tsx
+
+
 def test_frontend_data_queries_are_scoped_to_gateway_url() -> None:
     frontend_dir = Path("xbot/interfaces/webui/frontend/src")
     gateway_store = (frontend_dir / "stores" / "gateway-store.ts").read_text(encoding="utf-8")
@@ -433,6 +475,28 @@ def test_frontend_data_queries_are_scoped_to_gateway_url() -> None:
         assert "useGatewayBaseUrl" in source, relative
         assert "gatewayBaseUrl" in source, relative
         assert "queryKey:" in source, relative
+
+
+def test_frontend_message_invalidation_is_scoped_to_gateway_url() -> None:
+    chat_window = Path("xbot/interfaces/webui/frontend/src/components/chat/chat-window.tsx").read_text(encoding="utf-8")
+    sessions_hook = Path("xbot/interfaces/webui/frontend/src/hooks/use-sessions.ts").read_text(encoding="utf-8")
+
+    assert 'queryKey: ["sessions", gatewayBaseUrl, targetKey, "messages"]' in chat_window
+    assert 'queryKey: ["sessions", gatewayBaseUrl, targetKey, "messages"]' in chat_window.split('msg.type === "revoke_ok"')[1]
+    assert 'queryKey: ["sessions", gatewayBaseUrl, vars.key, "messages"]' in sessions_hook
+
+
+def test_frontend_hides_revoke_for_read_only_sessions() -> None:
+    chat_window = Path("xbot/interfaces/webui/frontend/src/components/chat/chat-window.tsx").read_text(encoding="utf-8")
+
+    assert "onRevoke={readOnly ? undefined : handleRevoke}" in chat_window
+
+
+def test_frontend_agent_messages_use_full_available_width() -> None:
+    bubble = Path("xbot/interfaces/webui/frontend/src/components/chat/message-bubble.tsx").read_text(encoding="utf-8")
+
+    assert 'isUser ? "max-w-2xl items-end" : "flex-1 items-start"' in bubble
+    assert '"flex min-w-0 flex-col gap-1"' in bubble
 
 
 def test_connection_page_clears_stale_gateway_query_cache() -> None:
@@ -517,6 +581,65 @@ def test_change_password_compatibility_endpoint_accepts_put(tmp_path: Path) -> N
         json={"username": "admin", "password": "compat-secret"},
     )
     assert accepted.status_code == 200
+
+
+def test_api_requires_auth_token(tmp_path: Path) -> None:
+    client, _services = _build_client(tmp_path)
+
+    response = client.get("/api/dashboard")
+
+    assert response.status_code == 401
+
+
+def test_websocket_requires_valid_auth_token(tmp_path: Path) -> None:
+    client, _services = _build_client(tmp_path)
+
+    with pytest.raises(Exception) as exc_info:
+        with client.websocket_connect("/ws/chat"):
+            pass
+
+    assert getattr(exc_info.value, "code", None) == 1008
+
+
+def test_websocket_cancel_stops_running_agent_turn(tmp_path: Path) -> None:
+    client, services = _build_client(tmp_path)
+    runtime = _CancellableRuntime()
+    services.agent = runtime
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+
+    with client.websocket_connect(f"/ws/chat?token={token}&session=web:admin:default") as websocket:
+        assert websocket.receive_json()["type"] == "session_info"
+        websocket.send_json({"type": "message", "content": "slow", "session_key": "web:admin:default"})
+        assert websocket.receive_json()["type"] == "progress"
+        websocket.send_json({"type": "cancel", "session_key": "web:admin:default"})
+        response = websocket.receive_json()
+
+    assert response["type"] == "cancel_ok"
+    assert runtime.cancelled is True
+
+
+def test_websocket_rejects_duplicate_running_session_across_connections(tmp_path: Path) -> None:
+    client, services = _build_client(tmp_path)
+    runtime = _CancellableRuntime()
+    services.agent = runtime
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+
+    with client.websocket_connect(f"/ws/chat?token={token}&session=web:admin:shared") as first:
+        assert first.receive_json()["type"] == "session_info"
+        first.send_json({"type": "message", "content": "slow", "session_key": "web:admin:shared"})
+        assert first.receive_json()["type"] == "progress"
+
+        with client.websocket_connect(f"/ws/chat?token={token}&session=web:admin:shared") as second:
+            assert second.receive_json()["type"] == "session_info"
+            second.send_json({"type": "message", "content": "again", "session_key": "web:admin:shared"})
+            error = second.receive_json()
+
+        first.send_json({"type": "cancel", "session_key": "web:admin:shared"})
+        assert first.receive_json()["type"] == "cancel_ok"
+
+    assert error["type"] == "error"
+    assert "already running" in error["error"]
+    assert len(runtime.calls) == 1
 
 
 def test_read_only_management_endpoints(tmp_path: Path) -> None:
@@ -867,6 +990,111 @@ def test_websocket_chat_honors_message_session_key(tmp_path: Path) -> None:
     assert services.agent.calls[0]["session_key"] == "web:admin:new"
 
 
+def test_websocket_chat_uses_session_namespace_as_runtime_channel(tmp_path: Path) -> None:
+    client, services = _build_client(tmp_path)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+
+    with client.websocket_connect(f"/ws/chat?token={token}&session=app:admin:abc123") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "message", "content": "hi"})
+        ws.receive_json()
+        ws.receive_json()
+
+    assert services.agent.calls[0]["session_key"] == "app:admin:abc123"
+    assert services.agent.calls[0]["channel"] == "app"
+    assert services.agent.calls[0]["chat_id"] == "admin:abc123"
+
+
+def test_websocket_chat_rejects_read_only_im_session_key(tmp_path: Path) -> None:
+    client, services = _build_client(tmp_path)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+
+    with client.websocket_connect(f"/ws/chat?token={token}&session=web:admin:old") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "message", "content": "hi", "session_key": "im:feishu:oc_123"})
+        error = ws.receive_json()
+
+    assert error["type"] == "error"
+    assert "read-only" in error["error"]
+    assert services.agent.calls == []
+    assert services.conversation_store.get("im:feishu:oc_123") is None
+
+
+def test_websocket_chat_persists_when_runtime_does_not(tmp_path: Path) -> None:
+    client, services = _build_client(tmp_path)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+
+    with client.websocket_connect(f"/ws/chat?token={token}&session=web:admin:persist") as ws:
+        ws.receive_json()
+        ws.send_json({"type": "message", "content": "save me"})
+        ws.receive_json()
+        done = ws.receive_json()
+        assert done["content"] == "echo:save me"
+
+    session = services.conversation_store.get("web:admin:persist")
+    assert session is not None
+    assert [m["role"] for m in session.messages] == ["user", "assistant"]
+    assert session.messages[0]["content"] == "save me"
+    assert session.messages[1]["content"] == "echo:save me"
+
+
+def test_get_session_messages_does_not_create_missing_session(tmp_path: Path) -> None:
+    client, services = _build_client(tmp_path)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = client.get("/api/sessions/web:admin:missing/messages", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json() == []
+    assert services.conversation_store.get("web:admin:missing") is None
+
+
+def test_session_list_updated_at_tracks_latest_message(tmp_path: Path) -> None:
+    import time
+
+    client, services = _build_client(tmp_path)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    session = services.conversation_store.get_or_create("web:admin:list-time")
+    session.add_message("user", "first")
+    services.conversation_store.save(session)
+    first_updated = next(
+        item for item in client.get("/api/sessions", headers=headers).json()
+        if item["key"] == "web:admin:list-time"
+    )["updated_at"]
+
+    time.sleep(0.02)
+    session.add_message("assistant", "second")
+    services.conversation_store.save(session)
+    second_updated = next(
+        item for item in client.get("/api/sessions", headers=headers).json()
+        if item["key"] == "web:admin:list-time"
+    )["updated_at"]
+
+    assert second_updated > first_updated
+
+
+def test_session_mutations_reject_read_only_im_sessions(tmp_path: Path) -> None:
+    client, services = _build_client(tmp_path)
+    session = services.conversation_store.get_or_create("im:feishu:oc_123")
+    session.add_message("user", "from feishu")
+    session.add_message("assistant", "reply")
+    services.conversation_store.save(session)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    revoke = client.delete("/api/sessions/im:feishu:oc_123/messages/0", headers=headers)
+    delete = client.delete("/api/sessions/im:feishu:oc_123", headers=headers)
+
+    assert revoke.status_code == 403
+    assert delete.status_code == 403
+    assert [m["content"] for m in services.conversation_store.get("im:feishu:oc_123").messages] == [
+        "from feishu",
+        "reply",
+    ]
+
+
 def test_session_key_mapping_avoids_colon_replacement_collisions() -> None:
     from xbot.interfaces.webui.session_keys import to_internal_session_key
 
@@ -874,6 +1102,17 @@ def test_session_key_mapping_avoids_colon_replacement_collisions() -> None:
     assert to_internal_session_key("app:admin:abc123") == "app:admin:abc123"
     assert to_internal_session_key("im:telegram:456") == "im:telegram:456"
     assert to_internal_session_key("cli:direct") == "cli:direct"
+
+
+def test_empty_session_key_generates_unique_web_session() -> None:
+    from xbot.interfaces.webui.session_keys import to_internal_session_key
+
+    first = to_internal_session_key("")
+    second = to_internal_session_key("")
+
+    assert first.startswith("web:admin:")
+    assert second.startswith("web:admin:")
+    assert first != second
 
 
 def test_websocket_chat_rejects_oversized_message(tmp_path: Path) -> None:
@@ -992,10 +1231,14 @@ def test_channel_runtime_prefers_live_manager_status(tmp_path: Path) -> None:
 
 def test_frontend_compatibility_mutations(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
+    session = services.conversation_store.get_or_create("web:admin:compat")
+    session.add_message("user", "hello")
+    session.add_message("assistant", "world")
+    services.conversation_store.save(session)
     token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
-    revoke = client.delete("/api/sessions/cli:web-admin-1/messages/0", headers=headers)
+    revoke = client.delete("/api/sessions/web:admin:compat/messages/0", headers=headers)
     memory = client.get("/api/sessions/cli:web-admin-1/memory", headers=headers)
     provider = client.patch("/api/providers/custom", headers=headers, json={"api_key": "sk-demo", "api_base": "https://example.com/v1"})
     channel = client.patch("/api/channels/telegram", headers=headers, json={"enabled": False, "botToken": "replaced"})

@@ -419,6 +419,7 @@ class ConversationStore:
             try:
                 first_message = ""
                 last_message = ""
+                last_message_at = ""
                 with open(path, encoding="utf-8") as f:
                     first_line = f.readline().strip()
                     if first_line:
@@ -438,13 +439,15 @@ class ConversationStore:
                                 if msg.get("role") == "user" and not first_message:
                                     first_message = content
                                 last_message = content
+                                if isinstance(msg.get("timestamp"), str):
+                                    last_message_at = msg["timestamp"]
                             item = {
                                 "key": key,
                                 "channel": key.split(":", 1)[0],
                                 "first_message": first_message,
                                 "last_message": last_message,
                                 "created_at": data.get("created_at"),
-                                "updated_at": data.get("updated_at"),
+                                "updated_at": last_message_at or data.get("updated_at"),
                                 "path": str(path)
                             }
                             current = sessions_by_key.get(key)

@@ -1,7 +1,10 @@
 import { lazy, Suspense } from "react";
+import type { ReactNode } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 import AppLayout from "./components/layout/app-layout";
+import { useAuthStore } from "./stores/auth-store";
 
+const Login = lazy(() => import("./pages/login"));
 const Dashboard = lazy(() => import("./pages/Dashboard"));
 const Chat = lazy(() => import("./pages/Chat"));
 const Channels = lazy(() => import("./pages/Channels"));
@@ -12,15 +15,24 @@ const Settings = lazy(() => import("./pages/Settings"));
 const SystemConfig = lazy(() => import("./pages/system-config"));
 const Connection = lazy(() => import("./pages/connection"));
 
+function PrivateRoute({ children }: { children: ReactNode }) {
+    const token = useAuthStore((s) => s.token);
+    return token ? <>{children}</> : <Navigate to="/login" replace />;
+}
+
 export default function App() {
     return (
         <Suspense fallback={null}>
             <Routes>
-                <Route path="/login" element={<Navigate to="/chat" replace />} />
+                <Route path="/login" element={<Login />} />
                 <Route path="/connection" element={<Connection />} />
                 <Route
                     path="/"
-                    element={<AppLayout />}
+                    element={
+                        <PrivateRoute>
+                            <AppLayout />
+                        </PrivateRoute>
+                    }
                 >
                     <Route index element={<Navigate to="/chat" replace />} />
                     <Route path="dashboard" element={<Dashboard />} />

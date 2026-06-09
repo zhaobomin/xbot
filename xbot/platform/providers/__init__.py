@@ -30,5 +30,3 @@ __all__ = [
     "find_by_name",
     "find_gateway",
 ]
-
-

@@ -72,10 +72,7 @@ export function SessionList() {
     }, [currentSessionKey, myPrefix, mySessions]);
 
     const newChat = () => {
-        const hexId = Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) =>
-            b.toString(16).padStart(2, "0")
-        ).join("");
-        const key = createClientSessionKey(user?.id, hexId);
+        const key = createClientSessionKey(user?.id);
         setCurrentSession(key);
         navigate("/chat");
     };

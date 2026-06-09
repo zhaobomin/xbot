@@ -27,9 +27,9 @@ body {
 @layer base {
     :root {
         /* === Light Theme — shadcn-style neutral console === */
-        --background: 0 0% 99%;
+        --background: 210 20% 98%;
         --foreground: 222 47% 11%;
-        --card: 0 0% 100%;
+        --card: 210 20% 98%;
         --card-foreground: 222 47% 11%;
         --popover: 0 0% 100%;
         --popover-foreground: 222 47% 11%;
@@ -37,24 +37,24 @@ body {
         --primary-foreground: 210 40% 98%;
         --secondary: 210 24% 96%;
         --secondary-foreground: 222 47% 11%;
-        --muted: 210 24% 96%;
+        --muted: 210 22% 94%;
         --muted-foreground: 215 16% 47%;
         --accent: 210 24% 96%;
         --accent-foreground: 222 47% 11%;
         --destructive: 0 84% 58%;
         --destructive-foreground: 0 0% 100%;
-        --border: 214 24% 90%;
-        --input: 214 32% 91%;
+        --border: 214 22% 88%;
+        --input: 214 24% 88%;
         --ring: 222 47% 11%;
         --radius: 0.5rem;
         /* Sidebar — neutral surface */
-        --sidebar-bg: 0 0% 100%;
+        --sidebar-bg: 210 20% 98%;
         --sidebar-fg: 222 47% 11%;
         --sidebar-muted: 215 16% 47%;
-        --sidebar-active-bg: 210 24% 96%;
+        --sidebar-active-bg: 210 22% 94%;
         --sidebar-active-fg: 222 47% 11%;
-        --sidebar-hover-bg: 210 24% 96%;
-        --sidebar-border: 214 32% 91%;
+        --sidebar-hover-bg: 210 22% 94%;
+        --sidebar-border: 214 22% 88%;
         --sidebar-section-label: 215 16% 47%;
         --sidebar-edge-shadow: none;
         --sidebar-glass-opacity: 0.88;

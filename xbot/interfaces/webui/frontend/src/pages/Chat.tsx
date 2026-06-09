@@ -79,21 +79,18 @@ export default function Chat() {
                 name: m.name ?? undefined,
                 serverIndex: m._serverIdx,
             }));
-        if (msgs.length > 0) {
-            const prevIds = new Set(lastSetMsgsRef.current.map((m) => m.id));
-            const localToPreserve = useChatStore
-                .getState()
-                .messages.filter(
-                    (m) =>
-                        !prevIds.has(m.id) &&
-                        m.role === "assistant" &&
-                        m.content.startsWith("\u26a0\ufe0f")
-                );
-            const merged =
-                localToPreserve.length > 0 ? [...msgs, ...localToPreserve] : msgs;
-            lastSetMsgsRef.current = merged;
-            setMessages(merged);
-        }
+        const prevIds = new Set(lastSetMsgsRef.current.map((m) => m.id));
+        const localToPreserve = useChatStore
+            .getState()
+            .messages.filter(
+                (m) =>
+                    !prevIds.has(m.id) &&
+                    m.role === "assistant" &&
+                    m.content.startsWith("\u26a0\ufe0f")
+            );
+        const merged = localToPreserve.length > 0 ? [...msgs, ...localToPreserve] : msgs;
+        lastSetMsgsRef.current = merged;
+        setMessages(merged);
     }, [currentSessionKey, historyLoaded, sessionMsgs, setMessages]);
 
     const desktopApp = isDesktopApp();
@@ -160,10 +157,7 @@ export default function Chat() {
     }, [displaySessions, search]);
 
     const newChat = () => {
-        const hexId = Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) =>
-            b.toString(16).padStart(2, "0")
-        ).join("");
-        const key = createClientSessionKey(user?.id, hexId);
+        const key = createClientSessionKey(user?.id);
         loadedKeyRef.current = key;
         loadedCountRef.current = 0;
         setCurrentSession(key);
@@ -181,7 +175,7 @@ export default function Chat() {
         <div
             className={cn(
                 "flex min-h-0",
-                isMobile ? "flex-1 flex-col" : "h-full gap-4 p-5"
+                isMobile ? "flex-1 flex-col" : cn("h-full", sessionsOnly && "p-5")
             )}
         >
             {/* Session sidebar */}
@@ -388,17 +382,14 @@ export default function Chat() {
             {!sessionsOnly && (
                 <div
                 className={cn(
-                    "flex flex-col overflow-hidden bg-card",
+                    "flex flex-col overflow-hidden",
                     isMobile
                         ? cn(
                             "w-full flex-1 min-h-0",
                             !mobileShowChat && "hidden"
                         )
-                        : "flex-1 rounded-xl border border-border bg-card"
+                        : "flex-1 bg-background"
                 )}
-                style={
-                    isMobile ? undefined : { boxShadow: "var(--shadow-card)" }
-                }
             >
                 {isMobile && (
                     <div className="flex h-12 shrink-0 items-center gap-2 px-3">
