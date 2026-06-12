@@ -61,6 +61,7 @@ class SessionStateMachine:
         on_transition: Callable[[str, SessionPhase, SessionPhase, str], None] | None = None,
     ) -> None:
         self._sessions: dict[str, SessionPhase] = {}
+        self._state_meta: dict[str, SessionState] = {}
         self._on_transition = on_transition
 
     def get_phase(self, session_key: str) -> SessionPhase:
@@ -135,7 +136,7 @@ class SessionStateMachine:
         state.last_active = time.time()
 
     def resolve_compact_notification_target(self, session_ref: str) -> tuple[str, str, str] | None:
-        state = getattr(self, "_state_meta", {}).get(session_ref)
+        state = self._get_state_meta().get(session_ref)
         if state is None:
             return None
         return (state.session_key, state.channel, state.chat_id)
@@ -145,7 +146,7 @@ class SessionStateMachine:
         state.commands = list(commands)
 
     def get_commands(self, session_key: str) -> list[str]:
-        state = getattr(self, "_state_meta", {}).get(session_key)
+        state = self._get_state_meta().get(session_key)
         return list(state.commands) if state else []
 
     def set_sdk_capabilities(
@@ -185,11 +186,13 @@ class SessionStateMachine:
         return state
 
     def _get_state_meta(self) -> dict[str, SessionState]:
-        state_meta = getattr(self, "_state_meta", None)
-        if state_meta is None:
-            state_meta = {}
-            self._state_meta = state_meta
-        return state_meta
+        # Eagerly initialize in __init__ so all access paths (including
+        # resolve_compact_notification_target / get_commands) never hit getattr.
+        try:
+            return self._state_meta  # type: ignore[attr-defined]
+        except AttributeError:
+            self._state_meta: dict[str, SessionState] = {}
+            return self._state_meta
 
 
 __all__ = [

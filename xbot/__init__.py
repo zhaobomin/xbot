@@ -7,12 +7,16 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-__version__ = "2.0.19"
+__version__ = "2.0.20"
 __logo__ = "🐈"
 
 
 def _git_info() -> dict[str, str]:
-    """Collect git metadata from the source tree at import time."""
+    """Collect git metadata from the source tree.
+
+    Called lazily by ``_get_cached_git_info()`` on first access, NOT at
+    import time, to avoid blocking the import with subprocess calls.
+    """
     repo = Path(__file__).resolve().parent.parent
     info: dict[str, str] = {}
     try:
@@ -36,6 +40,7 @@ _git: dict[str, str] | None = None
 
 
 def _get_cached_git_info() -> dict[str, str]:
+    """Return git info, computing it on first call (lazy + cached)."""
     global _git
     if _git is None:
         _git = _git_info()

@@ -144,7 +144,7 @@ class QQChannel(BaseChannel):
             try:
                 await self._client.close()
             except Exception:
-                pass
+                logger.debug("Error closing QQ client", exc_info=True)
         logger.info("QQ bot stopped")
 
     async def send(self, msg: OutboundMessage) -> None:

@@ -338,6 +338,7 @@ class PermissionRequestHandler(BasePermissionHandler):
         # Context TTL cleanup
         self._context_timestamps: dict[str, float] = {}
         self._context_ttl = 3600  # 1 hour TTL for session contexts
+        self._max_contexts = 1000  # Upper bound to prevent unbounded growth
 
     def set_session_context(
         self,
@@ -365,7 +366,7 @@ class PermissionRequestHandler(BasePermissionHandler):
             self._current_session_key.set(None)
 
     def _cleanup_expired_contexts(self) -> None:
-        """清理过期的 session context (TTL-based)."""
+        """清理过期的 session context (TTL-based) + 容量限制."""
         now = time.time()
         expired = [
             key for key, ts in self._context_timestamps.items()
@@ -377,6 +378,15 @@ class PermissionRequestHandler(BasePermissionHandler):
 
         if expired:
             logger.debug(f"Cleaned up {len(expired)} expired permission contexts")
+
+        # Evict oldest entries if we still exceed the capacity limit
+        overflow = len(self._session_context) - self._max_contexts
+        if overflow > 0:
+            oldest = sorted(self._context_timestamps, key=self._context_timestamps.get)[:overflow]
+            for key in oldest:
+                self._session_context.pop(key, None)
+                self._context_timestamps.pop(key, None)
+            logger.debug(f"Evicted {overflow} oldest permission contexts (capacity limit)")
 
     def set_current_session(self, session_key: str) -> None:
         """设置当前正在处理的会话。"""

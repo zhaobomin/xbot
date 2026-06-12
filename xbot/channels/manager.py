@@ -83,9 +83,13 @@ class ChannelManager:
 
     def _validate_allow_from(self) -> None:
         for name, ch in self.channels.items():
-            if getattr(ch.config, "allow_from", None) == []:
+            # Config can be either an object (allow_from) or a dict (allowFrom)
+            allow_from = getattr(ch.config, "allow_from", None)
+            if allow_from is None and isinstance(ch.config, dict):
+                allow_from = ch.config.get("allowFrom") or ch.config.get("allow_from")
+            if not allow_from:  # catches None, [], and other falsy values
                 raise SystemExit(
-                    f'Error: "{name}" has empty allowFrom (denies all). '
+                    f'Error: "{name}" has empty or missing allowFrom (denies all). '
                     f'Set ["*"] to allow everyone, or add specific user IDs.'
                 )
 

@@ -77,7 +77,12 @@ class ConversationSession:
 
     @staticmethod
     def _find_legal_start(messages: list[dict[str, Any]]) -> int:
-        """Find first index where every tool result has a matching assistant tool_call."""
+        """Find first index where every tool result has a matching assistant tool_call.
+
+        Deprecated: kept for backward compatibility.  New callers should prefer
+        ``_filter_orphan_tool_results`` which removes *only* orphan tool results
+        instead of discarding every message that follows an orphan.
+        """
         declared_at: dict[str, int] = {}
         start = 0
 
@@ -94,6 +99,30 @@ class ConversationSession:
 
         return start
 
+    @staticmethod
+    def _filter_orphan_tool_results(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        """Remove orphan tool results whose matching assistant tool_call is absent.
+
+        Unlike ``_find_legal_start`` which advances a start pointer (discarding
+        all subsequent valid messages), this filter removes *only* the orphan
+        tool result messages and keeps everything else intact.
+        """
+        declared_ids: set[str] = set()
+        for msg in messages:
+            if msg.get("role") == "assistant":
+                for tc in msg.get("tool_calls") or []:
+                    if isinstance(tc, dict) and tc.get("id"):
+                        declared_ids.add(str(tc["id"]))
+
+        return [
+            msg for msg in messages
+            if not (
+                msg.get("role") == "tool"
+                and msg.get("tool_call_id")
+                and str(msg["tool_call_id"]) not in declared_ids
+            )
+        ]
+
     def get_history(self, max_messages: int = 500) -> list[dict[str, Any]]:
         """Return unconsolidated messages for LLM input, aligned to a legal tool-call boundary."""
         unconsolidated = self.messages[self.last_consolidated:]
@@ -105,11 +134,11 @@ class ConversationSession:
                 sliced = sliced[i:]
                 break
 
-        # Some providers reject orphan tool results if the matching assistant
-        # tool_calls message fell outside the fixed-size history window.
-        start = self._find_legal_start(sliced)
-        if start:
-            sliced = sliced[start:]
+        # Remove orphan tool results whose matching assistant tool_call fell
+        # outside the fixed-size history window.  This is safer than the old
+        # ``_find_legal_start`` approach which discarded *all* messages after
+        # the first orphan, potentially losing valid user/assistant turns.
+        sliced = self._filter_orphan_tool_results(sliced)
 
         out: list[dict[str, Any]] = []
         for message in sliced:
@@ -138,11 +167,12 @@ class ConversationStore:
     Sessions are stored as JSONL files in the sessions directory.
     """
 
-    def __init__(self, workspace: Path):
+    def __init__(self, workspace: Path, max_cache_size: int = 500):
         self.workspace = workspace
         self.sessions_dir = ensure_dir(self.workspace / "sessions")
         self.legacy_sessions_dir = get_legacy_sessions_dir()
         self._cache: dict[str, ConversationSession] = {}
+        self._max_cache_size = max_cache_size
 
     def _get_session_path(self, key: str) -> Path:
         """Get the file path for a session."""
@@ -226,7 +256,7 @@ class ConversationStore:
                         fcntl.flock(lock_fd.fileno(), fcntl.LOCK_UN)
                     lock_fd.close()
                 except Exception:
-                    pass
+                    logger.debug("Error releasing file lock", exc_info=True)
 
     def get(self, key: str) -> ConversationSession | None:
         """
@@ -244,6 +274,7 @@ class ConversationStore:
         session = self._load(key)
         if session is not None:
             self._cache[key] = session
+            self._evict_if_needed()
         return session
 
     def get_or_create(self, key: str) -> ConversationSession:
@@ -264,6 +295,7 @@ class ConversationStore:
             session = ConversationSession(key=key)
 
         self._cache[key] = session
+        self._evict_if_needed()
         return session
 
     def _load(self, key: str) -> ConversationSession | None:
@@ -341,6 +373,7 @@ class ConversationStore:
             # else: no new messages and no metadata change — nothing to persist
 
         self._cache[session.key] = session
+        self._evict_if_needed()
 
     def _save_full(self, session: ConversationSession, path: Path) -> None:
         """Perform an atomic full write of the session file."""
@@ -369,6 +402,28 @@ class ConversationStore:
     def invalidate(self, key: str) -> None:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
+
+    def _evict_if_needed(self) -> None:
+        """Evict oldest cache entries when capacity is exceeded.
+
+        Uses ``updated_at`` as a proxy for age: the sessions that haven't been
+        updated recently are removed first.  Dirty (unsaved) sessions are never
+        evicted to avoid data loss.
+        """
+        overflow = len(self._cache) - self._max_cache_size
+        if overflow <= 0:
+            return
+        # Sort by updated_at ascending; skip dirty sessions.
+        candidates = [
+            (key, sess)
+            for key, sess in self._cache.items()
+            if not sess._metadata_dirty and not sess._new_messages
+        ]
+        if not candidates:
+            return
+        candidates.sort(key=lambda item: item[1].updated_at)
+        for key, _ in candidates[:overflow]:
+            self._cache.pop(key, None)
 
     def delete(self, key: str) -> bool:
         """Delete a session file and remove it from in-memory cache."""

@@ -360,7 +360,7 @@ class EmailChannel(BaseChannel):
             try:
                 client.logout()
             except Exception:
-                pass
+                logger.debug("Error logging out of IMAP server", exc_info=True)
 
         return messages
 
