@@ -106,7 +106,10 @@ class ProgressCoalescer:
         now_ts = now if now is not None else time.monotonic()
         ready: list[Hashable] = []
         for key, state in self._buffers.items():
-            if now_ts - state.updated_at >= self._debounce_s:
+            if (
+                now_ts - state.updated_at >= self._debounce_s
+                or now_ts - state.started_at >= self._max_wait_s
+            ):
                 ready.append(key)
 
         out: list[CoalescedEvent] = []

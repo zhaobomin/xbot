@@ -228,6 +228,16 @@ class ProvidersConfig(Base):
     def custom(self, value: ProviderConfig) -> None:
         self.custom_providers["custom"] = value
 
+    def get_provider_config(self, name: str | None) -> ProviderConfig | None:
+        """Return a provider config from fixed fields or custom_providers."""
+        if not name:
+            return None
+        provider_attr = name.replace("-", "_")
+        fixed = getattr(self, provider_attr, None)
+        if isinstance(fixed, ProviderConfig):
+            return fixed
+        return self.custom_providers.get(provider_attr)
+
 
 class HeartbeatConfig(Base):
     """Heartbeat service configuration."""
@@ -338,7 +348,7 @@ class Config(BaseSettings):
 
         forced = self.agents.defaults.provider
         if forced != "auto":
-            p = getattr(self.providers, forced, None)
+            p = self.providers.get_provider_config(forced)
             return (p, forced) if p else (None, None)
 
         model_lower = (model or self.agents.defaults.model).lower()
@@ -361,14 +371,14 @@ class Config(BaseSettings):
 
         # Explicit provider prefix wins — prevents `github-copilot/...codex` matching openai_codex.
         for spec in PROVIDERS:
-            p = getattr(self.providers, spec.name, None)
+            p = self.providers.get_provider_config(spec.name)
             if p and model_prefix and normalized_prefix == spec.name:
                 if spec.is_oauth or spec.is_local or _get_api_key_value(p):
                     return p, spec.name
 
         # Match by keyword (order follows PROVIDERS registry)
         for spec in PROVIDERS:
-            p = getattr(self.providers, spec.name, None)
+            p = self.providers.get_provider_config(spec.name)
             if p and any(_kw_matches(kw) for kw in spec.keywords):
                 if spec.is_oauth or spec.is_local or _get_api_key_value(p):
                     return p, spec.name
@@ -381,7 +391,7 @@ class Config(BaseSettings):
         for spec in PROVIDERS:
             if not spec.is_local:
                 continue
-            p = getattr(self.providers, spec.name, None)
+            p = self.providers.get_provider_config(spec.name)
             if not (p and p.api_base):
                 continue
             if spec.detect_by_base_keyword and spec.detect_by_base_keyword in p.api_base:
@@ -396,7 +406,7 @@ class Config(BaseSettings):
         for spec in PROVIDERS:
             if spec.is_oauth:
                 continue
-            p = getattr(self.providers, spec.name, None)
+            p = self.providers.get_provider_config(spec.name)
             if p and _get_api_key_value(p):
                 return p, spec.name
         return None, None

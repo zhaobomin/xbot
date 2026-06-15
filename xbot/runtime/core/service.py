@@ -423,7 +423,7 @@ class AgentService:
                 )
             raise
         except Exception as e:
-            logger.error(f"[AgentService] Error processing: {e}")
+            logger.exception("[AgentService] Error processing: %s", e)
             yield AgentResponse(
                 content=f"Error: {e}",
                 finish_reason="error",
@@ -737,7 +737,8 @@ class AgentService:
 
         # Optional live SDK discovery from connected client only.
         if include_live_connected:
-            record = self._client_pool._clients.get(session_key) if hasattr(self._client_pool, "_clients") else None
+            get_record = getattr(self._client_pool, "get_record", None)
+            record = await get_record(session_key) if callable(get_record) else None
             if record is not None and getattr(record, "state", "") == "connected":
                 try:
                     info = await record.client.get_server_info()
@@ -1529,8 +1530,10 @@ class AgentService:
         providers = getattr(config, "providers", None)
 
         # 1. If user explicitly set model, use it
-        if defaults is not None and getattr(defaults, "model", None):
-            return defaults.model
+        if defaults is not None:
+            model = getattr(defaults, "model", None)
+            if isinstance(model, str) and model.strip():
+                return model
 
         # 2. Try to get first model from current provider
         if defaults is not None and providers is not None:
@@ -1538,18 +1541,19 @@ class AgentService:
             if provider_name != "auto":
                 provider_attr = provider_name.replace("-", "_")
 
-                # Check fixed providers
-                provider_config = getattr(providers, provider_attr, None)
+                get_provider_config = getattr(providers, "get_provider_config", None)
+                if callable(get_provider_config):
+                    provider_config = get_provider_config(provider_name)
+                else:
+                    provider_config = getattr(providers, provider_attr, None)
+                    if not provider_config and hasattr(providers, "custom_providers"):
+                        provider_config = providers.custom_providers.get(provider_attr)
 
-                # Check custom_providers
-                if not provider_config and hasattr(providers, 'custom_providers'):
-                    provider_config = providers.custom_providers.get(provider_attr)
-
-                if provider_config and hasattr(provider_config, 'models') and provider_config.models:
+                if provider_config and hasattr(provider_config, "models") and provider_config.models:
                     return provider_config.models[0]
 
         configured_model = getattr(self._config, "model", None) if self._config else None
-        if configured_model:
+        if isinstance(configured_model, str) and configured_model.strip():
             return configured_model
 
         # 3. Hardcoded default

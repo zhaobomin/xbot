@@ -17,7 +17,7 @@ import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
 import { writeFile, mkdir } from 'fs/promises';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { randomBytes } from 'crypto';
 
 const VERSION = '0.1.0';
@@ -99,7 +99,10 @@ export class WhatsAppClient {
           console.log('Reconnecting in 5 seconds...');
           setTimeout(() => {
             this.reconnecting = false;
-            this.connect();
+            this.connect().catch((error) => {
+              console.error('Reconnect failed:', error);
+              this.options.onStatus('disconnected');
+            });
           }, 5000);
         }
       } else if (connection === 'open') {
@@ -170,11 +173,12 @@ export class WhatsAppClient {
       if (fileName) {
         // Documents have a filename — use it with a unique prefix to avoid collisions
         const prefix = `wa_${Date.now()}_${randomBytes(4).toString('hex')}_`;
-        outFilename = prefix + fileName;
+        const safeName = basename(fileName.replace(/\\/g, '/')).replace(/[^\w.\-]/g, '_') || 'file';
+        outFilename = prefix + safeName;
       } else {
         const mime = mimetype || 'application/octet-stream';
         // Derive extension from mimetype subtype (e.g. "image/png" → ".png", "application/pdf" → ".pdf")
-        const ext = '.' + (mime.split('/').pop()?.split(';')[0] || 'bin');
+        const ext = '.' + (mime.split('/').pop()?.split(';')[0] || 'bin').replace(/[^\w.\-]/g, '_');
         outFilename = `wa_${Date.now()}_${randomBytes(4).toString('hex')}${ext}`;
       }
 

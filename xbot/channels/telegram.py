@@ -309,15 +309,18 @@ class TelegramChannel(BaseChannel):
         self._running = False
 
         # Cancel all typing indicators
-        for chat_id in list(self._typing_tasks):
-            self._stop_typing(chat_id)
+        typing_tasks = list(self._typing_tasks.values())
+        for task in typing_tasks:
+            if not task.done():
+                task.cancel()
 
-        for task in self._media_group_tasks.values():
+        media_group_tasks = list(self._media_group_tasks.values())
+        for task in media_group_tasks:
             task.cancel()
-        if self._typing_tasks or self._media_group_tasks:
+        if typing_tasks or media_group_tasks:
             await asyncio.gather(
-                *self._typing_tasks.values(),
-                *self._media_group_tasks.values(),
+                *typing_tasks,
+                *media_group_tasks,
                 return_exceptions=True,
             )
         self._typing_tasks.clear()

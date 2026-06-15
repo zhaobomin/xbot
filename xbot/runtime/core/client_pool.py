@@ -208,6 +208,11 @@ class ClientPool:
                 count += 1
         return count
 
+    async def get_record(self, session_key: str) -> ClientRecord | None:
+        """Return the client record for a session under the pool lock."""
+        async with self._lock:
+            return self._clients.get(session_key)
+
     def snapshot(self) -> dict[str, Any]:
         """Get current pool state for observability.
 

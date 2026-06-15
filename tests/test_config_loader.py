@@ -162,6 +162,14 @@ class TestSaveConfig:
         # Check that camelCase aliases are used
         assert "maxTokens" in data["agents"]["defaults"]
 
+    def test_save_config_restricts_file_permissions(self, tmp_path):
+        """Config files contain secrets and should be owner-readable only."""
+        config_path = tmp_path / "config.json"
+
+        save_config(Config(), config_path)
+
+        assert config_path.stat().st_mode & 0o777 == 0o600
+
 
 class TestMigrateConfig:
     """Tests for config migration."""
@@ -214,6 +222,53 @@ class TestMigrateConfig:
 
         assert result["agents"]["type"] == "claude_sdk"
         assert result["tools"]["exec"]["timeout"] == 120
+
+    def test_migrate_registry_provider_fields_to_custom_providers(self):
+        """Non-fixed provider objects should survive schema validation."""
+        config = {
+            "agents": {
+                "defaults": {
+                    "provider": "aliyun_coding_plan",
+                    "model": "glm-5",
+                }
+            },
+            "providers": {
+                "aliyun_coding_plan": {
+                    "apiKey": "aliyun-key",
+                    "models": ["glm-5"],
+                }
+            },
+        }
+
+        result = _migrate_config(config)
+        loaded = Config.model_validate(result)
+
+        assert "aliyun_coding_plan" not in result["providers"]
+        assert loaded.providers.custom_providers["aliyun_coding_plan"].models == ["glm-5"]
+        assert loaded.get_api_key("glm-5") == "aliyun-key"
+
+    def test_load_config_auto_detects_migrated_custom_provider(self, tmp_path):
+        """Auto provider detection should inspect migrated customProviders entries."""
+        config_path = tmp_path / "config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "agents": {"defaults": {"provider": "auto", "model": "glm-5"}},
+                    "providers": {
+                        "aliyun_coding_plan": {
+                            "apiKey": "aliyun-key",
+                            "apiBase": "https://coding.dashscope.aliyuncs.com/apps/anthropic",
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        loaded = load_config(config_path)
+
+        assert loaded.agents.defaults.provider == "aliyun_coding_plan"
+        assert loaded.get_api_key("glm-5") == "aliyun-key"
 
 
 class TestAutoDetectProvider:

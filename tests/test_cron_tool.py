@@ -1,6 +1,5 @@
 """Tests for CronTool session cleanup functionality."""
 
-import asyncio
 import json
 import tempfile
 from datetime import datetime

@@ -230,6 +230,27 @@ class TestCrewStateManagerInvariants:
         with pytest.raises(InvariantViolationError):
             manager.transition_task("task2", TaskPhase.RUNNING)
 
+    def test_missing_dependency_raised_in_strict_mode(self):
+        """Missing dependency names are invariant violations, not satisfied deps."""
+        task_defs = [
+            TaskDefinition(
+                name="task2",
+                description="Task 2",
+                agent="agent1",
+                context_from=["missing_task"],
+            )
+        ]
+        manager = CrewStateManager(
+            task_names=["task2"],
+            task_definitions=task_defs,
+            strict_invariants=True,
+        )
+
+        manager.force_task_phase("task2", TaskPhase.QUEUED)
+
+        with pytest.raises(InvariantViolationError, match="missing_task"):
+            manager.transition_task("task2", TaskPhase.RUNNING)
+
 
 class TestCrewStateManagerWithDependencies:
     """Tests for state manager with task dependencies."""

@@ -309,6 +309,7 @@ class ConversationStore:
             metadata = {}
             created_at = None
             last_consolidated = 0
+            saw_valid_row = False
 
             # Use shared lock for reading to prevent reading partial writes
             with self._file_lock(path, exclusive=False):
@@ -318,7 +319,16 @@ class ConversationStore:
                         if not line:
                             continue
 
-                        data = json.loads(line)
+                        try:
+                            data = json.loads(line)
+                        except json.JSONDecodeError as e:
+                            logger.warning(
+                                "Skipping corrupt JSONL row in session %s: %s",
+                                key,
+                                e,
+                            )
+                            continue
+                        saw_valid_row = True
 
                         if data.get("_type") == "metadata":
                             metadata = data.get("metadata", {})
@@ -326,6 +336,9 @@ class ConversationStore:
                             last_consolidated = data.get("last_consolidated", 0)
                         else:
                             messages.append(data)
+
+            if not saw_valid_row:
+                return None
 
             return ConversationSession(
                 key=key,

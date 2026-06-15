@@ -38,7 +38,7 @@ def _make_raw_email(
     return msg.as_bytes()
 
 
-def test_fetch_new_messages_parses_unseen_and_marks_seen(monkeypatch) -> None:
+def test_fetch_new_messages_parses_unseen_and_marks_seen(monkeypatch, tmp_path) -> None:
     raw = _make_raw_email(subject="Invoice", body="Please pay")
 
     class FakeIMAP:
@@ -65,6 +65,7 @@ def test_fetch_new_messages_parses_unseen_and_marks_seen(monkeypatch) -> None:
             return "BYE", [b""]
 
     fake = FakeIMAP()
+    monkeypatch.setattr("xbot.channels.email.get_data_dir", lambda: tmp_path, raising=False)
     monkeypatch.setattr("xbot.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: fake)
 
     channel = EmailChannel(_make_config(), MessageBus())
@@ -79,6 +80,38 @@ def test_fetch_new_messages_parses_unseen_and_marks_seen(monkeypatch) -> None:
     # Same UID should be deduped in-process.
     items_again = channel._fetch_new_messages()
     assert items_again == []
+
+
+def test_processed_uids_persist_across_channel_instances(monkeypatch, tmp_path) -> None:
+    raw = _make_raw_email(subject="Persisted", body="Only once")
+
+    class FakeIMAP:
+        def login(self, _user: str, _pw: str):
+            return "OK", [b"logged in"]
+
+        def select(self, _mailbox: str):
+            return "OK", [b"1"]
+
+        def search(self, *_args):
+            return "OK", [b"1"]
+
+        def fetch(self, _imap_id: bytes, _parts: str):
+            return "OK", [(b"1 (UID 456 BODY[] {200})", raw), b")"]
+
+        def store(self, imap_id: bytes, op: str, flags: str):
+            return "OK", [b""]
+
+        def logout(self):
+            return "BYE", [b""]
+
+    monkeypatch.setattr("xbot.channels.email.get_data_dir", lambda: tmp_path, raising=False)
+    monkeypatch.setattr("xbot.channels.email.imaplib.IMAP4_SSL", lambda _h, _p: FakeIMAP())
+
+    first = EmailChannel(_make_config(), MessageBus())
+    assert len(first._fetch_new_messages()) == 1
+
+    second = EmailChannel(_make_config(), MessageBus())
+    assert second._fetch_new_messages() == []
 
 
 def test_extract_text_body_falls_back_to_html() -> None:

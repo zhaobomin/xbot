@@ -352,6 +352,12 @@ class FeishuChannel(BaseChannel):
             self._processed_message_ids[message_id] = now
         return True
 
+    def _unmark_message_seen(self, message_id: str | None) -> None:
+        if not message_id:
+            return
+        with self._dedup_lock:
+            self._processed_message_ids.pop(message_id, None)
+
     async def _run_with_dedup_lock(self, fn: "Callable[[], None]") -> None:
         def _locked() -> None:
             with self._dedup_lock:
@@ -368,9 +374,14 @@ class FeishuChannel(BaseChannel):
         if not isinstance(payload, dict):
             return
         data = self._namespace_from_dict(payload)
-        if not self._mark_message_seen(self._extract_message_id_from_event(data)):
+        message_id = self._extract_message_id_from_event(data)
+        if not self._mark_message_seen(message_id):
             return
-        await self._on_message(data)
+        try:
+            await self._on_message(data)
+        except Exception:
+            self._unmark_message_seen(message_id)
+            raise
 
     async def _run_ws_event_reader(self) -> None:
         ws_restart_count = 0
@@ -550,7 +561,7 @@ class FeishuChannel(BaseChannel):
             return 0
         one_char = {**element, "content": text[:1]}
         if cls._card_payload_len([one_char]) > max_chars_per_card:
-            return len(text)
+            return 0
         low, high, best = 1, len(text), 1
         while low <= high:
             mid = (low + high) // 2
@@ -1015,9 +1026,12 @@ class FeishuChannel(BaseChannel):
         media_dir = get_media_dir("feishu")
 
         data, filename = None, None
+        fallback_stem = f"{msg_type}_download"
 
         if msg_type == "image":
             image_key = content_json.get("image_key")
+            if image_key:
+                fallback_stem = image_key[:16]
             if image_key and message_id:
                 data, filename = await loop.run_in_executor(
                     None, self._download_image_sync, message_id, image_key
@@ -1027,6 +1041,8 @@ class FeishuChannel(BaseChannel):
 
         elif msg_type in ("audio", "file", "media"):
             file_key = content_json.get("file_key")
+            if file_key:
+                fallback_stem = file_key[:16]
             if file_key and message_id:
                 data, filename = await loop.run_in_executor(
                     None, self._download_file_sync, message_id, file_key, msg_type
@@ -1037,7 +1053,7 @@ class FeishuChannel(BaseChannel):
                     filename = f"{filename}.opus"
 
         if data and filename:
-            safe_name = sanitize_download_filename(filename, file_key[:16] if 'file_key' in locals() and file_key else f"{msg_type}_download")
+            safe_name = sanitize_download_filename(filename, fallback_stem)
             file_path = media_dir / safe_name
             await asyncio.to_thread(file_path.write_bytes, data)
             logger.debug("Downloaded %s to %s", msg_type, file_path)

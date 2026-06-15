@@ -84,6 +84,17 @@ def _make_wrapper(session: object, *, timeout: float = 0.1) -> MCPToolWrapper:
     return MCPToolWrapper(session, "test", tool_def, tool_timeout=timeout)
 
 
+def test_tool_registry_rejects_duplicate_tool_names() -> None:
+    registry = ToolRegistry()
+    first = _make_wrapper(SimpleNamespace(call_tool=None))
+    second = _make_wrapper(SimpleNamespace(call_tool=None))
+
+    registry.register(first)
+
+    with pytest.raises(ValueError, match="already registered"):
+        registry.register(second)
+
+
 @pytest.mark.asyncio
 async def test_execute_returns_text_blocks() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:

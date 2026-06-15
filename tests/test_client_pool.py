@@ -114,6 +114,21 @@ class TestClientPool:
             assert snapshot["counts"]["connected"] == 1
 
     @pytest.mark.asyncio
+    async def test_get_record_returns_connected_record(self, pool: ClientPool) -> None:
+        """Callers should not need to inspect the private _clients dict."""
+        with patch("claude_agent_sdk.ClaudeSDKClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.connect = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            await pool.get_or_create("session:1", options=MagicMock())
+
+            record = await pool.get_record("session:1")
+
+            assert record is not None
+            assert record.client is mock_client
+
+    @pytest.mark.asyncio
     async def test_get_or_create_cleans_up_on_connect_timeout(self, pool: ClientPool) -> None:
         """Connect timeout should trigger client cleanup."""
         with patch("claude_agent_sdk.ClaudeSDKClient") as mock_client_class:

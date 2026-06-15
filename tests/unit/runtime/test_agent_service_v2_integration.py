@@ -372,7 +372,7 @@ async def test_dispatch_persists_user_and_assistant_messages(tmp_path) -> None:
     service.process = fake_process  # type: ignore[method-assign]
     await service._dispatch(msg, bus)
 
-    session = store.get_or_create("feishu:c-dispatch-store")
+    session = store.get_or_create("im:feishu:c-dispatch-store")
     assert ("user", "hello") in session.messages
     assert ("assistant", "assistant answer") in session.messages
     assert store.saved == 1

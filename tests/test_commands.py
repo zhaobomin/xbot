@@ -1,7 +1,7 @@
+import asyncio
 import json
 import re
 import shutil
-import asyncio
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from slack_sdk.socket_mode.request import SocketModeRequest
 
 from xbot.channels.slack import SlackChannel, SlackConfig
 from xbot.platform.bus.events import OutboundMessage
@@ -73,6 +74,14 @@ class _FakeAsyncWebClient:
                 "timestamp": timestamp,
             }
         )
+
+
+class _FakeSocketClient:
+    def __init__(self) -> None:
+        self.responses: list[object] = []
+
+    async def send_socket_mode_response(self, response: object) -> None:
+        self.responses.append(response)
 
 
 @pytest.mark.asyncio
@@ -273,3 +282,43 @@ class TestSlackRateLimit:
             )
 
         assert mock_web.call_count == SLACK_MAX_RETRIES
+
+
+@pytest.mark.asyncio
+async def test_socket_request_notifies_thread_when_message_handling_fails(monkeypatch) -> None:
+    channel = SlackChannel(
+        SlackConfig(enabled=True, reply_in_thread=True, group_policy="open"),
+        MessageBus(),
+    )
+    fake_web = _FakeAsyncWebClient()
+    channel._web_client = fake_web
+
+    async def fail_handle_message(**_kwargs) -> None:
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(channel, "_handle_message", fail_handle_message)
+
+    req = SocketModeRequest(
+        type="events_api",
+        envelope_id="env-1",
+        payload={
+            "event": {
+                "type": "message",
+                "user": "U123",
+                "channel": "C123",
+                "channel_type": "channel",
+                "text": "help",
+                "ts": "1700000000.000100",
+            }
+        },
+    )
+
+    await channel._on_socket_request(_FakeSocketClient(), req)
+
+    assert fake_web.chat_post_calls == [
+        {
+            "channel": "C123",
+            "text": "Sorry, I hit an error while handling that message.",
+            "thread_ts": "1700000000.000100",
+        }
+    ]

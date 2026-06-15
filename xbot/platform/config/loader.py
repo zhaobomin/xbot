@@ -253,7 +253,12 @@ def _auto_detect_provider(data: dict[str, Any]) -> dict[str, Any]:
     # Get base_url/provider name from providers config
     detected_provider: str | None = None
     providers = data.get("providers", {})
-    for provider_name, provider_config in providers.items():
+    provider_items = list(providers.items())
+    custom_providers = providers.get("customProviders") or providers.get("custom_providers")
+    if isinstance(custom_providers, dict):
+        provider_items.extend(custom_providers.items())
+
+    for provider_name, provider_config in provider_items:
         if not isinstance(provider_config, dict):
             continue
         api_base = (provider_config.get("apiBase") or "").strip()
@@ -302,6 +307,10 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
 
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False, default=secret_str_encoder)
+    try:
+        os.chmod(path, 0o600)
+    except OSError as e:
+        logger.debug("Failed to restrict config permissions for %s: %s", path, e)
 
 
 def _migrate_config(data: dict) -> dict:
@@ -311,6 +320,8 @@ def _migrate_config(data: dict) -> dict:
     exec_cfg = tools.get("exec", {})
     if "restrictToWorkspace" in exec_cfg and "restrictToWorkspace" not in tools:
         tools["restrictToWorkspace"] = exec_cfg.pop("restrictToWorkspace")
+
+    _migrate_provider_fields(data)
 
     # Migrate agents.defaults.availableModels → providers.{name}.models
     agents = data.get("agents", {})
@@ -337,12 +348,7 @@ def _migrate_config(data: dict) -> dict:
                         provider_name = name
                         break
 
-        # Convert provider name to the format used in config
-        # e.g., "aliyun_coding_plan" → "aliyunCodingPlan"
-        config_provider_name = provider_name
-        if "_" in provider_name:
-            parts = provider_name.split("_")
-            config_provider_name = parts[0] + "".join(p.capitalize() for p in parts[1:])
+        config_provider_name = _provider_name_to_snake(provider_name)
 
         # Ensure providers section exists
         if "providers" not in data:
@@ -351,7 +357,7 @@ def _migrate_config(data: dict) -> dict:
         providers = data["providers"]
 
         # Determine where to put the models
-        if config_provider_name in providers:
+        if config_provider_name == "anthropic" and config_provider_name in providers:
             # Fixed provider
             if "models" not in providers[config_provider_name]:
                 providers[config_provider_name]["models"] = available_models
@@ -377,3 +383,35 @@ def _migrate_config(data: dict) -> dict:
             del defaults["available_models"]
 
     return data
+
+
+def _migrate_provider_fields(data: dict) -> None:
+    """Move registry provider objects that are not fixed fields into customProviders."""
+    providers = data.get("providers")
+    if not isinstance(providers, dict):
+        return
+
+    custom_providers = providers.setdefault("customProviders", {})
+    if not isinstance(custom_providers, dict):
+        custom_providers = {}
+        providers["customProviders"] = custom_providers
+
+    fixed_provider_keys = {"anthropic", "custom", "customProviders", "custom_providers"}
+    for raw_name in list(providers.keys()):
+        if raw_name in fixed_provider_keys:
+            continue
+        value = providers.get(raw_name)
+        if not isinstance(value, dict):
+            continue
+        normalized_name = _provider_name_to_snake(raw_name)
+        custom_providers.setdefault(normalized_name, value)
+        del providers[raw_name]
+
+
+def _provider_name_to_snake(name: str) -> str:
+    out = []
+    for index, char in enumerate(name):
+        if char.isupper() and index > 0:
+            out.append("_")
+        out.append(char.lower())
+    return "".join(out).replace("-", "_")

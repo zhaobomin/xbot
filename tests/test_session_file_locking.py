@@ -94,6 +94,24 @@ class TestSessionFileLocking:
         result = manager._load("nonexistent:session")
         assert result is None
 
+    def test_load_skips_corrupt_jsonl_rows(self, tmp_path: Path) -> None:
+        """One corrupt append row should not make the whole session unreadable."""
+        manager = ConversationStore(tmp_path)
+        path = manager._get_session_path("test:corrupt")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            '{"_type":"metadata","key":"test:corrupt","created_at":"2026-05-11T00:00:00","last_consolidated":0}\n'
+            '{"role":"user","content":"kept before"}\n'
+            '{"role":"assistant","content":\n'
+            '{"role":"user","content":"kept after"}\n',
+            encoding="utf-8",
+        )
+
+        loaded = manager._load("test:corrupt")
+
+        assert loaded is not None
+        assert [msg["content"] for msg in loaded.messages] == ["kept before", "kept after"]
+
     def test_session_paths_do_not_collide_for_similar_keys(self, tmp_path: Path) -> None:
         """Distinct session keys should never collapse to the same JSONL path."""
         manager = ConversationStore(tmp_path)

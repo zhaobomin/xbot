@@ -407,6 +407,14 @@ class WebFetchTool(Tool):
             text = data.get("content", "")
             if not text:
                 return None
+            final_url = data.get("url", url)
+            if not self.disable_security_checks:
+                from xbot.platform.security.network import validate_resolved_url
+
+                final_ok, final_err = validate_resolved_url(str(final_url))
+                if not final_ok:
+                    logger.warning("Jina Reader final URL blocked for %s: %s", url, final_err)
+                    return None
 
             if title:
                 text = f"# {title}\n\n{text}" if extract_mode == "markdown" else f"{title}\n\n{text}"
@@ -418,7 +426,7 @@ class WebFetchTool(Tool):
             text = f"{_UNTRUSTED_BANNER}\n\n{text}"
 
             return json.dumps({
-                "url": url, "finalUrl": data.get("url", url), "status": r.status_code,
+                "url": url, "finalUrl": final_url, "status": r.status_code,
                 "extractor": "jina", "truncated": truncated, "length": len(text),
                 "untrusted": True, "text": text,
             }, ensure_ascii=False)

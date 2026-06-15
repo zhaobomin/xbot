@@ -27,6 +27,11 @@ const PORT = parseInt(process.env.BRIDGE_PORT || '3001', 10);
 const AUTH_DIR = process.env.AUTH_DIR || join(homedir(), '.xbot', 'whatsapp-auth');
 const TOKEN = process.env.BRIDGE_TOKEN || undefined;
 
+if (!Number.isInteger(PORT) || PORT < 1 || PORT > 65535) {
+  console.error(`Invalid BRIDGE_PORT: ${process.env.BRIDGE_PORT}`);
+  process.exit(1);
+}
+
 console.log('🐈 xbot WhatsApp Bridge');
 console.log('========================\n');
 

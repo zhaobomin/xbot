@@ -5,14 +5,8 @@ content when ResultMessage.result is None but text content exists in
 AssistantMessage (event_type="content").
 """
 
-import asyncio
-import json
 from types import SimpleNamespace
-from typing import Any
 from unittest.mock import AsyncMock, MagicMock, patch
-
-import pytest
-
 
 # ─── Bug mechanism verification ───
 
@@ -123,8 +117,8 @@ def _make_inbound_msg():
 async def test_dispatch_fallback_publishes_content_when_result_empty():
     """FIX: _dispatch now publishes last_content_text as fallback
     when ResultMessage.result is empty but AssistantMessage has text."""
-    from xbot.runtime.core.protocol import AgentResponse
     from xbot.platform.bus.events import OutboundMessage
+    from xbot.runtime.core.protocol import AgentResponse
 
     svc = _make_dispatch_svc()
     bus = MagicMock()
@@ -176,7 +170,6 @@ async def test_dispatch_result_preferred_over_content_fallback():
     """When ResultMessage.result IS populated, it takes precedence over
     content fallback (backward compatibility with old CLI)."""
     from xbot.runtime.core.protocol import AgentResponse
-    from xbot.platform.bus.events import OutboundMessage
 
     svc = _make_dispatch_svc()
     bus = MagicMock()

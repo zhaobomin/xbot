@@ -234,7 +234,17 @@ class CrewStateManager:
                 if task_def:
                     for dep in task_def.context_from:
                         dep_phase = self._task_phases.get(dep)
-                        if dep_phase and dep_phase != TaskPhase.COMPLETED:
+                        if dep_phase is None:
+                            msg = (
+                                f"Task '{task_name}' is {phase.value} "
+                                f"but dependency '{dep}' does not exist"
+                            )
+                            if self._strict_invariants:
+                                raise InvariantViolationError(
+                                    f"Critical invariant violation: {msg}"
+                                )
+                            logger.warning(f"Invariant violation: {msg}")
+                        elif dep_phase != TaskPhase.COMPLETED:
                             msg = (
                                 f"Task '{task_name}' is {phase.value} "
                                 f"but dependency '{dep}' is {dep_phase.value}"

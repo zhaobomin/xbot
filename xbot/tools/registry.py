@@ -22,6 +22,8 @@ class ToolRegistry:
     def register(self, tool: Tool) -> None:
         """Register a tool."""
         with self._lock:
+            if tool.name in self._tools:
+                raise ValueError(f"Tool '{tool.name}' is already registered")
             self._tools[tool.name] = tool
 
     def unregister(self, name: str) -> None:

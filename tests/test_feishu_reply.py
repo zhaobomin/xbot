@@ -117,6 +117,12 @@ def test_feishu_config_reply_to_message_can_be_enabled() -> None:
     assert config.reply_to_message is True
 
 
+def test_download_and_save_media_does_not_use_locals_scope_probe() -> None:
+    source = Path("xbot/channels/feishu.py").read_text(encoding="utf-8")
+
+    assert "'file_key' in locals()" not in source
+
+
 # ---------------------------------------------------------------------------
 # _get_message_content_sync tests
 # ---------------------------------------------------------------------------
@@ -354,6 +360,28 @@ async def test_on_message_does_not_block_event_loop_when_dedup_lock_is_held() ->
     await asyncio.wait_for(task, timeout=1.0)
 
     assert elapsed < 0.1
+
+
+@pytest.mark.asyncio
+async def test_worker_dispatch_unmarks_message_when_processing_fails() -> None:
+    channel = _make_feishu_channel()
+    payload = _make_feishu_worker_payload(message_id="om_retry")
+    attempts = 0
+
+    async def fail_once(_data):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise RuntimeError("temporary failure")
+
+    channel._on_message = fail_once
+
+    with pytest.raises(RuntimeError, match="temporary failure"):
+        await channel._dispatch_worker_event({"type": "message", "payload": payload})
+
+    await channel._dispatch_worker_event({"type": "message", "payload": payload})
+
+    assert attempts == 2
 
 
 @pytest.mark.asyncio

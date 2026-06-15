@@ -88,7 +88,7 @@ class ChannelManager:
             if allow_from is None and isinstance(ch.config, dict):
                 allow_from = ch.config.get("allowFrom") or ch.config.get("allow_from")
             if not allow_from:  # catches None, [], and other falsy values
-                raise SystemExit(
+                raise ValueError(
                     f'Error: "{name}" has empty or missing allowFrom (denies all). '
                     f'Set ["*"] to allow everyone, or add specific user IDs.'
                 )

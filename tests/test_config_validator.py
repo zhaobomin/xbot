@@ -66,7 +66,7 @@ class TestValidateConfig:
         config = Config()
         config.agents.type = "claude_sdk"
         config.agents.defaults.provider = "openrouter"  # No longer in registry
-        config.providers.openrouter.api_key = "test_key"
+        config.providers.custom_providers["openrouter"] = ProviderConfig(api_key="test_key")
 
         with pytest.raises(ConfigurationError) as exc_info:
             validate_config(config)
@@ -100,7 +100,7 @@ class TestValidateConfig:
         config = Config()
         config.agents.type = "claude_sdk"
         config.agents.defaults.provider = "aliyun_coding_plan"
-        config.providers.aliyun_coding_plan.api_key = "test-key"
+        config.providers.custom_providers["aliyun_coding_plan"] = ProviderConfig(api_key="test-key")
 
         # Should not raise
         validate_config(config)
@@ -232,7 +232,9 @@ class TestSecretStrApiKey:
         # Set empty key for anthropic
         config.providers.anthropic.api_key = SecretStr("")
         # Set valid key for openai
-        config.providers.openai.api_key = SecretStr("sk-openai-key")
+        config.providers.custom_providers["openai"] = ProviderConfig(
+            api_key=SecretStr("sk-openai-key")
+        )
 
         # When requesting claude model, should return None
         # because anthropic matches by keyword but has no key
@@ -251,7 +253,9 @@ class TestSecretStrApiKey:
         # Set empty key for anthropic
         config.providers.anthropic.api_key = SecretStr("")
         # Set valid key for aliyun_coding_plan (in registry)
-        config.providers.aliyun_coding_plan.api_key = SecretStr("aliyun-key")
+        config.providers.custom_providers["aliyun_coding_plan"] = ProviderConfig(
+            api_key=SecretStr("aliyun-key")
+        )
 
         # When requesting a model with no keyword match
         # Should fallback to aliyun_coding_plan (first provider with valid key in registry order)

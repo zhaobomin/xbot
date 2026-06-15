@@ -13,7 +13,7 @@ interface SendCommand {
 }
 
 interface BridgeMessage {
-  type: 'message' | 'status' | 'qr' | 'error';
+  type: 'message' | 'status' | 'qr' | 'error' | 'sent';
   [key: string]: unknown;
 }
 
@@ -74,10 +74,10 @@ export class BridgeServer {
       try {
         const cmd = JSON.parse(data.toString()) as SendCommand;
         await this.handleCommand(cmd);
-        ws.send(JSON.stringify({ type: 'sent', to: cmd.to }));
+        this.sendToClient(ws, { type: 'sent', to: cmd.to });
       } catch (error) {
         console.error('Error handling command:', error);
-        ws.send(JSON.stringify({ type: 'error', error: String(error) }));
+        this.sendToClient(ws, { type: 'error', error: String(error) });
       }
     });
 
@@ -93,17 +93,35 @@ export class BridgeServer {
   }
 
   private async handleCommand(cmd: SendCommand): Promise<void> {
-    if (cmd.type === 'send' && this.wa) {
-      await this.wa.sendMessage(cmd.to, cmd.text);
+    if (cmd.type !== 'send') {
+      throw new Error(`Unsupported command type: ${String(cmd.type)}`);
     }
+    if (!this.wa) {
+      throw new Error('WhatsApp client is not initialized');
+    }
+    await this.wa.sendMessage(cmd.to, cmd.text);
   }
 
   private broadcast(msg: BridgeMessage): void {
     const data = JSON.stringify(msg);
     for (const client of this.clients) {
-      if (client.readyState === WebSocket.OPEN) {
-        client.send(data);
-      }
+      this.sendSerializedToClient(client, data);
+    }
+  }
+
+  private sendToClient(client: WebSocket, msg: BridgeMessage): void {
+    this.sendSerializedToClient(client, JSON.stringify(msg));
+  }
+
+  private sendSerializedToClient(client: WebSocket, data: string): void {
+    if (client.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    try {
+      client.send(data);
+    } catch (error) {
+      console.error('WebSocket send failed:', error);
+      this.clients.delete(client);
     }
   }
 
@@ -116,7 +134,12 @@ export class BridgeServer {
 
     // Close WebSocket server
     if (this.wss) {
-      this.wss.close();
+      await new Promise<void>((resolve, reject) => {
+        this.wss!.close((error) => {
+          if (error) reject(error);
+          else resolve();
+        });
+      });
       this.wss = null;
     }
 

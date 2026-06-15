@@ -237,7 +237,7 @@ class BaseProcess(ABC):
             output = progress.total_content
             if progress.is_final:
                 return output
-        return output
+        raise RuntimeError("Streaming task ended without final progress")
 
     # ------------------------------------------------------------------
     # Human intervention

@@ -27,9 +27,9 @@ from fastapi import (
     WebSocketDisconnect,
     status,
 )
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
-from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field, SecretStr
 
 from xbot import __version__
@@ -41,9 +41,15 @@ from xbot.interfaces.gateway.auth import (
     print_password_banner,
 )
 from xbot.interfaces.gateway.services import ServiceContainer
-from xbot.interfaces.gateway.session_keys import runtime_route_from_session_key, to_internal_session_key
+from xbot.interfaces.gateway.session_keys import (
+    runtime_route_from_session_key,
+    to_internal_session_key,
+)
 from xbot.platform.config.schema import MCPServerConfig, ProviderConfig
+from xbot.platform.logging.core import get_logger
 from xbot.runtime.system.cron.types import CronPayload, CronSchedule
+
+logger = get_logger(__name__)
 
 # ---------------------------------------------------------------------------
 # Security: Name validation for skills and MCP servers
@@ -990,7 +996,8 @@ def create_app(
         if body.send_tool_hints is not None:
             container.config.channels.send_tool_hints = body.send_tool_hints
         for name, channel_config in body.channels.items():
-            setattr(container.config.channels, name, channel_config)
+            safe_name = validate_safe_name(name, "channel name")
+            setattr(container.config.channels, safe_name, channel_config)
         container.persist_config()
         return await channels(authorization=authorization)
 
@@ -1274,7 +1281,11 @@ def create_app(
 
         _get_user_from_auth_header(authorization)
         content = str(body.get("content", ""))
-        container.config = Config.model_validate(json.loads(content))
+        try:
+            config_data = json.loads(content)
+            container.config = Config.model_validate(config_data)
+        except (json.JSONDecodeError, ValueError) as e:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
         container.persist_config()
         return {"ok": True}
 

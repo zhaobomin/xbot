@@ -74,3 +74,31 @@ async def test_shutdown_cancels_timer_task(tmp_path) -> None:
     await service.shutdown()
 
     assert service._task_registry.get_tasks("cron-service") == set()
+
+
+@pytest.mark.asyncio
+async def test_execute_job_persists_state_after_each_run(tmp_path, monkeypatch) -> None:
+    called: list[str] = []
+
+    async def on_job(job) -> None:
+        called.append(job.id)
+
+    service = CronService(tmp_path / "cron" / "jobs.json", on_job=on_job)
+    job = service.add_job(
+        name="persist-after-run",
+        schedule=CronSchedule(kind="every", every_ms=60_000),
+        message="hello",
+    )
+    save_calls = 0
+
+    def fake_save() -> None:
+        nonlocal save_calls
+        save_calls += 1
+
+    monkeypatch.setattr(service, "_save_store", fake_save)
+
+    await service._execute_job(job)
+
+    assert called == [job.id]
+    assert save_calls == 1
+    assert job.state.last_status == "ok"

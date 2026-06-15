@@ -5,6 +5,7 @@ This module defines the MCP tools that allow language models to interact
 with Todoist data and functionality.
 """
 
+import asyncio
 from typing import Any, Dict, List, Optional
 
 from mcp.server.fastmcp import Context
@@ -21,7 +22,13 @@ class TodoistTools:
         Args:
             api_token: Todoist API token for authentication
         """
+        self._api_token = api_token
         self.api = TodoistAPI(api_token)
+
+    async def _run_sdk(self, fn, *args, **kwargs):
+        """Run blocking Todoist SDK calls outside the event loop."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
 
     async def create_task(
         self,
@@ -102,7 +109,7 @@ class TodoistTools:
             # Try two methods
 
             # Method 1: Create a new instance of the API just for this call
-            fresh_api = TodoistAPI(self.api._token)
+            fresh_api = TodoistAPI(self._api_token)
             task = fresh_api.add_task(**task_data)
 
             if ctx:
@@ -119,7 +126,7 @@ class TodoistTools:
 
                 url = "https://api.todoist.com/rest/v2/tasks"
                 headers = {
-                    "Authorization": f"Bearer {self.api._token}",
+                    "Authorization": f"Bearer {self._api_token}",
                     "Content-Type": "application/json",
                 }
 
@@ -183,15 +190,9 @@ class TodoistTools:
             ctx.info("Fetching Todoist tasks")
 
         try:
-            import asyncio
-
-            loop = asyncio.get_event_loop()
-
             if filter_query:
                 # Use filter query if provided
-                paginator = await loop.run_in_executor(
-                    None, lambda: self.api.filter_tasks(query=filter_query)
-                )
+                paginator = await self._run_sdk(self.api.filter_tasks, query=filter_query)
             else:
                 # Otherwise use the get_tasks method with provided filters
                 kwargs = {}
@@ -202,9 +203,7 @@ class TodoistTools:
                 if label:
                     kwargs["label"] = label
 
-                paginator = await loop.run_in_executor(
-                    None, lambda: self.api.get_tasks(**kwargs)
-                )
+                paginator = await self._run_sdk(self.api.get_tasks, **kwargs)
 
             # API returns a ResultsPaginator that yields lists, need to flatten
             all_tasks = []
@@ -239,12 +238,8 @@ class TodoistTools:
             ctx.info(f"Fetching Todoist task: {task_id}")
 
         try:
-            import asyncio
-
-            loop = asyncio.get_event_loop()
-
             # Get the task by ID
-            task = await loop.run_in_executor(None, lambda: self.api.get_task(task_id))
+            task = await self._run_sdk(self.api.get_task, task_id)
 
             # Return task data as dictionary using the helper method
             return self._task_to_dict(task)
@@ -321,14 +316,8 @@ class TodoistTools:
             raise ValueError("No update data provided")
 
         try:
-            import asyncio
-
-            loop = asyncio.get_event_loop()
-
             # Update the task - pass task_id as first positional argument
-            success = await loop.run_in_executor(
-                None, lambda: self.api.update_task(task_id, **update_data)
-            )
+            success = await self._run_sdk(self.api.update_task, task_id, **update_data)
 
             if not success:
                 raise ValueError("Failed to update task")
@@ -362,7 +351,7 @@ class TodoistTools:
 
         try:
             # Complete the task
-            success = self.api.close_task(task_id)
+            success = await self._run_sdk(self.api.close_task, task_id)
 
             if not success:
                 raise ValueError(f"Failed to complete task {task_id}")
@@ -398,7 +387,7 @@ class TodoistTools:
 
         try:
             # Delete the task
-            success = self.api.delete_task(task_id)
+            success = await self._run_sdk(self.api.delete_task, task_id)
 
             if not success:
                 raise ValueError(f"Failed to delete task {task_id}")
@@ -432,7 +421,7 @@ class TodoistTools:
 
         try:
             # Get all projects - API returns a ResultsPaginator that yields lists
-            paginator = self.api.get_projects()
+            paginator = await self._run_sdk(self.api.get_projects)
             all_projects = []
             for page in paginator:
                 # Each iteration returns a list of projects
@@ -469,7 +458,7 @@ class TodoistTools:
 
         try:
             # Reopen the task
-            success = self.api.reopen_task(task_id)
+            success = await self._run_sdk(self.api.reopen_task, task_id)
 
             if not success:
                 raise ValueError(f"Failed to reopen task {task_id}")
@@ -521,7 +510,7 @@ class TodoistTools:
             if view_style:
                 project_data["view_style"] = view_style
 
-            project = self.api.add_project(**project_data)
+            project = await self._run_sdk(self.api.add_project, **project_data)
             return self._project_to_dict(project)
         except Exception as e:
             if ctx:
@@ -547,7 +536,7 @@ class TodoistTools:
             ctx.info(f"Fetching Todoist project: {project_id}")
 
         try:
-            project = self.api.get_project(project_id)
+            project = await self._run_sdk(self.api.get_project, project_id)
             return self._project_to_dict(project)
         except Exception as e:
             if ctx:
@@ -594,7 +583,7 @@ class TodoistTools:
             if not update_kwargs:
                 raise ValueError("No update data provided")
 
-            project = self.api.update_project(project_id, **update_kwargs)
+            project = await self._run_sdk(self.api.update_project, project_id, **update_kwargs)
             return self._project_to_dict(project)
         except Exception as e:
             if ctx:
@@ -620,7 +609,7 @@ class TodoistTools:
             ctx.info(f"Deleting Todoist project: {project_id}")
 
         try:
-            self.api.delete_project(project_id)
+            await self._run_sdk(self.api.delete_project, project_id)
             return {"status": "success", "message": f"Project {project_id} deleted"}
         except Exception as e:
             if ctx:
@@ -646,7 +635,7 @@ class TodoistTools:
             ctx.info(f"Archiving Todoist project: {project_id}")
 
         try:
-            self.api.archive_project(project_id)
+            await self._run_sdk(self.api.archive_project, project_id)
             return {"status": "success", "message": f"Project {project_id} archived"}
         except Exception as e:
             if ctx:
@@ -672,7 +661,7 @@ class TodoistTools:
             ctx.info(f"Unarchiving Todoist project: {project_id}")
 
         try:
-            self.api.unarchive_project(project_id)
+            await self._run_sdk(self.api.unarchive_project, project_id)
             return {"status": "success", "message": f"Project {project_id} unarchived"}
         except Exception as e:
             if ctx:
@@ -703,7 +692,7 @@ class TodoistTools:
                 kwargs["project_id"] = project_id
 
             # API returns a ResultsPaginator that yields lists
-            paginator = self.api.get_sections(**kwargs)
+            paginator = await self._run_sdk(self.api.get_sections, **kwargs)
             all_sections = []
             for page in paginator:
                 all_sections.extend(page)
@@ -732,7 +721,7 @@ class TodoistTools:
             ctx.info(f"Fetching Todoist section: {section_id}")
 
         try:
-            section = self.api.get_section(section_id)
+            section = await self._run_sdk(self.api.get_section, section_id)
             return self._section_to_dict(section)
         except Exception as e:
             if ctx:
@@ -766,7 +755,7 @@ class TodoistTools:
             if order is not None:
                 section_data["order"] = order
 
-            section = self.api.add_section(**section_data)
+            section = await self._run_sdk(self.api.add_section, **section_data)
             return self._section_to_dict(section)
         except Exception as e:
             if ctx:
@@ -794,7 +783,7 @@ class TodoistTools:
             ctx.info(f"Updating Todoist section: {section_id}")
 
         try:
-            section = self.api.update_section(section_id, name)
+            section = await self._run_sdk(self.api.update_section, section_id, name)
             return self._section_to_dict(section)
         except Exception as e:
             if ctx:
@@ -820,7 +809,7 @@ class TodoistTools:
             ctx.info(f"Deleting Todoist section: {section_id}")
 
         try:
-            self.api.delete_section(section_id)
+            await self._run_sdk(self.api.delete_section, section_id)
             return {"status": "success", "message": f"Section {section_id} deleted"}
         except Exception as e:
             if ctx:
@@ -845,7 +834,7 @@ class TodoistTools:
 
         try:
             # API returns a ResultsPaginator that yields lists
-            paginator = self.api.get_labels()
+            paginator = await self._run_sdk(self.api.get_labels)
             all_labels = []
             for page in paginator:
                 # Each iteration returns a list of labels
@@ -875,7 +864,7 @@ class TodoistTools:
             ctx.info(f"Fetching Todoist label: {label_id}")
 
         try:
-            label = self.api.get_label(label_id)
+            label = await self._run_sdk(self.api.get_label, label_id)
             return self._label_to_dict(label)
         except Exception as e:
             if ctx:
@@ -911,7 +900,7 @@ class TodoistTools:
             if favorite is not None:
                 label_data["favorite"] = favorite
 
-            label = self.api.add_label(**label_data)
+            label = await self._run_sdk(self.api.add_label, **label_data)
             return self._label_to_dict(label)
         except Exception as e:
             if ctx:
@@ -954,7 +943,7 @@ class TodoistTools:
             if not update_kwargs:
                 raise ValueError("No update data provided")
 
-            label = self.api.update_label(label_id, **update_kwargs)
+            label = await self._run_sdk(self.api.update_label, label_id, **update_kwargs)
             return self._label_to_dict(label)
         except Exception as e:
             if ctx:
@@ -980,7 +969,7 @@ class TodoistTools:
             ctx.info(f"Deleting Todoist label: {label_id}")
 
         try:
-            self.api.delete_label(label_id)
+            await self._run_sdk(self.api.delete_label, label_id)
             return {"status": "success", "message": f"Label {label_id} deleted"}
         except Exception as e:
             if ctx:
@@ -1018,7 +1007,7 @@ class TodoistTools:
                 kwargs["project_id"] = project_id
 
             # API returns a ResultsPaginator that yields lists
-            paginator = self.api.get_comments(**kwargs)
+            paginator = await self._run_sdk(self.api.get_comments, **kwargs)
             all_comments = []
             for page in paginator:
                 all_comments.extend(page)
@@ -1047,7 +1036,7 @@ class TodoistTools:
             ctx.info(f"Fetching Todoist comment: {comment_id}")
 
         try:
-            comment = self.api.get_comment(comment_id)
+            comment = await self._run_sdk(self.api.get_comment, comment_id)
             return self._comment_to_dict(comment)
         except Exception as e:
             if ctx:
@@ -1086,7 +1075,7 @@ class TodoistTools:
             if project_id:
                 comment_data["project_id"] = project_id
 
-            comment = self.api.add_comment(**comment_data)
+            comment = await self._run_sdk(self.api.add_comment, **comment_data)
             return self._comment_to_dict(comment)
         except Exception as e:
             if ctx:
@@ -1114,7 +1103,7 @@ class TodoistTools:
             ctx.info(f"Updating Todoist comment: {comment_id}")
 
         try:
-            comment = self.api.update_comment(comment_id, content)
+            comment = await self._run_sdk(self.api.update_comment, comment_id, content)
             return self._comment_to_dict(comment)
         except Exception as e:
             if ctx:
@@ -1140,7 +1129,7 @@ class TodoistTools:
             ctx.info(f"Deleting Todoist comment: {comment_id}")
 
         try:
-            self.api.delete_comment(comment_id)
+            await self._run_sdk(self.api.delete_comment, comment_id)
             return {"status": "success", "message": f"Comment {comment_id} deleted"}
         except Exception as e:
             if ctx:
@@ -1167,7 +1156,7 @@ class TodoistTools:
 
         try:
             # API returns a ResultsPaginator that yields lists
-            paginator = self.api.get_collaborators(project_id)
+            paginator = await self._run_sdk(self.api.get_collaborators, project_id)
             all_collaborators = []
             for page in paginator:
                 all_collaborators.extend(page)
@@ -1226,12 +1215,12 @@ class TodoistTools:
         return {
             "id": project.id,
             "name": project.name,
-            "color": project.color,
-            "is_favorite": project.is_favorite,
-            "is_inbox_project": project.is_inbox_project,
-            "order": project.order,
-            "parent_id": project.parent_id,
-            "url": project.url,
+            "color": getattr(project, "color", None),
+            "is_favorite": bool(getattr(project, "is_favorite", False)),
+            "is_inbox_project": bool(getattr(project, "is_inbox_project", False)),
+            "order": getattr(project, "order", None),
+            "parent_id": getattr(project, "parent_id", None),
+            "url": getattr(project, "url", None),
         }
 
     def _section_to_dict(self, section):
@@ -1250,7 +1239,7 @@ class TodoistTools:
             "name": label.name,
             "color": label.color,
             "order": label.order,
-            "favorite": label.favorite if hasattr(label, "favorite") else False,
+            "favorite": bool(getattr(label, "is_favorite", getattr(label, "favorite", False))),
         }
 
     def _comment_to_dict(self, comment):

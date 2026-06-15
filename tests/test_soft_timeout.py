@@ -121,7 +121,7 @@ class TestCrewExecutionTimeoutSemantics:
         assert result.output == "StartEnd"
 
     @pytest.mark.asyncio
-    async def test_stream_end_without_final_returns_last_output(self) -> None:
+    async def test_stream_end_without_final_fails_task(self) -> None:
         async def early_end_stream(*args, **kwargs):
             yield TaskProgress(delta_content="partial", total_content="partial", is_final=False)
 
@@ -132,8 +132,8 @@ class TestCrewExecutionTimeoutSemantics:
 
         result = await process._execute_single_task(task)
 
-        assert result.status == "success"
-        assert result.output == "partial"
+        assert result.status == "failed"
+        assert "ended without final progress" in result.output
 
     @pytest.mark.asyncio
     async def test_unknown_agent_still_fails_fast(self) -> None:

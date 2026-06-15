@@ -4,6 +4,7 @@ import asyncio
 
 import pytest
 
+from xbot.platform.bus.events import InboundMessage
 from xbot.platform.bus.queue import (
     InteractionRequest,
     InteractionResponse,
@@ -11,7 +12,6 @@ from xbot.platform.bus.queue import (
     PermissionRequest,
     PermissionResponse,
 )
-from xbot.platform.bus.events import InboundMessage
 
 
 def test_im_channel_inbound_message_uses_im_session_namespace():

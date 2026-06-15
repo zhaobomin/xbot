@@ -20,6 +20,7 @@ class ExecTool(Tool):
         allow_patterns: list[str] | None = None,
         restrict_to_workspace: bool = False,
         path_append: str = "",
+        timeout: float = 60.0,
     ):
         self.working_dir = Path(working_dir) if working_dir else None
         self.deny_patterns = deny_patterns or [
@@ -39,6 +40,7 @@ class ExecTool(Tool):
         self.allow_patterns = allow_patterns or []
         self.restrict_to_workspace = restrict_to_workspace
         self.path_append = path_append
+        self.timeout = timeout
 
     @property
     def name(self) -> str:
@@ -91,7 +93,23 @@ class ExecTool(Tool):
                 env=env,
             )
 
-            stdout, stderr = await process.communicate()
+            try:
+                stdout, stderr = await asyncio.wait_for(
+                    process.communicate(),
+                    timeout=self.timeout,
+                )
+            except asyncio.TimeoutError:
+                process.kill()
+                stdout, stderr = await process.communicate()
+                output_parts = []
+                if stdout:
+                    output_parts.append(stdout.decode("utf-8", errors="replace"))
+                if stderr:
+                    stderr_text = stderr.decode("utf-8", errors="replace")
+                    if stderr_text.strip():
+                        output_parts.append(f"STDERR:\n{stderr_text}")
+                output_parts.append(f"Error: command timed out after {self.timeout:g}s")
+                return "\n".join(output_parts)
 
             output_parts = []
 
@@ -230,7 +248,7 @@ class ExecTool(Tool):
         try:
             tokens = shlex.split(command, posix=os.name != "nt")
         except ValueError:
-            tokens = command.split()
+            return []
 
         candidates: list[str] = []
         for token in tokens[1:]:

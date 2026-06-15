@@ -115,12 +115,15 @@ def validate_resolved_url(url: str) -> tuple[bool, str]:
     """Validate an already-fetched URL (e.g. after redirect). Only checks the IP, skips DNS."""
     try:
         p = urlparse(url)
-    except Exception:
-        return True, ""
+    except Exception as e:
+        return False, f"Invalid URL: {e}"
+
+    if p.scheme not in ("http", "https"):
+        return False, f"Only http/https allowed, got '{p.scheme or 'none'}'"
 
     hostname = p.hostname
     if not hostname:
-        return True, ""
+        return False, "Missing hostname"
 
     try:
         addr = ipaddress.ip_address(hostname)

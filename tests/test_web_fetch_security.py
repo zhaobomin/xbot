@@ -288,3 +288,42 @@ async def test_web_fetch_jina_honors_text_extract_mode():
     assert "[link]" not in data["text"]
     assert "Heading" in data["text"]
     assert "bold" in data["text"]
+
+
+@pytest.mark.asyncio
+async def test_web_fetch_blocks_jina_final_url_that_resolves_private():
+    tool = WebFetchTool()
+
+    class FakeResponse:
+        status_code = 200
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": {
+                    "title": "unsafe",
+                    "content": "private content",
+                    "url": "http://internal.example/admin",
+                }
+            }
+
+    async def _fake_get(self, url, **kwargs):
+        return FakeResponse()
+
+    def _resolver(hostname, port, family=0, type_=0):
+        if hostname == "safe.example":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
+        if hostname == "internal.example":
+            return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 0))]
+        raise socket.gaierror(hostname)
+
+    with patch("httpx.AsyncClient.get", _fake_get), \
+         patch("xbot.platform.security.network.socket.getaddrinfo", _resolver), \
+         patch.object(tool, "_fetch_readability", AsyncMock(return_value='{"extractor":"readability"}')) as readability:
+        result = await tool.execute("https://safe.example/page")
+
+    data = json.loads(result)
+    assert data["extractor"] == "readability"
+    assert readability.await_count == 1

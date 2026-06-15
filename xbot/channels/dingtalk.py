@@ -127,7 +127,7 @@ class NanobotDingTalkHandler(CallbackHandler):
             logger.info("Received DingTalk message from %s (%s): %s", sender_name, sender_id, content)
 
             # Forward to Nanobot via _on_message (non-blocking).
-            self.channel._create_tracked_task(
+            self.channel._schedule_inbound_message(
                 self.channel._on_message(
                     content,
                     sender_id,
@@ -184,18 +184,17 @@ class DingTalkChannel(BaseChannel):
         self.config: DingTalkConfig = config
         self._client: Any = None
         self._http: httpx.AsyncClient | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
 
         # Access Token management for sending messages
         self._access_token: str | None = None
         self._token_expiry: float = 0
         self._token_lock = asyncio.Lock()
 
-        # Hold references to background tasks to prevent GC
-        self._background_tasks: set[asyncio.Task] = set()
-
     async def start(self) -> None:
         """Start the DingTalk bot with Stream Mode."""
         try:
+            self._loop = asyncio.get_running_loop()
             if not DINGTALK_AVAILABLE:
                 logger.error(
                     "DingTalk Stream SDK not installed. Run: pip install dingtalk-stream"
@@ -242,6 +241,22 @@ class DingTalkChannel(BaseChannel):
         if self._http:
             await self._http.aclose()
             self._http = None
+
+    def _schedule_inbound_message(self, coro: Any, name: str) -> None:
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if self._loop and self._loop.is_running() and current_loop is not self._loop:
+            try:
+                self._loop.call_soon_threadsafe(self._create_tracked_task, coro, name)
+            except Exception:
+                coro.close()
+                raise
+            return
+
+        self._create_tracked_task(coro, name=name)
 
     async def _get_access_token(self) -> str | None:
         """Get or refresh Access Token."""

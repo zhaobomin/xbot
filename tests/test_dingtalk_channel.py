@@ -224,6 +224,50 @@ async def test_handler_uses_channel_tracked_task(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_handler_schedules_inbound_on_channel_loop_from_other_thread(monkeypatch) -> None:
+    bus = MessageBus()
+    channel = DingTalkChannel(
+        DingTalkConfig(client_id="app", client_secret="secret", allow_from=["user1"]),
+        bus,
+    )
+    channel._loop = asyncio.get_running_loop()
+    handler = NanobotDingTalkHandler(channel)
+
+    class _FakeChatbotMessage:
+        text = SimpleNamespace(content="hello from thread")
+        extensions = {}
+        sender_staff_id = "user1"
+        sender_id = "fallback-user"
+        sender_nick = "Alice"
+        message_type = "text"
+
+        @staticmethod
+        def from_dict(_data):
+            return _FakeChatbotMessage()
+
+    monkeypatch.setattr(dingtalk_module, "ChatbotMessage", _FakeChatbotMessage)
+    monkeypatch.setattr(dingtalk_module, "AckMessage", SimpleNamespace(STATUS_OK="OK"))
+
+    status, body = await asyncio.to_thread(
+        lambda: asyncio.run(
+            handler.process(
+                SimpleNamespace(
+                    data={
+                        "conversationType": "1",
+                        "text": {"content": "hello from thread"},
+                    }
+                )
+            )
+        )
+    )
+    msg = await asyncio.wait_for(bus.consume_inbound(), timeout=1)
+
+    assert (status, body) == ("OK", "OK")
+    assert msg.content == "hello from thread"
+    assert msg.sender_id == "user1"
+
+
+@pytest.mark.asyncio
 async def test_stop_cancels_background_tasks_before_closing_http() -> None:
     channel = DingTalkChannel(
         DingTalkConfig(client_id="app", client_secret="secret", allow_from=["*"]),

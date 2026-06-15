@@ -294,6 +294,26 @@ class SlackChannel(BaseChannel):
             )
         except Exception:
             logger.exception("Error handling Slack message from %s", sender_id)
+            await self._notify_processing_error(chat_id, thread_ts, channel_type)
+
+    async def _notify_processing_error(
+        self,
+        chat_id: str,
+        thread_ts: str | None,
+        channel_type: str,
+    ) -> None:
+        if not self._web_client:
+            return
+        thread_ts_param = thread_ts if thread_ts and channel_type != "im" else None
+        try:
+            await self._send_with_retry(
+                self._web_client.chat_postMessage,
+                channel=chat_id,
+                text="Sorry, I hit an error while handling that message.",
+                thread_ts=thread_ts_param,
+            )
+        except Exception:
+            logger.exception("Failed to notify Slack user about message handling error")
 
     async def _update_react_emoji(self, chat_id: str, ts: str | None) -> None:
         """Remove the in-progress reaction and optionally add a done reaction."""

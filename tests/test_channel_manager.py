@@ -142,8 +142,8 @@ class TestChannelManagerStatus:
 class TestChannelManagerValidation:
     """Tests for ChannelManager validation."""
 
-    def test_empty_allow_from_raises_system_exit(self):
-        """Test that empty allow_from raises SystemExit."""
+    def test_empty_allow_from_raises_value_error(self):
+        """Invalid channel config should not terminate the whole process."""
         mock_config = MagicMock()
         mock_config.channels = MagicMock()
 
@@ -160,8 +160,7 @@ class TestChannelManagerValidation:
 
         bus = MessageBus()
 
-        # This should raise SystemExit because allow_from is empty
-        with pytest.raises(SystemExit) as exc_info:
+        with pytest.raises(ValueError) as exc_info:
             ChannelManager(mock_config, bus)
 
         assert "allowFrom" in str(exc_info.value)

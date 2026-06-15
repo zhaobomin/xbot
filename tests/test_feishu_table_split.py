@@ -115,6 +115,10 @@ def test_oversized_markdown_element_is_split_under_card_budget() -> None:
         assert len(json.dumps(card, ensure_ascii=False)) <= 180
 
 
+def test_largest_fitting_prefix_returns_zero_when_one_character_exceeds_budget() -> None:
+    assert FeishuChannel._largest_fitting_prefix(_md(""), "abc", max_chars_per_card=1) == 0
+
+
 def test_oversized_table_is_split_by_rows_under_card_budget() -> None:
     table = {
         "tag": "table",

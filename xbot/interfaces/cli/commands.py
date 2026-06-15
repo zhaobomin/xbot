@@ -986,7 +986,6 @@ def gateway(
     # Build WebUI app if enabled
     webui_app = None
     if not no_webui:
-        from contextlib import suppress as _suppress
         from xbot.interfaces.gateway.app import create_app
         from xbot.interfaces.gateway.services import ServiceContainer
         from xbot.platform.config.loader import save_config
@@ -1013,6 +1012,7 @@ def gateway(
 
     async def run():
         from contextlib import suppress as _suppress
+
         from xbot.runtime.system.monitoring.alerting import AlertConfig, init_alert_service
 
         # Initialize alert service

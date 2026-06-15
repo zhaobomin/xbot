@@ -165,6 +165,28 @@ class TestAgentService:
                 responses.append(response)
 
     @pytest.mark.asyncio
+    async def test_process_logs_unexpected_exception_with_traceback(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+        caplog,
+    ) -> None:
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+        context = AgentContext(session_key="test:traceback", prompt="Hello")
+        mock_client = MagicMock()
+        mock_client.query = AsyncMock(side_effect=RuntimeError("boom"))
+
+        with patch.object(service, "_get_or_create_client", AsyncMock(return_value=mock_client)):
+            responses = [response async for response in service.process(context)]
+
+        assert responses[-1].finish_reason == "error"
+        assert any(
+            record.exc_info and "Error processing" in record.message
+            for record in caplog.records
+        )
+
+    @pytest.mark.asyncio
     async def test_process_includes_media_references_in_query(
         self,
         config: AgentConfig,

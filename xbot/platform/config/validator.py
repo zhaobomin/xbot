@@ -48,12 +48,14 @@ def validate_config(config: Config) -> None:
         )
 
     # 3. Check API key is configured
-    provider_attr = provider_name.replace("-", "_")
-    provider_config = getattr(config.providers, provider_attr, None)
-
-    # Fallback: check custom_providers
-    if not provider_config and hasattr(config.providers, 'custom_providers'):
-        provider_config = config.providers.custom_providers.get(provider_attr)
+    get_provider_config = getattr(config.providers, "get_provider_config", None)
+    if callable(get_provider_config):
+        provider_config = get_provider_config(provider_name)
+    else:
+        provider_attr = provider_name.replace("-", "_")
+        provider_config = getattr(config.providers, provider_attr, None)
+        if not provider_config and hasattr(config.providers, "custom_providers"):
+            provider_config = config.providers.custom_providers.get(provider_attr)
 
     if not provider_config:
         raise ConfigurationError(

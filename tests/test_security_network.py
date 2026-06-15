@@ -99,6 +99,14 @@ def test_validate_resolved_url_fails_closed_when_dns_fails():
         assert "cannot be resolved" in err.lower()
 
 
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "http://", "not a url"])
+def test_validate_resolved_url_fails_closed_for_invalid_final_urls(url: str):
+    ok, err = validate_resolved_url(url)
+
+    assert not ok
+    assert err
+
+
 # ---------------------------------------------------------------------------
 # contains_internal_url — shell command scanning
 # ---------------------------------------------------------------------------

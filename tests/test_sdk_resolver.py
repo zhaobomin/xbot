@@ -1,6 +1,6 @@
 """Tests for Claude SDK provider/model resolver."""
 
-from xbot.platform.config.schema import Config
+from xbot.platform.config.schema import Config, ProviderConfig
 from xbot.platform.config.sdk_resolver import (
     detect_provider_from_model,
     normalize_sdk_model_name,
@@ -26,7 +26,7 @@ def test_resolve_auto_prefers_model_detected_provider_when_key_exists() -> None:
     config = Config()
     config.agents.defaults.provider = "auto"
     config.agents.defaults.model = "qwen-max"
-    config.providers.aliyun_coding_plan.api_key = "test-key"
+    config.providers.custom_providers["aliyun_coding_plan"] = ProviderConfig(api_key="test-key")
 
     provider, model = resolve_sdk_provider_and_model(config, require_api_key=True)
 
@@ -50,7 +50,7 @@ def test_resolve_rejects_sdk_incompatible_provider() -> None:
     config = Config()
     config.agents.defaults.provider = "openrouter"
     config.agents.defaults.model = "claude-sonnet-4-5"
-    config.providers.openrouter.api_key = "test-key"
+    config.providers.custom_providers["openrouter"] = ProviderConfig(api_key="test-key")
 
     try:
         resolve_sdk_provider_and_model(config)

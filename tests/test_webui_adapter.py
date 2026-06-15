@@ -523,6 +523,8 @@ def test_desktop_tauri_scaffold_points_to_webui_dist() -> None:
     assert "xbot/interfaces/webui/frontend/dist" in tauri_conf
     assert "http://localhost:5174" in tauri_conf
     assert "tauri::Builder::default()" in main_rs
+    assert ".expect(" not in main_rs
+    assert "std::process::exit(1)" in main_rs
 
 
 def test_desktop_tauri_declares_macos_app_icon() -> None:
@@ -1412,6 +1414,34 @@ def test_system_config_compatibility_endpoints(tmp_path: Path) -> None:
     assert logs.json()["content"] == "keyword line"
     assert logs.json()["path"].endswith("app.log")
     assert users_create.status_code == 400
+
+
+def test_put_raw_config_returns_400_for_invalid_json(tmp_path: Path) -> None:
+    client, _services = _build_client(tmp_path)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = client.put(
+        "/api/config/raw",
+        headers=headers,
+        json={"content": '{"agents": '},
+    )
+
+    assert response.status_code == 400
+
+
+def test_patch_channels_rejects_unsafe_channel_names(tmp_path: Path) -> None:
+    client, _services = _build_client(tmp_path)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    response = client.patch(
+        "/api/channels",
+        headers=headers,
+        json={"channels": {"bad/name": {"enabled": True}}},
+    )
+
+    assert response.status_code == 400
 
 
 def test_system_config_s3_and_workspace_transfer_endpoints(tmp_path: Path) -> None:

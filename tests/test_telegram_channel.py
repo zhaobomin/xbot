@@ -236,6 +236,33 @@ async def test_stop_cancels_typing_and_media_group_tasks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_stop_waits_for_typing_task_cancellation() -> None:
+    channel = TelegramChannel(
+        TelegramConfig(enabled=True, token="123:abc", allow_from=["*"]),
+        MessageBus(),
+    )
+    cancelled = False
+
+    async def typing_task():
+        nonlocal cancelled
+        try:
+            await asyncio.Future()
+        except asyncio.CancelledError:
+            await asyncio.sleep(0)
+            cancelled = True
+            raise
+
+    task = asyncio.create_task(typing_task())
+    channel._typing_tasks["1"] = task
+    await asyncio.sleep(0)
+
+    await channel.stop()
+
+    assert task.done()
+    assert cancelled is True
+
+
+@pytest.mark.asyncio
 async def test_send_text_retries_on_timeout() -> None:
     """_send_text retries on TimedOut before succeeding."""
     from telegram.error import TimedOut

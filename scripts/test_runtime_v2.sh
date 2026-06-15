@@ -8,7 +8,7 @@ pytest \
   tests/unit/runtime/test_agent_service_v2_integration.py \
   tests/unit/runtime/test_busy_spin_recovery_dispatch.py \
   tests/unit/runtime/test_runtime_registry_v2.py \
-  tests/unit/runtime/test_session_state_v2.py \
+  tests/unit/runtime/test_session_state_v2.py
 
 # State-machine core coverage gate (hard gate).
 pytest \

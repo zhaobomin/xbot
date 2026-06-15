@@ -3,6 +3,7 @@
 import asyncio
 import html
 import imaplib
+import json
 import re
 import smtplib
 import ssl
@@ -20,10 +21,13 @@ from pydantic import Field
 from xbot.channels.base import BaseChannel
 from xbot.platform.bus.events import OutboundMessage
 from xbot.platform.bus.queue import MessageBus
+from xbot.platform.config.paths import get_data_dir
 from xbot.platform.config.schema import Base
 from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
+
+
 class EmailConfig(Base):
     """Email channel configuration (IMAP inbound + SMTP outbound)."""
 
@@ -93,8 +97,9 @@ class EmailChannel(BaseChannel):
         self.config: EmailConfig = config
         self._last_subject_by_chat: dict[str, str] = {}
         self._last_message_id_by_chat: dict[str, str] = {}
-        self._processed_uids: OrderedDict[str, None] = OrderedDict()
         self._MAX_PROCESSED_UIDS = 100000
+        self._processed_uids_path = get_data_dir() / "email" / "processed_uids.json"
+        self._processed_uids = self._load_processed_uids()
 
     async def start(self) -> None:
         """Start polling IMAP for inbound emails."""
@@ -346,13 +351,7 @@ class EmailChannel(BaseChannel):
                 )
 
                 if dedupe and uid:
-                    self._processed_uids[uid] = None
-                    self._processed_uids.move_to_end(uid)
-                    # mark_seen is the primary dedup; this set is a safety net
-                    if len(self._processed_uids) > self._MAX_PROCESSED_UIDS:
-                        trim_count = len(self._processed_uids) // 2
-                        for _ in range(trim_count):
-                            self._processed_uids.popitem(last=False)
+                    self._remember_processed_uid(uid)
 
                 if mark_seen:
                     client.store(imap_id, "+FLAGS", "\\Seen")
@@ -363,6 +362,51 @@ class EmailChannel(BaseChannel):
                 logger.debug("Error logging out of IMAP server", exc_info=True)
 
         return messages
+
+    def _load_processed_uids(self) -> OrderedDict[str, None]:
+        try:
+            data = json.loads(self._processed_uids_path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return OrderedDict()
+        except Exception:
+            logger.warning(
+                "Failed to load Email processed UID cache from %s",
+                self._processed_uids_path,
+                exc_info=True,
+            )
+            return OrderedDict()
+
+        if not isinstance(data, list):
+            return OrderedDict()
+
+        cache: OrderedDict[str, None] = OrderedDict()
+        for uid in data[-self._MAX_PROCESSED_UIDS :]:
+            if isinstance(uid, str) and uid:
+                cache[uid] = None
+        return cache
+
+    def _remember_processed_uid(self, uid: str) -> None:
+        self._processed_uids[uid] = None
+        self._processed_uids.move_to_end(uid)
+        # mark_seen is the primary dedup; this persisted set is a safety net.
+        if len(self._processed_uids) > self._MAX_PROCESSED_UIDS:
+            trim_count = len(self._processed_uids) // 2
+            for _ in range(trim_count):
+                self._processed_uids.popitem(last=False)
+        self._save_processed_uids()
+
+    def _save_processed_uids(self) -> None:
+        try:
+            self._processed_uids_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path = self._processed_uids_path.with_suffix(".json.tmp")
+            tmp_path.write_text(json.dumps(list(self._processed_uids.keys())), encoding="utf-8")
+            tmp_path.replace(self._processed_uids_path)
+        except Exception:
+            logger.warning(
+                "Failed to save Email processed UID cache to %s",
+                self._processed_uids_path,
+                exc_info=True,
+            )
 
     @classmethod
     def _format_imap_date(cls, value: date) -> str:

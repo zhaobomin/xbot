@@ -761,8 +761,8 @@ class TestExecuteTaskEdgeCases:
         assert stream_cancelled
 
     @pytest.mark.asyncio
-    async def test_stop_async_iteration_handled(self) -> None:
-        """StopAsyncIteration should be handled correctly."""
+    async def test_stop_async_iteration_without_final_is_failed(self) -> None:
+        """A stream ending before final progress should not be treated as complete."""
         from xbot.crew.agent_pool import TaskProgress
         from xbot.crew.models import AgentRole
 
@@ -805,13 +805,12 @@ class TestExecuteTaskEdgeCases:
             timeout=None,
         )
 
-        output = await process._execute_task(
-            task=task,
-            prompt="test",
-            session_key="test",
-        )
-
-        assert output == "partial"
+        with pytest.raises(RuntimeError, match="ended without final progress"):
+            await process._execute_task(
+                task=task,
+                prompt="test",
+                session_key="test",
+            )
 
 
 class TestStateTransitions:

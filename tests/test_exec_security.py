@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import socket
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -124,3 +125,18 @@ async def test_exec_blocks_unsafe_device_or_network_tools(command: str):
     result = await tool.execute(command=command)
     assert "Error" in result
     assert "blocked" in result.lower()
+
+
+@pytest.mark.asyncio
+async def test_exec_times_out_long_running_command():
+    tool = ExecTool(timeout=0.1)
+
+    result = await tool.execute(
+        command=f'{sys.executable} -c "import time; time.sleep(5)"',
+    )
+
+    assert "timed out" in result.lower()
+
+
+def test_extract_relative_paths_does_not_guess_after_shell_parse_error():
+    assert ExecTool._extract_relative_paths('cat "unterminated path') == []

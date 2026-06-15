@@ -1,6 +1,6 @@
 """Compatibility tests for runtime state exports."""
 
-from xbot.runtime.state.machine import SessionEvent, SessionPhase, SessionState, VALID_TRANSITIONS
+from xbot.runtime.state.machine import VALID_TRANSITIONS, SessionEvent, SessionPhase, SessionState
 
 
 def test_machine_exports_v2_types() -> None:

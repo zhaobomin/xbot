@@ -1,6 +1,9 @@
 fn main() {
-    tauri::Builder::default()
+    if let Err(error) = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .run(tauri::generate_context!())
-        .expect("error while running xbot desktop app");
+    {
+        eprintln!("error while running xbot desktop app: {error}");
+        std::process::exit(1);
+    }
 }

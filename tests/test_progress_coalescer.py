@@ -72,3 +72,21 @@ def test_coalescer_flushes_on_max_wait() -> None:
 
     assert len(ready) == 1
     assert ready[0].text == "第一段 第二段"
+
+
+def test_flush_due_honors_max_wait_even_when_debounce_has_not_elapsed() -> None:
+    c = ProgressCoalescer(debounce_ms=10_000, max_wait_ms=500, max_chars=1000)
+    key = ("cli", "direct", "content_delta")
+
+    c.push(
+        key=key,
+        text="still waiting",
+        event_type="content_delta",
+        tool_hint=False,
+        now=0.0,
+    )
+
+    ready = c.flush_due(now=0.6)
+
+    assert len(ready) == 1
+    assert ready[0].text == "still waiting"

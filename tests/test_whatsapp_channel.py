@@ -3,6 +3,7 @@
 import asyncio
 import json
 import time
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -10,6 +11,41 @@ import pytest
 from xbot.channels.whatsapp import WhatsAppChannel, WhatsAppConfig
 from xbot.platform.bus.events import OutboundMessage
 from xbot.platform.bus.queue import MessageBus
+
+
+def test_whatsapp_bridge_source_sanitizes_downloaded_media_filename():
+    source = Path("bridge/src/whatsapp.ts").read_text(encoding="utf-8")
+
+    assert "basename(" in source
+    assert "prefix + fileName" not in source
+
+
+def test_whatsapp_bridge_reconnect_handles_rejected_connect_promise():
+    source = Path("bridge/src/whatsapp.ts").read_text(encoding="utf-8")
+
+    assert "this.connect().catch" in source
+
+
+def test_whatsapp_bridge_server_uses_safe_client_send_helper():
+    source = Path("bridge/src/server.ts").read_text(encoding="utf-8")
+
+    assert "private sendToClient" in source
+    assert "ws.send(JSON.stringify" not in source
+
+
+def test_whatsapp_bridge_server_waits_for_close_callback():
+    source = Path("bridge/src/server.ts").read_text(encoding="utf-8")
+
+    assert "await new Promise<void>" in source
+    assert ".close((error" in source
+
+
+def test_whatsapp_bridge_index_validates_bridge_port():
+    source = Path("bridge/src/index.ts").read_text(encoding="utf-8")
+
+    assert "Number.isInteger(PORT)" in source
+    assert "PORT < 1" in source
+    assert "process.exit(1)" in source
 
 
 class TestWhatsAppConfig:

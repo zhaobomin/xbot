@@ -350,6 +350,11 @@ class CronService:
             # Compute next run
             job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
 
+        try:
+            self._save_store()
+        except Exception:
+            logger.exception("Cron: failed to persist state after job '%s' (%s)", job.name, job.id)
+
     # ========== Public API ==========
 
     def list_jobs(self, include_disabled: bool = False) -> list[CronJob]:

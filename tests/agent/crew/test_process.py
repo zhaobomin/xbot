@@ -46,6 +46,22 @@ class MockAgentPool:
         return "Default output"
 
 
+class MockStreamingAgentPool(MockAgentPool):
+    def __init__(self, progress_items):
+        super().__init__()
+        self.progress_items = progress_items
+
+    def supports_native_streaming(self):
+        return True
+
+    def run_task_streaming(self, role_name, prompt, session_key, media=None):
+        async def _stream():
+            for item in self.progress_items:
+                yield item
+
+        return _stream()
+
+
 @pytest.fixture
 def basic_crew_config():
     """Create a basic crew config for testing."""
@@ -393,6 +409,23 @@ class TestSequentialProcess:
 
         assert results[1].status == "skipped"
         process._save_checkpoint.assert_called_once_with(basic_crew_config.tasks)
+
+    @pytest.mark.asyncio
+    async def test_streaming_task_requires_final_progress(self, basic_crew_config):
+        progress = MagicMock(total_content="partial output", is_final=False)
+        context = CrewExecutionContext()
+        state_manager = CrewStateManager(task_names=[t.name for t in basic_crew_config.tasks])
+        process = SequentialProcess(
+            pool=MockStreamingAgentPool([progress]),
+            context=context,
+            permission_handler=MockPermissionHandler(),
+            crew_config=basic_crew_config,
+            state_manager=state_manager,
+            started_at=datetime.now(),
+        )
+
+        with pytest.raises(RuntimeError, match="ended without final"):
+            await process._execute_task(basic_crew_config.tasks[0], "prompt", "session:1")
 
 
 class TestHierarchicalProcess:
