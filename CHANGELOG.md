@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.0.22 (2026-06-16)
+
+- 清理项目根目录：删除 MagicMock/ 测试残留、.codex-webui.log、.qoder/、.workbuddy/、扫描报告等无关文件。
+- 移除已废弃的 .superset/ 和空 package.json。
+- 日志路径从源码目录迁移至 ~/.xbot/logs/，更新 LaunchAgent 配置。
+- .gitignore 新增 .ruff_cache/ 规则。
+
 ## v2.0.16 (2026-06-03)
 
 - Upgraded `claude-agent-sdk` from `0.2.82` to `0.2.88`.

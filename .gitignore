@@ -28,3 +28,4 @@ uv.lock
 node_modules/
 .xbot/
 .claw/
+.ruff_cache/
