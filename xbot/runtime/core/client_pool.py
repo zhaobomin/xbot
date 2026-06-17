@@ -67,33 +67,36 @@ class ClientPool:
         Returns:
             ClaudeSDKClient instance
         """
-        async with self._lock:
-            record = self._clients.get(session_key)
+        while True:
+            async with self._lock:
+                record = self._clients.get(session_key)
+
             if record is not None and record.state == "connected":
                 if await self._is_client_healthy(record.client, session_key):
-                    record.last_used_at = time.time()
-                    return record.client
+                    async with self._lock:
+                        current = self._clients.get(session_key)
+                        if current is record and current.state == "connected":
+                            current.last_used_at = time.time()
+                            return current.client
+                    continue
 
                 logger.warning("Recycling unhealthy SDK client for session %s", session_key)
-                try:
-                    await asyncio.wait_for(record.client.disconnect(), timeout=3.0)
-                except Exception as e:
-                    logger.debug("Best-effort disconnect failed for unhealthy client %s: %s", session_key, e)
-                    await self._best_effort_force_disconnect(record.client, session_key)
-                record.state = "disconnected"
-                del self._clients[session_key]
+                await self._disconnect_record(record, timeout=3.0)
+                async with self._lock:
+                    if self._clients.get(session_key) is record:
+                        record.state = "disconnected"
+                        del self._clients[session_key]
+                continue
 
-            # Create new client
             from claude_agent_sdk import ClaudeSDKClient
 
             if options is None:
                 raise ValueError("Options required to create client")
 
-            await self._evict_if_needed_for_new_client(session_key)
+            await self._evict_for_capacity(session_key)
 
             client = ClaudeSDKClient(options)
 
-            # Connect the client (required before use)
             try:
                 await asyncio.wait_for(client.connect(), timeout=120.0)
             except asyncio.TimeoutError:
@@ -104,23 +107,42 @@ class ClientPool:
                     await self._best_effort_force_disconnect(client, session_key)
                 raise RuntimeError(f"SDK client connect timed out after 120s for session {session_key}")
 
-            self._clients[session_key] = ClientRecord(
-                session_key=session_key,
-                client=client,
-            )
-            logger.info(f"Created and connected client for session {session_key}")
-            return client
+            while True:
+                async with self._lock:
+                    existing = self._clients.get(session_key)
+                    if existing is not None and existing.state == "connected":
+                        existing.last_used_at = time.time()
+                        existing_client = existing.client
+                    else:
+                        evicted = self._pop_oldest_capacity_record_unlocked(exclude_keys={session_key})
+                        if evicted is None:
+                            self._clients[session_key] = ClientRecord(
+                                session_key=session_key,
+                                client=client,
+                            )
+                            logger.info(f"Created and connected client for session {session_key}")
+                            return client
+                        existing_client = None
 
-    async def _evict_if_needed_for_new_client(self, session_key: str) -> None:
-        """Evict the oldest connected client before creating a new one if at capacity."""
-        if self._max_clients is None or session_key in self._clients:
-            return
+                if existing_client is not None:
+                    await self._disconnect_client(client, session_key, timeout=5.0)
+                    return existing_client
+                await self._disconnect_record(evicted, timeout=10.0)
+
+    def _pop_oldest_capacity_record_unlocked(
+        self,
+        *,
+        exclude_keys: set[str] | None = None,
+    ) -> ClientRecord | None:
+        if self._max_clients is None:
+            return None
+        excluded = exclude_keys or set()
         connected = [
             record for record in self._clients.values()
-            if record.state == "connected"
+            if record.state == "connected" and record.session_key not in excluded
         ]
         if len(connected) < self._max_clients:
-            return
+            return None
 
         oldest = min(connected, key=lambda record: record.last_used_at)
         logger.info(
@@ -128,13 +150,31 @@ class ClientPool:
             oldest.session_key,
             self._max_clients,
         )
-        try:
-            await asyncio.wait_for(oldest.client.disconnect(), timeout=10.0)
-        except Exception as e:
-            logger.warning("Failed to disconnect evicted client for %s: %s", oldest.session_key, e)
-            await self._best_effort_force_disconnect(oldest.client, oldest.session_key)
-        oldest.state = "disconnected"
+        oldest.state = "disconnecting"
         self._clients.pop(oldest.session_key, None)
+        return oldest
+
+    async def _evict_for_capacity(self, session_key: str) -> None:
+        """Evict the oldest connected client before creating a new one if at capacity."""
+        async with self._lock:
+            evicted = self._pop_oldest_capacity_record_unlocked(exclude_keys={session_key})
+        if evicted is not None:
+            await self._disconnect_record(evicted, timeout=10.0)
+
+    async def _disconnect_record(self, record: ClientRecord, *, timeout: float) -> None:
+        try:
+            await asyncio.wait_for(record.client.disconnect(), timeout=timeout)
+        except Exception as e:
+            logger.warning("Failed to disconnect client for %s: %s", record.session_key, e)
+            await self._best_effort_force_disconnect(record.client, record.session_key)
+        record.state = "disconnected"
+
+    async def _disconnect_client(self, client: Any, session_key: str, *, timeout: float) -> None:
+        try:
+            await asyncio.wait_for(client.disconnect(), timeout=timeout)
+        except Exception as e:
+            logger.warning("Failed to disconnect unused client for %s: %s", session_key, e)
+            await self._best_effort_force_disconnect(client, session_key)
 
     async def _is_client_healthy(self, client: Any, session_key: str) -> bool:
         """Perform a lightweight liveness check before reusing a connected client."""

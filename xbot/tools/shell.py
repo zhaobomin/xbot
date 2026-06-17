@@ -251,11 +251,27 @@ class ExecTool(Tool):
             return []
 
         candidates: list[str] = []
-        for token in tokens[1:]:
+        separators = {"|", "||", "&&", ";"}
+        redirections = {">", ">>", "<", "2>", "2>>"}
+        command_name: str | None = None
+        positional_index = 0
+        expect_redirection_target = False
+
+        for token in tokens:
             stripped = token.strip("\"'")
             if not stripped:
                 continue
-            if stripped in {"|", "||", "&&", ";", ">", ">>", "<", "2>", "2>>"}:
+            if stripped in separators:
+                command_name = None
+                positional_index = 0
+                expect_redirection_target = False
+                continue
+            if stripped in redirections:
+                expect_redirection_target = True
+                continue
+            if command_name is None:
+                command_name = os.path.basename(stripped)
+                positional_index = 0
                 continue
             if stripped.startswith("-"):
                 continue
@@ -265,5 +281,10 @@ class ExecTool(Tool):
                 continue
             if stripped.startswith("~"):
                 continue
+            if command_name in {"grep", "egrep", "fgrep", "rg"} and positional_index == 0 and not expect_redirection_target:
+                positional_index += 1
+                continue
             candidates.append(stripped)
+            positional_index += 1
+            expect_redirection_target = False
         return candidates

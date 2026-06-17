@@ -368,6 +368,10 @@ class WecomChannel(BaseChannel):
                 logger.warning("No frame found for chat %s, cannot reply", msg.chat_id)
                 return
 
+            if not callable(self._generate_req_id):
+                logger.warning("WeCom request id generator not initialized")
+                return
+
             # Use streaming reply for better UX
             stream_id = self._generate_req_id("stream")
 

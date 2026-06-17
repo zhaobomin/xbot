@@ -151,6 +151,8 @@ class HeartbeatService:
             return "skip", ""
 
         args = response.tool_calls[0].arguments
+        if not isinstance(args, dict):
+            args = {}
         return args.get("action", "skip"), args.get("tasks", "")
 
     async def start(self) -> None:

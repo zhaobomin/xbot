@@ -160,3 +160,31 @@ class TestClientPool:
 
         first_client.disconnect.assert_awaited_once()
         assert pool.list_clients() == ["session:2"]
+
+    @pytest.mark.asyncio
+    async def test_connect_does_not_block_unrelated_disconnect(self) -> None:
+        """A slow SDK connect should not hold the pool lock for unrelated operations."""
+        pool = ClientPool()
+        connect_started = asyncio.Event()
+        allow_connect_to_finish = asyncio.Event()
+
+        async def slow_connect() -> None:
+            connect_started.set()
+            await allow_connect_to_finish.wait()
+
+        with patch("claude_agent_sdk.ClaudeSDKClient") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client.connect = slow_connect
+            mock_client.disconnect = AsyncMock()
+            mock_client_class.return_value = mock_client
+
+            create_task = asyncio.create_task(
+                pool.get_or_create("session:slow", options=MagicMock())
+            )
+            await connect_started.wait()
+            try:
+                result = await asyncio.wait_for(pool.disconnect("session:other"), timeout=0.05)
+                assert result is True
+            finally:
+                allow_connect_to_finish.set()
+                await create_task

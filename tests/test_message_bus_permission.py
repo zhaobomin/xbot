@@ -233,6 +233,32 @@ class TestMessageBusPermission:
         assert "req-timeout-clean" not in bus._permission_results
 
     @pytest.mark.asyncio
+    async def test_cleanup_expired_permission_request_wakes_waiter(self, bus):
+        req = PermissionRequest(
+            request_id="req-expired-cleanup",
+            session_key="telegram:456",
+            channel="telegram",
+            chat_id="456",
+            tool_name="exec",
+            tool_input={"command": "ls"},
+            message="Need permission",
+        )
+        req.created_at = 0
+        await bus.publish_permission_request(req)
+        _ = await bus.consume_outbound()
+        waiter = asyncio.create_task(
+            bus.wait_permission_response("req-expired-cleanup", timeout=10.0)
+        )
+        await asyncio.sleep(0.01)
+
+        async with bus._permission_lock:
+            bus._cleanup_expired_permission_requests_unlocked()
+
+        response = await asyncio.wait_for(waiter, timeout=0.1)
+        assert response.decision == "deny"
+        assert "expired" in response.reason.lower()
+
+    @pytest.mark.asyncio
     async def test_submit_permission_response_no_waiter(self, bus):
         resp = PermissionResponse(
             request_id="nonexistent",
@@ -450,6 +476,31 @@ class TestMessageBusPermission:
         assert response.action == "reply"
         assert response.content == "继续"
         assert bus.get_pending_interaction_for_session("slack:C1:thread:1") is None
+
+    @pytest.mark.asyncio
+    async def test_cleanup_expired_interaction_request_wakes_waiter(self, bus):
+        req = InteractionRequest(
+            request_id="ir-expired-cleanup",
+            session_key="slack:C1:thread:1",
+            channel="slack",
+            chat_id="C1",
+            kind="question",
+            prompt="继续吗？",
+        )
+        req.created_at = 0
+        await bus.publish_interaction_request(req)
+        _ = await bus.consume_outbound()
+        waiter = asyncio.create_task(
+            bus.wait_interaction_response("ir-expired-cleanup", timeout=10.0)
+        )
+        await asyncio.sleep(0.01)
+
+        async with bus._interaction_lock:
+            bus._cleanup_expired_interaction_requests_unlocked()
+
+        response = await asyncio.wait_for(waiter, timeout=0.1)
+        assert response.action == "cancel"
+        assert "expired" in response.content.lower()
 
     @pytest.mark.asyncio
     async def test_publish_interaction_request_supersedes_previous_session_request(self, bus):

@@ -104,6 +104,31 @@ async def test_decide_returns_skip_when_no_tool_call(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_decide_returns_skip_when_tool_arguments_are_none(tmp_path) -> None:
+    llm_call = DummyCaller([
+        LLMResponse(
+            content="",
+            tool_calls=[
+                ToolCallRequest(
+                    id="hb_1",
+                    name="heartbeat",
+                    arguments=None,  # type: ignore[arg-type]
+                )
+            ],
+        )
+    ])
+    service = HeartbeatService(
+        workspace=tmp_path,
+        llm_call=llm_call,
+    )
+
+    action, tasks = await service._decide("heartbeat content")
+
+    assert action == "skip"
+    assert tasks == ""
+
+
+@pytest.mark.asyncio
 async def test_trigger_now_executes_when_decision_is_run(tmp_path) -> None:
     (tmp_path / "HEARTBEAT.md").write_text("- [ ] do thing", encoding="utf-8")
 

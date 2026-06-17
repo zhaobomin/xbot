@@ -140,3 +140,9 @@ async def test_exec_times_out_long_running_command():
 
 def test_extract_relative_paths_does_not_guess_after_shell_parse_error():
     assert ExecTool._extract_relative_paths('cat "unterminated path') == []
+
+
+def test_extract_relative_paths_skips_pipeline_command_names_and_grep_patterns():
+    paths = ExecTool._extract_relative_paths("cat input.txt | grep needle > output.txt")
+
+    assert paths == ["input.txt", "output.txt"]

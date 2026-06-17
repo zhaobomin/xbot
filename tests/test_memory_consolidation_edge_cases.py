@@ -103,6 +103,14 @@ class TestNO_CHANGEHandling:
         assert final_memory == initial_memory, \
             "Memory should remain unchanged for lowercase no_change"
 
+    def test_format_messages_uses_unknown_role_when_missing(self) -> None:
+        """Malformed provider messages should not crash formatting."""
+        formatted = MemoryStore._format_messages([
+            {"content": "hello", "timestamp": "2026-01-01T00:00:00"}
+        ])
+
+        assert "UNKNOWN: hello" in formatted
+
 
 class TestCrossSessionPersistenceLocking:
     """Test that shared memory files are written serially."""

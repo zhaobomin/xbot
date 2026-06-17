@@ -120,9 +120,22 @@ class MessageBus:
                 expired_keys.append(request_id)
 
         for request_id in expired_keys:
+            req = self._permission_requests.get(request_id)
+            event = self._pending_permission_responses.get(request_id)
+            waiters = getattr(event, "_waiters", None) if event is not None else None
+            has_waiters = bool(waiters)
+            if event is not None and has_waiters and not event.is_set():
+                self._permission_results[request_id] = PermissionResponse(
+                    request_id=request_id,
+                    session_key=req.session_key if req else "",
+                    decision="deny",
+                    reason="Permission request expired during cleanup",
+                )
+                event.set()
+            else:
+                self._pending_permission_responses.pop(request_id, None)
+                self._permission_results.pop(request_id, None)
             self._permission_requests.pop(request_id, None)
-            self._pending_permission_responses.pop(request_id, None)
-            self._permission_results.pop(request_id, None)
             # 也清理 session 映射
             for session_key, rid in list(self._session_pending_requests.items()):
                 if rid == request_id:
@@ -145,9 +158,22 @@ class MessageBus:
                 expired_keys.append(request_id)
 
         for request_id in expired_keys:
+            req = self._interaction_requests.get(request_id)
+            event = self._pending_interaction_responses.get(request_id)
+            waiters = getattr(event, "_waiters", None) if event is not None else None
+            has_waiters = bool(waiters)
+            if event is not None and has_waiters and not event.is_set():
+                self._interaction_results[request_id] = InteractionResponse(
+                    request_id=request_id,
+                    session_key=req.session_key if req else "",
+                    action="cancel",
+                    content="Interaction request expired during cleanup",
+                )
+                event.set()
+            else:
+                self._pending_interaction_responses.pop(request_id, None)
+                self._interaction_results.pop(request_id, None)
             self._interaction_requests.pop(request_id, None)
-            self._pending_interaction_responses.pop(request_id, None)
-            self._interaction_results.pop(request_id, None)
             # 也清理 session 映射
             for session_key, rid in list(self._session_pending_interactions.items()):
                 if rid == request_id:

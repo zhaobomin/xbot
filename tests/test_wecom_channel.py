@@ -149,6 +149,22 @@ class TestWecomChannelMessageHandling:
         )
 
     @pytest.mark.asyncio
+    async def test_send_returns_when_request_id_generator_is_missing(self):
+        """A partially initialized SDK client should not crash send()."""
+        channel = WecomChannel(
+            WecomConfig(bot_id="test", secret="pass"),
+            MessageBus(),
+        )
+        channel._client = MagicMock()
+        channel._client.reply_stream = AsyncMock()
+        channel._generate_req_id = None
+        channel._chat_frames["chat-123"] = {"frame": "value"}
+
+        await channel.send(OutboundMessage(channel="wecom", chat_id="chat-123", content="hello"))
+
+        channel._client.reply_stream.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_chat_frames_cache_is_bounded_and_keeps_latest_entries(self):
         """Reply frame cache should not grow without bound."""
         channel = WecomChannel(
