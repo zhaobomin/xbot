@@ -43,10 +43,15 @@ class ClientPool:
     Use this when you don't need multi-tenant client management.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, max_clients: int | None = None) -> None:
         """Initialize the client pool."""
         self._clients: dict[str, ClientRecord] = {}
         self._lock = asyncio.Lock()
+        self._max_clients = max_clients if max_clients and max_clients > 0 else None
+
+    def set_max_clients(self, max_clients: int | None) -> None:
+        """Update capacity limit for future client creation."""
+        self._max_clients = max_clients if max_clients and max_clients > 0 else None
 
     async def get_or_create(
         self,
@@ -84,6 +89,8 @@ class ClientPool:
             if options is None:
                 raise ValueError("Options required to create client")
 
+            await self._evict_if_needed_for_new_client(session_key)
+
             client = ClaudeSDKClient(options)
 
             # Connect the client (required before use)
@@ -103,6 +110,31 @@ class ClientPool:
             )
             logger.info(f"Created and connected client for session {session_key}")
             return client
+
+    async def _evict_if_needed_for_new_client(self, session_key: str) -> None:
+        """Evict the oldest connected client before creating a new one if at capacity."""
+        if self._max_clients is None or session_key in self._clients:
+            return
+        connected = [
+            record for record in self._clients.values()
+            if record.state == "connected"
+        ]
+        if len(connected) < self._max_clients:
+            return
+
+        oldest = min(connected, key=lambda record: record.last_used_at)
+        logger.info(
+            "Evicting oldest SDK client %s to enforce max_clients=%s",
+            oldest.session_key,
+            self._max_clients,
+        )
+        try:
+            await asyncio.wait_for(oldest.client.disconnect(), timeout=10.0)
+        except Exception as e:
+            logger.warning("Failed to disconnect evicted client for %s: %s", oldest.session_key, e)
+            await self._best_effort_force_disconnect(oldest.client, oldest.session_key)
+        oldest.state = "disconnected"
+        self._clients.pop(oldest.session_key, None)
 
     async def _is_client_healthy(self, client: Any, session_key: str) -> bool:
         """Perform a lightweight liveness check before reusing a connected client."""

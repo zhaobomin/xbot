@@ -311,6 +311,7 @@ class TimeoutsConfig(Base):
     web_fetch: float = 20.0
     mcp_tool: float = 30.0
     shell_exec: float = 60.0
+    sdk_query: float = 30.0
 
 
 class ToolsConfig(Base):

@@ -32,6 +32,29 @@ def test_add_job_accepts_valid_timezone(tmp_path) -> None:
     assert job.state.next_run_at_ms is not None
 
 
+def test_default_timezone_is_applied_to_cron_jobs_without_tz(tmp_path) -> None:
+    utc_service = CronService(tmp_path / "utc" / "jobs.json", default_tz="UTC")
+    vancouver_service = CronService(
+        tmp_path / "vancouver" / "jobs.json",
+        default_tz="America/Vancouver",
+    )
+
+    utc_job = utc_service.add_job(
+        name="daily",
+        schedule=CronSchedule(kind="cron", expr="0 9 * * *"),
+        message="hello",
+    )
+    vancouver_job = vancouver_service.add_job(
+        name="daily",
+        schedule=CronSchedule(kind="cron", expr="0 9 * * *"),
+        message="hello",
+    )
+
+    assert utc_job.schedule.tz == "UTC"
+    assert vancouver_job.schedule.tz == "America/Vancouver"
+    assert utc_job.state.next_run_at_ms != vancouver_job.state.next_run_at_ms
+
+
 @pytest.mark.asyncio
 async def test_running_service_honors_external_disable(tmp_path) -> None:
     store_path = tmp_path / "cron" / "jobs.json"

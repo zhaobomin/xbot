@@ -10,10 +10,10 @@ set -euo pipefail
 #
 # Usage:
 #   ./scripts/verify_dual_track.sh --session feishu:ou_xxx
-#   ./scripts/verify_dual_track.sh --session feishu:ou_xxx --log logs/xbot-gateway-error.log
+#   ./scripts/verify_dual_track.sh --session feishu:ou_xxx --log ~/.xbot/logs/xbot-gateway-error.log
 #   ./scripts/verify_dual_track.sh --session feishu:ou_xxx --strict-toggle
 
-LOG_PATH="logs/xbot-gateway-error.log"
+LOG_PATH="${HOME}/.xbot/logs/xbot-gateway-error.log"
 SESSION_KEY=""
 STRICT_TOGGLE="0"
 TAIL_LINES="2000"
@@ -26,7 +26,7 @@ Required:
   --session <key>          target session key (e.g. feishu:ou_xxx)
 
 Options:
-  --log <path>             log file path (default: logs/xbot-gateway-error.log)
+  --log <path>             log file path (default: ${LOG_PATH})
   --tail-lines <n>         only analyze latest N lines (default: 2000)
   --strict-toggle          fail if both on/off toggles are not found
   -h, --help               show help

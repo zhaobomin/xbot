@@ -139,6 +139,28 @@ class TestAgentService:
         assert "length" not in caplog.text
         assert "20" not in caplog.text
 
+    def test_build_env_config_uses_normalized_custom_provider_name(
+        self,
+        config: AgentConfig,
+        tmp_path: Path,
+    ) -> None:
+        """Hyphenated provider names should find migrated custom provider config."""
+        runtime_config = Config()
+        runtime_config.agents.defaults.provider = "aliyun-coding-plan"
+        runtime_config.providers.custom_providers["aliyun_coding_plan"] = ProviderConfig(
+            api_key="sk-test-secret-value",
+            api_base="https://example.test/v1",
+        )
+
+        service = AgentService()
+        service._config = config
+        service._shared_resources = {"workspace": str(tmp_path), "config": runtime_config}
+
+        env = service._build_env_config()
+
+        assert env["ANTHROPIC_API_KEY"] == "sk-test-secret-value"
+        assert env["ANTHROPIC_BASE_URL"] == "https://example.test/v1"
+
     @pytest.mark.asyncio
     async def test_process_returns_response(
         self,
@@ -185,6 +207,32 @@ class TestAgentService:
             record.exc_info and "Error processing" in record.message
             for record in caplog.records
         )
+
+    @pytest.mark.asyncio
+    async def test_process_uses_configured_sdk_query_timeout(
+        self,
+        config: AgentConfig,
+        tmp_path: Path,
+    ) -> None:
+        runtime_config = Config()
+        runtime_config.tools.timeouts.sdk_query = 0.01
+        service = AgentService()
+        await service.initialize(config, {"workspace": str(tmp_path), "config": runtime_config})
+        context = AgentContext(session_key="test:query-timeout", prompt="Hello")
+
+        async def slow_query(_prompt: str) -> None:
+            await asyncio.sleep(60)
+
+        mock_client = MagicMock()
+        mock_client.query = slow_query
+        service._client_pool.disconnect = AsyncMock(return_value=True)
+
+        with patch.object(service, "_get_or_create_client", AsyncMock(return_value=mock_client)):
+            responses = [response async for response in service.process(context)]
+
+        assert responses[-1].finish_reason == "error"
+        assert "timed out" in responses[-1].content
+        service._client_pool.disconnect.assert_awaited_once_with("test:query-timeout")
 
     @pytest.mark.asyncio
     async def test_process_includes_media_references_in_query(
@@ -1056,6 +1104,17 @@ class TestRunDispatch:
                 "kind": "server_tool_result",
             },
         ]
+
+    @pytest.mark.asyncio
+    async def test_convert_assistant_message_ignores_empty_content(self, config, shared_resources):
+        """Empty AssistantMessage frames should not surface as blank user-visible replies."""
+        service = await self._make_service(config, shared_resources)
+        AssistantMessage = type("AssistantMessage", (), {})
+
+        msg = AssistantMessage()
+        msg.content = []
+
+        assert service._convert_assistant_message(msg) is None
 
     @pytest.mark.asyncio
     async def test_convert_actual_claude_agent_sdk_new_message_types(self, config, shared_resources):

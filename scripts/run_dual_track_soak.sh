@@ -11,7 +11,7 @@ SESSION_KEY=""
 DURATION_MIN="30"
 INTERVAL_SEC="30"
 HEALTH_URL="http://127.0.0.1:18080/health"
-LOG_PATH="logs/xbot-gateway-error.log"
+LOG_PATH="${HOME}/.xbot/logs/xbot-gateway-error.log"
 SERVICE_LABEL="com.xbot.gateway"
 REPORT_DIR="logs"
 REPORT_FILE=""
@@ -27,7 +27,7 @@ Options:
   --duration-min <n>       soak duration in minutes (default: 30)
   --interval-sec <n>       sampling interval in seconds (default: 30)
   --health-url <url>       health endpoint
-  --log <path>             error log path (default: logs/xbot-gateway-error.log)
+  --log <path>             error log path (default: ${LOG_PATH})
   --service-label <label>  launchd label (default: com.xbot.gateway)
   --report-file <path>     output markdown report
   -h, --help               show help

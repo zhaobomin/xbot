@@ -13,7 +13,7 @@ set -euo pipefail
 SESSION_KEY=""
 HEALTH_URL="http://127.0.0.1:18080/health"
 SKIP_TESTS="0"
-LOG_PATH="logs/xbot-gateway-error.log"
+LOG_PATH="${HOME}/.xbot/logs/xbot-gateway-error.log"
 TAIL_LINES="3000"
 REPORT_DIR="logs"
 REPORT_FILE=""

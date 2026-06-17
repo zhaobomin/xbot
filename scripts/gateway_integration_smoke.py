@@ -57,7 +57,7 @@ def main() -> int:
     parser.add_argument("--status-url", default="http://127.0.0.1:18080/status")
     parser.add_argument("--expect-program", default="")
     parser.add_argument("--expect-workdir", default="")
-    parser.add_argument("--log-path", default="logs/xbot-gateway.log")
+    parser.add_argument("--log-path", default="~/.xbot/logs/xbot-gateway.log")
     args = parser.parse_args()
 
     uid = str(_run(["id", "-u"]).strip())
@@ -88,7 +88,7 @@ def main() -> int:
             if key not in status_payload:
                 failures.append(f"status payload missing key: {key}")
 
-    log_tail = _tail(Path(args.log_path))
+    log_tail = _tail(Path(args.log_path).expanduser())
     if "Starting xbot gateway version" not in log_tail:
         failures.append("gateway startup marker not found in recent log tail")
 

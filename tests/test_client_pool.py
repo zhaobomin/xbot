@@ -141,3 +141,22 @@ class TestClientPool:
                 await pool.get_or_create("session:timeout", options=MagicMock())
 
             mock_client.disconnect.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_get_or_create_evicts_oldest_client_at_capacity(self) -> None:
+        """Capacity should be enforced even when idle pruning has not run yet."""
+        pool = ClientPool(max_clients=1)
+        with patch("claude_agent_sdk.ClaudeSDKClient") as mock_client_class:
+            first_client = MagicMock()
+            first_client.connect = AsyncMock()
+            first_client.disconnect = AsyncMock()
+            second_client = MagicMock()
+            second_client.connect = AsyncMock()
+            second_client.disconnect = AsyncMock()
+            mock_client_class.side_effect = [first_client, second_client]
+
+            await pool.get_or_create("session:1", options=MagicMock())
+            await pool.get_or_create("session:2", options=MagicMock())
+
+        first_client.disconnect.assert_awaited_once()
+        assert pool.list_clients() == ["session:2"]

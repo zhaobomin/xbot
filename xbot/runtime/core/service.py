@@ -341,13 +341,23 @@ class AgentService:
             # Send the query - SDK accepts string directly
             logger.info(f"[AgentService] Sending query for {context.session_key}")
             try:
-                await asyncio.wait_for(client.query(query_prompt), timeout=30.0)
+                query_timeout = self._get_sdk_query_timeout()
+                await asyncio.wait_for(client.query(query_prompt), timeout=query_timeout)
                 if sm:
                     self._dispatch_state_event(
                         context.session_key,
                         SessionEvent.QUERY_SENT,
                         reason="query_sent",
                     )
+            except asyncio.TimeoutError as e:
+                await self._client_pool.disconnect(context.session_key)
+                if sm:
+                    self._dispatch_state_event(
+                        context.session_key,
+                        SessionEvent.QUERY_FAILED,
+                        reason="query_timeout",
+                    )
+                raise RuntimeError(f"SDK query timed out after {query_timeout}s") from e
             except Exception:
                 if sm:
                     self._dispatch_state_event(
@@ -443,6 +453,17 @@ class AgentService:
         if state is None:
             state = getattr(message, "state", None)
         return state == "idle"
+
+    def _get_sdk_query_timeout(self) -> float:
+        """Return configured SDK query timeout in seconds."""
+        config = self._shared_resources.get("config")
+        timeouts = getattr(getattr(config, "tools", None), "timeouts", None) if config else None
+        value = getattr(timeouts, "sdk_query", 30.0)
+        try:
+            timeout = float(value)
+        except (TypeError, ValueError):
+            return 30.0
+        return timeout if timeout > 0 else 30.0
 
     def _has_pending_user_wait(self, session_key: str) -> bool:
         """Return whether session is currently waiting on permission/interaction input."""
@@ -1300,6 +1321,9 @@ class AgentService:
         # Opportunistic idle-client pruning to avoid unbounded growth across session switching.
         config = self._shared_resources.get("config")
         sdk_cfg = getattr(getattr(config, "agents", None), "claude_sdk", None) if config else None
+        max_clients = getattr(sdk_cfg, "max_clients", None)
+        if isinstance(max_clients, int):
+            self._client_pool.set_max_clients(max_clients)
         idle_ttl = getattr(sdk_cfg, "client_idle_ttl_seconds", 3600)
         scavenger_enabled = getattr(sdk_cfg, "client_scavenger_enabled", True)
         if scavenger_enabled and isinstance(idle_ttl, (int, float)) and idle_ttl > 0:
@@ -1542,7 +1566,7 @@ class AgentService:
                 provider_attr = provider_name.replace("-", "_")
 
                 get_provider_config = getattr(providers, "get_provider_config", None)
-                if callable(get_provider_config):
+                if callable(get_provider_config) and hasattr(type(providers), "get_provider_config"):
                     provider_config = get_provider_config(provider_name)
                 else:
                     provider_config = getattr(providers, provider_attr, None)
@@ -1589,19 +1613,14 @@ class AgentService:
             logger.warning("[AgentService] No providers in config")
             return env
 
-        # Try to get provider config (handles both snake_case and camelCase)
-        provider_config = None
-        for attr_name in [provider_name, provider_name.replace("_", ""), provider_name.replace("-", "_")]:
-            provider_config = getattr(providers, attr_name, None)
-            if provider_config:
-                logger.info(f"[AgentService] Found provider config via attr: {attr_name}")
-                break
-
-        # Fallback: check custom_providers
-        if not provider_config and hasattr(providers, 'custom_providers'):
-            provider_config = providers.custom_providers.get(provider_name)
-            if provider_config:
-                logger.info(f"[AgentService] Found provider config in custom_providers: {provider_name}")
+        get_provider_config = getattr(providers, "get_provider_config", None)
+        if callable(get_provider_config) and hasattr(type(providers), "get_provider_config"):
+            provider_config = get_provider_config(provider_name)
+        else:
+            provider_attr = provider_name.replace("-", "_")
+            provider_config = getattr(providers, provider_attr, None)
+            if not provider_config and hasattr(providers, "custom_providers"):
+                provider_config = providers.custom_providers.get(provider_attr)
 
         if provider_config:
             # Handle SecretStr type for api_key
@@ -2055,6 +2074,9 @@ class AgentService:
             event_data = {"tool_calls": len(tool_calls)}
         elif text:
             event_type = "content"
+
+        if not text and not progress_texts and not tool_calls:
+            return None
 
         return AgentResponse(
             content=text,

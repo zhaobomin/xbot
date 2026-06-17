@@ -104,6 +104,46 @@ class TestNO_CHANGEHandling:
             "Memory should remain unchanged for lowercase no_change"
 
 
+class TestCrossSessionPersistenceLocking:
+    """Test that shared memory files are written serially."""
+
+    @pytest.mark.asyncio
+    async def test_consolidate_messages_serializes_shared_store_access(self, tmp_path: Path) -> None:
+        concurrent = 0
+        max_concurrent = 0
+        guard = asyncio.Lock()
+
+        class SlowStore:
+            _MAX_FAILURES_BEFORE_RAW_ARCHIVE = 5
+
+            async def consolidate(self, messages, backend):
+                nonlocal concurrent, max_concurrent
+                async with guard:
+                    concurrent += 1
+                    max_concurrent = max(max_concurrent, concurrent)
+                await asyncio.sleep(0.05)
+                async with guard:
+                    concurrent -= 1
+                return True
+
+        consolidator = MemoryConsolidator(
+            workspace=tmp_path,
+            backend=MagicMock(),
+            sessions=ConversationStore(tmp_path),
+            context_window_tokens=10_000,
+            build_messages=lambda **kwargs: [],
+            get_tool_definitions=lambda: [],
+            memory_store=SlowStore(),  # type: ignore[arg-type]
+        )
+
+        await asyncio.gather(
+            consolidator.consolidate_messages([{"role": "user", "content": "a"}]),
+            consolidator.consolidate_messages([{"role": "user", "content": "b"}]),
+        )
+
+        assert max_concurrent == 1
+
+
 class TestForceConsolidateBoundary:
     """Test that force_consolidate respects boundaries."""
 

@@ -35,6 +35,8 @@ class MCPServerConnection:
 class MCPToolWrapper(Tool):
     """Wraps a single MCP server tool as an xbot Tool."""
 
+    MAX_RESULT_CHARS = 512_000
+
     def __init__(self, session, server_name: str, tool_def, tool_timeout: int | None = None):
         from xbot.platform.config.schema import TimeoutsConfig
         self._session = session
@@ -90,7 +92,10 @@ class MCPToolWrapper(Tool):
                 parts.append(block.text)
             else:
                 parts.append(str(block))
-        return "\n".join(parts) or "(no output)"
+        output = "\n".join(parts) or "(no output)"
+        if len(output) > self.MAX_RESULT_CHARS:
+            return output[:self.MAX_RESULT_CHARS].rstrip() + "\n[truncated]"
+        return output
 
 
 def _is_ignorable_mcp_close_error(exc: BaseException) -> bool:

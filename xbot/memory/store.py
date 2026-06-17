@@ -347,6 +347,7 @@ class MemoryConsolidator:
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
         self._locks: dict[str, asyncio.Lock] = {}
+        self._store_lock = asyncio.Lock()
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""
@@ -363,7 +364,8 @@ class MemoryConsolidator:
 
     async def consolidate_messages(self, messages: list[dict[str, object]]) -> bool:
         """Archive a selected message chunk into persistent memory."""
-        return await self.store.consolidate(messages, self.backend)
+        async with self._store_lock:
+            return await self.store.consolidate(messages, self.backend)
 
     def pick_consolidation_boundary(
         self,

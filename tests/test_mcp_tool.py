@@ -109,6 +109,19 @@ async def test_execute_returns_text_blocks() -> None:
 
 
 @pytest.mark.asyncio
+async def test_execute_truncates_large_results() -> None:
+    async def call_tool(_name: str, arguments: dict) -> object:
+        return SimpleNamespace(content=[_FakeTextContent("x" * 700_000)])
+
+    wrapper = _make_wrapper(SimpleNamespace(call_tool=call_tool))
+
+    result = await wrapper.execute()
+
+    assert len(result) < 700_000
+    assert result.endswith("[truncated]")
+
+
+@pytest.mark.asyncio
 async def test_execute_returns_timeout_string() -> None:
     async def call_tool(_name: str, arguments: dict) -> object:
         await asyncio.sleep(1)

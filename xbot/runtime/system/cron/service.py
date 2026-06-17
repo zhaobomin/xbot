@@ -24,7 +24,7 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
-def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
+def _compute_next_run(schedule: CronSchedule, now_ms: int, default_tz: str | None = None) -> int | None:
     """Compute next run time in ms."""
     if schedule.kind == "at":
         return schedule.at_ms if schedule.at_ms and schedule.at_ms > now_ms else None
@@ -42,7 +42,8 @@ def _compute_next_run(schedule: CronSchedule, now_ms: int) -> int | None:
             from croniter import croniter
             # Use caller-provided reference time for deterministic scheduling
             base_time = now_ms / 1000
-            tz = ZoneInfo(schedule.tz) if schedule.tz else datetime.now().astimezone().tzinfo
+            tz_name = schedule.tz or default_tz
+            tz = ZoneInfo(tz_name) if tz_name else datetime.now().astimezone().tzinfo
             base_dt = datetime.fromtimestamp(base_time, tz=tz)
             cron = croniter(schedule.expr, base_dt)
             next_dt = cron.get_next(datetime)
@@ -102,10 +103,15 @@ class CronService:
     def __init__(
         self,
         store_path: Path,
-        on_job: Callable[[CronJob], Coroutine[Any, Any, str | None]] | None = None
+        on_job: Callable[[CronJob], Coroutine[Any, Any, str | None]] | None = None,
+        default_tz: str | None = None,
     ):
         self.store_path = store_path
         self.on_job = on_job
+        self.default_tz = default_tz
+        if default_tz:
+            from zoneinfo import ZoneInfo
+            ZoneInfo(default_tz)
         self._store: CronStore | None = None
         self._last_mtime: float = 0.0
         self._timer_task: asyncio.Task | None = None
@@ -269,7 +275,7 @@ class CronService:
         now = _now_ms()
         for job in self._store.jobs:
             if job.enabled:
-                job.state.next_run_at_ms = _compute_next_run(job.schedule, now)
+                job.state.next_run_at_ms = self._compute_next_run(job.schedule, now)
 
     def _get_next_wake_ms(self) -> int | None:
         """Get the earliest next run time across all jobs."""
@@ -348,7 +354,7 @@ class CronService:
                 job.state.next_run_at_ms = None
         else:
             # Compute next run
-            job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
+            job.state.next_run_at_ms = self._compute_next_run(job.schedule, _now_ms())
 
         try:
             self._save_store()
@@ -363,6 +369,14 @@ class CronService:
         jobs = store.jobs if include_disabled else [j for j in store.jobs if j.enabled]
         return sorted(jobs, key=lambda j: j.state.next_run_at_ms or float('inf'))
 
+    def _compute_next_run(self, schedule: CronSchedule, now_ms: int) -> int | None:
+        return _compute_next_run(schedule, now_ms, self.default_tz)
+
+    def _apply_default_timezone(self, schedule: CronSchedule) -> CronSchedule:
+        if schedule.kind == "cron" and not schedule.tz and self.default_tz:
+            schedule.tz = self.default_tz
+        return schedule
+
     def add_job(
         self,
         name: str,
@@ -375,6 +389,7 @@ class CronService:
     ) -> CronJob:
         """Add a new job."""
         store = self._load_store()
+        schedule = self._apply_default_timezone(schedule)
         _validate_schedule_for_add(schedule)
         now = _now_ms()
 
@@ -390,7 +405,7 @@ class CronService:
                 channel=channel,
                 to=to,
             ),
-            state=CronJobState(next_run_at_ms=_compute_next_run(schedule, now)),
+            state=CronJobState(next_run_at_ms=self._compute_next_run(schedule, now)),
             created_at_ms=now,
             updated_at_ms=now,
             delete_after_run=delete_after_run,
@@ -434,6 +449,7 @@ class CronService:
 
             # Validate first, before mutating anything
             if "schedule" in updates:
+                updates["schedule"] = self._apply_default_timezone(updates["schedule"])
                 _validate_schedule_for_add(updates["schedule"])
 
             # Apply changes
@@ -449,7 +465,7 @@ class CronService:
             now = _now_ms()
             job.updated_at_ms = now
             if job.enabled:
-                job.state.next_run_at_ms = _compute_next_run(job.schedule, now)
+                job.state.next_run_at_ms = self._compute_next_run(job.schedule, now)
             else:
                 job.state.next_run_at_ms = None
             self._save_store()
@@ -470,7 +486,7 @@ class CronService:
                 job.enabled = enabled
                 job.updated_at_ms = _now_ms()
                 if enabled:
-                    job.state.next_run_at_ms = _compute_next_run(job.schedule, _now_ms())
+                    job.state.next_run_at_ms = self._compute_next_run(job.schedule, _now_ms())
                 else:
                     job.state.next_run_at_ms = None
                 self._save_store()
