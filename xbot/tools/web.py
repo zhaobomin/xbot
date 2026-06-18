@@ -184,6 +184,15 @@ class WebSearchTool(Tool):
             return api_key.get_secret_value()
         return str(api_key)
 
+    def _pinned_transport_for_url(
+        self,
+        url: str,
+    ) -> tuple[_PinnedAsyncHTTPTransport | None, str | None]:
+        allowed, error, pinned = _validate_and_pin_url(url)
+        if not allowed:
+            return None, error
+        return _PinnedAsyncHTTPTransport(pinned, proxy=self.proxy), None
+
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
         provider = self.config.provider.strip().lower() or "brave"
         n = min(max(count or self.config.max_results, 1), 10)
@@ -211,13 +220,20 @@ class WebSearchTool(Tool):
         if not api_key:
             logger.warning("BRAVE_API_KEY not set, falling back to DuckDuckGo")
             return await self._search_duckduckgo(query, n)
+        endpoint = "https://api.search.brave.com/res/v1/web/search"
+        transport, error = self._pinned_transport_for_url(endpoint)
+        if error:
+            return f"Error: invalid Brave Search URL: {error}"
         try:
-            async with httpx.AsyncClient(proxy=self.proxy) as client:
+            async with httpx.AsyncClient(
+                proxy=None if transport is not None else self.proxy,
+                timeout=self.timeout,
+                transport=transport,
+            ) as client:
                 r = await client.get(
-                    "https://api.search.brave.com/res/v1/web/search",
+                    endpoint,
                     params={"q": query, "count": n},
                     headers={"Accept": "application/json", "X-Subscription-Token": api_key},
-                    timeout=self.timeout,
                 )
                 r.raise_for_status()
             items = [
@@ -233,13 +249,20 @@ class WebSearchTool(Tool):
         if not api_key:
             logger.warning("TAVILY_API_KEY not set, falling back to DuckDuckGo")
             return await self._search_duckduckgo(query, n)
+        endpoint = "https://api.tavily.com/search"
+        transport, error = self._pinned_transport_for_url(endpoint)
+        if error:
+            return f"Error: invalid Tavily URL: {error}"
         try:
-            async with httpx.AsyncClient(proxy=self.proxy) as client:
+            async with httpx.AsyncClient(
+                proxy=None if transport is not None else self.proxy,
+                timeout=self.timeout,
+                transport=transport,
+            ) as client:
                 r = await client.post(
-                    "https://api.tavily.com/search",
+                    endpoint,
                     headers={"Authorization": f"Bearer {api_key}"},
                     json={"query": query, "max_results": n},
-                    timeout=self.timeout,
                 )
                 r.raise_for_status()
             return _format_results(query, r.json().get("results", []), n)
@@ -252,16 +275,19 @@ class WebSearchTool(Tool):
             logger.warning("SEARXNG_BASE_URL not set, falling back to DuckDuckGo")
             return await self._search_duckduckgo(query, n)
         endpoint = f"{base_url.rstrip('/')}/search"
-        is_valid, error_msg = _validate_url_safe(endpoint)
-        if not is_valid:
-            return f"Error: invalid SearXNG URL: {error_msg}"
+        transport, error = self._pinned_transport_for_url(endpoint)
+        if error:
+            return f"Error: invalid SearXNG URL: {error}"
         try:
-            async with httpx.AsyncClient(proxy=self.proxy) as client:
+            async with httpx.AsyncClient(
+                proxy=None if transport is not None else self.proxy,
+                timeout=self.timeout,
+                transport=transport,
+            ) as client:
                 r = await client.get(
                     endpoint,
                     params={"q": query, "format": "json"},
                     headers={"User-Agent": USER_AGENT},
-                    timeout=self.timeout,
                 )
                 r.raise_for_status()
             return _format_results(query, r.json().get("results", []), n)
@@ -273,14 +299,21 @@ class WebSearchTool(Tool):
         if not api_key:
             logger.warning("JINA_API_KEY not set, falling back to DuckDuckGo")
             return await self._search_duckduckgo(query, n)
+        endpoint = "https://s.jina.ai/"
+        transport, error = self._pinned_transport_for_url(endpoint)
+        if error:
+            return f"Error: invalid Jina URL: {error}"
         try:
             headers = {"Accept": "application/json", "Authorization": f"Bearer {api_key}"}
-            async with httpx.AsyncClient(proxy=self.proxy) as client:
+            async with httpx.AsyncClient(
+                proxy=None if transport is not None else self.proxy,
+                timeout=self.timeout,
+                transport=transport,
+            ) as client:
                 r = await client.get(
-                    "https://s.jina.ai/",
+                    endpoint,
                     params={"q": query},
                     headers=headers,
-                    timeout=self.timeout,
                 )
                 r.raise_for_status()
             data = r.json().get("data", [])[:n]

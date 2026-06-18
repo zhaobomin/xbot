@@ -582,12 +582,63 @@ class TestLLMRepairCallable:
                 return True
 
         monkeypatch.setattr("threading.Thread", FakeThread)
+        monkeypatch.setattr(
+            "xbot.crew.orchestrator._LLMRepairRunner._STARTUP_TIMEOUT_SECONDS",
+            0.01,
+        )
 
         repair = orchestrator._get_llm_repair_callable()
         assert repair is not None
 
         with pytest.raises(TimeoutError, match="timed out"):
             repair("repair prompt")
+
+    def test_llm_repair_reuses_agent_service_for_multiple_attempts(self, monkeypatch) -> None:
+        """Repair retries should not rebuild the service lifecycle for each prompt."""
+        from types import SimpleNamespace
+
+        from xbot.platform.config.schema import Config
+
+        crew_config = MagicMock()
+        crew_config.workspace = "/tmp/test_crew"
+        orchestrator = CrewOrchestrator(
+            crew_config,
+            Config(),
+            MockPermissionHandler(),
+        )
+
+        class FakeService:
+            initialize_count = 0
+            shutdown_count = 0
+
+            def __init__(self, agent_config, shared_resources):
+                self.agent_config = agent_config
+                self.shared_resources = shared_resources
+
+            async def initialize(self):
+                type(self).initialize_count += 1
+
+            async def shutdown(self):
+                type(self).shutdown_count += 1
+
+            async def process(self, context):
+                yield SimpleNamespace(content=f"fixed:{context.prompt}", delta_content="")
+
+        monkeypatch.setattr("xbot.runtime.core.service.AgentService", FakeService)
+
+        repair = orchestrator._get_llm_repair_callable()
+        assert repair is not None
+
+        try:
+            assert repair("first") == "fixed:first"
+            assert repair("second") == "fixed:second"
+            assert FakeService.initialize_count == 1
+        finally:
+            close = getattr(repair, "close", None)
+            if callable(close):
+                close()
+
+        assert FakeService.shutdown_count == 1
 
 
 class TestOrchestratorInit:

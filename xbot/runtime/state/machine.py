@@ -12,6 +12,28 @@ from xbot.runtime.state.coordinator import (
     SessionState,
 )
 
+_LEGACY_EVENT_TARGET: dict[SessionEvent, SessionPhase] = {
+    SessionEvent.USER_MESSAGE: SessionPhase.RUNNING,
+    SessionEvent.CLIENT_ACQUIRED: SessionPhase.RUNNING,
+    SessionEvent.QUERY_SENT: SessionPhase.RUNNING,
+    SessionEvent.STREAM_IDLE_BOUNDARY: SessionPhase.STOPPING,
+    SessionEvent.TURN_COMPLETED: SessionPhase.IDLE,
+    SessionEvent.DISCONNECT_OK: SessionPhase.IDLE,
+    SessionEvent.PERMISSION_PENDING: SessionPhase.WAITING_PERMISSION,
+    SessionEvent.INTERACTION_PENDING: SessionPhase.WAITING_INTERACTION,
+    SessionEvent.PERMISSION_RESOLVED: SessionPhase.RUNNING,
+    SessionEvent.INTERACTION_RESOLVED: SessionPhase.RUNNING,
+    SessionEvent.CLIENT_ACQUIRE_FAILED: SessionPhase.ERROR,
+    SessionEvent.QUERY_FAILED: SessionPhase.ERROR,
+    SessionEvent.STREAM_TIMEOUT: SessionPhase.STOPPING,
+    SessionEvent.STREAM_ENDED_UNEXPECTEDLY: SessionPhase.STOPPING,
+    SessionEvent.STREAM_ERROR: SessionPhase.STOPPING,
+    SessionEvent.INTERRUPT: SessionPhase.STOPPING,
+    SessionEvent.SHUTDOWN: SessionPhase.STOPPING,
+    SessionEvent.RECOVER: SessionPhase.RUNNING,
+}
+
+
 _LEGACY_VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
     SessionPhase.IDLE: {
         SessionPhase.RUNNING,
@@ -98,27 +120,7 @@ class SessionStateMachine:
         reason: str = "",
         strict: bool = True,
     ) -> bool:
-        event_targets = {
-            SessionEvent.USER_MESSAGE: SessionPhase.RUNNING,
-            SessionEvent.CLIENT_ACQUIRED: SessionPhase.RUNNING,
-            SessionEvent.QUERY_SENT: SessionPhase.RUNNING,
-            SessionEvent.STREAM_IDLE_BOUNDARY: SessionPhase.STOPPING,
-            SessionEvent.TURN_COMPLETED: SessionPhase.IDLE,
-            SessionEvent.DISCONNECT_OK: SessionPhase.IDLE,
-            SessionEvent.PERMISSION_PENDING: SessionPhase.WAITING_PERMISSION,
-            SessionEvent.INTERACTION_PENDING: SessionPhase.WAITING_INTERACTION,
-            SessionEvent.PERMISSION_RESOLVED: SessionPhase.RUNNING,
-            SessionEvent.INTERACTION_RESOLVED: SessionPhase.RUNNING,
-            SessionEvent.CLIENT_ACQUIRE_FAILED: SessionPhase.ERROR,
-            SessionEvent.QUERY_FAILED: SessionPhase.ERROR,
-            SessionEvent.STREAM_TIMEOUT: SessionPhase.STOPPING,
-            SessionEvent.STREAM_ENDED_UNEXPECTEDLY: SessionPhase.STOPPING,
-            SessionEvent.STREAM_ERROR: SessionPhase.STOPPING,
-            SessionEvent.INTERRUPT: SessionPhase.STOPPING,
-            SessionEvent.SHUTDOWN: SessionPhase.STOPPING,
-            SessionEvent.RECOVER: SessionPhase.RUNNING,
-        }
-        to_phase = event_targets.get(event)
+        to_phase = _LEGACY_EVENT_TARGET.get(event)
         if to_phase is None:
             return True
         return self.transition(session_key, to_phase, reason=reason, force=not strict)
@@ -169,9 +171,15 @@ class SessionStateMachine:
 
     def _set_sdk_session_id_impl(self, session_key: str, sdk_id: str | None) -> None:
         state = self._get_or_create_state(session_key)
+        old = state.sdk_session_id
+        if old and old != sdk_id:
+            self._get_state_meta().pop(old, None)
         state.sdk_session_id = sdk_id
         if sdk_id:
             self._get_state_meta()[sdk_id] = state
+        elif old:
+            # sdk_id set to None: remove old index entry, keep session_key entry
+            pass
 
     def resolve_sdk_session_id(self, session_key: str) -> str | None:
         state = self._get_state_meta().get(session_key)

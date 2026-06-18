@@ -170,6 +170,8 @@ class MemoryStore:
                 tool_info = f" [tools: {', '.join(message['tools_used'])}]"
 
             content = has_content if has_content else f"(tool calls: {len(has_tool_calls)})"
+            if isinstance(content, (list, dict)):
+                content = f"({type(content).__name__}: {len(str(content))} chars)"
             role = str(message.get("role") or "unknown")
 
             lines.append(

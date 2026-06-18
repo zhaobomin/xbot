@@ -470,6 +470,7 @@ class ConversationStore:
             self._save_full(session, path)
             # Clear new messages since we've rewritten everything
             session._new_messages.clear()
+            session._metadata_dirty = False
 
         # Update the cache
         self._cache[session.key] = session

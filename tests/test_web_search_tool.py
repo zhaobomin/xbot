@@ -1,5 +1,7 @@
 """Tests for multi-provider web search."""
 
+from urllib.parse import urlparse
+
 import httpx
 import pytest
 
@@ -18,6 +20,14 @@ def _response(status: int = 200, json: dict | None = None) -> httpx.Response:
     return r
 
 
+def _allow_pinned_search(monkeypatch):
+    def fake_pin(url):
+        hostname = urlparse(url).hostname or "example.com"
+        return True, "", {hostname: "203.0.113.10"}
+
+    monkeypatch.setattr("xbot.tools.web._validate_and_pin_url", fake_pin)
+
+
 @pytest.mark.asyncio
 async def test_brave_search(monkeypatch):
     async def mock_get(self, url, **kw):
@@ -28,10 +38,49 @@ async def test_brave_search(monkeypatch):
         })
 
     monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
+    _allow_pinned_search(monkeypatch)
     tool = _tool(provider="brave", api_key="brave-key")
     result = await tool.execute(query="xbot", count=1)
     assert "NanoBot" in result
     assert "https://example.com" in result
+
+
+@pytest.mark.asyncio
+async def test_brave_search_uses_pinned_transport(monkeypatch):
+    captured = {}
+
+    class FakeTransport:
+        def __init__(self, pinned_hosts, proxy=None):
+            self.pinned_hosts = pinned_hosts
+            self.proxy = proxy
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, **kw):
+            return _response(json={"web": {"results": []}})
+
+    monkeypatch.setattr("xbot.tools.web._PinnedAsyncHTTPTransport", FakeTransport)
+    monkeypatch.setattr(
+        "xbot.tools.web._validate_and_pin_url",
+        lambda url: (True, "", {"api.search.brave.com": "203.0.113.10"}),
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    tool = _tool(provider="brave", api_key="brave-key")
+    result = await tool.execute(query="xbot", count=1)
+
+    assert "No results" in result
+    assert isinstance(captured["transport"], FakeTransport)
+    assert captured["transport"].pinned_hosts == {"api.search.brave.com": "203.0.113.10"}
+    assert captured["proxy"] is None
 
 
 @pytest.mark.asyncio
@@ -44,6 +93,7 @@ async def test_tavily_search(monkeypatch):
         })
 
     monkeypatch.setattr(httpx.AsyncClient, "post", mock_post)
+    _allow_pinned_search(monkeypatch)
     tool = _tool(provider="tavily", api_key="tavily-key")
     result = await tool.execute(query="openclaw")
     assert "OpenClaw" in result
@@ -59,8 +109,7 @@ async def test_searxng_search(monkeypatch):
         })
 
     monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
-    # Mock SSRF validation so the test domain isn't rejected
-    monkeypatch.setattr("xbot.tools.web._validate_url_safe", lambda url: (True, ""))
+    _allow_pinned_search(monkeypatch)
     tool = _tool(provider="searxng", base_url="https://searx.example")
     result = await tool.execute(query="test")
     assert "Result" in result
@@ -113,6 +162,7 @@ async def test_jina_search(monkeypatch):
         })
 
     monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
+    _allow_pinned_search(monkeypatch)
     tool = _tool(provider="jina", api_key="jina-key")
     result = await tool.execute(query="test")
     assert "Jina Result" in result
@@ -134,6 +184,7 @@ async def test_default_provider_is_brave(monkeypatch):
         return _response(json={"web": {"results": []}})
 
     monkeypatch.setattr(httpx.AsyncClient, "get", mock_get)
+    _allow_pinned_search(monkeypatch)
     tool = _tool(provider="", api_key="test-key")
     result = await tool.execute(query="test")
     assert "No results" in result

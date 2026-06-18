@@ -150,7 +150,10 @@ class HeartbeatService:
         if response is None or not getattr(response, "has_tool_calls", False):
             return "skip", ""
 
-        args = response.tool_calls[0].arguments
+        tool_calls = getattr(response, "tool_calls", None) or []
+        if not tool_calls:
+            return "skip", ""
+        args = tool_calls[0].arguments
         if not isinstance(args, dict):
             args = {}
         return args.get("action", "skip"), args.get("tasks", "")

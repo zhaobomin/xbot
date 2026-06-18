@@ -200,21 +200,21 @@ class ClientPool:
             True if disconnected, False if not found
         """
         async with self._lock:
-            record = self._clients.get(session_key)
+            record = self._clients.pop(session_key, None)
             if record is None:
                 return True
 
-            try:
-                await asyncio.wait_for(record.client.disconnect(), timeout=10.0)
-                record.state = "disconnected"
-                del self._clients[session_key]
-                logger.info(f"Disconnected client for session {session_key}")
-                return True
-            except Exception as e:
-                logger.warning(f"Failed to disconnect client for {session_key}: {e}")
-                await self._best_effort_force_disconnect(record.client, session_key)
-                del self._clients[session_key]
-                return True
+        # Network I/O moved outside the lock to avoid blocking other operations
+        try:
+            await asyncio.wait_for(record.client.disconnect(), timeout=10.0)
+            record.state = "disconnected"
+            logger.info(f"Disconnected client for session {session_key}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to disconnect client for {session_key}: {e}")
+            await self._best_effort_force_disconnect(record.client, session_key)
+            record.state = "disconnected"
+            return True
 
     async def _best_effort_force_disconnect(self, client: Any, session_key: str) -> None:
         """Best-effort fallback when graceful disconnect fails."""

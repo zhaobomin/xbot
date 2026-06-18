@@ -29,3 +29,5 @@ node_modules/
 .xbot/
 .claw/
 .ruff_cache/
+.codegraph/
+.workbuddy/

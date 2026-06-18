@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +21,104 @@ from xbot.platform.config.schema import Config
 from xbot.platform.logging.core import get_logger
 
 logger = get_logger(__name__)
+
+
+class _LLMRepairRunner:
+    """Synchronous wrapper around a long-lived async AgentService."""
+
+    _STARTUP_TIMEOUT_SECONDS = 5.0
+
+    def __init__(self, service: Any, agent_context_cls: type[Any], timeout_seconds: float = 120.0) -> None:
+        self._service = service
+        self._agent_context_cls = agent_context_cls
+        self._timeout_seconds = timeout_seconds
+        self._loop: asyncio.AbstractEventLoop | None = None
+        self._thread: threading.Thread | None = None
+        self._ready = threading.Event()
+        self._closed = False
+        self._initialized = False
+        self._startup_error: BaseException | None = None
+
+    def __call__(self, prompt: str) -> str:
+        self._ensure_started()
+        if self._closed or self._loop is None:
+            raise RuntimeError("LLM repair runner is closed")
+
+        future = asyncio.run_coroutine_threadsafe(self._call(prompt), self._loop)
+        try:
+            return future.result(timeout=self._timeout_seconds)
+        except concurrent.futures.TimeoutError as exc:
+            future.cancel()
+            raise TimeoutError(f"LLM repair timed out after {self._timeout_seconds:g}s") from exc
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            if self._initialized:
+                future = asyncio.run_coroutine_threadsafe(self._shutdown(), loop)
+                try:
+                    future.result(timeout=self._timeout_seconds)
+                except Exception:
+                    logger.exception("[crew] Failed to shutdown LLM repair service")
+            loop.call_soon_threadsafe(loop.stop)
+        if self._thread is not None:
+            self._thread.join(timeout=self._timeout_seconds)
+
+    def _ensure_started(self) -> None:
+        if self._loop is not None and self._thread is not None:
+            return
+        self._thread = threading.Thread(target=self._thread_main, daemon=True)
+        self._thread.start()
+        if not self._ready.wait(timeout=self._STARTUP_TIMEOUT_SECONDS):
+            raise TimeoutError("LLM repair timed out while starting worker")
+        if self._startup_error is not None:
+            raise self._startup_error
+
+    def _thread_main(self) -> None:
+        try:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            self._loop = loop
+            self._ready.set()
+            loop.run_forever()
+        except BaseException as exc:
+            self._startup_error = exc
+            self._ready.set()
+        finally:
+            loop = self._loop
+            if loop is not None:
+                loop.close()
+
+    async def _call(self, prompt: str) -> str:
+        if not self._initialized:
+            await self._service.initialize()
+            self._initialized = True
+        session_key = f"repair_{hash(prompt) % 10000}"
+        context = self._agent_context_cls(
+            session_key=session_key,
+            prompt=prompt,
+            channel="repair",
+            chat_id="repair",
+            media=None,
+        )
+        content = ""
+        async for response in self._service.process(context):
+            if response.content:
+                content = response.content
+            elif response.delta_content:
+                content += response.delta_content
+        return content
+
+    async def _shutdown(self) -> None:
+        shutdown = getattr(self._service, "shutdown", None)
+        if callable(shutdown):
+            await shutdown()
+        self._initialized = False
+
+
 class CrewOrchestrator:
     """Assembles pool, context, state manager, and process to run a crew.
 
@@ -152,6 +252,7 @@ class CrewOrchestrator:
                     if self.crew_config.process == ProcessType.hierarchical
                     else SequentialProcess
                 )
+                llm_repair = self._get_llm_repair_callable()
                 process = process_cls(
                     pool=manager.pool,
                     context=context,
@@ -161,12 +262,17 @@ class CrewOrchestrator:
                     config_path=self.config_path,
                     started_at=started_at,
                     on_progress=self.on_progress,
-                    llm_repair=self._get_llm_repair_callable(),
+                    llm_repair=llm_repair,
                 )
                 manager.set_process(process)
 
                 # Execute tasks
-                results = await process.execute(self.crew_config.tasks)
+                try:
+                    results = await process.execute(self.crew_config.tasks)
+                finally:
+                    close_repair = getattr(llm_repair, "close", None)
+                    if callable(close_repair):
+                        close_repair()
                 manager.set_results(results)
 
         except asyncio.CancelledError:
@@ -277,8 +383,6 @@ class CrewOrchestrator:
         Returns:
             Callable that takes a prompt and returns LLM response, or None.
         """
-        import threading
-
         # Guard: only proceed if we have a real Config instance.
         # MagicMock / test stubs will fail this check and return None gracefully.
         if not isinstance(self.xbot_config, Config):
@@ -299,7 +403,7 @@ class CrewOrchestrator:
                 "session_manager": None,
             }
 
-            # Create a lightweight service for repair
+            # Create a lightweight service for repair.
             agent_config = AgentConfig(
                 model=agents_config.defaults.model,
                 system_prompt="",  # System prompt is built dynamically by ContextBuilder
@@ -307,62 +411,7 @@ class CrewOrchestrator:
                 agents=getattr(agents_config.defaults, "agents", []),
             )
             service = AgentService(agent_config, shared_resources)
-
-            async def _init_and_call(prompt: str) -> str:
-                """Initialize service and run a single repair call."""
-                await service.initialize()
-                try:
-                    session_key = f"repair_{hash(prompt) % 10000}"
-                    context = AgentContext(
-                        session_key=session_key,
-                        prompt=prompt,
-                        channel="repair",
-                        chat_id="repair",
-                        media=None,
-                    )
-                    content = ""
-                    async for response in service.process(context):
-                        if response.content:
-                            content = response.content
-                        elif response.delta_content:
-                            content += response.delta_content
-                    return content
-                finally:
-                    shutdown = getattr(service, "shutdown", None)
-                    if callable(shutdown):
-                        await shutdown()
-
-            def repair_callable(prompt: str) -> str:
-                """Run the async repair call in a dedicated thread with its own event loop.
-
-                This avoids the 'asyncio.run() cannot be called when another event
-                loop is running' error that occurs when called from within an async
-                context on Python 3.10+.
-                """
-                result: list[str] = []
-                exception: list[BaseException] = []
-
-                def _thread_target() -> None:
-                    import asyncio as _asyncio
-                    loop = _asyncio.new_event_loop()
-                    _asyncio.set_event_loop(loop)
-                    try:
-                        result.append(loop.run_until_complete(_init_and_call(prompt)))
-                    except Exception as exc:
-                        exception.append(exc)
-                    finally:
-                        loop.close()
-
-                t = threading.Thread(target=_thread_target, daemon=True)
-                t.start()
-                t.join(timeout=120)  # 2-minute hard timeout for repair
-                if t.is_alive():
-                    raise TimeoutError("LLM repair timed out after 120s")
-                if exception:
-                    raise exception[0]
-                return result[0] if result else ""
-
-            return repair_callable
+            return _LLMRepairRunner(service, AgentContext)
         except Exception as e:
             logger.warning(f"Failed to create LLM repair callable: {e}")
             return None

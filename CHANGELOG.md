@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.0.28 (2026-06-18)
+
+- 修复 LLM repair 重试时重复初始化并关闭 `AgentService` 的问题，改为同一次 crew 执行内复用长生命周期 repair runner。
+- 搜索 API provider（Brave / Tavily / SearXNG / Jina）统一使用 URL 校验与 DNS pinning transport。
+- 修复多项稳定性问题：conversation compact 元数据 dirty 标记、旧 sdk session 索引清理、heartbeat tool call 参数防御、health readiness 状态兼容、memory 消息格式化容错。
+- 优化 `ClientPool.disconnect()`，避免在持锁期间执行网络断开 I/O。
+- 增加相关回归测试并更新本地工作目录忽略规则。
+
 ## v2.0.22 (2026-06-16)
 
 - 清理项目根目录：删除 MagicMock/ 测试残留、.codex-webui.log、.qoder/、.workbuddy/、扫描报告等无关文件。

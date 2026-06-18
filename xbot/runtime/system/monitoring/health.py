@@ -160,6 +160,8 @@ class HealthCheckService:
         """Readiness probe - checks critical components."""
         # Critical components: agent and at least one channel
         agent_status = self._status.get("agent", "unknown")
+        if isinstance(agent_status, dict):
+            agent_status = agent_status.get("state", agent_status.get("status", "unknown"))
         channels = self._status.get("channels", [])
 
         ready = (
