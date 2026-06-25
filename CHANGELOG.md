@@ -1,5 +1,9 @@
 # Changelog
 
+## v2.0.29 (2026-06-25)
+
+- Upgraded `claude-agent-sdk` from `0.2.103` to `0.2.110`, pulling in bundled Claude Code CLI updates from `2.1.179` to `2.1.191`.
+
 ## v2.0.28 (2026-06-18)
 
 - 修复 LLM repair 重试时重复初始化并关闭 `AgentService` 的问题，改为同一次 crew 执行内复用长生命周期 repair runner。
