@@ -1244,7 +1244,6 @@ xbot gateway --config ~/.xbot-telegram/config.json --workspace /tmp/xbot-telegra
 | `xbot agent --logs` | Show runtime logs during chat |
 | `xbot gateway` | Start the gateway |
 | `xbot status` | Show status |
-| `xbot provider login openai-codex` | OAuth login for providers |
 | `xbot channels login` | Link WhatsApp (scan QR) |
 | `xbot channels status` | Show channel status |
 
