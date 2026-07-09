@@ -20,6 +20,8 @@
 
 ## 📢 Latest Updates
 
+- **2026-07-09** 🚀 Released **v2.0.32** — multimodal image support (vision), config API secret restoration, memory consolidation concurrency safety, arm64 native venv
+- **2026-07-09** 🚀 Released **v2.0.30** — upgraded to claude-agent-sdk 0.2.113 with zombie subprocess prevention
 - **2026-04-14** 🚀 Released **v2.0.0** — unified runtime state machine with `SessionCoordinator`; removed legacy phase/transition compatibility paths (breaking change, see migration guide)
 - **2026-03-23** 🔄 **Coordinator Mode Migration** — Unified state management with SessionStateCoordinator, transaction-based atomic operations, removed legacy dual-track architecture
 - **2026-03-22** 🚀 **Major Architecture Upgrade** — Agent Router with pluggable backends, Claude SDK native integration, capability-based permission system, and enhanced memory with reme-ai
@@ -143,7 +145,7 @@ The router provides:
   <tr>
     <td align="center"><p align="center"><img src="case/search.gif" width="180" height="400"></p></td>
     <td align="center"><p align="center"><img src="case/code.gif" width="180" height="400"></p></td>
-    <td align="center"><p align="center"><img src="case/scedule.gif" width="180" height="400"></p></td>
+    <td align="center"><p align="center"><img src="case/schedule.gif" width="180" height="400"></p></td>
     <td align="center"><p align="center"><img src="case/memory.gif" width="180" height="400"></p></td>
   </tr>
   <tr>
@@ -173,12 +175,47 @@ Notes:
 
 ## 📦 Install
 
+**Install from PyPI** (stable)
+
+```bash
+pip install xbot
+```
+
+**Install with [uv](https://github.com/astral-sh/uv)** (stable, fast)
+
+```bash
+uv tool install xbot
+```
+
 **Install from source** (latest features, recommended for development)
 
 ```bash
-git clone https://github.com/HKUDS/xbot.git
+git clone https://github.com/zhaobomin/xbot.git
 cd xbot
 pip install -e .
+```
+
+### Update to latest version
+
+**PyPI / pip**
+
+```bash
+pip install -U xbot
+xbot --version
+```
+
+**uv**
+
+```bash
+uv tool upgrade xbot
+xbot --version
+```
+
+**Using WhatsApp?** Rebuild the local bridge after upgrading:
+
+```bash
+rm -rf ~/.xbot/bridge
+xbot channels login
 ```
 
 ## 🔥 v2 Migration Guide
@@ -223,41 +260,6 @@ This suite enforces coverage gate for:
 - `xbot/runtime/state`
 
 Current coverage threshold (state-machine core): **90%**.
-
-**Install with [uv](https://github.com/astral-sh/uv)** (stable, fast)
-
-```bash
-uv tool install xbot
-```
-
-**Install from PyPI** (stable)
-
-```bash
-pip install xbot
-```
-
-### Update to latest version
-
-**PyPI / pip**
-
-```bash
-pip install -U xbot
-xbot --version
-```
-
-**uv**
-
-```bash
-uv tool upgrade xbot
-xbot --version
-```
-
-**Using WhatsApp?** Rebuild the local bridge after upgrading:
-
-```bash
-rm -rf ~/.xbot/bridge
-xbot channels login
-```
 
 ## 🚀 Quick Start
 
@@ -314,8 +316,6 @@ That's it! You have a working AI assistant in 2 minutes.
 ## 💬 Chat Apps
 
 Connect xbot to your favorite chat platform. Want to build your own? See the [Channel Plugin Guide](./docs/CHANNEL_PLUGIN_GUIDE.md).
-
-> Channel plugin support is available in the `main` branch; not yet published to PyPI.
 
 | Channel | What you need |
 |---------|---------------|
@@ -1489,7 +1489,7 @@ which xbot   # e.g. /home/user/.local/bin/xbot
 
 ```ini
 [Unit]
-Description=Nanobot Gateway
+Description=xbot Gateway
 After=network.target
 
 [Service]
@@ -1532,27 +1532,30 @@ If you edit the `.service` file itself, run `systemctl --user daemon-reload` bef
 
 ```
 xbot/
-├── agent/              # 🧠 Core agent logic
-│   ├── backends/       #    Agent backends (Claude SDK)
-│   ├── router.py       #    Agent router for backend selection
-│   ├── context.py      #    Prompt builder
-│   ├── memory.py       #    Persistent memory
-│   ├── memory_reme.py  #    reme-ai integration
-│   ├── skills.py       #    Skills loader
-│   ├── subagent.py     #    Background task execution
-│   ├── capabilities.py #    Capability catalog
-│   ├── capability_policy.py # Permission policies
-│   ├── handoff_policy.py    # Agent handoff decisions
-│   └── tools/          #    Built-in tools (incl. spawn)
-├── skills/             # 🎯 Bundled skills (github, weather, tmux...)
-├── channels/           # 📱 Chat channel integrations (supports plugins)
-├── bus/                # 🚌 Message routing
-├── cron/               # ⏰ Scheduled tasks
-├── heartbeat/          # 💓 Proactive wake-up
-├── providers/          # 🤖 LLM providers (OpenRouter, etc.)
-├── session/            # 💬 Conversation sessions
-├── config/             # ⚙️ Configuration
-└── cli/                # 🖥️ Commands
+├── capabilities/       # 🛡️ Capability catalog and policies
+├── channels/           # 📱 Chat channel integrations (Feishu, Telegram, Discord, etc.)
+├── crew/               # 👥 Multi-agent crew system (roles, planner, role pool)
+├── interaction/        # 💬 Permission handler and event formatting
+├── interfaces/         # 🖥️ User interfaces
+│   ├── cli/            #    Command-line interface
+│   ├── gateway/        #    Gateway server (FastAPI)
+│   └── webui/          #    Web UI adapter
+├── memory/             # 🧠 Memory store and consolidation
+├── platform/           # 🔧 Platform infrastructure
+│   ├── bus/            #    Message bus (inbound/outbound routing)
+│   ├── config/         #    Configuration schema and loading
+│   ├── logging/        #    Logging infrastructure
+│   ├── providers/      #    LLM provider registry
+│   ├── security/       #    Security utilities
+│   └── utils/          #    Shared utilities
+├── runtime/            # ⚙️ Core runtime
+│   ├── core/           #    AgentService, client pool, context builder
+│   ├── session/        #    Conversation store
+│   ├── state/          #    Session state machine
+│   └── system/         #    Cron, heartbeat, monitoring
+├── skills/             # 🎯 Bundled skills
+├── templates/          # 📋 Default configs, commands, memory, packs
+└── tools/              # 🔨 Built-in tools (shell, file, web, MCP, etc.)
 ```
 
 ## 🤝 Contribute & Roadmap
@@ -1568,38 +1571,38 @@ PRs welcome! The codebase is intentionally small and readable. 🤗
 
 **Unsure which branch to target?** See [CONTRIBUTING.md](./CONTRIBUTING.md) for details.
 
-**Roadmap** — Pick an item and [open a PR](https://github.com/HKUDS/xbot/pulls)!
+**Roadmap** — Pick an item and [open a PR](https://github.com/zhaobomin/xbot/pulls)!
 
-- [ ] **Multi-modal** — See and hear (images, voice, video)
-- [ ] **Long-term memory** — Never forget important context
+- [x] **Multi-modal** — Images, audio, and file attachments with vision support
+- [x] **Long-term memory** — Token-based memory with reme-ai integration
+- [x] **More integrations** — 11+ chat platforms (Telegram, Discord, Feishu, DingTalk, Slack, QQ, WhatsApp, Email, Matrix, Wecom, Mochat)
 - [ ] **Better reasoning** — Multi-step planning and reflection
-- [ ] **More integrations** — Calendar and more
 - [ ] **Self-improvement** — Learn from feedback and mistakes
-- [ ] **Multi-agent collaboration** — Team-based problem solving
+- [x] **Multi-agent collaboration** — Agent Teams and Sub-Agent architecture
 - [ ] **Advanced tool orchestration** — Complex workflow automation
 
 ### Contributors
 
-<a href="https://github.com/HKUDS/xbot/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=HKUDS/xbot&max=100&columns=12&updated=20260210" alt="Contributors" />
+<a href="https://github.com/zhaobomin/xbot/graphs/contributors">
+  <img src="https://contrib.rocks/image?repo=zhaobomin/xbot&max=100&columns=12&updated=20260210" alt="Contributors" />
 </a>
 
 
 ## ⭐ Star History
 
 <div align="center">
-  <a href="https://star-history.com/#HKUDS/xbot&Date">
+  <a href="https://star-history.com/#zhaobomin/xbot&Date">
     <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=HKUDS/xbot&type=Date&theme=dark" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=HKUDS/xbot&type=Date" />
-      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=HKUDS/xbot&type=Date" style="border-radius: 15px; box-shadow: 0 0 30px rgba(0, 217, 255, 0.3);" />
+      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=zhaobomin/xbot&type=Date&theme=dark" />
+      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=zhaobomin/xbot&type=Date" />
+      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=zhaobomin/xbot&type=Date" style="border-radius: 15px; box-shadow: 0 0 30px rgba(0, 217, 255, 0.3);" />
     </picture>
   </a>
 </div>
 
 <p align="center">
   <em> Thanks for visiting ✨ xbot!</em><br><br>
-  <img src="https://visitor-badge.laobi.icu/badge?page_id=HKUDS.xbot&style=for-the-badge&color=00d4ff" alt="Views">
+  <img src="https://visitor-badge.laobi.icu/badge?page_id=zhaobomin.xbot&style=for-the-badge&color=00d4ff" alt="Views">
 </p>
 
 
