@@ -131,7 +131,6 @@ The router provides:
 - [Linux Service](#-linux-service)
 - [Project Structure](#-project-structure)
 - [Contribute & Roadmap](#-contribute--roadmap)
-- [Star History](#-star-history)
 
 ## ✨ Features
 
@@ -1580,31 +1579,6 @@ PRs welcome! The codebase is intentionally small and readable. 🤗
 - [ ] **Self-improvement** — Learn from feedback and mistakes
 - [x] **Multi-agent collaboration** — Agent Teams and Sub-Agent architecture
 - [ ] **Advanced tool orchestration** — Complex workflow automation
-
-### Contributors
-
-<a href="https://github.com/zhaobomin/xbot/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=zhaobomin/xbot&max=100&columns=12&updated=20260210" alt="Contributors" />
-</a>
-
-
-## ⭐ Star History
-
-<div align="center">
-  <a href="https://star-history.com/#zhaobomin/xbot&Date">
-    <picture>
-      <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=zhaobomin/xbot&type=Date&theme=dark" />
-      <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=zhaobomin/xbot&type=Date" />
-      <img alt="Star History Chart" src="https://api.star-history.com/svg?repos=zhaobomin/xbot&type=Date" style="border-radius: 15px; box-shadow: 0 0 30px rgba(0, 217, 255, 0.3);" />
-    </picture>
-  </a>
-</div>
-
-<p align="center">
-  <em> Thanks for visiting ✨ xbot!</em><br><br>
-  <img src="https://visitor-badge.laobi.icu/badge?page_id=zhaobomin.xbot&style=for-the-badge&color=00d4ff" alt="Views">
-</p>
-
 
 <p align="center">
   <sub>xbot is for educational, research, and technical exchange purposes only</sub>
