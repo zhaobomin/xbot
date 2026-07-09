@@ -92,18 +92,16 @@
 
 ## 🏗️ Architecture
 
-### Agent Router Architecture
+### Claude SDK Backend
 
-xbot features a modern **Agent Router** architecture that supports multiple backend implementations:
+xbot is built on the **Claude Code SDK** — a Python wrapper around the Claude Code CLI. The SDK spawns a Claude CLI subprocess and communicates via stdin/stdout using JSON streaming.
 
-- **Claude SDK Backend**: Native Claude integration with Anthropic and compatible providers
-- **Custom Backends**: Easily implement your own agent logic
-
-The router provides:
-- Dynamic backend switching
-- Unified message processing interface
-- Backend lifecycle management
-- Capability-based tool routing
+Key components:
+- **AgentService**: Core agent logic, manages client pool and session lifecycle
+- **Session State Machine**: Tracks agent state (idle, querying, receiving, waiting for permission, etc.)
+- **Message Bus**: Routes messages between channels and agent sessions
+- **Memory Store**: Persistent long-term memory with reme-ai integration
+- **Tool System**: Built-in tools (shell, file, web) + MCP server integration
 
 ## Table of Contents
 
@@ -243,11 +241,7 @@ Current coverage threshold (state-machine core): **90%**.
 
 > [!TIP]
 > Set your API key in `~/.xbot/config.json`.
-> Get API keys: [OpenRouter](https://openrouter.ai/keys) (Global)
->
-> For other LLM providers, please see the [Providers](#providers) section.
->
-> For web search capability setup, please see [Web Search](#web-search).
+> xbot uses the Claude Code SDK — only Anthropic Messages API-compatible providers are supported.
 
 **1. Initialize**
 
@@ -257,27 +251,38 @@ xbot init
 
 **2. Configure** (`~/.xbot/config.json`)
 
-Add or merge these **two parts** into your config (other options have defaults).
+Add your API key and model configuration:
 
-*Set your API key* (e.g. OpenRouter, recommended for global users):
 ```json
 {
   "providers": {
     "anthropic": {
       "apiKey": "sk-ant-xxx"
     }
+  },
+  "agents": {
+    "defaults": {
+      "model": "claude-sonnet-4-20250514",
+      "provider": "anthropic"
+    }
   }
 }
 ```
 
-*Set your model and backend* (optionally pin a provider — defaults to auto-detection):
+Or use Aliyun Coding Plan / Alrun gateway:
+
 ```json
 {
+  "providers": {
+    "alrun": {
+      "apiKey": "sk-xxx",
+      "apiBase": "https://your-alrun-endpoint"
+    }
+  },
   "agents": {
-    "type": "claude_sdk",
     "defaults": {
-      "model": "claude-sonnet-4-5",
-      "provider": "anthropic"
+      "model": "your-model-name",
+      "provider": "alrun"
     }
   }
 }
@@ -838,228 +843,83 @@ Config file: `~/.xbot/config.json`
 
 ### Agent Backend Configuration
 
-xbot currently uses a single backend (`claude_sdk`) through the Agent Router:
+xbot is built on the **Claude Code SDK**. All model providers must be compatible with the **Anthropic Messages API protocol**.
 
 ```json
 {
   "agents": {
-    "type": "claude_sdk",
     "defaults": {
-      "model": "anthropic/claude-sonnet-4-20250514",
+      "model": "claude-sonnet-4-20250514",
       "provider": "anthropic"
     }
   }
 }
 ```
 
-Available backend type:
-- `claude_sdk`: Native Claude SDK integration
+### Supported Providers
 
-### Providers
+| Provider | Description | Config |
+|---|---|---|
+| `anthropic` | Anthropic official API | `ANTHROPIC_API_KEY` |
+| `aliyun_coding_plan` | Aliyun Coding Plan (Anthropic-compatible gateway) | `ANTHROPIC_API_KEY` |
+| `alrun` | Alrun gateway (Anthropic-compatible) | `ANTHROPIC_API_KEY` |
 
-> [!TIP]
-> - **Groq** provides free voice transcription via Whisper. If configured, Telegram voice messages will be automatically transcribed.
-> - **MiniMax Coding Plan**: Exclusive discount links for the xbot community: [Overseas](https://platform.minimax.io/subscribe/coding-plan?code=9txpdXw04g&source=link) · [Mainland China](https://platform.minimaxi.com/subscribe/token-plan?code=GILTJpMTqZ&source=link)
-> - **MiniMax (Mainland China)**: If your API key is from MiniMax's mainland China platform (minimaxi.com), set `"apiBase": "https://api.minimaxi.com/v1"` in your minimax provider config.
-> - **VolcEngine / BytePlus Coding Plan**: Use dedicated providers `volcengineCodingPlan` or `byteplusCodingPlan` instead of the pay-per-use `volcengine` / `byteplus` providers.
-> - **Zhipu Coding Plan**: If you're on Zhipu's coding plan, set `"apiBase": "https://open.bigmodel.cn/api/coding/paas/v4"` in your zhipu provider config.
-> - **Alibaba Cloud BaiLian**: If you're using Alibaba Cloud BaiLian's OpenAI-compatible endpoint, set `"apiBase": "https://dashscope.aliyuncs.com/compatible-mode/v1"` in your dashscope provider config.
+> **Note:** Since xbot uses the Claude Code SDK under the hood, only Anthropic Messages API-compatible endpoints are supported. OpenAI, Gemini, and other non-Anthropic protocols are not supported.
 
-| Provider | Purpose | Get API Key |
-|----------|---------|-------------|
-| `custom` | Any OpenAI-compatible endpoint (direct SDK routing) | — |
-| `openrouter` | LLM (recommended, access to all models) | [openrouter.ai](https://openrouter.ai) |
-| `volcengine` | LLM (VolcEngine, pay-per-use) | [Coding Plan](https://www.volcengine.com/activity/codingplan?utm_campaign=xbot&utm_content=xbot&utm_medium=devrel&utm_source=OWO&utm_term=xbot) · [volcengine.com](https://www.volcengine.com) |
-| `byteplus` | LLM (VolcEngine international, pay-per-use) | [Coding Plan](https://www.byteplus.com/en/activity/codingplan?utm_campaign=xbot&utm_content=xbot&utm_medium=devrel&utm_source=OWO&utm_term=xbot) · [byteplus.com](https://www.byteplus.com) |
-| `anthropic` | LLM (Claude direct) | [console.anthropic.com](https://console.anthropic.com) |
-| `azure_openai` | LLM (Azure OpenAI) | [portal.azure.com](https://portal.azure.com) |
-| `openai` | LLM (GPT direct) | [platform.openai.com](https://platform.openai.com) |
-| `deepseek` | LLM (DeepSeek direct) | [platform.deepseek.com](https://platform.deepseek.com) |
-| `groq` | LLM + **Voice transcription** (Whisper) | [console.groq.com](https://console.groq.com) |
-| `minimax` | LLM (MiniMax direct) | [platform.minimaxi.com](https://platform.minimaxi.com) |
-| `gemini` | LLM (Gemini direct) | [aistudio.google.com](https://aistudio.google.com) |
-| `aihubmix` | LLM (API gateway, access to all models) | [aihubmix.com](https://aihubmix.com) |
-| `siliconflow` | LLM (SiliconFlow/硅基流动) | [siliconflow.cn](https://siliconflow.cn) |
-| `dashscope` | LLM (Qwen) | [dashscope.console.aliyun.com](https://dashscope.console.aliyun.com) |
-| `moonshot` | LLM (Moonshot/Kimi) | [platform.moonshot.cn](https://platform.moonshot.cn) |
-| `zhipu` | LLM (Zhipu GLM) | [open.bigmodel.cn](https://open.bigmodel.cn) |
-| `ollama` | LLM (local, Ollama) | — |
-| `vllm` | LLM (local, any OpenAI-compatible server) | — |
-| `openai_codex` | LLM (Codex, OAuth) | `xbot provider login openai-codex` |
-| `github_copilot` | LLM (GitHub Copilot, OAuth) | `xbot provider login github-copilot` |
-
-<details>
-<summary><b>OpenAI Codex (OAuth)</b></summary>
-
-Codex uses OAuth instead of API keys. Requires a ChatGPT Plus or Pro account.
-
-**1. Login:**
-```bash
-xbot provider login openai-codex
-```
-
-**2. Set model** (merge into `~/.xbot/config.json`):
-```json
-{
-  "agents": {
-    "defaults": {
-      "model": "openai-codex/gpt-5.1-codex"
-    }
-  }
-}
-```
-
-**3. Chat:**
-```bash
-xbot agent -m "Hello!"
-
-# Target a specific workspace/config locally
-xbot agent -c ~/.xbot-telegram/config.json -m "Hello!"
-
-# One-off workspace override on top of that config
-xbot agent -c ~/.xbot-telegram/config.json -w /tmp/xbot-telegram-test -m "Hello!"
-```
-
-> Docker users: use `docker run -it` for interactive OAuth login.
-
-</details>
-
-<details>
-<summary><b>Custom Provider (Any OpenAI-compatible API)</b></summary>
-
-Connects directly to any OpenAI-compatible endpoint — LM Studio, llama.cpp, Together AI, Fireworks, Azure OpenAI, or any self-hosted server. Model name is passed as-is.
+**Anthropic (direct):**
 
 ```json
 {
   "providers": {
-    "custom": {
-      "apiKey": "your-api-key",
-      "apiBase": "https://api.your-provider.com/v1"
+    "anthropic": {
+      "apiKey": "sk-ant-xxx"
     }
   },
   "agents": {
     "defaults": {
-      "model": "your-model-name"
+      "model": "claude-sonnet-4-20250514",
+      "provider": "anthropic"
     }
   }
 }
 ```
 
-> For local servers that don't require a key, set `apiKey` to any non-empty string (e.g. `"no-key"`).
+**Aliyun Coding Plan (Anthropic-compatible gateway):**
 
-</details>
-
-<details>
-<summary><b>Ollama (local)</b></summary>
-
-Run a local model with Ollama, then add to config:
-
-**1. Start Ollama** (example):
-```bash
-ollama run llama3.2
-```
-
-**2. Add to config** (partial — merge into `~/.xbot/config.json`):
 ```json
 {
   "providers": {
-    "ollama": {
-      "apiBase": "http://localhost:11434"
+    "aliyun_coding_plan": {
+      "apiKey": "sk-sp-xxx"
     }
   },
   "agents": {
     "defaults": {
-      "provider": "ollama",
-      "model": "llama3.2"
+      "model": "qwen3.7-plus",
+      "provider": "aliyun_coding_plan"
     }
   }
 }
 ```
 
-> `provider: "auto"` also works when `providers.ollama.apiBase` is configured, but setting `"provider": "ollama"` is the clearest option.
+**Alrun (Anthropic-compatible gateway):**
 
-</details>
-
-<details>
-<summary><b>vLLM (local / OpenAI-compatible)</b></summary>
-
-Run your own model with vLLM or any OpenAI-compatible server, then add to config:
-
-**1. Start the server** (example):
-```bash
-vllm serve meta-llama/Llama-3.1-8B-Instruct --port 8000
-```
-
-**2. Add to config** (partial — merge into `~/.xbot/config.json`):
-
-*Provider (key can be any non-empty string for local):*
 ```json
 {
   "providers": {
-    "vllm": {
-      "apiKey": "dummy",
-      "apiBase": "http://localhost:8000/v1"
+    "alrun": {
+      "apiKey": "sk-xxx",
+      "apiBase": "https://your-alrun-endpoint"
     }
-  }
-}
-```
-
-*Model:*
-```json
-{
+  },
   "agents": {
     "defaults": {
-      "model": "meta-llama/Llama-3.1-8B-Instruct"
+      "model": "your-model-name",
+      "provider": "alrun"
     }
   }
 }
 ```
-
-</details>
-
-<details>
-<summary><b>Adding a New Provider (Developer Guide)</b></summary>
-
-xbot uses a **Provider Registry** (`xbot/providers/registry.py`) as the single source of truth.
-Adding a new provider only takes **2 steps** — no if-elif chains to touch.
-
-**Step 1.** Add a `ProviderSpec` entry to `PROVIDERS` in `xbot/providers/registry.py`:
-
-```python
-ProviderSpec(
-    name="myprovider",                   # config field name
-    keywords=("myprovider", "mymodel"),  # model-name keywords for auto-matching
-    env_key="MYPROVIDER_API_KEY",        # env var for provider auth
-    display_name="My Provider",          # shown in `xbot status`
-    model_prefix="myprovider",           # auto-prefix: model → myprovider/model
-    skip_prefixes=("myprovider/",),      # don't double-prefix
-)
-```
-
-**Step 2.** Add a field to `ProvidersConfig` in `xbot/config/schema.py`:
-
-```python
-class ProvidersConfig(BaseModel):
-    ...
-    myprovider: ProviderConfig = ProviderConfig()
-```
-
-That's it! Environment variables, model prefixing, config matching, and `xbot status` display will all work automatically.
-
-**Common `ProviderSpec` options:**
-
-| Field | Description | Example |
-|-------|-------------|---------|
-| `model_prefix` | Auto-prefix model names | `"dashscope"` → `dashscope/qwen-max` |
-| `skip_prefixes` | Don't prefix if model already starts with these | `("dashscope/", "openrouter/")` |
-| `env_extras` | Additional env vars to set | `(("ZHIPUAI_API_KEY", "{api_key}"),)` |
-| `model_overrides` | Per-model parameter overrides | `(("kimi-k2.5", {"temperature": 1.0}),)` |
-| `is_gateway` | Can route any model (like OpenRouter) | `True` |
-| `detect_by_key_prefix` | Detect gateway by API key prefix | `"sk-or-"` |
-| `detect_by_base_keyword` | Detect gateway by API base URL | `"openrouter"` |
-| `strip_model_prefix` | Strip existing prefix before re-prefixing | `True` (for AiHubMix) |
-
-</details>
 
 
 ### Web Search
@@ -1327,7 +1187,7 @@ Example config:
   "agents": {
     "defaults": {
       "workspace": "~/.xbot-telegram/workspace",
-      "model": "anthropic/claude-sonnet-4-6"
+      "model": "claude-sonnet-4-20250514"
     }
   },
   "channels": {
