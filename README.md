@@ -1,5 +1,4 @@
 <div align="center">
-  <img src="xbot_logo.png" alt="xbot" width="500">
   <h1>xbot: Ultra-Lightweight Personal AI Assistant Framework</h1>
   <p>
     <a href="https://pypi.org/project/xbot/"><img src="https://img.shields.io/pypi/v/xbot" alt="PyPI"></a>
@@ -95,10 +94,6 @@
 
 ## 🏗️ Architecture
 
-<p align="center">
-  <img src="xbot_arch.png" alt="xbot architecture" width="800">
-</p>
-
 ### Agent Router Architecture
 
 xbot features a modern **Agent Router** architecture that supports multiple backend implementations:
@@ -134,26 +129,12 @@ The router provides:
 
 ## ✨ Features
 
-<table align="center">
-  <tr align="center">
-    <th><p align="center">📈 24/7 Real-Time Market Analysis</p></th>
-    <th><p align="center">🚀 Full-Stack Software Engineer</p></th>
-    <th><p align="center">📅 Smart Daily Routine Manager</p></th>
-    <th><p align="center">📚 Personal Knowledge Assistant</p></th>
-  </tr>
-  <tr>
-    <td align="center"><p align="center"><img src="case/search.gif" width="180" height="400"></p></td>
-    <td align="center"><p align="center"><img src="case/code.gif" width="180" height="400"></p></td>
-    <td align="center"><p align="center"><img src="case/schedule.gif" width="180" height="400"></p></td>
-    <td align="center"><p align="center"><img src="case/memory.gif" width="180" height="400"></p></td>
-  </tr>
-  <tr>
-    <td align="center">Discovery • Insights • Trends</td>
-    <td align="center">Develop • Deploy • Scale</td>
-    <td align="center">Schedule • Automate • Organize</td>
-    <td align="center">Learn • Memory • Reasoning</td>
-  </tr>
-</table>
+xbot supports a wide range of capabilities:
+
+- 📈 **24/7 Real-Time Market Analysis** — Discovery, insights, and trends
+- 🚀 **Full-Stack Software Engineer** — Develop, deploy, and scale
+- 📅 **Smart Daily Routine Manager** — Schedule, automate, and organize
+- 📚 **Personal Knowledge Assistant** — Learn, memory, and reasoning
 
 ## 🖥️ WebUI
 
