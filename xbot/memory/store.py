@@ -272,7 +272,20 @@ class MemoryStore:
                 # Empty update - keep existing memory
                 logger.debug("Memory consolidation: empty memory_update, keeping existing memory")
             elif update != current_memory:
-                self.write_long_term(update)
+                # Optimistic concurrency: another consolidation may have written
+                # MEMORY.md while the LLM call was in flight (there is no lock
+                # around the LLM call, so consolidations across sessions run
+                # concurrently). Re-read and only write if unchanged; otherwise
+                # skip to avoid clobbering the other update (lost-update). The
+                # skipped update's info is already preserved in HISTORY.md and
+                # will inform the next consolidation.
+                if self.read_long_term() == current_memory:
+                    self.write_long_term(update)
+                else:
+                    logger.info(
+                        "Memory consolidation: MEMORY.md changed during LLM call, "
+                        "skipping write to avoid lost-update"
+                    )
 
             self._consecutive_failures = 0
             logger.info("Memory consolidation done for %s messages", len(messages))

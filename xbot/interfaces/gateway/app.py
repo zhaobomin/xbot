@@ -269,6 +269,44 @@ def _mask_secret(value: Any) -> str:
     return "••••" if len(raw) <= 4 else f"••••{raw[-4:]}"
 
 
+def _is_masked_secret_value(value: str) -> bool:
+    """True if `value` looks like a redacted placeholder produced by GET /api/config/raw.
+
+    The raw config GET serializes SecretStr via ``model_dump(mode="json")`` to
+    ``"**********"``, then ``_sanitize_public_config`` masks sensitive fields to
+    ``"••••"`` + last4. Both forms indicate "secret was redacted for display".
+    """
+    return value == "**********" or value.startswith("••••")
+
+
+def _restore_masked_secrets(old: Any, new: Any) -> None:
+    """Restore SecretStr values redacted by the raw config round-trip.
+
+    GET /api/config/raw masks SecretStr fields for safety. When the edited
+    config is PUT back, those placeholders would otherwise clobber the real
+    secrets (e.g. api keys, tokens). This walks ``new`` (a pydantic model) in
+    parallel with ``old`` and, for every SecretStr field whose current value is
+    a mask, copies the real value from ``old``. A user-supplied new (non-mask)
+    value is preserved; an empty value clears the secret as requested.
+    """
+    from pydantic import BaseModel, SecretStr
+
+    if not isinstance(new, BaseModel) or not isinstance(old, BaseModel):
+        return
+    for field_name in type(new).model_fields:
+        new_val = getattr(new, field_name, None)
+        old_val = getattr(old, field_name, None)
+        if isinstance(new_val, SecretStr):
+            if _is_masked_secret_value(new_val.get_secret_value()) and isinstance(old_val, SecretStr):
+                setattr(new, field_name, SecretStr(old_val.get_secret_value()))
+        elif isinstance(new_val, BaseModel) and isinstance(old_val, BaseModel):
+            _restore_masked_secrets(old_val, new_val)
+        elif isinstance(new_val, dict) and isinstance(old_val, dict):
+            for key, value in new_val.items():
+                if isinstance(value, BaseModel) and isinstance(old_val.get(key), BaseModel):
+                    _restore_masked_secrets(old_val[key], value)
+
+
 def _serialize_cron_job(job: Any) -> dict[str, Any]:
     return {
         "id": job.id,
@@ -1294,9 +1332,13 @@ def create_app(
         content = str(body.get("content", ""))
         try:
             config_data = json.loads(content)
-            container.config = Config.model_validate(config_data)
+            new_config = Config.model_validate(config_data)
         except (json.JSONDecodeError, ValueError) as e:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+        # Restore secrets that GET /api/config/raw redacted for display, so
+        # editing a non-secret field and saving doesn't clobber api keys/tokens.
+        _restore_masked_secrets(container.config, new_config)
+        container.config = new_config
         container.persist_config()
         return {"ok": True}
 
