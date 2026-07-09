@@ -11,11 +11,11 @@
   </p>
 </div>
 
-🐈 **xbot** is an **ultra-lightweight** personal AI assistant framework inspired by [OpenClaw](https://github.com/openclaw/openclaw).
+🐈 **xbot** is a **lightweight** personal AI assistant framework built on Claude SDK.
 
-⚡️ Delivers core agent functionality with **99% fewer lines of code** than OpenClaw.
+⚡️ Delivers enterprise-grade agent functionality with minimal overhead.
 
-📏 Real-time line count: run `bash core_agent_lines.sh` to verify anytime.
+🔧 Extensible architecture with pluggable channels, tools, and memory systems.
 
 ## 📢 Latest Updates
 
@@ -78,19 +78,17 @@
 
 ## 🌟 Key Features
 
-🪶 **Ultra-Lightweight**: A super lightweight implementation of OpenClaw — 99% smaller, significantly faster.
+🔌 **Multi-Channel**: Connect to 11+ chat platforms (Feishu, Telegram, Discord, DingTalk, Slack, QQ, WhatsApp, Email, Matrix, Wecom, Mochat).
 
-🔬 **Research-Ready**: Clean, readable code that's easy to understand, modify, and extend for research.
+🧠 **Long-term Memory**: Persistent memory with reme-ai integration for context retention across sessions.
 
-⚡️ **Lightning Fast**: Minimal footprint means faster startup, lower resource usage, and quicker iterations.
+🖼️ **Multimodal Support**: Image, audio, and file attachments with vision recognition.
 
-💎 **Easy-to-Use**: One-click to deploy and you're ready to go.
+🛠️ **Tool Ecosystem**: Built-in tools (shell, file, web search, web fetch) + MCP server integration.
 
-🔌 **Pluggable Architecture**: Agent Router with Claude SDK backend and clear extension points.
+🔐 **Enterprise Security**: Capability-based permission system, workspace sandboxing, and access control.
 
-🧠 **Advanced Memory**: Token-based memory with reme-ai integration for long-term context retention.
-
-🛡️ **Capability-Based Security**: Fine-grained permission control with capability policies.
+⚙️ **Flexible Deployment**: CLI, Gateway service, Docker, or Kubernetes — deploy however you like.
 
 ## 🏗️ Architecture
 
@@ -127,18 +125,19 @@ The router provides:
 - [Project Structure](#-project-structure)
 - [Contribute & Roadmap](#-contribute--roadmap)
 
-## ✨ Features
+## ✨ What Can xbot Do?
 
-xbot supports a wide range of capabilities:
-
-- 📈 **24/7 Real-Time Market Analysis** — Discovery, insights, and trends
-- 🚀 **Full-Stack Software Engineer** — Develop, deploy, and scale
-- 📅 **Smart Daily Routine Manager** — Schedule, automate, and organize
-- 📚 **Personal Knowledge Assistant** — Learn, memory, and reasoning
+- 💬 **Chat Across Platforms** — One bot, 11+ channels (Feishu, Telegram, Discord, DingTalk, Slack, QQ, WhatsApp, Email, Matrix, Wecom, Mochat)
+- 🧠 **Remember Context** — Long-term memory with reme-ai integration, never forget important details
+- 🖼️ **See Images** — Multimodal vision support for image recognition and analysis
+- 🔧 **Use Tools** — Shell commands, file operations, web search, web fetch, and MCP server integration
+- ⏰ **Scheduled Tasks** — Cron jobs, heartbeat monitoring, and proactive reminders
+- 👥 **Multi-Agent** — Crew system with specialized roles and sub-agent orchestration
+- 🔐 **Secure by Default** — Capability-based permissions, workspace sandboxing, access control
 
 ## 🖥️ WebUI
 
-xbot ships with a standalone WebUI adapter that reuses the nanobot-style frontend while keeping runtime integration low-intrusion.
+xbot ships with a built-in WebUI for management and monitoring.
 
 Start it with:
 
@@ -148,10 +147,9 @@ xbot webui serve
 
 Notes:
 
-- The current WebUI runs in single-admin mode. Default login is `admin` / `nanobot`, and you should change the password immediately after first login.
-- Supported core pages are `Dashboard`, `Chat`, `Channels`, `Tools`, `Settings`, and `System Config`.
-- The WebUI exposes xbot-native capabilities only. Unsupported nanobot-specific features are hidden or downgraded instead of being emulated.
-- Channel and MCP runtime status are shown from the adapter's live integration surface; disconnected items are reported explicitly.
+- The WebUI runs in single-admin mode. Default login is `admin` / `admin`, and you should change the password immediately after first login.
+- Supported core pages: `Dashboard`, `Chat`, `Channels`, `Tools`, `Settings`, and `System Config`.
+- Channel and MCP runtime status are shown from the live integration surface; disconnected items are reported explicitly.
 
 ## 📦 Install
 
@@ -484,7 +482,7 @@ pip install xbot[matrix]
       "homeserver": "https://matrix.org",
       "userId": "@xbot:matrix.org",
       "accessToken": "syt_xxx",
-      "deviceId": "NANOBOT01",
+      "deviceId": "XBOT01",
       "e2eeEnabled": true,
       "allowFrom": ["@your_user:matrix.org"],
       "groupPolicy": "open",
@@ -847,7 +845,7 @@ xbot currently uses a single backend (`claude_sdk`) through the Agent Router:
   "agents": {
     "type": "claude_sdk",
     "defaults": {
-      "model": "anthropic/claude-sonnet-4-6",
+      "model": "anthropic/claude-sonnet-4-20250514",
       "provider": "anthropic"
     }
   }
