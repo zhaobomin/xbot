@@ -117,6 +117,9 @@ class CronService:
         self._timer_task: asyncio.Task | None = None
         self._running = False
         self._load_failed = False  # Track if last load attempt failed
+        # Per-job execution timeout. A single stuck job (e.g. an MCP tool that
+        # never returns) cannot block the whole scheduler longer than this.
+        self.job_timeout_s: float = 300.0
         self._task_registry = ServiceTaskRegistry(error_reporter=self._report_task_error)
 
     @staticmethod
@@ -316,8 +319,10 @@ class CronService:
             if j.enabled and j.state.next_run_at_ms and now >= j.state.next_run_at_ms
         ]
 
-        for job in due_jobs:
-            await self._execute_job(job)
+        # Run due jobs concurrently so one slow/stuck job (bounded by
+        # job_timeout_s) doesn't delay the others or block re-arming the timer.
+        if due_jobs:
+            await asyncio.gather(*(self._execute_job(job) for job in due_jobs))
 
         try:
             self._save_store()
@@ -331,12 +336,20 @@ class CronService:
 
         try:
             if self.on_job:
-                await self.on_job(job)
+                await asyncio.wait_for(
+                    self.on_job(job), timeout=self.job_timeout_s
+                )
 
             job.state.last_status = "ok"
             job.state.last_error = None
             logger.info("Cron: job '%s' completed", job.name)
 
+        except asyncio.TimeoutError:
+            job.state.last_status = "error"
+            job.state.last_error = f"job timed out after {self.job_timeout_s:g}s"
+            logger.error(
+                "Cron: job '%s' timed out after %ss", job.name, self.job_timeout_s
+            )
         except Exception as e:
             job.state.last_status = "error"
             job.state.last_error = str(e)

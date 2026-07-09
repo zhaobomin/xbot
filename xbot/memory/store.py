@@ -350,7 +350,6 @@ class MemoryConsolidator:
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
         self._locks: dict[str, asyncio.Lock] = {}
-        self._store_lock = asyncio.Lock()
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""
@@ -366,9 +365,14 @@ class MemoryConsolidator:
             self._locks.pop(session_key, None)
 
     async def consolidate_messages(self, messages: list[dict[str, object]]) -> bool:
-        """Archive a selected message chunk into persistent memory."""
-        async with self._store_lock:
-            return await self.store.consolidate(messages, self.backend)
+        """Archive a selected message chunk into persistent memory.
+
+        No global lock is held across the (10-30s) LLM call so that
+        consolidation in one session doesn't block message handling in
+        another. Per-session serialization is still provided by the
+        session-level lock from :meth:`get_lock`.
+        """
+        return await self.store.consolidate(messages, self.backend)
 
     def pick_consolidation_boundary(
         self,
@@ -416,8 +420,11 @@ class MemoryConsolidator:
 
     def estimate_session_prompt_tokens(self, session: ConversationSession) -> tuple[int, str]:
         """Estimate current prompt size for the normal session history view."""
+        from xbot.platform.bus.events import parse_session_key
+
         history = session.get_history(max_messages=0)
-        channel, chat_id = (session.key.split(":", 1) if ":" in session.key else (None, None))
+        _channel, _chat_id = parse_session_key(session.key)
+        channel, chat_id = (_channel or None, _chat_id or None)
         probe_messages = self._build_messages(
             history=history,
             current_message="[token-probe]",

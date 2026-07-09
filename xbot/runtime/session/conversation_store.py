@@ -208,12 +208,25 @@ class ConversationStore:
         return self.legacy_sessions_dir / self._safe_session_filename(key)
 
     def _session_paths_for_read(self, key: str) -> list[Path]:
-        return [
+        paths = [
             self._get_session_path(key),
             self._get_old_session_path(key),
             self._get_legacy_session_path(key),
             self._get_old_legacy_session_path(key),
         ]
+        # Backward compatibility: sessions written before the `im:` namespace
+        # prefix were stored under the bare `{channel}:{chat_id}` key. Fall
+        # back to those paths so upgraded IM users keep their conversation
+        # history instead of starting an empty session.
+        if key.startswith("im:"):
+            legacy_key = key[3:]
+            paths.extend([
+                self._get_session_path(legacy_key),
+                self._get_old_session_path(legacy_key),
+                self._get_legacy_session_path(legacy_key),
+                self._get_old_legacy_session_path(legacy_key),
+            ])
+        return paths
 
     def _session_paths_for_delete(self, key: str) -> list[Path]:
         seen: set[Path] = set()
@@ -482,6 +495,8 @@ class ConversationStore:
         Returns:
             List of session info dicts.
         """
+        from xbot.platform.bus.events import parse_session_key
+
         sessions_by_key: dict[str, dict[str, Any]] = {}
 
         for path in self.sessions_dir.glob("*.jsonl"):
@@ -499,7 +514,11 @@ class ConversationStore:
                                 line = line.strip()
                                 if not line:
                                     continue
-                                msg = json.loads(line)
+                                try:
+                                    msg = json.loads(line)
+                                except json.JSONDecodeError:
+                                    logger.warning("Skipping corrupt JSONL row in %s: %s", path, line[:100])
+                                    continue
                                 if msg.get("_type") == "metadata":
                                     continue
                                 content = self._message_preview(msg.get("content"))
@@ -512,7 +531,7 @@ class ConversationStore:
                                     last_message_at = msg["timestamp"]
                             item = {
                                 "key": key,
-                                "channel": key.split(":", 1)[0],
+                                "channel": parse_session_key(key)[0],
                                 "first_message": first_message,
                                 "last_message": last_message,
                                 "created_at": data.get("created_at"),

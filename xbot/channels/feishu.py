@@ -193,12 +193,17 @@ class FeishuChannel(BaseChannel):
         return True, "ok"
 
     def _kill_stale_ws_workers(self) -> None:
-        """Kill any stale feishu worker processes left over from previous runs.
+        """Kill stale feishu worker processes left over from previous runs.
 
         When the gateway is force-killed (SIGKILL), worker subprocesses may
         survive as orphans (ppid becomes 1).  If not cleaned up, the stale
         worker will also hold a WebSocket connection to Feishu, causing
         message delivery issues.
+
+        To avoid killing workers belonging to *other* xbot instances on the
+        same host, only workers whose parent is THIS gateway (ppid == our pid)
+        or orphans (ppid == 1) are targeted. Active workers of other instances
+        (ppid == their gateway pid) are left alone.
         """
         import signal
         import subprocess
@@ -211,6 +216,7 @@ class FeishuChannel(BaseChannel):
                 text=True,
             )
             if result.returncode == 0:
+                gateway_pid = os.getpid()
                 for line in result.stdout.strip().split("\n"):
                     pid = line.strip()
                     if not pid:
@@ -218,7 +224,14 @@ class FeishuChannel(BaseChannel):
                     try:
                         pid_int = int(pid)
                         # Don't kill ourselves
-                        if pid_int == os.getpid():
+                        if pid_int == gateway_pid:
+                            continue
+                        # Only target our own children or orphans (ppid==1);
+                        # never kill another instance's active worker.
+                        ppid = self._read_parent_pid(pid_int)
+                        if ppid is None:
+                            continue
+                        if ppid != gateway_pid and ppid != 1:
                             continue
                         logger.info("Killing stale feishu worker process: %s", pid)
                         os.kill(pid_int, signal.SIGTERM)
@@ -226,6 +239,23 @@ class FeishuChannel(BaseChannel):
                         pass
         except Exception as exc:
             logger.debug("Error checking for stale workers: %s", exc)
+
+    @staticmethod
+    def _read_parent_pid(pid: int) -> int | None:
+        """Return the parent PID of ``pid``, or None if it cannot be determined."""
+        import subprocess
+
+        try:
+            result = subprocess.run(
+                ["ps", "-o", "ppid=", "-p", str(pid)],
+                capture_output=True,
+                text=True,
+            )
+            if result.returncode == 0:
+                return int(result.stdout.strip())
+        except (FileNotFoundError, ValueError, subprocess.SubprocessError):
+            pass
+        return None
 
     def _start_ws_worker(self) -> None:
         from xbot.channels.feishu_ws_worker import run_feishu_ws_worker
@@ -602,6 +632,11 @@ class FeishuChannel(BaseChannel):
             remaining = piece
             while remaining:
                 fit = cls._largest_fitting_prefix(element, remaining, max_chars_per_card)
+                if fit == 0:
+                    # Even a single character exceeds the card limit (degenerate
+                    # config). Drop this piece to avoid an infinite loop where
+                    # remaining would never shrink.
+                    break
                 if fit >= len(remaining):
                     current = remaining
                     remaining = ""

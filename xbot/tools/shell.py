@@ -4,6 +4,7 @@ import asyncio
 import os
 import re
 import shlex
+import signal
 from pathlib import Path
 from typing import Any
 
@@ -91,6 +92,10 @@ class ExecTool(Tool):
                 stderr=asyncio.subprocess.PIPE,
                 cwd=cwd,
                 env=env,
+                # Become a new process-group leader so a timeout can kill the
+                # whole group (piped/background children included) instead of
+                # orphaning them. No-op semantics on Windows.
+                start_new_session=True,
             )
 
             try:
@@ -99,6 +104,14 @@ class ExecTool(Tool):
                     timeout=self.timeout,
                 )
             except asyncio.TimeoutError:
+                # Kill the entire process group so piped/background children
+                # don't survive as orphans; fall back to killing just the
+                # shell PID on non-POSIX platforms.
+                if os.name == "posix" and process.pid:
+                    try:
+                        os.killpg(os.getpgid(process.pid), signal.SIGKILL)
+                    except (ProcessLookupError, PermissionError):
+                        pass
                 process.kill()
                 stdout, stderr = await process.communicate()
                 output_parts = []
@@ -248,7 +261,10 @@ class ExecTool(Tool):
         try:
             tokens = shlex.split(command, posix=os.name != "nt")
         except ValueError:
-            return []
+            # shlex fails on shell metacharacters/syntax errors; fall back to a
+            # naive split so restrict_to_workspace can still extract relative
+            # paths instead of silently skipping validation.
+            tokens = command.split()
 
         candidates: list[str] = []
         separators = {"|", "||", "&&", ";"}

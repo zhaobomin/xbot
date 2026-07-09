@@ -232,7 +232,8 @@ class ProvidersConfig(Base):
         """Return a provider config from fixed fields or custom_providers."""
         if not name:
             return None
-        provider_attr = name.replace("-", "_")
+        from xbot.platform.config.loader import _provider_name_to_snake
+        provider_attr = _provider_name_to_snake(name)
         fixed = getattr(self, provider_attr, None)
         if isinstance(fixed, ProviderConfig):
             return fixed

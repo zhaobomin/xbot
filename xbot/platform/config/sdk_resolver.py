@@ -6,7 +6,7 @@ Claude SDK backend so config validation and runtime use identical rules.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from xbot.platform.config.provider_registry import SDK_COMPATIBLE_PROVIDER_NAMES
 
@@ -65,8 +65,6 @@ def resolve_sdk_provider_and_model(
     """
     configured_provider = config.agents.defaults.provider
     configured_model = (config.agents.defaults.model or "").strip()
-    if not configured_model:
-        raise ValueError("agents.defaults.model must not be empty")
 
     if configured_provider == "auto":
         detected = detect_provider_from_model(configured_model)
@@ -79,6 +77,19 @@ def resolve_sdk_provider_and_model(
             )
     else:
         provider_name = configured_provider
+
+    # Schema contract: an empty model means "use the provider's first model".
+    if not configured_model:
+        provider_config = _get_provider_config(config, provider_name)
+        models = getattr(provider_config, "models", None) if provider_config else None
+        if models:
+            configured_model = list(models)[0]
+
+    if not configured_model:
+        raise ValueError(
+            "agents.defaults.model is empty and provider "
+            f"'{provider_name}' has no models configured"
+        )
 
     if provider_name not in SDK_COMPATIBLE_PROVIDER_NAMES:
         compatible = ", ".join(sorted(SDK_COMPATIBLE_PROVIDER_NAMES))
@@ -96,16 +107,20 @@ def resolve_sdk_provider_and_model(
     return provider_name, normalize_sdk_model_name(configured_model, provider_name)
 
 
-def _has_api_key(config: "Config", provider_name: str) -> bool:
+def _get_provider_config(config: "Config", provider_name: str) -> Any:
+    """Return the ProviderConfig for a provider name, or None."""
     get_provider_config = getattr(config.providers, "get_provider_config", None)
     if callable(get_provider_config):
-        provider_config = get_provider_config(provider_name)
-    else:
-        provider_attr = provider_name.replace("-", "_")
-        provider_config = getattr(config.providers, provider_attr, None)
-        if not provider_config and hasattr(config.providers, "custom_providers"):
-            provider_config = config.providers.custom_providers.get(provider_attr)
+        return get_provider_config(provider_name)
+    provider_attr = provider_name.replace("-", "_")
+    provider_config = getattr(config.providers, provider_attr, None)
+    if not provider_config and hasattr(config.providers, "custom_providers"):
+        provider_config = config.providers.custom_providers.get(provider_attr)
+    return provider_config
 
+
+def _has_api_key(config: "Config", provider_name: str) -> bool:
+    provider_config = _get_provider_config(config, provider_name)
     if not provider_config:
         return False
     api_key = getattr(provider_config, "api_key", None)

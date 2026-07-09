@@ -396,7 +396,7 @@ def _migrate_provider_fields(data: dict) -> None:
         custom_providers = {}
         providers["customProviders"] = custom_providers
 
-    fixed_provider_keys = {"anthropic", "custom", "customProviders", "custom_providers"}
+    fixed_provider_keys = {"anthropic", "customProviders", "custom_providers"}
     for raw_name in list(providers.keys()):
         if raw_name in fixed_provider_keys:
             continue

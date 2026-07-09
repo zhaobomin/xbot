@@ -79,7 +79,8 @@ class ModelManager:
         Returns:
             模型列表，未配置时返回空列表
         """
-        provider_attr = self._provider_name.replace("-", "_")
+        from xbot.platform.config.loader import _provider_name_to_snake
+        provider_attr = _provider_name_to_snake(self._provider_name)
 
         # 先检查固定供应商
         provider_config = getattr(self._config.providers, provider_attr, None)
@@ -147,7 +148,8 @@ class ModelManager:
         from xbot.platform.config.provider_registry import get_provider_spec
 
         # 获取 provider 配置
-        provider_attr = self._provider_name.replace("-", "_")
+        from xbot.platform.config.loader import _provider_name_to_snake
+        provider_attr = _provider_name_to_snake(self._provider_name)
         provider_config = getattr(self._config.providers, provider_attr, None)
 
         if not provider_config and hasattr(self._config.providers, 'custom_providers'):

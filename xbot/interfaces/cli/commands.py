@@ -121,7 +121,8 @@ def _resolve_heartbeat_target(
         key = item.get("key") or ""
         if ":" not in key:
             continue
-        channel, chat_id = key.split(":", 1)
+        from xbot.platform.bus.events import parse_session_key
+        channel, chat_id = parse_session_key(key)
         if channel in {"cli", "system", "heartbeat"}:
             continue
         if channel.startswith("cron"):
@@ -1241,8 +1242,13 @@ def agent(
     else:
         resolved_session_key = _generate_cli_session_key()
 
-    if ":" in resolved_session_key:
-        cli_channel, cli_chat_id = resolved_session_key.split(":", 1)
+    # Strip the `im:` namespace prefix so IM sessions resumed via CLI resolve
+    # to their real channel (e.g. `slack`) rather than the literal `im`.
+    _session_key_for_split = (
+        resolved_session_key[3:] if resolved_session_key.startswith("im:") else resolved_session_key
+    )
+    if ":" in _session_key_for_split:
+        cli_channel, cli_chat_id = _session_key_for_split.split(":", 1)
     else:
         cli_channel, cli_chat_id = "cli", resolved_session_key
 

@@ -81,11 +81,20 @@ class ClientPool:
                     continue
 
                 logger.warning("Recycling unhealthy SDK client for session %s", session_key)
-                await self._disconnect_record(record, timeout=3.0)
+                # Mark disconnecting and remove from the pool BEFORE the await
+                # so a concurrent caller cannot observe this record in the
+                # "connected" state and reuse a client that is being torn down.
+                # Mirrors the capacity-eviction path in _pop_oldest_capacity_record_unlocked.
                 async with self._lock:
-                    if self._clients.get(session_key) is record:
-                        record.state = "disconnected"
-                        del self._clients[session_key]
+                    if not (
+                        self._clients.get(session_key) is record
+                        and record.state == "connected"
+                    ):
+                        # Another caller already recycled/replaced this record.
+                        continue
+                    record.state = "disconnecting"
+                    self._clients.pop(session_key, None)
+                await self._disconnect_record(record, timeout=3.0)
                 continue
 
             from claude_agent_sdk import ClaudeSDKClient
@@ -214,7 +223,7 @@ class ClientPool:
             logger.warning(f"Failed to disconnect client for {session_key}: {e}")
             await self._best_effort_force_disconnect(record.client, session_key)
             record.state = "disconnected"
-            return True
+            return False
 
     async def _best_effort_force_disconnect(self, client: Any, session_key: str) -> None:
         """Best-effort fallback when graceful disconnect fails."""

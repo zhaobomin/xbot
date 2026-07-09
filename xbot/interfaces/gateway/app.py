@@ -1008,12 +1008,13 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
-        existing = getattr(container.config.channels, channel_name, {})
+        safe_name = validate_safe_name(channel_name, "channel name")
+        existing = getattr(container.config.channels, safe_name, {})
         merged = dict(existing or {})
         merged.update(body)
-        setattr(container.config.channels, channel_name, merged)
+        setattr(container.config.channels, safe_name, merged)
         container.persist_config()
-        return {"name": channel_name, "config": _sanitize_public_config(merged)}
+        return {"name": safe_name, "config": _sanitize_public_config(merged)}
 
     @app.post("/api/channels/{channel_name}/reload")
     async def reload_channel(
@@ -1159,7 +1160,7 @@ def create_app(
         _get_user_from_auth_header(authorization)
         if body.enabled is not None:
             container.config.gateway.heartbeat.enabled = body.enabled
-            container.heartbeat.enabled = body.enabled
+            await container.heartbeat.set_enabled(body.enabled)
         if body.interval_s is not None:
             if body.interval_s < 1:
                 raise HTTPException(
@@ -1229,8 +1230,13 @@ def create_app(
             gateway.port = body.port
         if body.heartbeat_enabled is not None:
             gateway.heartbeat.enabled = body.heartbeat_enabled
-            container.heartbeat.enabled = body.heartbeat_enabled
+            await container.heartbeat.set_enabled(body.heartbeat_enabled)
         if body.heartbeat_interval_s is not None:
+            if body.heartbeat_interval_s < 1:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="heartbeat interval_s must be >= 1",
+                )
             gateway.heartbeat.interval_s = body.heartbeat_interval_s
             container.heartbeat.interval_s = body.heartbeat_interval_s
         container.persist_config()
@@ -1263,9 +1269,14 @@ def create_app(
     @app.get("/api/config/raw")
     async def get_raw_config(authorization: str | None = Header(default=None)) -> dict[str, str]:
         _get_user_from_auth_header(authorization)
+        # mode="json" serializes SecretStr -> "**********" so secrets are never
+        # exposed via the _json_default fallback; _sanitize_public_config adds
+        # a second layer for any plain-string sensitive fields (e.g. headers).
         return {
             "content": json.dumps(
-                container.config.model_dump(by_alias=True),
+                _sanitize_public_config(
+                    container.config.model_dump(by_alias=True, mode="json")
+                ),
                 ensure_ascii=False,
                 indent=2,
                 default=_json_default,
@@ -1354,7 +1365,25 @@ def create_app(
         _get_user_from_auth_header(authorization)
         if not (file.filename or "").endswith(".zip"):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Only .zip files are accepted")
-        data = await file.read()
+
+        # Guards against zip-bomb / resource-exhaustion DoS: cap upload size,
+        # entry count, and total uncompressed size before extracting.
+        MAX_ZIP_SIZE = 50 * 1024 * 1024  # 50 MB compressed
+        MAX_ENTRIES = 10_000
+        MAX_UNCOMPRESSED = 100 * 1024 * 1024  # 100 MB decompressed
+
+        contents = b""
+        while True:
+            chunk = await file.read(64 * 1024)
+            if not chunk:
+                break
+            contents += chunk
+            if len(contents) > MAX_ZIP_SIZE:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail="Zip file exceeds 50MB limit",
+                )
+        data = contents
         backups_dir = (container.data_dir or container.config.workspace_path) / "backups"
         backups_dir.mkdir(parents=True, exist_ok=True)
         backup_path = backups_dir / f"workspace-backup-{datetime.now().strftime('%Y%m%d-%H%M%S')}.zip"
@@ -1365,6 +1394,18 @@ def create_app(
         extracted_path = workspace_parent / f".workspace-import-{secrets.token_hex(8)}"
         staged_old_path = workspace_parent / f".workspace-import-old-{secrets.token_hex(8)}"
         with zipfile.ZipFile(BytesIO(data), "r") as zf:
+            entries = zf.infolist()
+            if len(entries) > MAX_ENTRIES:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Too many zip entries: {len(entries)} > {MAX_ENTRIES}",
+                )
+            total_uncompressed = sum(info.file_size for info in entries)
+            if total_uncompressed > MAX_UNCOMPRESSED:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Uncompressed size exceeds 100MB limit",
+                )
             for member in zf.namelist():
                 _validate_workspace_zip_member(member, extracted_path)
             extracted_path.mkdir(parents=True, exist_ok=True)
@@ -1728,11 +1769,16 @@ def create_app(
                 )
                 owned_task_keys.add(active_session_key)
         except WebSocketDisconnect:
+            pass
+        finally:
+            # Cancel any in-flight agent turns on every exit path — client
+            # disconnect, oversized/malformed message return, or error — so
+            # the session slot is released and a reconnect isn't blocked by
+            # an "already running" ghost task.
             for key in list(owned_task_keys):
                 task = active_tasks.pop(key, None)
                 if task is not None and not task.done():
                     task.cancel()
-            return
 
     @app.get("/{full_path:path}", response_class=HTMLResponse)
     async def spa_fallback(full_path: str) -> str:

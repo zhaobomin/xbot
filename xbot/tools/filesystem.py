@@ -291,7 +291,16 @@ class EditFileTool(_FsTool):
                     new_content = content.replace(match, norm_new)
                 else:
                     new_content = content
-                    for fragment in dict.fromkeys(_find_fuzzy_match_fragments(content, old_text.replace("\r\n", "\n"))):
+                    fragments = list(
+                        dict.fromkeys(
+                            _find_fuzzy_match_fragments(content, old_text.replace("\r\n", "\n"))
+                        )
+                    )
+                    # Replace longer fragments first so a shorter fragment that
+                    # is a substring of a longer match doesn't corrupt the longer
+                    # match (and consume it) before the longer one is replaced.
+                    fragments.sort(key=len, reverse=True)
+                    for fragment in fragments:
                         new_content = new_content.replace(fragment, norm_new)
             else:
                 new_content = content.replace(match, norm_new, 1)

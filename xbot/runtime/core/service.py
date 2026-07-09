@@ -7,6 +7,7 @@ combining the core logic from ClaudeSDKBackend and AgentRuntime.
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import time
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from xbot.memory.store import MemoryConsolidator
 from xbot.platform.bus.events import InboundMessage, OutboundMessage
 from xbot.platform.logging.core import get_logger
 from xbot.platform.utils.file_reader import FileType, classify_file, format_file_reference
+from xbot.platform.utils.helpers import detect_image_mime
 from xbot.runtime.core.client_pool import ClientPool
 from xbot.runtime.core.command_handlers import LocalCommandHandler
 from xbot.runtime.core.context.builder import ContextBuilder
@@ -338,11 +340,25 @@ class AgentService:
             await self._refresh_session_commands_from_client(context.session_key, client)
 
             query_prompt = self._build_query_prompt(context.prompt, context.media)
-            # Send the query - SDK accepts string directly
+            # Send the query - SDK accepts string directly or AsyncIterable of frames
             logger.info(f"[AgentService] Sending query for {context.session_key}")
             try:
                 query_timeout = self._get_sdk_query_timeout()
-                await asyncio.wait_for(client.query(query_prompt), timeout=query_timeout)
+                if isinstance(query_prompt, list):
+                    # Multimodal content blocks — wrap in user frame and stream
+                    frame = {
+                        "type": "user",
+                        "message": {"role": "user", "content": query_prompt},
+                        "parent_tool_use_id": None,
+                        "session_id": "default",
+                    }
+
+                    async def _frame_iter():
+                        yield frame
+
+                    await asyncio.wait_for(client.query(_frame_iter()), timeout=query_timeout)
+                else:
+                    await asyncio.wait_for(client.query(query_prompt), timeout=query_timeout)
                 if sm:
                     self._dispatch_state_event(
                         context.session_key,
@@ -588,12 +604,18 @@ class AgentService:
         return False
 
     @staticmethod
-    def _build_query_prompt(prompt: str, media: list[Any] | None) -> str:
-        """Build SDK query payload by injecting media references into prompt text."""
+    def _build_query_prompt(prompt: str, media: list[Any] | None) -> str | list[dict[str, Any]]:
+        """Build SDK query payload.
+
+        Returns:
+            str: Plain text prompt (no images).
+            list[dict]: Anthropic content blocks when images are present
+                (multimodal message for vision-capable models).
+        """
         if not media:
             return prompt
 
-        image_lines: list[str] = []
+        image_blocks: list[dict[str, Any]] = []
         audio_lines: list[str] = []
         file_lines: list[str] = []
 
@@ -609,7 +631,31 @@ class AgentService:
                 abs_path = str(path_obj.resolve())
                 file_type = classify_file(abs_path)
                 if file_type is FileType.IMAGE:
-                    image_lines.append(f"[Image: source: {abs_path}]")
+                    # Read image and encode as base64 content block
+                    try:
+                        raw_bytes = path_obj.read_bytes()
+                        mime = detect_image_mime(raw_bytes)
+                        if mime and mime.startswith("image/"):
+                            b64 = base64.b64encode(raw_bytes).decode()
+                            image_blocks.append({
+                                "type": "image",
+                                "source": {
+                                    "type": "base64",
+                                    "media_type": mime,
+                                    "data": b64,
+                                },
+                            })
+                        else:
+                            # Unsupported image format, fall back to text reference
+                            image_blocks.append({
+                                "type": "text",
+                                "text": f"[Image: unsupported format at {abs_path}]",
+                            })
+                    except OSError:
+                        image_blocks.append({
+                            "type": "text",
+                            "text": f"[Image: failed to read {abs_path}]",
+                        })
                 elif file_type is FileType.AUDIO:
                     audio_lines.append(f"[Audio: source: {abs_path}]")
                 else:
@@ -619,21 +665,30 @@ class AgentService:
             # Preserve unresolved references so model can still reason or ask follow-up.
             file_lines.append(f"[附件路径: {path_text}]")
 
+        # Build text parts for non-image media
         media_sections: list[str] = []
-        if image_lines:
-            media_sections.append("用户附加了以下图片:\n" + "\n".join(image_lines))
         if audio_lines:
             media_sections.append("用户附加了以下音频:\n" + "\n".join(audio_lines))
         if file_lines:
             media_sections.append("用户附加了以下文件:\n" + "\n".join(file_lines))
 
-        if not media_sections:
-            return prompt
-
-        prefix = "\n\n".join(media_sections)
+        text_parts: list[str] = []
+        if media_sections:
+            text_parts.append("\n\n".join(media_sections))
         if prompt.strip():
-            return f"{prefix}\n\n用户请求:\n{prompt}"
-        return prefix
+            text_parts.append(prompt)
+
+        text_content = "\n\n".join(text_parts) if text_parts else ""
+
+        # If no images, return plain string
+        if not image_blocks:
+            return text_content or prompt
+
+        # Build multimodal content blocks: images first, then text
+        content_blocks: list[dict[str, Any]] = list(image_blocks)
+        if text_content:
+            content_blocks.append({"type": "text", "text": text_content})
+        return content_blocks
 
     async def shutdown(self) -> None:
         """Shutdown the agent service and release resources."""
@@ -2631,6 +2686,10 @@ class AgentService:
             media=media or [],
         )
 
+        # Persist the user message before processing so it survives even if
+        # process() raises — aligns with the workflow-mode persistence order.
+        self._persist_user_message(session_key, content)
+
         try:
             final_result_text = ""
             last_content_text = ""
@@ -2693,8 +2752,7 @@ class AgentService:
             if not final_result_text and last_content_text:
                 final_result_text = last_content_text
 
-            # Persist messages to conversation store
-            self._persist_user_message(session_key, content)
+            # Persist assistant response (user message already persisted above)
             if final_result_text:
                 self._persist_assistant_message(session_key, final_result_text)
 

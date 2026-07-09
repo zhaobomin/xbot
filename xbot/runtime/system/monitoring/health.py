@@ -18,6 +18,19 @@ from xbot.platform.logging.core import get_logger
 logger = get_logger(__name__)
 
 
+def _is_agent_ready(agent_status: Any) -> bool:
+    """Return True when the agent status indicates readiness.
+
+    Normalizes both the legacy string form (``"running"``/``"unknown"``/...) and
+    the dict form ``{"state": ...}`` used by some callers, so every readiness
+    route applies the same rule. ``"unknown"`` (the pre-init default) is treated
+    as ready to preserve the v2.0.14 contract where startup returned 200.
+    """
+    if isinstance(agent_status, dict):
+        agent_status = agent_status.get("state", agent_status.get("status", "unknown"))
+    return agent_status in ("running", "unknown")
+
+
 @dataclass
 class HealthStatus:
     """Health status for a component."""
@@ -160,14 +173,11 @@ class HealthCheckService:
         """Readiness probe - checks critical components."""
         # Critical components: agent and at least one channel
         agent_status = self._status.get("agent", "unknown")
-        if isinstance(agent_status, dict):
-            agent_status = agent_status.get("state", agent_status.get("status", "unknown"))
         channels = self._status.get("channels", [])
 
-        ready = (
-            agent_status == "running"
-            and len(channels) > 0
-        )
+        ready = _is_agent_ready(agent_status) and len(channels) > 0
+        if isinstance(agent_status, dict):
+            agent_status = agent_status.get("state", agent_status.get("status", "unknown"))
 
         result = {
             "ready": ready,
@@ -276,7 +286,9 @@ def create_health_router(health: "HealthCheckService") -> Any:
         """Readiness probe - checks critical components."""
         agent_status = health._status.get("agent", "unknown")
         channels = health._status.get("channels", [])
-        ready = agent_status == "running" and len(channels) > 0
+        ready = _is_agent_ready(agent_status) and len(channels) > 0
+        if isinstance(agent_status, dict):
+            agent_status = agent_status.get("state", agent_status.get("status", "unknown"))
         result = {
             "ready": ready,
             "agent": agent_status,

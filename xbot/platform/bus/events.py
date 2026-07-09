@@ -36,6 +36,23 @@ def to_canonical_session_key(channel: str, chat_id: str, override: str | None = 
     return f"{normalized_channel}:{normalized_chat_id}"
 
 
+def parse_session_key(key: str) -> tuple[str, str]:
+    """Split a session key into (channel, chat_id).
+
+    Strips the leading ``im:`` namespace prefix introduced for IM channels so
+    that callers receive the real channel (e.g. ``slack``) rather than the
+    literal ``im``. Symmetric with :func:`to_canonical_session_key`.
+    """
+    if not key:
+        return "", ""
+    if key.startswith("im:"):
+        key = key[3:]
+    if ":" in key:
+        channel, chat_id = key.split(":", 1)
+        return channel, chat_id
+    return key, ""
+
+
 @dataclass
 class InboundMessage:
     """Message received from a chat channel."""

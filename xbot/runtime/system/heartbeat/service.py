@@ -97,9 +97,9 @@ class HeartbeatService:
         """Configure runtime callbacks used by heartbeat execution."""
         if llm_call is not _UNSET and llm_call is not None:
             self._llm_call = llm_call
-        if on_execute is not _UNSET:
+        if on_execute is not _UNSET and on_execute is not None:
             self.on_execute = on_execute
-        if on_notify is not _UNSET:
+        if on_notify is not _UNSET and on_notify is not None:
             self.on_notify = on_notify
 
     @staticmethod
@@ -178,6 +178,18 @@ class HeartbeatService:
             self._task.cancel()
             self._task = None
 
+    async def set_enabled(self, enabled: bool) -> None:
+        """Toggle heartbeat at runtime so WebUI/API changes take effect immediately.
+
+        - Enabling when the loop is stopped (e.g. was disabled at startup) starts it.
+        - Disabling when the loop is running stops it, releasing the periodic task.
+        """
+        self.enabled = enabled
+        if enabled and not self._running:
+            await self.start()
+        elif not enabled and self._running:
+            self.stop()
+
     async def shutdown(self) -> None:
         """Stop the heartbeat service and wait for owned tasks to finish."""
         self.stop()
@@ -190,6 +202,12 @@ class HeartbeatService:
                 await asyncio.sleep(self.interval_s)
                 if not self._running:
                     break
+
+                # Honor runtime enabled toggles (WebUI/API PATCH). When disabled
+                # we skip the tick without exiting, so a later re-enable resumes
+                # immediately even if stop() was not called.
+                if not self.enabled:
+                    continue
 
                 # 检查上一个任务是否仍在运行
                 if self._running_tick is not None and not self._running_tick.done():
