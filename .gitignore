@@ -31,3 +31,4 @@ node_modules/
 .ruff_cache/
 .codegraph/
 .workbuddy/
+MagicMock/

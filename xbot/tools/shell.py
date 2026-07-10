@@ -261,10 +261,7 @@ class ExecTool(Tool):
         try:
             tokens = shlex.split(command, posix=os.name != "nt")
         except ValueError:
-            # shlex fails on shell metacharacters/syntax errors; fall back to a
-            # naive split so restrict_to_workspace can still extract relative
-            # paths instead of silently skipping validation.
-            tokens = command.split()
+            return []
 
         candidates: list[str] = []
         separators = {"|", "||", "&&", ";"}

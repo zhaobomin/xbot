@@ -364,7 +364,7 @@ class CrewConfigValidator:
 
         # Check for orphan tasks (no downstream consumers)
         downstream: dict[str, int] = {name: 0 for name in task_deps}
-        for name, deps in task_deps.items():
+        for _name, deps in task_deps.items():
             for dep in deps:
                 if dep in downstream:
                     downstream[dep] += 1

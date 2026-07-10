@@ -126,7 +126,7 @@ class HeartbeatService:
         from xbot.platform.utils.helpers import current_time_str
 
         response = None
-        for attempt, delay in enumerate((0, 1, 2, 4)):
+        for _attempt, delay in enumerate((0, 1, 2, 4)):
             if delay:
                 await asyncio.sleep(delay)
             response = await self._llm_call(

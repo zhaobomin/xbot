@@ -159,6 +159,11 @@ class _FakeHeartbeatService:
             "heartbeat_file": str(self.workspace / "HEARTBEAT.md"),
         }
 
+    async def set_enabled(self, enabled: bool) -> None:
+        """Mirror HeartbeatService.set_enabled for the PATCH endpoint path."""
+        self.enabled = enabled
+        self._running = enabled
+
 
 class _StrictHeartbeatService(_FakeHeartbeatService):
     def __init__(self) -> None:

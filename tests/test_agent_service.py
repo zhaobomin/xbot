@@ -280,11 +280,25 @@ class TestAgentService:
                 pass
 
         mock_client.query.assert_awaited_once()
-        sent_prompt = mock_client.query.await_args.args[0]
-        assert "[Image: source:" in sent_prompt
-        assert str(image_path.resolve()) in sent_prompt
-        assert "[附件:" in sent_prompt
-        assert str(text_path.resolve()) in sent_prompt
+        sent_gen = mock_client.query.await_args.args[0]
+        # Multimodal: query receives an async iterator of user frames whose
+        # message content is a list of Anthropic content blocks.
+        frames = [frame async for frame in sent_gen]
+        assert len(frames) == 1
+        frame = frames[0]
+        assert frame["type"] == "user"
+        assert frame["message"]["role"] == "user"
+        content = frame["message"]["content"]
+        assert isinstance(content, list)
+        image_blocks = [b for b in content if b.get("type") == "image"]
+        assert len(image_blocks) == 1
+        assert image_blocks[0]["source"]["type"] == "base64"
+        assert image_blocks[0]["source"]["media_type"] == "image/png"
+        text_blocks = [b for b in content if b.get("type") == "text"]
+        assert text_blocks
+        combined_text = "".join(b["text"] for b in text_blocks)
+        assert str(text_path.resolve()) in combined_text
+        assert "请分析附件" in combined_text
 
     @pytest.mark.asyncio
     async def test_get_session_commands_default_no_connect(
@@ -612,9 +626,16 @@ class TestRunDispatch:
         assert frame["message"]["role"] == "user"
         assert frame["parent_tool_use_id"] is None
         assert frame["session_id"] == session_key
-        assert "用户附加了以下图片" in frame["message"]["content"]
-        assert str(image_path) in frame["message"]["content"]
-        assert "用户请求:\ndescribe" in frame["message"]["content"]
+        content = frame["message"]["content"]
+        # Multimodal: images become base64 content blocks instead of text refs.
+        assert isinstance(content, list)
+        image_blocks = [b for b in content if b.get("type") == "image"]
+        assert len(image_blocks) == 1
+        assert image_blocks[0]["source"]["type"] == "base64"
+        assert image_blocks[0]["source"]["media_type"] == "image/png"
+        text_blocks = [b for b in content if b.get("type") == "text"]
+        assert text_blocks
+        assert text_blocks[-1]["text"] == "describe"
 
     @pytest.mark.asyncio
     async def test_reset_session_removes_session_worker(self, config, shared_resources, bus):

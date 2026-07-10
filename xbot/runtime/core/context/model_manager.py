@@ -145,10 +145,9 @@ class ModelManager:
         Returns:
             Base URL 字符串
         """
-        from xbot.platform.config.provider_registry import get_provider_spec
-
         # 获取 provider 配置
         from xbot.platform.config.loader import _provider_name_to_snake
+        from xbot.platform.config.provider_registry import get_provider_spec
         provider_attr = _provider_name_to_snake(self._provider_name)
         provider_config = getattr(self._config.providers, provider_attr, None)
 

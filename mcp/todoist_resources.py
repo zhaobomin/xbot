@@ -5,6 +5,7 @@ This module defines the MCP resources for accessing and displaying
 Todoist data such as tasks, projects, and labels.
 """
 
+import asyncio
 import json
 from typing import Optional, Tuple
 
@@ -23,6 +24,17 @@ class TodoistResources:
             api_token: Todoist API token for authentication
         """
         self.api = TodoistAPI(api_token)
+
+    async def _run_sdk(self, fn, *args, **kwargs):
+        """Run blocking Todoist SDK calls outside the event loop.
+
+        The Todoist SDK methods (get_tasks/get_projects/...) perform synchronous
+        HTTP I/O. Calling them directly inside an ``async def`` would block the
+        MCP server's event loop for the whole request duration. Mirrors the
+        pattern in ``todoist_tools.py``.
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, lambda: fn(*args, **kwargs))
 
     async def get_tasks_resource(
         self,
@@ -58,7 +70,7 @@ class TodoistResources:
                 kwargs["label"] = label
 
             # Get tasks
-            tasks_iterator = self.api.get_tasks(**kwargs)
+            tasks_iterator = await self._run_sdk(self.api.get_tasks, **kwargs)
             tasks_list = list(tasks_iterator)
 
             # Convert tasks to dictionaries
@@ -164,7 +176,7 @@ class TodoistResources:
 
         try:
             # Get all projects
-            projects = self.api.get_projects()
+            projects = await self._run_sdk(self.api.get_projects)
 
             # Convert projects to dictionaries
             projects_data = [
@@ -235,7 +247,7 @@ class TodoistResources:
 
         try:
             # Get sections for the project
-            sections = self.api.get_sections(project_id=project_id)
+            sections = await self._run_sdk(self.api.get_sections, project_id=project_id)
 
             # Convert sections to dictionaries
             sections_data = [
@@ -296,7 +308,7 @@ class TodoistResources:
 
         try:
             # Get all labels
-            labels = self.api.get_labels()
+            labels = await self._run_sdk(self.api.get_labels)
 
             # Convert labels to dictionaries
             labels_data = [

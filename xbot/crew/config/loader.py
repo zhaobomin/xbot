@@ -101,7 +101,7 @@ class CrewConfigLoader:
 
         # Merge all configs in the chain
         merged = {}
-        for config_path, config in chain:
+        for _config_path, config in chain:
             merged = merge_configs(merged, config)
 
         # Extract variables from the merged config

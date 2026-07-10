@@ -43,6 +43,7 @@ export class WhatsAppClient {
   private sock: any = null;
   private options: WhatsAppClientOptions;
   private reconnecting = false;
+  private reconnectTimer: NodeJS.Timeout | null = null;
 
   constructor(options: WhatsAppClientOptions) {
     this.options = options;
@@ -97,8 +98,10 @@ export class WhatsAppClient {
         if (shouldReconnect && !this.reconnecting) {
           this.reconnecting = true;
           console.log('Reconnecting in 5 seconds...');
-          setTimeout(() => {
+          if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = setTimeout(() => {
             this.reconnecting = false;
+            this.reconnectTimer = null;
             this.connect().catch((error) => {
               console.error('Reconnect failed:', error);
               this.options.onStatus('disconnected');
@@ -106,6 +109,11 @@ export class WhatsAppClient {
           }, 5000);
         }
       } else if (connection === 'open') {
+        if (this.reconnectTimer) {
+          clearTimeout(this.reconnectTimer);
+          this.reconnectTimer = null;
+        }
+        this.reconnecting = false;
         console.log('✅ Connected to WhatsApp');
         this.options.onStatus('connected');
       }

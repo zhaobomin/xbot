@@ -23,12 +23,13 @@ def _is_agent_ready(agent_status: Any) -> bool:
 
     Normalizes both the legacy string form (``"running"``/``"unknown"``/...) and
     the dict form ``{"state": ...}`` used by some callers, so every readiness
-    route applies the same rule. ``"unknown"`` (the pre-init default) is treated
-    as ready to preserve the v2.0.14 contract where startup returned 200.
+    route applies the same rule. Only ``"running"`` counts as ready — the
+    ``"unknown"``/``"initializing"`` startup window returns 503 so traffic is
+    not routed to an instance that hasn't finished initializing.
     """
     if isinstance(agent_status, dict):
         agent_status = agent_status.get("state", agent_status.get("status", "unknown"))
-    return agent_status in ("running", "unknown")
+    return agent_status == "running"
 
 
 @dataclass

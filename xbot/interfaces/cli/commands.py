@@ -10,7 +10,7 @@ import sys
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from uuid import uuid4
 
 if sys.platform == "win32":
@@ -2663,7 +2663,7 @@ def _generate_markdown_report(manifest: dict, task_outputs: list) -> str:
     # Task outputs
     lines.append("## Task Outputs")
     lines.append("")
-    for i, task_output in enumerate(task_outputs, 1):
+    for _i, task_output in enumerate(task_outputs, 1):
         lines.append(f"### {task_output['file']}")
         lines.append("")
         lines.append("```")

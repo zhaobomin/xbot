@@ -272,20 +272,7 @@ class MemoryStore:
                 # Empty update - keep existing memory
                 logger.debug("Memory consolidation: empty memory_update, keeping existing memory")
             elif update != current_memory:
-                # Optimistic concurrency: another consolidation may have written
-                # MEMORY.md while the LLM call was in flight (there is no lock
-                # around the LLM call, so consolidations across sessions run
-                # concurrently). Re-read and only write if unchanged; otherwise
-                # skip to avoid clobbering the other update (lost-update). The
-                # skipped update's info is already preserved in HISTORY.md and
-                # will inform the next consolidation.
-                if self.read_long_term() == current_memory:
-                    self.write_long_term(update)
-                else:
-                    logger.info(
-                        "Memory consolidation: MEMORY.md changed during LLM call, "
-                        "skipping write to avoid lost-update"
-                    )
+                self.write_long_term(update)
 
             self._consecutive_failures = 0
             logger.info("Memory consolidation done for %s messages", len(messages))
@@ -363,6 +350,7 @@ class MemoryConsolidator:
         self._build_messages = build_messages
         self._get_tool_definitions = get_tool_definitions
         self._locks: dict[str, asyncio.Lock] = {}
+        self._store_lock = asyncio.Lock()
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
         """Return the shared consolidation lock for one session."""
@@ -380,12 +368,14 @@ class MemoryConsolidator:
     async def consolidate_messages(self, messages: list[dict[str, object]]) -> bool:
         """Archive a selected message chunk into persistent memory.
 
-        No global lock is held across the (10-30s) LLM call so that
-        consolidation in one session doesn't block message handling in
-        another. Per-session serialization is still provided by the
-        session-level lock from :meth:`get_lock`.
+        The store-level lock serializes consolidation across sessions because
+        ``MemoryStore.consolidate`` performs a read-modify-write on the shared
+        ``MEMORY.md`` (read -> LLM -> write). Without serialization, two
+        concurrent consolidations would lose updates. Per-session serialization
+        is additionally provided by :meth:`get_lock`.
         """
-        return await self.store.consolidate(messages, self.backend)
+        async with self._store_lock:
+            return await self.store.consolidate(messages, self.backend)
 
     def pick_consolidation_boundary(
         self,

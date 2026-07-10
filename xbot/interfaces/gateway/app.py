@@ -842,7 +842,6 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, str]:
         _get_user_from_auth_header(authorization)
-        session_key  # reserved for future per-session memory lookup
         workspace = container.config.workspace_path
         memory_file = workspace / "MEMORY.md"
         history_file = workspace / "HISTORY.md"
@@ -888,7 +887,7 @@ def create_app(
 
         # Legacy WebUI compatibility: expose the historical `custom` provider
         # first, while storing it in the new custom_providers map.
-        container.config.providers.custom
+        _ = container.config.providers.custom  # ensure legacy 'custom' provider is registered
 
         for name, value in container.config.providers.custom_providers.items():
             raw_key = value.api_key.get_secret_value() if hasattr(value.api_key, "get_secret_value") else ""
@@ -973,7 +972,7 @@ def create_app(
 
         # 查找供应商
         fixed_names = {"anthropic"}
-        container.config.providers.custom
+        _ = container.config.providers.custom  # ensure legacy 'custom' provider is registered
         if safe_name in fixed_names:
             provider = getattr(container.config.providers, safe_name)
         elif safe_name in container.config.providers.custom_providers:
@@ -1410,9 +1409,9 @@ def create_app(
 
         # Guards against zip-bomb / resource-exhaustion DoS: cap upload size,
         # entry count, and total uncompressed size before extracting.
-        MAX_ZIP_SIZE = 50 * 1024 * 1024  # 50 MB compressed
-        MAX_ENTRIES = 10_000
-        MAX_UNCOMPRESSED = 100 * 1024 * 1024  # 100 MB decompressed
+        max_zip_size = 50 * 1024 * 1024  # 50 MB compressed
+        max_entries = 10_000
+        max_uncompressed = 100 * 1024 * 1024  # 100 MB decompressed
 
         contents = b""
         while True:
@@ -1420,7 +1419,7 @@ def create_app(
             if not chunk:
                 break
             contents += chunk
-            if len(contents) > MAX_ZIP_SIZE:
+            if len(contents) > max_zip_size:
                 raise HTTPException(
                     status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
                     detail="Zip file exceeds 50MB limit",
@@ -1437,13 +1436,13 @@ def create_app(
         staged_old_path = workspace_parent / f".workspace-import-old-{secrets.token_hex(8)}"
         with zipfile.ZipFile(BytesIO(data), "r") as zf:
             entries = zf.infolist()
-            if len(entries) > MAX_ENTRIES:
+            if len(entries) > max_entries:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Too many zip entries: {len(entries)} > {MAX_ENTRIES}",
+                    detail=f"Too many zip entries: {len(entries)} > {max_entries}",
                 )
             total_uncompressed = sum(info.file_size for info in entries)
-            if total_uncompressed > MAX_UNCOMPRESSED:
+            if total_uncompressed > max_uncompressed:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail="Uncompressed size exceeds 100MB limit",

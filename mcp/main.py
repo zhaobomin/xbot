@@ -7,9 +7,8 @@ It sets up the server and registers the tools and resources.
 
 from typing import Any, Dict, List, Optional, Tuple
 
-from mcp.server.fastmcp import Context, FastMCP
-
 from config import load_config
+from mcp.server.fastmcp import Context, FastMCP
 from todoist_resources import TodoistResources
 from todoist_tools import TodoistTools
 

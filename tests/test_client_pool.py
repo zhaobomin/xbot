@@ -60,8 +60,13 @@ class TestClientPool:
             mock_client.disconnect.assert_called_once()
 
     @pytest.mark.asyncio
-    async def test_disconnect_returns_true_after_force_disconnect(self, pool: ClientPool) -> None:
-        """Forced cleanup should still count as a successful disconnect."""
+    async def test_disconnect_returns_false_after_force_disconnect_failure(self, pool: ClientPool) -> None:
+        """Graceful disconnect failure surfaces as False even after best-effort force cleanup.
+
+        The force-disconnect fallback still runs (close is awaited) and the
+        record is removed from the pool, but the return value is False so
+        prune_idle/disconnect_all counts don't mask the graceful-failure trend.
+        """
         with patch("claude_agent_sdk.ClaudeSDKClient") as mock_client_class:
             mock_client = MagicMock()
             mock_client.connect = AsyncMock()
@@ -73,7 +78,7 @@ class TestClientPool:
 
             await pool.get_or_create("session:force", options=MagicMock())
 
-            assert await pool.disconnect("session:force") is True
+            assert await pool.disconnect("session:force") is False
             assert "session:force" not in pool.snapshot()["clients"]
             mock_client.close.assert_awaited_once()
 
