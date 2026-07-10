@@ -4,6 +4,7 @@ import asyncio
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -473,7 +474,6 @@ def test_frontend_data_queries_are_scoped_to_gateway_url() -> None:
         "hooks/use-channels.ts",
         "hooks/use-providers.ts",
         "hooks/use-mcp.ts",
-        "hooks/use-skills.ts",
         "hooks/useSkills.ts",
     ]:
         source = (frontend_dir / relative).read_text(encoding="utf-8")
@@ -748,6 +748,7 @@ def test_patch_channel_masks_secret_response_but_persists_plain_config(tmp_path:
 
 def test_patch_agent_config_persists_and_reloads(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
+    services.agent._memory_consolidator = SimpleNamespace(context_window_tokens=65_536)
     token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
@@ -758,11 +759,8 @@ def test_patch_agent_config_persists_and_reloads(tmp_path: Path) -> None:
             "model": "gpt-4.1-mini",
             "provider": "openai",
             "workspace": str(tmp_path / "alt-workspace"),
-            "max_tokens": 4096,
-            "temperature": 0.7,
             "max_iterations": 12,
             "context_window_tokens": 32768,
-            "reasoning_effort": "high",
             "send_progress": False,
         },
     )
@@ -771,18 +769,35 @@ def test_patch_agent_config_persists_and_reloads(tmp_path: Path) -> None:
     body = response.json()
     assert body["model"] == "gpt-4.1-mini"
     assert body["provider"] == "openai"
-    assert body["max_tokens"] == 4096
-    assert body["temperature"] == 0.7
     assert body["max_iterations"] == 12
     assert body["context_window_tokens"] == 32768
-    assert body["reasoning_effort"] == "high"
     assert services.config.agents.defaults.model == "gpt-4.1-mini"
-    assert services.config.agents.defaults.max_tokens == 4096
-    assert services.config.agents.defaults.temperature == 0.7
-    assert services.config.agents.defaults.max_tool_iterations == 12
+    assert services.config.agents.claude_sdk.max_turns == 12
     assert services.config.agents.defaults.context_window_tokens == 32768
-    assert services.config.agents.defaults.reasoning_effort == "high"
+    assert services.agent._memory_consolidator.context_window_tokens == 32768
     assert services.config.channels.send_progress is False
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"max_iterations": 0},
+        {"max_iterations": 101},
+        {"context_window_tokens": 1023},
+        {"context_window_tokens": 1_000_001},
+    ],
+)
+def test_patch_agent_config_rejects_invalid_runtime_limits(tmp_path: Path, payload: dict[str, int]) -> None:
+    client, _services = _build_client(tmp_path)
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+
+    response = client.patch(
+        "/api/config/agent",
+        headers={"Authorization": f"Bearer {token}"},
+        json=payload,
+    )
+
+    assert response.status_code == 422
 
 
 def test_session_memory_endpoint_reads_canonical_memory_directory(tmp_path: Path) -> None:

@@ -284,8 +284,6 @@ function ProvidersTab() {
 
 // ── Agent tab ─────────────────────────────────────────────────────────────────
 
-const REASONING_EFFORT_OPTIONS = ["__default__", "none", "low", "medium", "high"];
-
 function AgentTab() {
     const { t } = useTranslation();
     const { data: agent, isLoading: loadingAgent } = useAgentSettings();
@@ -300,11 +298,8 @@ function AgentTab() {
 
     const [model, setModel] = useState("");
     const [provider, setProvider] = useState("");
-    const [maxTokens, setMaxTokens] = useState("");
-    const [temperature, setTemperature] = useState("");
     const [maxToolIter, setMaxToolIter] = useState("");
     const [memoryWindow, setMemoryWindow] = useState("");
-    const [reasoningEffort, setReasoningEffort] = useState("__default__");
     const [workspace, setWorkspace] = useState("");
     const [agentInited, setAgentInited] = useState(false);
     const [sendProgress, setSendProgress] = useState(true);
@@ -315,11 +310,8 @@ function AgentTab() {
     if (agent && !agentInited) {
         setModel(agent.model ?? "");
         setProvider(agent.provider ?? "");
-        setMaxTokens(String(agent.max_tokens ?? ""));
-        setTemperature(String(agent.temperature ?? ""));
         setMaxToolIter(String(agent.max_iterations ?? ""));
         setMemoryWindow(String(agent.context_window_tokens ?? ""));
-        setReasoningEffort(agent.reasoning_effort || "__default__");
         setWorkspace(agent.workspace ?? "");
         setSendProgress(agent.send_progress ?? true);
         setSendToolHints(agent.send_tool_hints ?? false);
@@ -330,11 +322,8 @@ function AgentTab() {
         updateAgent.mutate({
             model: model || undefined,
             provider: provider || undefined,
-            max_tokens: maxTokens ? Number(maxTokens) : undefined,
-            temperature: temperature ? Number(temperature) : undefined,
             max_iterations: maxToolIter ? Number(maxToolIter) : undefined,
             context_window_tokens: memoryWindow ? Number(memoryWindow) : undefined,
-            reasoning_effort: reasoningEffort && reasoningEffort !== "__default__" ? reasoningEffort : undefined,
             workspace: workspace || undefined,
             send_progress: sendProgress,
             send_tool_hints: sendToolHints,
@@ -407,31 +396,12 @@ function AgentTab() {
                                     )}
                                 </div>
                                 <div className="space-y-1">
-                                    <Label>{t("settings.maxTokens")}</Label>
-                                    <Input type="number" value={maxTokens} onChange={(e) => setMaxTokens(e.target.value)} placeholder="4096" />
-                                </div>
-                                <div className="space-y-1">
-                                    <Label>{t("settings.temperature")}</Label>
-                                    <Input type="number" step="0.1" min="0" max="2" value={temperature} onChange={(e) => setTemperature(e.target.value)} placeholder="0.7" />
-                                </div>
-                                <div className="space-y-1">
                                     <Label>{t("settings.maxToolIterations")}</Label>
-                                    <Input type="number" value={maxToolIter} onChange={(e) => setMaxToolIter(e.target.value)} placeholder="30" />
+                                    <Input type="number" min="1" max="100" value={maxToolIter} onChange={(e) => setMaxToolIter(e.target.value)} placeholder="40" />
                                 </div>
                                 <div className="space-y-1">
                                     <Label>{t("settings.contextWindowTokens")}</Label>
-                                    <Input type="number" value={memoryWindow} onChange={(e) => setMemoryWindow(e.target.value)} placeholder="128000" />
-                                </div>
-                                <div className="space-y-1">
-                                    <Label>{t("settings.reasoningEffort")}</Label>
-                                    <Select value={reasoningEffort} onValueChange={setReasoningEffort}>
-                                        <SelectTrigger><SelectValue placeholder="— default —" /></SelectTrigger>
-                                        <SelectContent>
-                                            {REASONING_EFFORT_OPTIONS.map((e) => (
-                                                <SelectItem key={e} value={e}>{e === "__default__" ? "— default —" : e}</SelectItem>
-                                            ))}
-                                        </SelectContent>
-                                    </Select>
+                                    <Input type="number" min="1024" max="1000000" value={memoryWindow} onChange={(e) => setMemoryWindow(e.target.value)} placeholder="65536" />
                                 </div>
                                 <div className="space-y-1">
                                     <Label>{t("settings.workspace")}</Label>

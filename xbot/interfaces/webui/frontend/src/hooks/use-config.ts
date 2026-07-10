@@ -7,11 +7,8 @@ import { useGatewayBaseUrl } from "../stores/gateway-store";
 export interface AgentSettings {
     model: string;
     provider: string;
-    max_tokens: number;
-    temperature: number;
     max_iterations: number;
     context_window_tokens: number;
-    reasoning_effort: string;
     workspace: string;
     send_progress?: boolean;
     send_tool_hints?: boolean;

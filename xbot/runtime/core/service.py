@@ -1389,8 +1389,13 @@ class AgentService:
 
         # Build options
         options = self._build_sdk_options(session_key=session_key)
+        options_fingerprint = f"{options.model}\x1f{options.max_turns}"
         try:
-            return await self._client_pool.get_or_create(session_key, options=options)
+            return await self._client_pool.get_or_create(
+                session_key,
+                options=options,
+                options_fingerprint=options_fingerprint,
+            )
         except Exception as e:
             if self._should_retry_without_resume(session_key, options, e):
                 logger.warning(
@@ -1400,7 +1405,11 @@ class AgentService:
                 )
                 self._clear_sdk_resume_context(session_key)
                 retry_options = self._build_sdk_options(session_key=session_key)
-                return await self._client_pool.get_or_create(session_key, options=retry_options)
+                return await self._client_pool.get_or_create(
+                    session_key,
+                    options=retry_options,
+                    options_fingerprint=f"{retry_options.model}\x1f{retry_options.max_turns}",
+                )
             raise
 
     def _should_retry_without_resume(self, session_key: str, options: Any, error: Exception) -> bool:

@@ -26,6 +26,7 @@ class ClientRecord:
 
     session_key: str
     client: ClaudeSDKClient
+    options_fingerprint: str | None = None
     created_at: float = field(default_factory=time.time)
     last_used_at: float = field(default_factory=time.time)
     state: str = "connected"
@@ -57,6 +58,7 @@ class ClientPool:
         self,
         session_key: str,
         options: Any | None = None,
+        options_fingerprint: str | None = None,
     ) -> ClaudeSDKClient:
         """Get an existing client or create a new one.
 
@@ -72,6 +74,21 @@ class ClientPool:
                 record = self._clients.get(session_key)
 
             if record is not None and record.state == "connected":
+                if (
+                    options_fingerprint is not None
+                    and record.options_fingerprint != options_fingerprint
+                ):
+                    logger.info("Recreating SDK client for %s after runtime options changed", session_key)
+                    async with self._lock:
+                        if not (
+                            self._clients.get(session_key) is record
+                            and record.state == "connected"
+                        ):
+                            continue
+                        record.state = "disconnecting"
+                        self._clients.pop(session_key, None)
+                    await self._disconnect_record(record, timeout=10.0)
+                    continue
                 if await self._is_client_healthy(record.client, session_key):
                     async with self._lock:
                         current = self._clients.get(session_key)
@@ -128,6 +145,7 @@ class ClientPool:
                             self._clients[session_key] = ClientRecord(
                                 session_key=session_key,
                                 client=client,
+                                options_fingerprint=options_fingerprint,
                             )
                             logger.info(f"Created and connected client for session {session_key}")
                             return client

@@ -18,6 +18,18 @@ def test_heartbeat_interval_must_be_positive(interval: int) -> None:
         Config.model_validate({"gateway": {"heartbeat": {"interval_s": interval}}})
 
 
+@pytest.mark.parametrize(
+    "config",
+    [
+        {"agents": {"claudeSdk": {"maxTurns": 0}}},
+        {"agents": {"defaults": {"contextWindowTokens": 1023}}},
+    ],
+)
+def test_agent_runtime_limits_must_be_within_supported_range(config: dict) -> None:
+    with pytest.raises(ValidationError):
+        Config.model_validate(config)
+
+
 def test_load_config_keeps_max_tokens_and_warns_on_legacy_memory_window(tmp_path) -> None:
     config_path = tmp_path / "config.json"
     config_path.write_text(

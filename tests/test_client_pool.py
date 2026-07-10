@@ -46,6 +46,28 @@ class TestClientPool:
             mock_client_class.assert_called_once()  # Only created once
 
     @pytest.mark.asyncio
+    async def test_get_or_create_reconnects_when_options_fingerprint_changes(self, pool: ClientPool) -> None:
+        """The next turn must not reuse a client created with stale SDK options."""
+        with patch("claude_agent_sdk.ClaudeSDKClient") as mock_client_class:
+            first_client = MagicMock()
+            first_client.connect = AsyncMock()
+            first_client.disconnect = AsyncMock()
+            second_client = MagicMock()
+            second_client.connect = AsyncMock()
+            mock_client_class.side_effect = [first_client, second_client]
+
+            await pool.get_or_create(
+                "session:1", options=MagicMock(), options_fingerprint="model-a:40"
+            )
+            client = await pool.get_or_create(
+                "session:1", options=MagicMock(), options_fingerprint="model-a:12"
+            )
+
+            assert client is second_client
+            first_client.disconnect.assert_awaited_once()
+            assert mock_client_class.call_count == 2
+
+    @pytest.mark.asyncio
     async def test_disconnect(self, pool: ClientPool) -> None:
         """Test disconnecting a client."""
         with patch("claude_agent_sdk.ClaudeSDKClient") as mock_client_class:

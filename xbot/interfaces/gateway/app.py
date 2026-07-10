@@ -175,11 +175,8 @@ class AgentConfigPatch(BaseModel):
     model: str | None = None
     provider: str | None = None
     workspace: str | None = None
-    max_tokens: int | None = None
-    temperature: float | None = None
-    max_iterations: int | None = None
-    context_window_tokens: int | None = None
-    reasoning_effort: str | None = None
+    max_iterations: int | None = Field(default=None, ge=1, le=100)
+    context_window_tokens: int | None = Field(default=None, ge=1024, le=1_000_000)
     send_progress: bool | None = None
     send_tool_hints: bool | None = None
 
@@ -1221,11 +1218,8 @@ def create_app(
         return {
             "model": defaults.model,
             "provider": defaults.provider,
-            "max_tokens": defaults.max_tokens,
-            "temperature": defaults.temperature,
-            "max_iterations": defaults.max_tool_iterations,
+            "max_iterations": container.config.agents.claude_sdk.max_turns,
             "context_window_tokens": defaults.context_window_tokens,
-            "reasoning_effort": defaults.reasoning_effort,
             "workspace": defaults.workspace,
             "send_progress": container.config.channels.send_progress,
             "send_tool_hints": container.config.channels.send_tool_hints,
@@ -1246,16 +1240,13 @@ def create_app(
             defaults.provider = body.provider
         if body.workspace is not None:
             defaults.workspace = body.workspace
-        if body.max_tokens is not None:
-            defaults.max_tokens = body.max_tokens
-        if body.temperature is not None:
-            defaults.temperature = body.temperature
         if body.max_iterations is not None:
-            defaults.max_tool_iterations = body.max_iterations
+            container.config.agents.claude_sdk.max_turns = body.max_iterations
         if body.context_window_tokens is not None:
             defaults.context_window_tokens = body.context_window_tokens
-        if body.reasoning_effort is not None:
-            defaults.reasoning_effort = body.reasoning_effort
+            memory_consolidator = getattr(container.agent, "_memory_consolidator", None)
+            if memory_consolidator is not None:
+                memory_consolidator.context_window_tokens = body.context_window_tokens
         if body.send_progress is not None:
             container.config.channels.send_progress = body.send_progress
         if body.send_tool_hints is not None:

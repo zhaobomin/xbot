@@ -39,7 +39,7 @@ class AgentDefaults(Base):
     # 保留此字段以兼容旧配置，但运行时不再使用
     available_models: list[str] = Field(default_factory=list, exclude=True)
     max_tokens: int = 8192
-    context_window_tokens: int = 65_536
+    context_window_tokens: int = Field(default=65_536, ge=1024, le=1_000_000)
     temperature: float = 0.1
     max_tool_iterations: int = 40
     # Deprecated compatibility field: accepted from old configs but ignored at runtime.
@@ -114,7 +114,7 @@ class ClaudeSDKAgentConfig(Base):
     注意: 供应商凭证(api_key/api_base)从全局 providers 读取
     """
 
-    max_turns: int = 40
+    max_turns: int = Field(default=40, ge=1, le=100)
     permission_mode: Literal["default", "acceptEdits", "plan", "bypassPermissions", "dontAsk"] = "acceptEdits"
     agents: dict[str, "AgentDefinition"] | None = None
     hooks: dict[str, list] | None = None

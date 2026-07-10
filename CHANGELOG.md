@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.0.35 (2026-07-10)
+
+- WebUI 的“最大轮次”现在映射到 Claude SDK `max_turns`；配置变更会在下一轮对话重建客户端生效。
+- 上下文窗口设置会同步至内存归并器，并为 API 与配置文件增加有效范围校验。
+- 删除 Claude SDK 不支持的最大输出、温度和推理强度设置入口，避免保存但不生效的伪配置。
+
 ## v2.0.29 (2026-06-25)
 
 - Upgraded `claude-agent-sdk` from `0.2.103` to `0.2.110`, pulling in bundled Claude Code CLI updates from `2.1.179` to `2.1.191`.
