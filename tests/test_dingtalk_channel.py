@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import pytest
 
 import xbot.channels.dingtalk as dingtalk_module
-from xbot.channels.dingtalk import DingTalkChannel, DingTalkConfig, NanobotDingTalkHandler
+from xbot.channels.dingtalk import DingTalkChannel, DingTalkConfig, XbotDingTalkHandler
 from xbot.platform.bus.queue import MessageBus
 
 
@@ -74,7 +74,7 @@ async def test_group_send_uses_group_messages_api() -> None:
         "token",
         "group:conv123",
         "sampleMarkdown",
-        {"text": "hello", "title": "Nanobot Reply"},
+        {"text": "hello", "title": "xbot Reply"},
     )
 
     assert ok is True
@@ -91,7 +91,7 @@ async def test_handler_uses_voice_recognition_text_when_text_is_empty(monkeypatc
         DingTalkConfig(client_id="app", client_secret="secret", allow_from=["user1"]),
         bus,
     )
-    handler = NanobotDingTalkHandler(channel)
+    handler = XbotDingTalkHandler(channel)
 
     class _FakeChatbotMessage:
         text = None
@@ -135,7 +135,7 @@ async def test_handler_processes_file_message(monkeypatch) -> None:
         DingTalkConfig(client_id="app", client_secret="secret", allow_from=["user1"]),
         bus,
     )
-    handler = NanobotDingTalkHandler(channel)
+    handler = XbotDingTalkHandler(channel)
 
     class _FakeFileChatbotMessage:
         text = None
@@ -183,7 +183,7 @@ async def test_handler_uses_channel_tracked_task(monkeypatch) -> None:
         DingTalkConfig(client_id="app", client_secret="secret", allow_from=["user1"]),
         bus,
     )
-    handler = NanobotDingTalkHandler(channel)
+    handler = XbotDingTalkHandler(channel)
     created: list[str | None] = []
 
     class _FakeChatbotMessage:
@@ -231,7 +231,7 @@ async def test_handler_schedules_inbound_on_channel_loop_from_other_thread(monke
         bus,
     )
     channel._loop = asyncio.get_running_loop()
-    handler = NanobotDingTalkHandler(channel)
+    handler = XbotDingTalkHandler(channel)
 
     class _FakeChatbotMessage:
         text = SimpleNamespace(content="hello from thread")

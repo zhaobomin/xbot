@@ -213,16 +213,22 @@ class MessageBus:
         # 追踪会话的 pending request，并预注册 waiter 事件，避免
         # "用户先回复、waiter 后注册"导致的竞态丢失。
         async with self._permission_lock:
+            previous_request_id = self._session_pending_requests.get(req.session_key)
+            adds_new_request = (
+                req.request_id not in self._permission_requests
+                and previous_request_id != req.request_id
+            )
             # 检查并清理超时请求
-            if len(self._permission_requests) >= self._max_pending_requests:
+            if adds_new_request and len(self._permission_requests) >= self._max_pending_requests:
                 cleaned = self._cleanup_expired_permission_requests_unlocked()
                 if len(self._permission_requests) >= self._max_pending_requests:
-                    logger.warning(
-                        f"Permission request pool at capacity ({len(self._permission_requests)}/{self._max_pending_requests}), "
-                        f"cleaned {cleaned} expired request(s)"
+                    message = (
+                        f"Permission request pool at capacity ({len(self._permission_requests)}/"
+                        f"{self._max_pending_requests}), cleaned {cleaned} expired request(s)"
                     )
+                    logger.warning(message)
+                    raise RuntimeError(message)
 
-            previous_request_id = self._session_pending_requests.get(req.session_key)
             if previous_request_id and previous_request_id != req.request_id:
                 prev_event = self._pending_permission_responses.get(previous_request_id)
                 if prev_event is not None and not prev_event.is_set():
@@ -258,16 +264,22 @@ class MessageBus:
     async def publish_interaction_request(self, req: InteractionRequest) -> None:
         """发布通用交互请求并通知用户。"""
         async with self._interaction_lock:
+            previous_request_id = self._session_pending_interactions.get(req.session_key)
+            adds_new_request = (
+                req.request_id not in self._interaction_requests
+                and previous_request_id != req.request_id
+            )
             # 检查并清理超时请求
-            if len(self._interaction_requests) >= self._max_pending_requests:
+            if adds_new_request and len(self._interaction_requests) >= self._max_pending_requests:
                 cleaned = self._cleanup_expired_interaction_requests_unlocked()
                 if len(self._interaction_requests) >= self._max_pending_requests:
-                    logger.warning(
-                        f"Interaction request pool at capacity ({len(self._interaction_requests)}/{self._max_pending_requests}), "
-                        f"cleaned {cleaned} expired request(s)"
+                    message = (
+                        f"Interaction request pool at capacity ({len(self._interaction_requests)}/"
+                        f"{self._max_pending_requests}), cleaned {cleaned} expired request(s)"
                     )
+                    logger.warning(message)
+                    raise RuntimeError(message)
 
-            previous_request_id = self._session_pending_interactions.get(req.session_key)
             if previous_request_id and previous_request_id != req.request_id:
                 # Cancel stale interaction for the same session to avoid dangling waiters.
                 prev_event = self._pending_interaction_responses.get(previous_request_id)

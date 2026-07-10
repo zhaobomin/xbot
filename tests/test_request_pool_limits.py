@@ -47,6 +47,25 @@ class TestPermissionRequestPoolLimits:
             assert len(bus._permission_requests) == 5
 
     @pytest.mark.asyncio
+    async def test_permission_request_pool_rejects_new_session_at_capacity(self) -> None:
+        bus = MessageBus(max_queue_size=10, max_pending_requests=1)
+        first = PermissionRequest(
+            request_id="first", session_key="session-1", channel="telegram", chat_id="chat",
+            tool_name="tool", tool_input={}, message="first",
+        )
+        second = PermissionRequest(
+            request_id="second", session_key="session-2", channel="telegram", chat_id="chat",
+            tool_name="tool", tool_input={}, message="second",
+        )
+        await bus.publish_permission_request(first)
+
+        with pytest.raises(RuntimeError, match="Permission request pool at capacity"):
+            await bus.publish_permission_request(second)
+
+        async with bus._permission_lock:
+            assert set(bus._permission_requests) == {"first"}
+
+    @pytest.mark.asyncio
     async def test_permission_request_expired_cleanup(self) -> None:
         """Expired permission requests should be cleaned up."""
         bus = MessageBus(max_pending_requests=10)
@@ -213,6 +232,23 @@ class TestInteractionRequestPoolLimits:
 
         async with bus._interaction_lock:
             assert len(bus._interaction_requests) == 5
+
+    @pytest.mark.asyncio
+    async def test_interaction_request_pool_rejects_new_session_at_capacity(self) -> None:
+        bus = MessageBus(max_queue_size=10, max_pending_requests=1)
+        first = InteractionRequest(
+            request_id="first", session_key="session-1", channel="telegram", chat_id="chat", prompt="first",
+        )
+        second = InteractionRequest(
+            request_id="second", session_key="session-2", channel="telegram", chat_id="chat", prompt="second",
+        )
+        await bus.publish_interaction_request(first)
+
+        with pytest.raises(RuntimeError, match="Interaction request pool at capacity"):
+            await bus.publish_interaction_request(second)
+
+        async with bus._interaction_lock:
+            assert set(bus._interaction_requests) == {"first"}
 
     @pytest.mark.asyncio
     async def test_interaction_request_expired_cleanup(self) -> None:

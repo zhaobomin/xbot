@@ -1,12 +1,21 @@
 import json
 from types import SimpleNamespace
 
+import pytest
+from pydantic import ValidationError
 from typer.testing import CliRunner
 
 from xbot.interfaces.cli.commands import app
 from xbot.platform.config.loader import load_config, save_config
+from xbot.platform.config.schema import Config
 
 runner = CliRunner()
+
+
+@pytest.mark.parametrize("interval", [0, -1])
+def test_heartbeat_interval_must_be_positive(interval: int) -> None:
+    with pytest.raises(ValidationError):
+        Config.model_validate({"gateway": {"heartbeat": {"interval_s": interval}}})
 
 
 def test_load_config_keeps_max_tokens_and_warns_on_legacy_memory_window(tmp_path) -> None:

@@ -758,6 +758,11 @@ def test_patch_agent_config_persists_and_reloads(tmp_path: Path) -> None:
             "model": "gpt-4.1-mini",
             "provider": "openai",
             "workspace": str(tmp_path / "alt-workspace"),
+            "max_tokens": 4096,
+            "temperature": 0.7,
+            "max_iterations": 12,
+            "context_window_tokens": 32768,
+            "reasoning_effort": "high",
             "send_progress": False,
         },
     )
@@ -766,8 +771,35 @@ def test_patch_agent_config_persists_and_reloads(tmp_path: Path) -> None:
     body = response.json()
     assert body["model"] == "gpt-4.1-mini"
     assert body["provider"] == "openai"
+    assert body["max_tokens"] == 4096
+    assert body["temperature"] == 0.7
+    assert body["max_iterations"] == 12
+    assert body["context_window_tokens"] == 32768
+    assert body["reasoning_effort"] == "high"
     assert services.config.agents.defaults.model == "gpt-4.1-mini"
+    assert services.config.agents.defaults.max_tokens == 4096
+    assert services.config.agents.defaults.temperature == 0.7
+    assert services.config.agents.defaults.max_tool_iterations == 12
+    assert services.config.agents.defaults.context_window_tokens == 32768
+    assert services.config.agents.defaults.reasoning_effort == "high"
     assert services.config.channels.send_progress is False
+
+
+def test_session_memory_endpoint_reads_canonical_memory_directory(tmp_path: Path) -> None:
+    client, services = _build_client(tmp_path)
+    memory_dir = services.config.workspace_path / "memory"
+    memory_dir.mkdir(parents=True, exist_ok=True)
+    (memory_dir / "MEMORY.md").write_text("canonical memory", encoding="utf-8")
+    (memory_dir / "HISTORY.md").write_text("canonical history", encoding="utf-8")
+    token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
+
+    response = client.get(
+        "/api/sessions/web:admin:test/memory",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json() == {"memory": "canonical memory", "history": "canonical history"}
 
 
 def test_cron_management_endpoints(tmp_path: Path) -> None:

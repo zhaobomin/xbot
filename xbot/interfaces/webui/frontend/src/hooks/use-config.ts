@@ -21,7 +21,7 @@ export interface GatewayConfig {
     host: string;
     port: number;
     heartbeat_enabled: boolean;
-    heartbeat_interval: number;
+    heartbeat_interval_s: number;
 }
 
 export function useAgentSettings() {

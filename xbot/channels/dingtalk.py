@@ -40,10 +40,10 @@ except ImportError:
     ChatbotMessage = None  # type: ignore[assignment,misc]
 
 
-class NanobotDingTalkHandler(CallbackHandler):
+class XbotDingTalkHandler(CallbackHandler):
     """
     Standard DingTalk Stream SDK Callback Handler.
-    Parses incoming messages and forwards them to the Nanobot channel.
+    Parses incoming messages and forwards them to the xbot channel.
     """
 
     def __init__(self, channel: "DingTalkChannel"):
@@ -126,7 +126,7 @@ class NanobotDingTalkHandler(CallbackHandler):
 
             logger.info("Received DingTalk message from %s (%s): %s", sender_name, sender_id, content)
 
-            # Forward to Nanobot via _on_message (non-blocking).
+            # Forward to xbot via _on_message (non-blocking).
             self.channel._schedule_inbound_message(
                 self.channel._on_message(
                     content,
@@ -216,7 +216,7 @@ class DingTalkChannel(BaseChannel):
             self._client = DingTalkStreamClient(credential)
 
             # Register standard handler
-            handler = NanobotDingTalkHandler(self)
+            handler = XbotDingTalkHandler(self)
             self._client.register_callback_handler(ChatbotMessage.TOPIC, handler)
 
             logger.info("DingTalk bot started with Stream Mode")
@@ -440,7 +440,7 @@ class DingTalkChannel(BaseChannel):
             token,
             chat_id,
             "sampleMarkdown",
-            {"text": content, "title": "Nanobot Reply"},
+            {"text": content, "title": "xbot Reply"},
         )
 
     async def _send_media_ref(self, token: str, chat_id: str, media_ref: str) -> bool:
@@ -533,7 +533,7 @@ class DingTalkChannel(BaseChannel):
         conversation_id: str | None = None,
         media: list[str] | None = None,
     ) -> None:
-        """Handle incoming message (called by NanobotDingTalkHandler).
+        """Handle incoming message (called by XbotDingTalkHandler).
 
         Delegates to BaseChannel._handle_message() which enforces allow_from
         permission checks before publishing to the bus.
