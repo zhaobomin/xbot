@@ -114,7 +114,7 @@ class ClaudeSDKAgentConfig(Base):
     注意: 供应商凭证(api_key/api_base)从全局 providers 读取
     """
 
-    max_turns: int = Field(default=40, ge=1, le=100)
+    max_turns: int = Field(default=40, ge=1, le=1000)
     permission_mode: Literal["default", "acceptEdits", "plan", "bypassPermissions", "dontAsk"] = "acceptEdits"
     agents: dict[str, "AgentDefinition"] | None = None
     hooks: dict[str, list] | None = None

@@ -782,7 +782,7 @@ def test_patch_agent_config_persists_and_reloads(tmp_path: Path) -> None:
     "payload",
     [
         {"max_iterations": 0},
-        {"max_iterations": 101},
+        {"max_iterations": 1001},
         {"context_window_tokens": 1023},
         {"context_window_tokens": 1_000_001},
     ],

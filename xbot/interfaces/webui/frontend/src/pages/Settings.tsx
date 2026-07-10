@@ -397,7 +397,7 @@ function AgentTab() {
                                 </div>
                                 <div className="space-y-1">
                                     <Label>{t("settings.maxToolIterations")}</Label>
-                                    <Input type="number" min="1" max="100" value={maxToolIter} onChange={(e) => setMaxToolIter(e.target.value)} placeholder="40" />
+                                    <Input type="number" min="1" max="1000" value={maxToolIter} onChange={(e) => setMaxToolIter(e.target.value)} placeholder="40" />
                                 </div>
                                 <div className="space-y-1">
                                     <Label>{t("settings.contextWindowTokens")}</Label>

@@ -175,7 +175,7 @@ class AgentConfigPatch(BaseModel):
     model: str | None = None
     provider: str | None = None
     workspace: str | None = None
-    max_iterations: int | None = Field(default=None, ge=1, le=100)
+    max_iterations: int | None = Field(default=None, ge=1, le=1000)
     context_window_tokens: int | None = Field(default=None, ge=1024, le=1_000_000)
     send_progress: bool | None = None
     send_tool_hints: bool | None = None
