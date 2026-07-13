@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.0.37 (2026-07-13)
+
+- 升级 `claude-agent-sdk` 至 `0.2.115`，内置 Claude Code CLI 更新至 `2.1.206`。
+- 修复代理模式下 DNS pinning 可能失效的问题：WebFetch 在安全检查开启时阻止不安全的本地代理回退，同时保留固定搜索服务的代理能力。
+- 修复 Python wheel 内容随本机构建残留漂移的问题：精确打包 WhatsApp Bridge 源码、排除 `node_modules` 与生成目录，并正式随包发布 WebUI 构建产物。
+- 删除无效的 `frontend/dev-dist` 回退和旧 Service Worker 残留，增加 WebUI、代理安全及打包契约回归测试。
+
 ## v2.0.36 (2026-07-10)
 
 - 放宽 Claude SDK 最大轮次的有效上限至 1000，兼容现有部署配置并恢复网关启动。
