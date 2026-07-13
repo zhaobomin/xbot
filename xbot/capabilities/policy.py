@@ -34,14 +34,18 @@ class CapabilityPolicy:
         allowed: list[str] = []
         dropped: list[str] = []
         available = self.available_tool_names(backend)
-        has_mcp = bool(self.mcp_servers)
 
         for name in normalized:
             canonical = canonical_tool_name(name)
             if canonical in available:
                 allowed.append(canonical)
                 continue
-            if canonical.startswith("mcp_") or (has_mcp and canonical not in self.catalog.builtin_tool_names()):
+            # MCP tools are only recognized by their explicit "mcp_" prefix
+            # (SDK-side tools use "mcp__<server>__<tool>", both share the prefix).
+            # Do NOT fall back to "has_mcp implies any unknown name is MCP" —
+            # that path silently accepts misspelled builtin names when any
+            # MCP server is configured, defeating the builtin allowlist.
+            if canonical.startswith("mcp_"):
                 allowed.append(canonical)
                 continue
             dropped.append(canonical)

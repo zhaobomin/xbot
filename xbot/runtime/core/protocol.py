@@ -36,6 +36,7 @@ class AgentContext:
     prompt: str
     history: list[dict[str, Any]] = field(default_factory=list)
     media: list[Any] | None = None
+    model: str | None = None
     channel: str = ""
     chat_id: str = ""
     metadata: dict[str, Any] = field(default_factory=dict)

@@ -34,3 +34,4 @@ node_modules/
 .codegraph/
 .workbuddy/
 MagicMock/
+.qoder/

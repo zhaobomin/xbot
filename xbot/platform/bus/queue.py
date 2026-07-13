@@ -100,6 +100,8 @@ class MessageBus:
         self._session_pending_requests: dict[str, str] = {}
         # 存储 PermissionRequest 对象用于超时检查
         self._permission_requests: dict[str, PermissionRequest] = {}
+        # 显式追踪 wait_permission_response 中的 waiter 数量，避免访问 Event._waiters 私有属性
+        self._permission_waiter_counts: dict[str, int] = {}
 
         # 通用交互请求/响应支持
         self._pending_interaction_responses: dict[str, asyncio.Event] = {}
@@ -107,6 +109,8 @@ class MessageBus:
         self._interaction_requests: dict[str, InteractionRequest] = {}
         self._interaction_lock = asyncio.Lock()
         self._session_pending_interactions: dict[str, str] = {}
+        # 显式追踪 wait_interaction_response 中的 waiter 数量
+        self._interaction_waiter_counts: dict[str, int] = {}
 
     def _cleanup_expired_permission_requests_unlocked(self) -> int:
         """清理超时的权限请求。必须在持有 _permission_lock 时调用。
@@ -122,8 +126,7 @@ class MessageBus:
         for request_id in expired_keys:
             req = self._permission_requests.get(request_id)
             event = self._pending_permission_responses.get(request_id)
-            waiters = getattr(event, "_waiters", None) if event is not None else None
-            has_waiters = bool(waiters)
+            has_waiters = self._permission_waiter_counts.get(request_id, 0) > 0
             if event is not None and has_waiters and not event.is_set():
                 self._permission_results[request_id] = PermissionResponse(
                     request_id=request_id,
@@ -160,8 +163,7 @@ class MessageBus:
         for request_id in expired_keys:
             req = self._interaction_requests.get(request_id)
             event = self._pending_interaction_responses.get(request_id)
-            waiters = getattr(event, "_waiters", None) if event is not None else None
-            has_waiters = bool(waiters)
+            has_waiters = self._interaction_waiter_counts.get(request_id, 0) > 0
             if event is not None and has_waiters and not event.is_set():
                 self._interaction_results[request_id] = InteractionResponse(
                     request_id=request_id,
@@ -183,6 +185,22 @@ class MessageBus:
             logger.warning(f"Cleaned up {len(expired_keys)} expired interaction request(s)")
 
         return len(expired_keys)
+
+    def _decrement_permission_waiter(self, request_id: str) -> None:
+        """减少权限 waiter 计数，为 0 时移除条目。必须在持有 _permission_lock 时调用。"""
+        cnt = self._permission_waiter_counts.get(request_id, 0) - 1
+        if cnt <= 0:
+            self._permission_waiter_counts.pop(request_id, None)
+        else:
+            self._permission_waiter_counts[request_id] = cnt
+
+    def _decrement_interaction_waiter(self, request_id: str) -> None:
+        """减少交互 waiter 计数，为 0 时移除条目。必须在持有 _interaction_lock 时调用。"""
+        cnt = self._interaction_waiter_counts.get(request_id, 0) - 1
+        if cnt <= 0:
+            self._interaction_waiter_counts.pop(request_id, None)
+        else:
+            self._interaction_waiter_counts[request_id] = cnt
 
     async def publish_inbound(self, msg: InboundMessage) -> None:
         """Publish a message from a channel to the agent."""
@@ -331,6 +349,9 @@ class MessageBus:
         event = asyncio.Event()
         async with self._permission_lock:
             event = self._pending_permission_responses.setdefault(request_id, event)
+            self._permission_waiter_counts[request_id] = (
+                self._permission_waiter_counts.get(request_id, 0) + 1
+            )
 
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout)
@@ -341,6 +362,7 @@ class MessageBus:
                 to_remove = [k for k, v in self._session_pending_requests.items() if v == request_id]
                 for k in to_remove:
                     del self._session_pending_requests[k]
+                self._decrement_permission_waiter(request_id)
             if result is None:
                 return PermissionResponse(
                     request_id=request_id,
@@ -357,6 +379,7 @@ class MessageBus:
                 to_remove = [k for k, v in self._session_pending_requests.items() if v == request_id]
                 for k in to_remove:
                     del self._session_pending_requests[k]
+                self._decrement_permission_waiter(request_id)
             return PermissionResponse(
                 request_id=request_id,
                 session_key="",
@@ -372,6 +395,7 @@ class MessageBus:
                 to_remove = [k for k, v in self._session_pending_requests.items() if v == request_id]
                 for k in to_remove:
                     del self._session_pending_requests[k]
+                self._decrement_permission_waiter(request_id)
             raise
 
     async def wait_interaction_response(
@@ -383,6 +407,9 @@ class MessageBus:
         event = asyncio.Event()
         async with self._interaction_lock:
             event = self._pending_interaction_responses.setdefault(request_id, event)
+            self._interaction_waiter_counts[request_id] = (
+                self._interaction_waiter_counts.get(request_id, 0) + 1
+            )
 
         try:
             await asyncio.wait_for(event.wait(), timeout=timeout)
@@ -393,6 +420,7 @@ class MessageBus:
                 to_remove = [k for k, v in self._session_pending_interactions.items() if v == request_id]
                 for k in to_remove:
                     del self._session_pending_interactions[k]
+                self._decrement_interaction_waiter(request_id)
             if result is None:
                 return InteractionResponse(
                     request_id=request_id,
@@ -409,6 +437,7 @@ class MessageBus:
                 to_remove = [k for k, v in self._session_pending_interactions.items() if v == request_id]
                 for k in to_remove:
                     del self._session_pending_interactions[k]
+                self._decrement_interaction_waiter(request_id)
             return InteractionResponse(
                 request_id=request_id,
                 session_key="",
@@ -424,6 +453,7 @@ class MessageBus:
                 to_remove = [k for k, v in self._session_pending_interactions.items() if v == request_id]
                 for k in to_remove:
                     del self._session_pending_interactions[k]
+                self._decrement_interaction_waiter(request_id)
             raise
 
     async def submit_permission_response(self, resp: PermissionResponse) -> bool:

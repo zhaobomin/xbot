@@ -351,16 +351,32 @@ class MemoryConsolidator:
         self._get_tool_definitions = get_tool_definitions
         self._locks: dict[str, asyncio.Lock] = {}
         self._store_lock = asyncio.Lock()
+        # 显式追踪 per-session 锁上的 waiter 数量，避免访问 asyncio.Lock._waiters 私有属性。
+        # 调用方约定：get_lock() 会 +1，_cleanup_lock_if_idle() 会 -1。
+        self._lock_waiter_counts: dict[str, int] = {}
 
     def get_lock(self, session_key: str) -> asyncio.Lock:
-        """Return the shared consolidation lock for one session."""
+        """Return the shared consolidation lock for one session.
+
+        Callers MUST pair every call with a matching ``_cleanup_lock_if_idle``
+        (typically in a ``finally`` block) so waiter counts stay balanced.
+        """
+        self._lock_waiter_counts[session_key] = (
+            self._lock_waiter_counts.get(session_key, 0) + 1
+        )
         return self._locks.setdefault(session_key, asyncio.Lock())
 
     def _cleanup_lock_if_idle(self, session_key: str, lock: asyncio.Lock) -> None:
+        # Balance the +1 from get_lock. When no other holder/waiter remains,
+        # remove the lock entry to keep the map bounded.
+        cnt = self._lock_waiter_counts.get(session_key, 0) - 1
+        if cnt <= 0:
+            self._lock_waiter_counts.pop(session_key, None)
+        else:
+            self._lock_waiter_counts[session_key] = cnt
         if lock.locked():
             return
-        waiters = getattr(lock, "_waiters", None)
-        if waiters:
+        if self._lock_waiter_counts.get(session_key, 0) > 0:
             return
         if self._locks.get(session_key) is lock:
             self._locks.pop(session_key, None)

@@ -147,6 +147,7 @@ class AgentService:
         self._commands_loader: Any = None
         self._command_handler: LocalCommandHandler | None = None
         self._session_workers: dict[str, SessionWorker] = {}
+        self._session_model_overrides: dict[str, str] = {}
         self._direct_progress_callbacks: dict[str, ProgressCallback] = {}
 
         # ReMe integration: ContextBuilder and MemoryConsolidator
@@ -155,6 +156,7 @@ class AgentService:
         self._sdk_settings_file: str | None = None
         self._async_consolidation_tasks: set[asyncio.Task] = set()
         self._async_registry_tasks: set[asyncio.Task] = set()
+        self._async_hook_notification_tasks: set[asyncio.Task] = set()
         self._cli_stderr_window_seconds = 5.0
         self._cli_stderr_max_warnings_per_window = 20
         self._cli_stderr_max_line_chars = 800
@@ -321,7 +323,12 @@ class AgentService:
         try:
             # Get or create client
             try:
-                client = await self._get_or_create_client(context.session_key)
+                if context.model:
+                    client = await self._get_or_create_client(
+                        context.session_key, model=context.model
+                    )
+                else:
+                    client = await self._get_or_create_client(context.session_key)
                 if sm:
                     self._dispatch_state_event(
                         context.session_key,
@@ -708,6 +715,11 @@ class AgentService:
                 task.cancel()
             await asyncio.gather(*self._async_registry_tasks, return_exceptions=True)
             self._async_registry_tasks.clear()
+        if self._async_hook_notification_tasks:
+            for task in list(self._async_hook_notification_tasks):
+                task.cancel()
+            await asyncio.gather(*self._async_hook_notification_tasks, return_exceptions=True)
+            self._async_hook_notification_tasks.clear()
 
         for session_key in list(self._session_workers.keys()):
             await self._stop_session_worker(session_key, disconnect=True)
@@ -735,6 +747,7 @@ class AgentService:
             session_key,
             drop_sdk_context,
         )
+        self._session_model_overrides.pop(session_key, None)
 
         runtime_registry = self._shared_resources.get("runtime_registry")
         sdk_session_id: str | None = None
@@ -1364,6 +1377,8 @@ class AgentService:
     async def _get_or_create_client(
         self,
         session_key: str,
+        *,
+        model: str | None = None,
     ) -> ClaudeSDKClient:
         """Get or create SDK client for session.
 
@@ -1388,7 +1403,7 @@ class AgentService:
                 logger.debug("Idle client pruning skipped for %s: %s", session_key, e)
 
         # Build options
-        options = self._build_sdk_options(session_key=session_key)
+        options = self._build_sdk_options(session_key=session_key, model=model)
         options_fingerprint = f"{options.model}\x1f{options.max_turns}"
         try:
             return await self._client_pool.get_or_create(
@@ -1404,7 +1419,7 @@ class AgentService:
                     e,
                 )
                 self._clear_sdk_resume_context(session_key)
-                retry_options = self._build_sdk_options(session_key=session_key)
+                retry_options = self._build_sdk_options(session_key=session_key, model=model)
                 return await self._client_pool.get_or_create(
                     session_key,
                     options=retry_options,
@@ -1458,7 +1473,12 @@ class AgentService:
         except Exception as e:
             logger.debug("Failed to clear persisted sdk_session_id for %s: %s", session_key, e)
 
-    def _build_sdk_options(self, session_key: str | None = None) -> Any:
+    def _build_sdk_options(
+        self,
+        session_key: str | None = None,
+        *,
+        model: str | None = None,
+    ) -> Any:
         """Build ClaudeAgentOptions from configuration."""
         from claude_agent_sdk import ClaudeAgentOptions
 
@@ -1523,9 +1543,14 @@ class AgentService:
                 except Exception as e:
                     logger.debug("Failed to resolve sdk_session_id for %s: %s", session_key, e)
 
+        effective_model = (
+            model.strip()
+            if isinstance(model, str) and model.strip()
+            else self._get_effective_model(session_key)
+        )
         options = ClaudeAgentOptions(
             cwd=execution_cwd,
-            model=self._get_effective_model(),
+            model=effective_model,
             system_prompt=system_prompt,
             resume=resume_session,
             mcp_servers=mcp_servers if mcp_servers else None,
@@ -1605,14 +1630,24 @@ class AgentService:
                 logger.debug("Failed to resolve workspace dir override for %s: %s", session_key, e)
         return workspace_expanded
 
-    def _get_effective_model(self) -> str:
+    def set_session_model(self, session_key: str, model: str) -> None:
+        """Set a temporary model override for one runtime session."""
+        self._session_model_overrides[session_key] = model
+
+    def _get_effective_model(self, session_key: str | None = None) -> str:
         """Get the effective model to use.
 
         Priority:
-        1. agents.defaults.model (if explicitly set)
-        2. providers.{current_provider}.models[0]
-        3. Hardcoded default
+        1. Session model override
+        2. agents.defaults.model (if explicitly set)
+        3. providers.{current_provider}.models[0]
+        4. Hardcoded default
         """
+        if session_key:
+            override = self._session_model_overrides.get(session_key)
+            if override:
+                return override
+
         config = self._shared_resources.get("config")
         defaults = getattr(getattr(config, "agents", None), "defaults", None)
         providers = getattr(config, "providers", None)
@@ -1755,7 +1790,7 @@ class AgentService:
 
     def _build_options(self, context: AgentContext) -> Any:
         """Build processing options for a context."""
-        return self._build_sdk_options(session_key=context.session_key)
+        return self._build_sdk_options(session_key=context.session_key, model=context.model)
 
     def _build_hooks(self, sdk_config: Any) -> dict[str, list] | None:
         """Build hooks configuration including compact notification.
@@ -1864,11 +1899,9 @@ class AgentService:
                     except Exception as e:
                         logger.warning("Failed to send compact notification to %s:%s: %s", channel, chat_id, e)
 
-                try:
-                    loop = asyncio.get_running_loop()
-                    asyncio.ensure_future(_send(), loop=loop)
-                except RuntimeError as e:
-                    logger.warning("Cannot send compact notification for %s: no event loop: %s", session_ref, e)
+                self._track_hook_notification_task(
+                    _send(), hook_type="pre_compact", session_ref=session_ref,
+                )
 
             compact_handler = CompactHookHandler(
                 enabled=True,
@@ -1945,11 +1978,9 @@ class AgentService:
                 except Exception as e:
                     logger.debug("Failed to send subagent compat notification to %s:%s: %s", channel, chat_id, e)
 
-            try:
-                loop = asyncio.get_running_loop()
-                asyncio.ensure_future(_send(), loop=loop)
-            except RuntimeError:
-                logger.debug("No event loop for subagent compat notification: session=%s", session_ref)
+            self._track_hook_notification_task(
+                _send(), hook_type="subagent_compat", session_ref=session_ref,
+            )
 
         compat_handler = SubagentModelCompatHookHandler(
             enabled=True,
@@ -3447,6 +3478,54 @@ class AgentService:
 
         task.add_done_callback(_on_done)
 
+    def _track_hook_notification_task(
+        self, coro: Any, *, hook_type: str, session_ref: str
+    ) -> asyncio.Task | None:
+        """Track hook notification fire-and-forget tasks so they are not GC'd
+        and exceptions are consumed.
+
+        Args:
+            coro: The coroutine to schedule.
+            hook_type: Short identifier (e.g. "pre_compact", "subagent_compat").
+            session_ref: Session reference for logging.
+
+        Returns:
+            The created Task, or None if no event loop is available.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError as e:
+            logger.warning(
+                "Cannot schedule hook notification (%s) for %s: no event loop: %s",
+                hook_type, session_ref, e,
+            )
+            # Close the coroutine to avoid "coroutine was never awaited" warnings.
+            try:
+                coro.close()
+            except Exception:
+                pass
+            return None
+
+        task = loop.create_task(coro, name=f"hook-notify:{hook_type}:{session_ref}")
+        self._async_hook_notification_tasks.add(task)
+
+        def _on_done(done_task: asyncio.Task) -> None:
+            self._async_hook_notification_tasks.discard(done_task)
+            try:
+                done_task.result()
+            except asyncio.CancelledError:
+                logger.debug(
+                    "Hook notification (%s) cancelled for %s", hook_type, session_ref,
+                )
+            except Exception as e:
+                logger.warning(
+                    "Hook notification (%s) failed for %s: %s",
+                    hook_type, session_ref, e,
+                )
+
+        task.add_done_callback(_on_done)
+        return task
+
     def _persist_sdk_session_id_to_store(self, session_key: str, sdk_session_id: str | None) -> None:
         """Persist sdk_session_id in conversation store metadata for restart recovery."""
         conversation_store = self._shared_resources.get("conversation_store")
@@ -3627,7 +3706,7 @@ class AgentService:
         Args:
             prompt: Prompt to execute
             session_key: Session identifier
-            model: Optional model override
+            model: Optional per-call model override
 
         Returns:
             Response content as string
@@ -3635,6 +3714,7 @@ class AgentService:
         context = AgentContext(
             session_key=session_key,
             prompt=prompt,
+            model=model,
         )
 
         result = []

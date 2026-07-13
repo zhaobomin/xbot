@@ -90,7 +90,7 @@ class LocalCommandHandler:
             response_text = self._coord_status_text()
 
         elif cmd_lower.startswith("!model"):
-            response_text = self._handle_model_command(cmd)
+            response_text = self._handle_model_command(cmd, session_key)
 
         else:
             response_text = f"Unknown command: {cmd}"
@@ -385,7 +385,7 @@ class LocalCommandHandler:
 
         return "\n".join(lines)
 
-    def _handle_model_command(self, content: str) -> str:
+    def _handle_model_command(self, content: str, session_key: str) -> str:
         """Handle !model command (matches v0.3.37 model management)."""
         svc = self._service
         parts = content.split(maxsplit=1)
@@ -407,6 +407,8 @@ class LocalCommandHandler:
             else:
                 model_id = parts[1].strip()
                 success, message = svc._model_manager.switch_model(model_id)
+                if success:
+                    svc.set_session_model(session_key, model_id)
                 return message
         else:
             model = svc._config.model if svc._config else "unknown"

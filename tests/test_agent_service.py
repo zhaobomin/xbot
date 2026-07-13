@@ -72,6 +72,97 @@ class TestAgentService:
         assert service._get_effective_model() == "qwen3-coder-next"
 
     @pytest.mark.asyncio
+    async def test_model_command_overrides_only_its_session_and_reset_restores_default(
+        self, tmp_path: Path
+    ) -> None:
+        """!model must affect the next SDK options for just the addressed session."""
+        runtime_config = Config()
+        runtime_config.agents.defaults.provider = "anthropic"
+        runtime_config.agents.defaults.model = "claude-sonnet-4-5"
+        runtime_config.providers.anthropic.models = [
+            "claude-sonnet-4-5",
+            "claude-3-haiku-20240307",
+        ]
+        service = AgentService()
+        await service.initialize(
+            AgentConfig(model="", system_prompt="Test"),
+            {"workspace": str(tmp_path), "config": runtime_config},
+        )
+        bus = MagicMock()
+        bus.publish_outbound = AsyncMock()
+        msg = InboundMessage(
+            channel="test", sender_id="u1", chat_id="c1", content="!model claude-3-haiku-20240307"
+        )
+
+        await service._command_handler.handle(msg, bus)
+
+        assert service._get_effective_model("test:c1") == "claude-3-haiku-20240307"
+        assert service._build_sdk_options(session_key="test:c1").model == "claude-3-haiku-20240307"
+        assert service._get_effective_model("test:other") == "claude-sonnet-4-5"
+
+        await service.reset_session("test:c1")
+
+        assert service._get_effective_model("test:c1") == "claude-sonnet-4-5"
+
+    @pytest.mark.asyncio
+    async def test_call_for_auxiliary_passes_model_override_to_context(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """Auxiliary calls must preserve a per-call model override."""
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+        observed_context: AgentContext | None = None
+
+        async def fake_process(context: AgentContext):
+            nonlocal observed_context
+            observed_context = context
+            yield AgentResponse(content="ok")
+
+        with patch.object(service, "process", side_effect=fake_process):
+            assert await service.call_for_auxiliary("ping", model="claude-haiku") == "ok"
+
+        assert observed_context is not None
+        assert observed_context.model == "claude-haiku"
+
+    @pytest.mark.asyncio
+    async def test_process_passes_model_override_to_client(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """A context model override must reach SDK client construction."""
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+        client = MagicMock()
+        client.query = AsyncMock()
+
+        async def receive_messages():
+            yield SystemMessage(state="idle")
+
+        client.receive_messages = receive_messages
+        get_client = AsyncMock(return_value=client)
+
+        with (
+            patch.object(service, "_get_or_create_client", get_client),
+            patch.object(service, "_refresh_session_commands_from_client", AsyncMock()),
+        ):
+            responses = [
+                response
+                async for response in service.process(
+                    AgentContext(
+                        session_key="auxiliary",
+                        prompt="ping",
+                        model="claude-haiku",
+                    )
+                )
+            ]
+
+        assert responses == []
+        get_client.assert_awaited_once_with("auxiliary", model="claude-haiku")
+
+    @pytest.mark.asyncio
     async def test_shutdown(
         self,
         config: AgentConfig,
@@ -1410,3 +1501,118 @@ class TestRunDispatch:
 
         # Should call consolidator once
         service._memory_consolidator.maybe_consolidate_by_tokens.assert_called_once_with(session)
+
+    # --- Test 24: async consolidation task self-removes via done_callback ---
+
+    @pytest.mark.asyncio
+    async def test_dispatch_memory_consolidation_async_removes_task_on_done(
+        self, config, shared_resources, bus
+    ) -> None:
+        """Async consolidation task must self-discard from the set once completed."""
+        from xbot.platform.config.schema import Config
+
+        runtime_config = Config()
+        runtime_config.agents.claude_sdk.memory_consolidation_mode = "async"
+        shared_resources["config"] = runtime_config
+
+        service = await self._make_service(config, shared_resources)
+        service._memory_consolidator = AsyncMock()
+
+        session = MagicMock()
+        await service._trigger_memory_consolidation("test-session-done", session)
+
+        assert len(service._async_consolidation_tasks) == 1
+        tracked_task = next(iter(service._async_consolidation_tasks))
+
+        # Wait for task and its done_callback to run.
+        await asyncio.gather(tracked_task, return_exceptions=True)
+        await asyncio.sleep(0)
+
+        assert not service._async_consolidation_tasks
+
+    # --- Test 25-27: hook notification fire-and-forget task tracking ---
+
+    @pytest.mark.asyncio
+    async def test_track_hook_notification_task_success_cleanup(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """Hook notification task should be tracked and discarded on completion."""
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        completed = asyncio.Event()
+
+        async def _ok() -> None:
+            completed.set()
+
+        task = service._track_hook_notification_task(
+            _ok(), hook_type="pre_compact", session_ref="s1"
+        )
+
+        assert task is not None
+        assert task in service._async_hook_notification_tasks
+
+        await completed.wait()
+        # Give the done_callback a chance to run.
+        await asyncio.sleep(0)
+
+        assert task not in service._async_hook_notification_tasks
+        assert not service._async_hook_notification_tasks
+
+    @pytest.mark.asyncio
+    async def test_track_hook_notification_task_exception_consumed(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Hook notification exceptions should be logged and set cleared."""
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        async def _boom() -> None:
+            raise RuntimeError("boom-hook")
+
+        task = service._track_hook_notification_task(
+            _boom(), hook_type="subagent_compat", session_ref="s2"
+        )
+
+        assert task is not None
+        await asyncio.gather(task, return_exceptions=True)
+        # Give the done_callback a chance to run.
+        await asyncio.sleep(0)
+
+        assert not service._async_hook_notification_tasks
+        assert "Hook notification (subagent_compat) failed for s2" in caplog.text
+        assert "boom-hook" in caplog.text
+
+    def test_track_hook_notification_task_no_running_loop(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Without a running loop, coroutine must be closed and warning logged."""
+        import inspect as _inspect
+
+        service = AgentService()
+
+        called = False
+
+        async def _never() -> None:
+            nonlocal called
+            called = True
+
+        coro = _never()
+
+        result = service._track_hook_notification_task(
+            coro, hook_type="pre_compact", session_ref="s3"
+        )
+
+        assert result is None
+        assert not service._async_hook_notification_tasks
+        assert not called  # coro was closed, not awaited
+        assert _inspect.getcoroutinestate(coro) == _inspect.CORO_CLOSED
+        assert "Cannot schedule hook notification (pre_compact) for s3" in caplog.text

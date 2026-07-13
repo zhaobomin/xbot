@@ -87,6 +87,23 @@ class TestCapabilityPolicy:
         assert "exec" in result.allowed
         assert "mcp_fs_read" in result.allowed
 
+    def test_resolve_agent_tools_misspelled_builtin_dropped_even_with_mcp(
+        self, mock_catalog: CapabilityCatalog
+    ) -> None:
+        """Regression: a misspelled builtin tool must be dropped even when an
+        MCP server is configured. Previously a fail-open branch treated any
+        non-builtin name as MCP when ``mcp_servers`` was non-empty, silently
+        accepting typos like ``read_fille`` and defeating the allowlist."""
+        policy = CapabilityPolicy(mock_catalog, mcp_servers={"fs": {}})
+        result = policy.resolve_agent_tools(
+            ["read", "read_fille", "mcp_fs_read", "unknown_tool"],
+            backend="custom",
+        )
+        assert "read" in result.allowed
+        assert "mcp_fs_read" in result.allowed
+        assert "read_fille" in result.dropped
+        assert "unknown_tool" in result.dropped
+
     def test_resolve_agent_tools_empty_list(self, mock_catalog: CapabilityCatalog) -> None:
         """Test resolving empty tool list."""
         policy = CapabilityPolicy(mock_catalog)
