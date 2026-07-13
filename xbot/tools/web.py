@@ -191,6 +191,11 @@ class WebSearchTool(Tool):
         allowed, error, pinned = _validate_and_pin_url(url)
         if not allowed:
             return None, error
+        # Search endpoints are fixed by the provider or administrator. When a
+        # proxy is configured, use httpx's normal proxy transport instead of
+        # pretending the locally resolved address remains pinned through it.
+        if self.proxy:
+            return None, None
         return _PinnedAsyncHTTPTransport(pinned, proxy=self.proxy), None
 
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
@@ -406,6 +411,17 @@ class WebFetchTool(Tool):
             if result is None:
                 logger.debug("WebFetch: Jina failed, falling back to readability for '%s'", url)
         if result is None:
+            if self.proxy and not self.disable_security_checks:
+                return json.dumps(
+                    {
+                        "error": (
+                            "Local proxy fallback blocked: proxy-side DNS cannot be pinned "
+                            "while SSRF security checks are enabled"
+                        ),
+                        "url": url,
+                    },
+                    ensure_ascii=False,
+                )
             result = await self._fetch_readability(url, extract_mode, max_chars)
 
         logger.debug("WebFetch: completed for '%s', result_len=%s", url, len(result))

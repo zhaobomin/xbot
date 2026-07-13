@@ -339,6 +339,36 @@ def test_webui_serves_frontend_dist_when_present(tmp_path: Path) -> None:
     assert "frontend-dist" in response.text
 
 
+def test_webui_default_frontend_does_not_fall_back_to_dev_dist(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import xbot.interfaces.gateway.app as gateway_app
+    from xbot.interfaces.webui.services import ServiceContainer
+
+    fake_gateway_file = tmp_path / "xbot" / "interfaces" / "gateway" / "app.py"
+    dev_dist = fake_gateway_file.parent.parent / "webui" / "frontend" / "dev-dist"
+    dev_dist.mkdir(parents=True)
+    (dev_dist / "index.html").write_text("<html>stale-dev-build</html>", encoding="utf-8")
+    monkeypatch.setattr(gateway_app, "__file__", str(fake_gateway_file))
+
+    config = Config()
+    config.agents.defaults.workspace = str(tmp_path / "workspace")
+    services = ServiceContainer(
+        config=config,
+        bus=MessageBus(),
+        agent=_FakeRuntime(),
+        conversation_store=ConversationStore(config.workspace_path),
+        cron=_FakeCronService(),
+        heartbeat=_FakeHeartbeatService(),
+    )
+
+    web_app = gateway_app.create_app(services, data_dir=tmp_path / "data")
+
+    expected_dist = fake_gateway_file.parent.parent / "webui" / "frontend" / "dist"
+    assert Path(web_app.state.frontend_dir) == expected_dist
+
+
 def test_webui_spa_routes_fall_back_to_index(tmp_path: Path) -> None:
     from xbot.interfaces.webui.app import create_app
     from xbot.interfaces.webui.services import ServiceContainer

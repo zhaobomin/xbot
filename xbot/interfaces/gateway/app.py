@@ -462,14 +462,7 @@ def create_app(
     else:
         # Frontend static files are in the webui/ directory (sibling to gateway/)
         webui_dir = Path(__file__).parent.parent / "webui"
-        frontend_candidates = (
-            webui_dir / "frontend" / "dist",
-            webui_dir / "frontend" / "dev-dist",
-        )
-        resolved_frontend_dir = next(
-            (path for path in frontend_candidates if path.exists()),
-            frontend_candidates[0],
-        )
+        resolved_frontend_dir = webui_dir / "frontend" / "dist"
     app.state.frontend_dir = resolved_frontend_dir
     app.state.s3_config_path = resolved_data_dir / "s3.json"
     default_s3_config = {

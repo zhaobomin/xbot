@@ -84,6 +84,45 @@ async def test_brave_search_uses_pinned_transport(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_brave_search_uses_configured_proxy_without_claiming_dns_pinning(monkeypatch):
+    captured = {}
+
+    class ForbiddenPinnedTransport:
+        def __init__(self, *args, **kwargs):
+            raise AssertionError("proxy-backed search must not use the pinned transport")
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, url, **kw):
+            return _response(json={"web": {"results": []}})
+
+    monkeypatch.setattr("xbot.tools.web._PinnedAsyncHTTPTransport", ForbiddenPinnedTransport)
+    monkeypatch.setattr(
+        "xbot.tools.web._validate_and_pin_url",
+        lambda url: (True, "", {"api.search.brave.com": "203.0.113.10"}),
+    )
+    monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
+
+    tool = WebSearchTool(
+        config=WebSearchConfig(provider="brave", api_key="brave-key"),
+        proxy="http://127.0.0.1:7890",
+    )
+    result = await tool.execute(query="xbot", count=1)
+
+    assert "No results" in result
+    assert captured["proxy"] == "http://127.0.0.1:7890"
+    assert captured["transport"] is None
+
+
+@pytest.mark.asyncio
 async def test_tavily_search(monkeypatch):
     async def mock_post(self, url, **kw):
         assert "tavily" in url

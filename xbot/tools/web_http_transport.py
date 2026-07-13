@@ -64,6 +64,12 @@ class PinnedAsyncHTTPTransport(httpx.AsyncBaseTransport):
         proxy: str | None = None,
         max_response_bytes: int = 10 * 1024 * 1024,
     ):
+        if proxy is not None and pinned_hosts:
+            raise ValueError(
+                "Proxy mode cannot preserve DNS pinning because the proxy resolves "
+                "the target hostname"
+            )
+
         limits = httpx.Limits()
         ssl_context = ssl.create_default_context()
         backend = PinnedAsyncNetworkBackend(pinned_hosts)

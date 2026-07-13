@@ -105,6 +105,23 @@ async def test_web_fetch_can_disable_security_checks(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_web_fetch_proxy_fails_closed_when_jina_cannot_fetch() -> None:
+    tool = WebFetchTool(
+        proxy="http://127.0.0.1:7890",
+        web_config=WebToolsConfig(),
+    )
+
+    with patch("xbot.platform.security.network.socket.getaddrinfo", _fake_resolve_public), \
+         patch.object(tool, "_fetch_jina", AsyncMock(return_value=None)), \
+         patch.object(tool, "_fetch_readability", AsyncMock()) as readability:
+        result = await tool.execute(url="https://example.com/page")
+
+    data = json.loads(result)
+    assert "proxy-side DNS cannot be pinned" in data["error"]
+    assert readability.await_count == 0
+
+
+@pytest.mark.asyncio
 async def test_web_fetch_blocks_redirect_before_following_private_target():
     tool = WebFetchTool()
     state: dict[str, object] = {"requested": [], "follow_redirects": None}

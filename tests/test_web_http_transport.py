@@ -71,3 +71,11 @@ async def test_pinned_transport_rejects_oversized_response_and_closes_stream():
 
     assert pool.last_response is not None
     assert pool.last_response.stream.closed is True
+
+
+def test_pinned_transport_rejects_proxy_that_would_bypass_dns_pinning():
+    with pytest.raises(ValueError, match="DNS pinning"):
+        PinnedAsyncHTTPTransport(
+            {"example.com": "93.184.216.34"},
+            proxy="http://127.0.0.1:7890",
+        )

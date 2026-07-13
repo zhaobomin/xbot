@@ -4,6 +4,8 @@
 .env
 *.pyc
 dist/
+!xbot/interfaces/webui/frontend/dist/
+!xbot/interfaces/webui/frontend/dist/**
 build/
 *.egg-info/
 *.egg
