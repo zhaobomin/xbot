@@ -1,3 +1,4 @@
+from scripts.review.security.runner import run as security_runner_run
 from scripts.review.security.scan_async_race import scan as scan_async_race
 from scripts.review.security.scan_auth_bypass import scan as scan_auth_bypass
 from scripts.review.security.scan_deadlock import scan as scan_deadlock
@@ -107,3 +108,12 @@ def test_event_loop_block_detail_has_func_contract():
     assert findings
     assert all(f.detail.startswith("func:") for f in findings)
     assert all(f.category == "async_block" for f in findings)
+
+
+def test_security_runner_runs_all_scanners_and_dedups():
+    findings = security_runner_run("tests/review/fixtures/security")
+    assert isinstance(findings, list)
+    assert len(findings) > 0  # fixtures carry known anti-patterns
+    # No duplicate (file, line, category) tuples survive cross-track dedup.
+    keys = [(f.file, f.line, f.category) for f in findings]
+    assert len(keys) == len(set(keys)), "duplicates found"
