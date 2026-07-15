@@ -1,0 +1,8 @@
+import pytest
+from {{ module_path }} import {{ function_name }}
+
+def test_{{ finding_id }}():
+    # Real bug (injection) -> command executes -> assertion fails -> confirmed
+    # Clean (escaped/list form) -> no execution -> passes -> refuted
+    with pytest.raises((subprocess.SubprocessError, ValueError)):
+        {{ function_name }}("; rm -rf /")

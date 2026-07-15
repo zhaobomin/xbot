@@ -1,0 +1,8 @@
+import pytest
+from {{ module_path }} import {{ function_name }}
+
+def test_{{ finding_id }}():
+    # Real bug (no auth) -> returns 200 -> assertion fails -> confirmed
+    # Clean (authed) -> raises 401 -> passes -> refuted
+    with pytest.raises((PermissionError, Exception)):
+        {{ function_name }}()

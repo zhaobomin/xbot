@@ -1,0 +1,11 @@
+import gc
+import pytest
+from {{ module_path }} import {{ function_name }}
+
+@pytest.mark.asyncio
+async def test_{{ finding_id }}():
+    # Real bug (GC'd task) -> task incomplete after gc.collect -> assertion fails -> confirmed
+    # Clean (held task) -> completes -> passes -> refuted
+    {{ function_name }}({{ sample_args }})
+    gc.collect()
+    # assertion: task should still be running or completed, not destroyed

@@ -1,0 +1,15 @@
+import asyncio
+import pytest
+from {{ module_path }} import {{ function_name }}
+
+@pytest.mark.asyncio
+async def test_{{ finding_id }}():
+    # Real bug (blocks) -> wait_for raises TimeoutError -> caught -> pytest.fail -> test FAILS -> confirmed
+    # Clean (non-blocking) -> completes -> no exception -> test PASSES -> refuted
+    try:
+        await asyncio.wait_for(
+            {{ function_name }}({{ sample_args }}),
+            timeout=0.1,
+        )
+    except asyncio.TimeoutError:
+        pytest.fail("event loop blocked by synchronous call")

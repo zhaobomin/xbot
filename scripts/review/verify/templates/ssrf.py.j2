@@ -1,0 +1,8 @@
+import pytest
+from {{ module_path }} import {{ function_name }}
+
+def test_{{ finding_id }}():
+    # Real bug (leaks) -> request reaches intranet -> assertion fails -> test FAILS -> confirmed
+    # Clean (guarded) -> raises/asserts -> test PASSES -> refuted
+    with pytest.raises((ValueError, ConnectionError)):
+        {{ function_name }}("http://169.254.169.254/")
