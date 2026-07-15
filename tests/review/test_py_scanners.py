@@ -112,6 +112,7 @@ from scripts.review.py.scan_mutable_defaults import scan as scan_mutable_default
 from scripts.review.py.scan_naming_remnants import scan as scan_naming_remnants
 from scripts.review.py.scan_ssrf import scan as scan_ssrf
 from scripts.review.py.scan_retry_jitter import scan as scan_retry_jitter
+from scripts.review.py.scan_codegraph_reachability import scan as scan_codegraph_reachability
 
 
 def test_ssrf_hits_bad_not_good():
@@ -132,3 +133,15 @@ def test_retry_jitter_hits_bad_not_good():
     lines = {f.line for f in findings}
     assert 10 in lines             # bad() fixed sleep in retry loop
     assert 5 not in lines          # good() jittered sleep
+
+
+def test_codegraph_reachability_does_not_crash():
+    findings = scan_codegraph_reachability()
+    assert isinstance(findings, list)
+    # Either real findings or a toolchain_error — both are valid
+
+
+def test_codegraph_missing_db_returns_toolchain_error():
+    findings = scan_codegraph_reachability(db_path="/nonexistent/codegraph.db")
+    assert len(findings) == 1
+    assert findings[0].category == "toolchain_error"
