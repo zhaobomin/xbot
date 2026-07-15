@@ -1,3 +1,5 @@
+from scripts.review.ts.build_tsc import scan as build_tsc_scan
+from scripts.review.ts.lint_eslint import scan as lint_eslint_scan
 from scripts.review.ts.scan_any_type import scan as scan_any_type
 from scripts.review.ts.scan_console_log import scan as scan_console_log
 from scripts.review.ts.scan_frontend_a11y import scan as scan_frontend_a11y
@@ -82,3 +84,18 @@ def test_frontend_a11y_detail_has_func_contract():
     findings = scan_frontend_a11y("tests/review/fixtures/ts/frontend_a11y_sample.tsx")
     assert findings
     assert all(f.detail.startswith("func:") for f in findings)
+
+
+def test_build_tsc_parses_type_error():
+    findings = build_tsc_scan("tests/review/fixtures/ts/tsc_error_sample.ts")
+    lines = {f.line for f in findings}
+    assert 1 in lines              # const x: number = "bad" -> TS2322
+    assert all(f.category == "toolchain_error" for f in findings)
+
+
+def test_lint_eslint_emits_toolchain_error_and_does_not_crash():
+    findings = lint_eslint_scan("bridge")
+    assert len(findings) == 1
+    f = findings[0]
+    assert f.category == "toolchain_error"
+    assert f.detail.startswith("eslint broken:")
