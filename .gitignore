@@ -37,5 +37,11 @@ MagicMock/
 .qoder/
 
 # review toolchain output
- findings_*.json
+tests/review_temp/
+
+# review toolchain output (ensure clean matches)
+findings_*.json
+findings_raw.json
+findings_verified.json
+docs/reviews/auto/*_findings.json
 tests/review_temp/
