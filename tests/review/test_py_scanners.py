@@ -145,3 +145,39 @@ def test_codegraph_missing_db_returns_toolchain_error():
     findings = scan_codegraph_reachability(db_path="/nonexistent/codegraph.db")
     assert len(findings) == 1
     assert findings[0].category == "toolchain_error"
+
+
+def test_scan_task_lifecycle_hits_fix2_golden():
+    from scripts.review.py.scan_task_lifecycle import scan
+    findings = scan("tests/review/fixtures/known_bugs/task_lifecycle_fix2.py")
+    assert findings  # scanner fires on real bug shape
+
+
+def test_scan_private_api_hits_fix4_golden():
+    from scripts.review.py.scan_private_api import scan
+    findings = scan("tests/review/fixtures/known_bugs/private_api_fix4.py")
+    assert findings
+
+
+def test_scan_fail_open_hits_fix8_golden():
+    from scripts.review.py.scan_fail_open import scan
+    findings = scan("tests/review/fixtures/known_bugs/fail_open_fix8.py")
+    assert findings
+
+
+def test_scan_ssrf_hits_v2027_golden():
+    from scripts.review.py.scan_ssrf import scan
+    findings = scan("tests/review/fixtures/known_bugs/ssrf_v2027.py")
+    assert findings
+
+
+def test_scan_naming_remnants_hits_nanobot_golden():
+    from scripts.review.py.scan_naming_remnants import scan
+    findings = scan("tests/review/fixtures/known_bugs/naming_remnants_nanobot.py")
+    assert findings
+
+
+def test_scan_async_blocks_hits_p0_1_golden():
+    from scripts.review.py.scan_async_blocks import scan
+    findings = scan("tests/review/fixtures/known_bugs/async_blocks_p0_1.py")
+    assert findings
