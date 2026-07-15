@@ -1,3 +1,4 @@
+from scripts.review.security.scan_async_race import scan as scan_async_race
 from scripts.review.security.scan_auth_bypass import scan as scan_auth_bypass
 from scripts.review.security.scan_injection import scan as scan_injection
 from scripts.review.security.scan_secrets import scan as scan_secrets
@@ -59,3 +60,16 @@ def test_secrets_high_confidence_no_func_contract():
     assert findings
     assert all(f.category == "secrets" for f in findings)
     assert all(f.confidence == "high" for f in findings)
+
+
+def test_async_race_hits_bad_not_good():
+    findings = scan_async_race("tests/review/fixtures/security/async_race_sample.py")
+    lines = {f.line for f in findings}
+    assert 12 in lines         # _cache["k"] = "v" without a lock
+    assert 8 not in lines      # _cache["k"] = "v" under asyncio.Lock() clean
+
+
+def test_async_race_category_no_func_contract():
+    findings = scan_async_race("tests/review/fixtures/security/async_race_sample.py")
+    assert findings
+    assert all(f.category == "async_race" for f in findings)
