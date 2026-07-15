@@ -39,6 +39,20 @@ def test_fail_open_detail_has_func_contract():
     findings = scan_fail_open("tests/review/fixtures/fail_open_sample.py")
     assert findings
     assert all(f.detail.startswith("func:") for f in findings)
+
+
+def test_dead_code_hits_unused_and_unassigned():
+    findings = scan_dead_code("tests/review/fixtures/dead_code_sample.py")
+    lines = {f.line for f in findings}
+    assert 1 in lines              # import unused_module
+    assert 11 in lines             # asyncio.ensure_future unassigned
+    assert 2 not in lines          # import os is referenced
+
+
+def test_dead_code_detail_has_func_contract():
+    findings = scan_dead_code("tests/review/fixtures/dead_code_sample.py")
+    assert findings
+    assert all(f.detail.startswith("func:") for f in findings)
 def test_private_api_hits_waiters_not_set():
     findings = scan_private_api("tests/review/fixtures/private_api_sample.py")
     lines = {f.line for f in findings}
@@ -46,3 +60,5 @@ def test_private_api_hits_waiters_not_set():
     assert 6 not in lines           # event.set() clean
 from scripts.review.py.scan_private_api import scan as scan_private_api
 from scripts.review.py.scan_fail_open import scan as scan_fail_open
+from scripts.review.py.scan_fail_open import scan as scan_fail_open
+from scripts.review.py.scan_dead_code import scan as scan_dead_code
