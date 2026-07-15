@@ -80,6 +80,21 @@ def test_mutable_defaults_detail_has_func_contract():
     findings = scan_mutable_defaults("tests/review/fixtures/mutable_defaults_sample.py")
     assert findings
     assert all(f.detail.startswith("func:") for f in findings)
+
+
+def test_naming_remnants_hits_class_docstring_string():
+    findings = scan_naming_remnants("tests/review/fixtures/naming_remnants_sample.py")
+    lines = {f.line for f in findings}
+    assert 5 in lines              # class NanobotHandler
+    assert 6 in lines              # docstring "forwards to Nanobot"
+    assert 9 in lines              # REPLY_TITLE = "Nanobot Reply"
+    assert 1 not in lines          # class GoodHandler
+
+
+def test_naming_remnants_detail_has_func_contract():
+    findings = scan_naming_remnants("tests/review/fixtures/naming_remnants_sample.py")
+    assert findings
+    assert all(f.detail.startswith("func:") for f in findings)
 def test_private_api_hits_waiters_not_set():
     findings = scan_private_api("tests/review/fixtures/private_api_sample.py")
     lines = {f.line for f in findings}
@@ -93,3 +108,5 @@ from scripts.review.py.scan_dead_code import scan as scan_dead_code
 from scripts.review.py.scan_task_lifecycle import scan as scan_task_lifecycle
 from scripts.review.py.scan_task_lifecycle import scan as scan_task_lifecycle
 from scripts.review.py.scan_mutable_defaults import scan as scan_mutable_defaults
+from scripts.review.py.scan_mutable_defaults import scan as scan_mutable_defaults
+from scripts.review.py.scan_naming_remnants import scan as scan_naming_remnants
