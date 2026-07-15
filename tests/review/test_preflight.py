@@ -1,3 +1,4 @@
+from scripts.review.preflight import preflight
 from scripts.review.verify.baseline_tests import run_baseline
 from scripts.review.verify.coverage_gaps import check_coverage
 
@@ -25,3 +26,9 @@ def test_coverage_skips_when_pytest_cov_missing():
     result = check_coverage([])
     assert result.get("skipped") is True
     assert "pytest-cov" in result.get("reason", "")
+def test_preflight_returns_status_dict():
+    status = preflight()
+    assert "ruff" in status and "pytest" in status
+    assert status["ruff"] is True
+    assert status["pytest_cov"] is False  # not installed
+    assert status["codegraph_stale"] is True  # Jun-17, >2wk old

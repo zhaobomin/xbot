@@ -16,7 +16,9 @@ from scripts.review.verify.run_regression import run_with_results
 
 def run(findings_raw: list[Finding]) -> list[Finding]:
     # 1. Baseline pytest run (informational; surfaces pre-existing failures).
-    run_baseline()
+    # Cached on the function so the top-level orchestrator can report
+    # baseline_failures in findings_final.json without a second pytest run.
+    run._baseline_result = run_baseline()
     # 2. Coverage gap analysis (informational; skipped without pytest-cov).
     check_coverage(findings_raw)
     # 3. Generate + run regression tests for template-eligible findings,
