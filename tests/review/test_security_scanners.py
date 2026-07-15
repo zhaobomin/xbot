@@ -1,5 +1,6 @@
 from scripts.review.security.scan_auth_bypass import scan as scan_auth_bypass
 from scripts.review.security.scan_injection import scan as scan_injection
+from scripts.review.security.scan_secrets import scan as scan_secrets
 from scripts.review.security.scan_ssrf import scan as scan_ssrf
 
 
@@ -43,3 +44,18 @@ def test_injection_detail_has_func_contract():
     assert findings
     assert all(f.detail.startswith("func:") for f in findings)
     assert all(f.category == "injection" for f in findings)
+
+
+def test_secrets_hits_bad_not_good():
+    findings = scan_secrets("tests/review/fixtures/security/secrets_sample.py")
+    lines = {f.line for f in findings}
+    assert 10 in lines          # API_KEY = "sk-abc123def456"
+    assert 11 in lines          # password = "supersecretpass"
+    assert 6 not in lines       # os.environ["KEY"] clean
+
+
+def test_secrets_high_confidence_no_func_contract():
+    findings = scan_secrets("tests/review/fixtures/security/secrets_sample.py")
+    assert findings
+    assert all(f.category == "secrets" for f in findings)
+    assert all(f.confidence == "high" for f in findings)
