@@ -1,5 +1,6 @@
 from scripts.review.ts.scan_any_type import scan as scan_any_type
 from scripts.review.ts.scan_console_log import scan as scan_console_log
+from scripts.review.ts.scan_frontend_a11y import scan as scan_frontend_a11y
 from scripts.review.ts.scan_reconnect_race import scan as scan_reconnect_race
 from scripts.review.ts.scan_unhandled_promise import scan as scan_unhandled_promise
 from scripts.review.ts.scan_unused_exports import scan as scan_unused_exports
@@ -66,5 +67,18 @@ def test_unused_exports_hits_unused_not_used():
 
 def test_unused_exports_detail_has_func_contract():
     findings = scan_unused_exports("tests/review/fixtures/ts/unused_exports")
+    assert findings
+    assert all(f.detail.startswith("func:") for f in findings)
+
+
+def test_frontend_a11y_hits_bad_not_good():
+    findings = scan_frontend_a11y("tests/review/fixtures/ts/frontend_a11y_sample.tsx")
+    lines = {f.line for f in findings}
+    assert 6 in lines              # <img src="x" /> without alt
+    assert 2 not in lines          # <img src="x" alt="desc" /> clean
+
+
+def test_frontend_a11y_detail_has_func_contract():
+    findings = scan_frontend_a11y("tests/review/fixtures/ts/frontend_a11y_sample.tsx")
     assert findings
     assert all(f.detail.startswith("func:") for f in findings)
