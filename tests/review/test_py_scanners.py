@@ -66,6 +66,20 @@ def test_task_lifecycle_detail_has_func_contract():
     findings = scan_task_lifecycle("tests/review/fixtures/task_lifecycle_sample.py")
     assert findings
     assert all(f.detail.startswith("func:") for f in findings)
+
+
+def test_mutable_defaults_hits_list_and_dict_not_none():
+    findings = scan_mutable_defaults("tests/review/fixtures/mutable_defaults_sample.py")
+    lines = {f.line for f in findings}
+    assert 5 in lines              # def bad(x=[])
+    assert 9 in lines              # def also_bad(y={})
+    assert 1 not in lines          # def good(x=None)
+
+
+def test_mutable_defaults_detail_has_func_contract():
+    findings = scan_mutable_defaults("tests/review/fixtures/mutable_defaults_sample.py")
+    assert findings
+    assert all(f.detail.startswith("func:") for f in findings)
 def test_private_api_hits_waiters_not_set():
     findings = scan_private_api("tests/review/fixtures/private_api_sample.py")
     lines = {f.line for f in findings}
@@ -77,3 +91,5 @@ from scripts.review.py.scan_fail_open import scan as scan_fail_open
 from scripts.review.py.scan_dead_code import scan as scan_dead_code
 from scripts.review.py.scan_dead_code import scan as scan_dead_code
 from scripts.review.py.scan_task_lifecycle import scan as scan_task_lifecycle
+from scripts.review.py.scan_task_lifecycle import scan as scan_task_lifecycle
+from scripts.review.py.scan_mutable_defaults import scan as scan_mutable_defaults
