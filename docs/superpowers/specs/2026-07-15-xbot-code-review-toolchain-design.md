@@ -32,7 +32,7 @@ agent→Finding 输出契约、gen_regression 模板机制、confidence/severity
 
 默认行为(不传 `--fix-confirmed`)仍是仅报告。
 
-**eligible 条件可达性说明**: dead_code 和 naming_remnants 属于无模板 category(5.3 表中"不生成测试"),不经过动态验证,故无动态 verdict。confidence_updater(5.5)对此类 category 设有**静态确认规则**: 无模板且默认 confidence=high → verdict=confirmed-by-static(verify_note="static-confirmed")。因此 `--fix-confirmed` 的 eligible 条件对这两类等价于 `confidence=high`(经静态确认),是可达的,而非依赖不可达的动态 confirmed。
+**eligible 条件可达性说明**: dead_code 和 naming_remnants 属于无模板 category(5.3 表中"不生成测试"),不经过动态验证,故无动态 verdict。confidence_updater(5.5)对此类 category 设有**静态确认规则**: 无模板且默认 confidence=high → verdict=confirmed(verify_note="static-confirmed", 静态确认路径)。因此 `--fix-confirmed` 的 eligible 条件对这两类等价于 `confidence=high`(经静态确认),是可达的,而非依赖不可达的动态 confirmed。
 
 ---
 
@@ -301,7 +301,7 @@ from {{ finding.module_path }} import {{ finding.function_name }}
 @pytest.mark.asyncio
 async def test_{{ finding.id }}(monkeypatch):
     # 断言正确行为: 函数在超时内完成(不阻塞事件循环)
-    # 真 bug(阻塞)→ wait_for 抛 TimeoutError 未被捕获 → 测试失败 → confirmed
+    # 真 bug(阻塞)→ wait_for 抛 TimeoutError 被捕获并 pytest.fail → 测试失败 → confirmed
     # 干净(不阻塞)→ 函数完成 → 测试通过 → refuted
     try:
         await asyncio.wait_for(
@@ -349,7 +349,7 @@ async def test_{{ finding.id }}(monkeypatch):
 
 边界: 动态验证层不修代码,不删 finding,只更新 verdict/confidence/verify_note。坐实/证伪判定全部基于测试运行结果,不做推理猜测。
 
-**静态确认规则(无模板 category)**: dead_code 等"不生成测试"的 category(5.3 表)不经过动态验证。confidence_updater 对这类 category 设: 若默认 confidence=high → verdict=confirmed-by-static,verify_note="static-confirmed";否则 verdict=inconclusive。这使 `--fix-confirmed` 的 eligible allowlist(dead_code、naming_remnants)可达。
+**静态确认规则(无模板 category)**: dead_code 等"不生成测试"的 category(5.3 表)不经过动态验证。confidence_updater 对这类 category 设: 若默认 confidence=high → verdict=confirmed(verify_note="static-confirmed", 静态确认路径);否则 verdict=inconclusive。这使 `--fix-confirmed` 的 eligible allowlist(dead_code、naming_remnants)可达。
 
 ---
 
@@ -394,7 +394,7 @@ async def test_{{ finding.id }}(monkeypatch):
 - 当前有、基线无 → `new`
 - 当前有、基线有且 diff_status 非 fixed → `recurring`
 - 当前无、基线有 → `fixed`
-- 当前有、基线有且 diff_status 曾为 fixed → `regression`
+- 当前有、且基线 `fixed_history` 命中(4 轮 TTL 内)→ `regression`
 
 行号变化不影响匹配(只要符号和 title 相同)。这解决了"行号移动导致 recurring 被误判为 fixed+new"的问题。
 
