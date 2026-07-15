@@ -456,7 +456,7 @@ class TestAgentService:
 
 
 class TestRunDispatch:
-    """Tests for the run() message routing and _dispatch() processing chain."""
+    """Tests for the run() message routing and worker processing chain."""
 
     @pytest.fixture
     def state_manager(self) -> RuntimeSessionRegistry:
@@ -488,23 +488,24 @@ class TestRunDispatch:
         await service.initialize(config, shared_resources)
         return service
 
-    # --- Test 1: Progress forwarding ---
+    # --- Worker event forwarding (replaces legacy _dispatch tests) ---
 
     @pytest.mark.asyncio
-    async def test_progress_forwarding(self, config, shared_resources, bus):
-        """_dispatch should forward progress_texts as OutboundMessage with _progress metadata."""
+    async def test_worker_forwards_progress(self, config, shared_resources, bus):
+        """_publish_worker_response should forward progress_texts with _progress metadata."""
         service = await self._make_service(config, shared_resources)
+        session_key = "test:c1"
+        worker = service._create_detached_session_worker(
+            session_key, client=MagicMock(), channel="test", chat_id="c1",
+        )
+        service._session_workers[session_key] = worker
 
-        async def fake_process(context):
-            yield AgentResponse(content="", progress_texts=["Thinking about it..."])
-            yield AgentResponse(content="Hello!")
+        await service._publish_worker_response(
+            worker,
+            AgentResponse(content="", progress_texts=["Thinking about it..."]),
+            bus,
+        )
 
-        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="Hi")
-
-        with patch.object(service, "process", side_effect=fake_process):
-            await service._dispatch(msg, bus)
-
-        # Find progress call (event_type="thinking" -> progress_kind="reasoning")
         progress_calls = [
             c for c in bus.publish_outbound.call_args_list
             if c.args[0].metadata.get("_progress") is True
@@ -514,49 +515,47 @@ class TestRunDispatch:
         assert progress_calls[0].args[0].metadata.get("_progress_kind") == "reasoning"
         assert "Thinking about it..." in progress_calls[0].args[0].content
 
-    # --- Test 2: Tool hint forwarding ---
-
     @pytest.mark.asyncio
-    async def test_tool_hint_forwarding(self, config, shared_resources, bus):
-        """_dispatch should forward tool_calls as OutboundMessage with _tool_hint metadata."""
+    async def test_worker_forwards_tool_hints(self, config, shared_resources, bus):
+        """_publish_worker_response should forward tool_calls with _tool_hint metadata."""
         service = await self._make_service(config, shared_resources)
+        session_key = "test:c1"
+        worker = service._create_detached_session_worker(
+            session_key, client=MagicMock(), channel="test", chat_id="c1",
+        )
+        service._session_workers[session_key] = worker
 
-        async def fake_process(context):
-            yield AgentResponse(
-                content="",
-                tool_calls=[{"name": "bash", "input": {"cmd": "ls"}}],
-            )
-            yield AgentResponse(content="Done!")
+        await service._publish_worker_response(
+            worker,
+            AgentResponse(content="", tool_calls=[{"name": "bash", "input": {"cmd": "ls"}}]),
+            bus,
+        )
 
-        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="list files")
-
-        with patch.object(service, "process", side_effect=fake_process):
-            await service._dispatch(msg, bus)
-
-        tool_calls = [
+        tool_hint_calls = [
             c for c in bus.publish_outbound.call_args_list
             if c.args[0].metadata.get("_tool_hint") is True
         ]
-        assert len(tool_calls) >= 1
-        assert "bash" in tool_calls[0].args[0].content
-
-    # --- Test 3: Usage forwarding ---
+        assert len(tool_hint_calls) >= 1
+        assert "bash" in tool_hint_calls[0].args[0].content
 
     @pytest.mark.asyncio
-    async def test_usage_forwarding(self, config, shared_resources, bus):
-        """_dispatch should forward usage as OutboundMessage with _event_type=usage metadata."""
+    async def test_worker_forwards_usage(self, config, shared_resources, bus):
+        """_publish_worker_response should forward usage with _event_type=usage metadata."""
         service = await self._make_service(config, shared_resources)
+        session_key = "test:c1"
+        worker = service._create_detached_session_worker(
+            session_key, client=MagicMock(), channel="test", chat_id="c1",
+        )
+        service._session_workers[session_key] = worker
 
-        async def fake_process(context):
-            yield AgentResponse(
+        await service._publish_worker_response(
+            worker,
+            AgentResponse(
                 content="Answer",
                 usage={"input_tokens": 100, "output_tokens": 50},
-            )
-
-        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="Hi")
-
-        with patch.object(service, "process", side_effect=fake_process):
-            await service._dispatch(msg, bus)
+            ),
+            bus,
+        )
 
         usage_calls = [
             c for c in bus.publish_outbound.call_args_list
@@ -567,19 +566,24 @@ class TestRunDispatch:
         assert "50" in usage_calls[0].args[0].content
 
     @pytest.mark.asyncio
-    async def test_dispatch_ignores_final_content_after_deltas(self, config, shared_resources, bus):
-        """_dispatch should avoid duplicating final content after streamed deltas."""
+    async def test_worker_publishes_result_after_deltas(self, config, shared_resources, bus):
+        """Result should be published as a non-progress message after delta forwarding."""
         service = await self._make_service(config, shared_resources)
+        session_key = "test:c1"
+        worker = service._create_detached_session_worker(
+            session_key, client=MagicMock(), channel="test", chat_id="c1",
+        )
+        service._session_workers[session_key] = worker
 
-        async def fake_process(context):
-            yield AgentResponse(content="", is_delta=True, delta_content="A")
-            yield AgentResponse(content="", is_delta=True, delta_content="B")
-            yield AgentResponse(content="AB", event_type="result")
-
-        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="dup")
-
-        with patch.object(service, "process", side_effect=fake_process):
-            await service._dispatch(msg, bus)
+        await service._publish_worker_response(
+            worker, AgentResponse(content="", is_delta=True, delta_content="A"), bus,
+        )
+        await service._publish_worker_response(
+            worker, AgentResponse(content="", is_delta=True, delta_content="B"), bus,
+        )
+        await service._publish_worker_response(
+            worker, AgentResponse(content="AB", event_type="result"), bus,
+        )
 
         final_messages = [
             c.args[0]
@@ -862,8 +866,8 @@ class TestRunDispatch:
     # --- Test 8: Workspace command injection ---
 
     @pytest.mark.asyncio
-    async def test_workspace_command(self, config, shared_resources, bus, tmp_path):
-        """Workspace commands should inject command content into prompt."""
+    async def test_workspace_command(self, config, shared_resources, tmp_path):
+        """Workspace commands should inject command content into prompt via _prepare_prompt_from_message."""
         # Create a command file
         cmd_dir = tmp_path / "commands"
         cmd_dir.mkdir()
@@ -875,103 +879,32 @@ class TestRunDispatch:
         from xbot.runtime.core.context.commands import CommandsLoader
         service._commands_loader = CommandsLoader(tmp_path)
 
-        async def fake_process(context):
-            # Verify the prompt was injected
-            assert context.prompt == "Say hello in a friendly way"
-            yield AgentResponse(content="Hello there!", event_type="result")
-
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="/greet")
-
-        with patch.object(service, "process", side_effect=fake_process):
-            await service._dispatch(msg, bus)
-
-        # Final response should be sent
-        final_calls = [
-            c for c in bus.publish_outbound.call_args_list
-            if not c.args[0].metadata  # no metadata = final response
-        ]
-        assert len(final_calls) == 1
-        assert "Hello there!" in final_calls[0].args[0].content
-
-    # --- Test 9: Error recovery ---
-
-    @pytest.mark.asyncio
-    async def test_error_recovery(self, config, shared_resources, bus, state_manager):
-        """SDK exceptions should result in error message and phase back to IDLE."""
-        service = await self._make_service(config, shared_resources)
-
-        async def failing_process(context):
-            raise RuntimeError("SDK connection failed")
-            yield  # Make it a generator  # noqa: B018
-
-        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="Hi")
-
-        with patch.object(service, "process", side_effect=failing_process):
-            await service._dispatch(msg, bus)
-
-        # Error message should be sent
-        assert bus.publish_outbound.call_count >= 1
-        error_calls = [
-            c for c in bus.publish_outbound.call_args_list
-            if "\u274c" in c.args[0].content or "error" in c.args[0].content.lower()
-            or "\u51fa\u9519" in c.args[0].content
-        ]
-        assert len(error_calls) >= 1
-
-        # Phase should be back to IDLE
-        session_key = "test:c1"
-        assert state_manager.get_phase(session_key) == SessionPhase.IDLE
-
-    # --- Test 10: Dispatch phase lifecycle ---
-
-    @pytest.mark.asyncio
-    async def test_dispatch_phase_lifecycle(self, config, shared_resources, bus, state_manager):
-        """With mocked process(), _dispatch keeps phase stable and ends at IDLE."""
-        service = await self._make_service(config, shared_resources)
-        session_key = "test:c1"
-
-        phases_seen: list[SessionPhase] = []
-
-        async def tracking_process(context):
-            # Capture phase during processing
-            phases_seen.append(state_manager.get_phase(session_key))
-            yield AgentResponse(content="Done")
-
-        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="Hi")
-
-        # Before dispatch
-        assert state_manager.get_phase(session_key) == SessionPhase.IDLE
-
-        with patch.object(service, "process", side_effect=tracking_process):
-            await service._dispatch(msg, bus)
-
-        # This test mocks process(); phase transitions are owned by process().
-        assert phases_seen == [SessionPhase.IDLE]
-
-        # After dispatch, phase should be IDLE
-        assert state_manager.get_phase(session_key) == SessionPhase.IDLE
+        prompt = service._prepare_prompt_from_message(msg)
+        assert prompt == "Say hello in a friendly way"
 
     # --- Test 11: System message (compact) forwarding ---
 
     @pytest.mark.asyncio
     async def test_system_message_compact_forwarding(self, config, shared_resources, bus):
-        """SystemMessage with compact subtype should be forwarded as progress with event_type=system."""
+        """_publish_worker_response should forward compact system messages as progress with event_type=system."""
         service = await self._make_service(config, shared_resources)
+        session_key = "test:c1"
+        worker = service._create_detached_session_worker(
+            session_key, client=MagicMock(), channel="test", chat_id="c1",
+        )
+        service._session_workers[session_key] = worker
 
-        async def fake_process(context):
-            # Simulate a compact system message followed by a normal response
-            yield AgentResponse(
+        await service._publish_worker_response(
+            worker,
+            AgentResponse(
                 content="",
                 progress_texts=["\U0001f504 Compressing context..."],
                 event_type="system",
                 event_data={"subtype": "pre_compact"},
-            )
-            yield AgentResponse(content="Done after compact")
-
-        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="Hi")
-
-        with patch.object(service, "process", side_effect=fake_process):
-            await service._dispatch(msg, bus)
+            ),
+            bus,
+        )
 
         # Find system progress call
         system_calls = [
@@ -1041,25 +974,6 @@ class TestRunDispatch:
         empty_msg.message = ""
         result = service._convert_system_message(empty_msg)
         assert result is None
-
-    # --- Test 14: _dispatch stores routing for compact hook delivery ---
-
-    @pytest.mark.asyncio
-    async def test_dispatch_stores_routing(self, config, shared_resources, bus, state_manager):
-        """_dispatch should store session routing in state_manager."""
-        service = await self._make_service(config, shared_resources)
-
-        async def fake_process(_context):
-            yield AgentResponse(content="ok")
-
-        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="Hi")
-
-        with patch.object(service, "process", side_effect=fake_process):
-            await service._dispatch(msg, bus)
-
-        resolved = state_manager.resolve_compact_notification_target("test:c1")
-        assert resolved == ("test:c1", "test", "c1")
-
     # --- Test 15: process syncs SDK session ID mapping ---
 
     @pytest.mark.asyncio
@@ -1370,51 +1284,6 @@ class TestRunDispatch:
         assert result is not None
         assert result.event_type == "thinking"
         assert result.progress_texts
-
-    # --- Test 18: dispatch forwards tool_call event_data ---
-
-    @pytest.mark.asyncio
-    async def test_dispatch_tool_call_event_data(self, config, shared_resources, bus):
-        """Tool-call progress should carry tool_calls payload in _event_data."""
-        service = await self._make_service(config, shared_resources)
-
-        tool_calls = [{"name": "bash", "input": {"cmd": "ls"}, "kind": "tool"}]
-
-        async def fake_process(_context):
-            yield AgentResponse(content="", tool_calls=tool_calls)
-            yield AgentResponse(content="done")
-
-        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="run")
-        with patch.object(service, "process", side_effect=fake_process):
-            await service._dispatch(msg, bus)
-
-        tool_events = [
-            c for c in bus.publish_outbound.call_args_list
-            if c.args[0].metadata.get("_event_type") == "tool_call"
-        ]
-        assert tool_events
-        assert tool_events[0].args[0].metadata.get("_event_data", {}).get("tool_calls") == tool_calls
-
-    # --- Test 19: skip empty usage summary (0/0) ---
-
-    @pytest.mark.asyncio
-    async def test_dispatch_skips_zero_usage_summary(self, config, shared_resources, bus):
-        """Usage summary should be skipped when input/output tokens are both zero."""
-        service = await self._make_service(config, shared_resources)
-
-        async def fake_process(_context):
-            yield AgentResponse(content="ok", usage={"input_tokens": 0, "output_tokens": 0})
-
-        msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="run")
-        with patch.object(service, "process", side_effect=fake_process):
-            await service._dispatch(msg, bus)
-
-        usage_events = [
-            c for c in bus.publish_outbound.call_args_list
-            if c.args[0].metadata.get("_event_type") == "usage"
-        ]
-        assert usage_events == []
-
     # --- Test 20: _convert_result_message parses dict usage correctly ---
 
     @pytest.mark.asyncio

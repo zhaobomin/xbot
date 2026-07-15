@@ -129,33 +129,33 @@ def test_exec_extract_absolute_paths_captures_quoted_paths() -> None:
     assert "~/.xbot/config.json" in paths
 
 
-def test_exec_guard_blocks_home_path_outside_workspace(tmp_path) -> None:
+async def test_exec_guard_blocks_home_path_outside_workspace(tmp_path) -> None:
     tool = ExecTool(restrict_to_workspace=True)
-    error = tool._guard_command("cat ~/.xbot/config.json", str(tmp_path))
+    error = await tool._guard_command("cat ~/.xbot/config.json", str(tmp_path))
     assert error == "Error: Command blocked by safety guard (path outside working dir)"
 
 
-def test_exec_guard_blocks_quoted_home_path_outside_workspace(tmp_path) -> None:
+async def test_exec_guard_blocks_quoted_home_path_outside_workspace(tmp_path) -> None:
     tool = ExecTool(restrict_to_workspace=True)
-    error = tool._guard_command('cat "~/.xbot/config.json"', str(tmp_path))
+    error = await tool._guard_command('cat "~/.xbot/config.json"', str(tmp_path))
     assert error == "Error: Command blocked by safety guard (path outside working dir)"
 
 
-def test_exec_guard_blocks_relative_symlink_outside_workspace(tmp_path) -> None:
+async def test_exec_guard_blocks_relative_symlink_outside_workspace(tmp_path) -> None:
     tool = ExecTool(restrict_to_workspace=True)
     outside = tmp_path.parent / "outside.txt"
     outside.write_text("x", encoding="utf-8")
     link = tmp_path / "link_outside.txt"
     link.symlink_to(outside)
 
-    error = tool._guard_command("cat link_outside.txt", str(tmp_path))
+    error = await tool._guard_command("cat link_outside.txt", str(tmp_path))
 
     assert error == "Error: Command blocked by safety guard (path outside working dir)"
 
 
-def test_exec_guard_blocks_mixed_separator_relative_traversal(tmp_path) -> None:
+async def test_exec_guard_blocks_mixed_separator_relative_traversal(tmp_path) -> None:
     tool = ExecTool(restrict_to_workspace=True)
-    error = tool._guard_command(r"cat ..\/secret.txt", str(tmp_path))
+    error = await tool._guard_command(r"cat ..\/secret.txt", str(tmp_path))
     assert error == "Error: Command blocked by safety guard (path traversal detected)"
 
 

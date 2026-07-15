@@ -1,5 +1,13 @@
 # Changelog
 
+## v2.0.39 (2026-07-15)
+
+- 修复异步工具中阻塞式 DNS 解析导致事件循环冻结的问题：`web_fetch`/`web_search` 的 SSRF 校验改为非阻塞 `loop.getaddrinfo`，新增 `async_validate_and_pin_url` 和 `async_validate_resolved_url`。
+- 修复 `ExecTool`/Telegram/Discord 中同样的同步 DNS 阻塞问题：`contains_internal_url` 和 URL 校验全部异步化。
+- 修复 SDK 客户端 `options_fingerprint` 范围过窄：新增 permission_mode、disallowed_tools、setting_sources、MCP server 名称到指纹，配置变更后自动重建客户端。
+- 修复 `MessageTool._sent_in_turn` 并发竞态：改为 per-session dict 隔离，新增 `was_sent_in_turn()` 公共方法。
+- 删除不再被生产代码调用的 `_dispatch` 方法（约 160 行），迁移相关测试至 worker path（`_publish_worker_response`）。
+
 ## v2.0.38 (2026-07-13)
 
 - 修复 `!model <id>` 仅显示切换成功但未影响真实 SDK 请求的问题：模型覆盖现在按 session 生效，下一次请求会使用所选模型，重置 session 后恢复默认模型。

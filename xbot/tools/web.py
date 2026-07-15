@@ -75,50 +75,22 @@ def _validate_url(url: str) -> tuple[bool, str]:
         return False, str(e)
 
 
-def _validate_url_safe(url: str) -> tuple[bool, str]:
+async def _validate_url_safe(url: str) -> tuple[bool, str]:
     """Validate URL with SSRF protection: scheme, domain, and resolved IP check."""
-    from xbot.platform.security.network import validate_url_target
-    return validate_url_target(url)
+    from xbot.platform.security.network import async_validate_url_target
+    return await async_validate_url_target(url)
 
 
-def _validate_and_pin_url(url: str) -> tuple[bool, str, dict[str, str]]:
+async def _validate_and_pin_url(url: str) -> tuple[bool, str, dict[str, str]]:
     """Validate URL safety and return pinned host mapping in a single DNS resolution.
 
     Returns (ok, error_message, pinned_hosts).
     Eliminates TOCTOU DNS rebinding by reusing the same resolved IPs for both
     validation and connection pinning.
     """
-    from urllib.parse import urlparse as _urlparse
+    from xbot.platform.security.network import async_validate_and_pin_url
+    return await async_validate_and_pin_url(url)
 
-    from xbot.platform.security.network import _is_private, _resolve_host_ips
-
-    try:
-        p = _urlparse(url)
-    except Exception as e:
-        return False, str(e), {}
-
-    if p.scheme not in ("http", "https"):
-        return False, f"Only http/https allowed, got '{p.scheme or 'none'}'", {}
-    if not p.netloc:
-        return False, "Missing domain", {}
-
-    hostname = p.hostname
-    if not hostname:
-        return False, "Missing hostname", {}
-
-    try:
-        resolved = _resolve_host_ips(hostname)
-    except Exception:
-        return False, f"Cannot resolve hostname: {hostname}", {}
-
-    if not resolved:
-        return False, f"Cannot resolve hostname: {hostname}", {}
-
-    for addr in resolved:
-        if _is_private(addr):
-            return False, f"Blocked: {hostname} resolves to private/internal address {addr}", {}
-
-    return True, "", {hostname: str(resolved[0])}
 
 
 def _resolve_pinned_host(url: str) -> dict[str, str]:
@@ -184,11 +156,11 @@ class WebSearchTool(Tool):
             return api_key.get_secret_value()
         return str(api_key)
 
-    def _pinned_transport_for_url(
+    async def _pinned_transport_for_url(
         self,
         url: str,
     ) -> tuple[_PinnedAsyncHTTPTransport | None, str | None]:
-        allowed, error, pinned = _validate_and_pin_url(url)
+        allowed, error, pinned = await _validate_and_pin_url(url)
         if not allowed:
             return None, error
         # Search endpoints are fixed by the provider or administrator. When a
@@ -226,7 +198,7 @@ class WebSearchTool(Tool):
             logger.warning("BRAVE_API_KEY not set, falling back to DuckDuckGo")
             return await self._search_duckduckgo(query, n)
         endpoint = "https://api.search.brave.com/res/v1/web/search"
-        transport, error = self._pinned_transport_for_url(endpoint)
+        transport, error = await self._pinned_transport_for_url(endpoint)
         if error:
             return f"Error: invalid Brave Search URL: {error}"
         try:
@@ -255,7 +227,7 @@ class WebSearchTool(Tool):
             logger.warning("TAVILY_API_KEY not set, falling back to DuckDuckGo")
             return await self._search_duckduckgo(query, n)
         endpoint = "https://api.tavily.com/search"
-        transport, error = self._pinned_transport_for_url(endpoint)
+        transport, error = await self._pinned_transport_for_url(endpoint)
         if error:
             return f"Error: invalid Tavily URL: {error}"
         try:
@@ -280,7 +252,7 @@ class WebSearchTool(Tool):
             logger.warning("SEARXNG_BASE_URL not set, falling back to DuckDuckGo")
             return await self._search_duckduckgo(query, n)
         endpoint = f"{base_url.rstrip('/')}/search"
-        transport, error = self._pinned_transport_for_url(endpoint)
+        transport, error = await self._pinned_transport_for_url(endpoint)
         if error:
             return f"Error: invalid SearXNG URL: {error}"
         try:
@@ -305,7 +277,7 @@ class WebSearchTool(Tool):
             logger.warning("JINA_API_KEY not set, falling back to DuckDuckGo")
             return await self._search_duckduckgo(query, n)
         endpoint = "https://s.jina.ai/"
-        transport, error = self._pinned_transport_for_url(endpoint)
+        transport, error = await self._pinned_transport_for_url(endpoint)
         if error:
             return f"Error: invalid Jina URL: {error}"
         try:
@@ -399,7 +371,7 @@ class WebFetchTool(Tool):
         logger.debug("WebFetch: url='%s', extractMode=%s, maxChars=%s", url, extract_mode, max_chars)
 
         if not self.disable_security_checks:
-            is_valid, error_msg = _validate_url_safe(url)
+            is_valid, error_msg = await _validate_url_safe(url)
             if not is_valid:
                 logger.warning("WebFetch: URL validation failed for '%s': %s", url, error_msg)
                 return json.dumps({"error": f"URL validation failed: {error_msg}", "url": url}, ensure_ascii=False)
@@ -458,9 +430,9 @@ class WebFetchTool(Tool):
                 return None
             final_url = data.get("url", url)
             if not self.disable_security_checks:
-                from xbot.platform.security.network import validate_resolved_url
+                from xbot.platform.security.network import async_validate_resolved_url
 
-                final_ok, final_err = validate_resolved_url(str(final_url))
+                final_ok, final_err = await async_validate_resolved_url(str(final_url))
                 if not final_ok:
                     logger.warning("Jina Reader final URL blocked for %s: %s", url, final_err)
                     return None
@@ -493,7 +465,7 @@ class WebFetchTool(Tool):
             while True:
                 transport = None
                 if not self.disable_security_checks:
-                    allowed, error, pinned = _validate_and_pin_url(current_url)
+                    allowed, error, pinned = await _validate_and_pin_url(current_url)
                     if not allowed:
                         return json.dumps({"error": f"URL validation failed: {error}", "url": current_url}, ensure_ascii=False)
                     transport = _PinnedAsyncHTTPTransport(
@@ -518,8 +490,8 @@ class WebFetchTool(Tool):
                     break
 
             if not self.disable_security_checks:
-                from xbot.platform.security.network import validate_resolved_url
-                redir_ok, redir_err = validate_resolved_url(str(r.url))
+                from xbot.platform.security.network import async_validate_resolved_url
+                redir_ok, redir_err = await async_validate_resolved_url(str(r.url))
                 if not redir_ok:
                     return json.dumps({"error": f"Redirect blocked: {redir_err}", "url": url}, ensure_ascii=False)
 

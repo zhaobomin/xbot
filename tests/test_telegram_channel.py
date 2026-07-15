@@ -443,7 +443,9 @@ async def test_send_remote_media_url_after_security_validation(monkeypatch) -> N
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
-    monkeypatch.setattr("xbot.channels.telegram.validate_url_target", lambda url: (True, ""))
+    async def _safe_url(url):
+        return True, ""
+    monkeypatch.setattr("xbot.channels.telegram.async_validate_url_target", _safe_url)
 
     await channel.send(
         OutboundMessage(
@@ -471,10 +473,9 @@ async def test_send_blocks_unsafe_remote_media_url(monkeypatch) -> None:
         MessageBus(),
     )
     channel._app = _FakeApp(lambda: None)
-    monkeypatch.setattr(
-        "xbot.channels.telegram.validate_url_target",
-        lambda url: (False, "Blocked: example.com resolves to private/internal address 127.0.0.1"),
-    )
+    async def _block_url(url):
+        return False, "Blocked: example.com resolves to private/internal address 127.0.0.1"
+    monkeypatch.setattr("xbot.channels.telegram.async_validate_url_target", _block_url)
 
     await channel.send(
         OutboundMessage(

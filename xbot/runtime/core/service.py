@@ -1374,6 +1374,27 @@ class AgentService:
         ]
         return "\n".join(lines)
 
+    @staticmethod
+    def _build_options_fingerprint(options: Any) -> str:
+        """Build a fingerprint that detects config changes requiring client recreation.
+
+        Includes fields that (a) change via WebUI config edits and (b) affect the
+        SDK subprocess behavior at creation time. ``system_prompt`` is intentionally
+        excluded — it changes frequently with memory updates, and the agent can
+        read memory files at runtime via the memory tool.
+        """
+        mcp_keys = sorted((options.mcp_servers or {}).keys()) if options.mcp_servers else []
+        disallowed = sorted(options.disallowed_tools or [])
+        sources = sorted(options.setting_sources or [])
+        return "\x1f".join([
+            str(options.model),
+            str(options.max_turns),
+            str(options.permission_mode or ""),
+            ",".join(disallowed),
+            ",".join(sources),
+            ",".join(mcp_keys),
+        ])
+
     async def _get_or_create_client(
         self,
         session_key: str,
@@ -1404,7 +1425,7 @@ class AgentService:
 
         # Build options
         options = self._build_sdk_options(session_key=session_key, model=model)
-        options_fingerprint = f"{options.model}\x1f{options.max_turns}"
+        options_fingerprint = self._build_options_fingerprint(options)
         try:
             return await self._client_pool.get_or_create(
                 session_key,
@@ -1423,7 +1444,7 @@ class AgentService:
                 return await self._client_pool.get_or_create(
                     session_key,
                     options=retry_options,
-                    options_fingerprint=f"{retry_options.model}\x1f{retry_options.max_turns}",
+                    options_fingerprint=self._build_options_fingerprint(retry_options),
                 )
             raise
 
@@ -3145,165 +3166,6 @@ class AgentService:
             sess_mgr.save(session)
         except Exception as e:
             logger.warning("Failed to persist assistant message: %s", e)
-
-    async def _dispatch(self, msg: InboundMessage, bus: Any) -> None:
-        """Complete processing chain for a single inbound message."""
-        session_key = msg.session_key or f"{msg.channel}:{msg.chat_id}"
-
-        try:
-            # Ensure routing exists before processing so hooks can resolve targets.
-            self._set_session_routing(session_key, msg.channel, msg.chat_id)
-
-            # Workspace command injection
-            prompt = msg.content
-            if self._commands_loader and self._commands_loader.is_command(prompt):
-                cmd_name = self._commands_loader.get_command_from_text(prompt)
-                if cmd_name:
-                    cmd_content = self._commands_loader.load_command(cmd_name)
-                    if cmd_content:
-                        prompt = cmd_content
-
-            context = AgentContext(
-                session_key=session_key,
-                prompt=prompt,
-                channel=msg.channel,
-                chat_id=msg.chat_id,
-                media=msg.media or [],
-            )
-
-            final_result_text = ""
-            last_content_text = ""
-            last_usage: dict[str, Any] | None = None
-            error_sent = False
-            execution_cwd = self._resolve_execution_cwd(session_key)
-            attempts = 0
-            max_attempts = 2
-
-            while attempts < max_attempts:
-                error_response_content: str | None = None
-                async for response in self.process(context):
-                    # Forward thinking/progress
-                    if response.progress_texts:
-                        evt_type = response.event_type or "thinking"
-                        evt_data = response.event_data
-                        for text in response.progress_texts:
-                            await self._publish_event(
-                                bus, msg.channel, msg.chat_id, text,
-                                source_metadata=msg.metadata,
-                                event_data=evt_data,
-                                _progress=True, _event_type=evt_type,
-                            )
-
-                    # Forward explicit tool-hint text
-                    if response.tool_hint_text:
-                        await self._publish_event(
-                            bus, msg.channel, msg.chat_id, response.tool_hint_text,
-                            source_metadata=msg.metadata,
-                            _tool_hint=True, _progress=True, _event_type="tool_hint",
-                        )
-
-                    # Forward tool hints
-                    if response.tool_calls:
-                        hint = self._format_tool_hint(response.tool_calls, execution_cwd=execution_cwd)
-                        await self._publish_event(
-                            bus, msg.channel, msg.chat_id, hint,
-                            source_metadata=msg.metadata,
-                            event_data={"tool_calls": response.tool_calls},
-                            _tool_hint=True, _progress=True, _event_type="tool_call",
-                        )
-
-                    # Forward content deltas to progress stream
-                    if response.is_delta and response.delta_content:
-                        await self._publish_event(
-                            bus, msg.channel, msg.chat_id, response.delta_content,
-                            source_metadata=msg.metadata,
-                            event_data=response.event_data,
-                            _progress=True,
-                            _event_type=response.event_type or "content_delta",
-                        )
-
-                    # Final user-visible output: prefer ResultMessage.result,
-                    # fall back to last AssistantMessage text content (CLI >=2.1.128
-                    # may leave result=None).
-                    if response.event_type == "result" and response.content:
-                        final_result_text = response.content
-                        await bus.publish_outbound(OutboundMessage(
-                            channel=msg.channel,
-                            chat_id=msg.chat_id,
-                            content=response.content,
-                        ))
-                    elif response.event_type == "content" and response.content and not response.is_delta:
-                        last_content_text = response.content
-
-                    # Capture process errors for potential automatic recovery.
-                    if response.finish_reason == "error" and response.content:
-                        error_response_content = response.content
-                        break
-
-                    # Track usage
-                    if response.usage:
-                        last_usage = response.usage
-
-                if error_response_content and attempts == 0 and self._is_recoverable_stream_error_text(error_response_content):
-                    recovered = await self._attempt_broken_session_recovery(session_key, reason="stream_error_auto_retry")
-                    if recovered:
-                        attempts += 1
-                        continue
-                if error_response_content:
-                    error_sent = True
-                    await bus.publish_outbound(OutboundMessage(
-                        channel=msg.channel,
-                        chat_id=msg.chat_id,
-                        content=error_response_content,
-                    ))
-                break
-
-            # Fallback: if ResultMessage.result was empty (CLI >=2.1.128 may
-            # leave result=None), publish the last text content we captured.
-            if not final_result_text and not error_sent and last_content_text:
-                final_result_text = last_content_text
-                await bus.publish_outbound(OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content=last_content_text,
-                ))
-
-            # Send usage summary
-            if last_usage and not error_sent:
-                from xbot.interaction.event_formatter import format_usage_summary
-                usage_text = format_usage_summary(last_usage)
-                if usage_text:
-                    await self._publish_event(
-                        bus, msg.channel, msg.chat_id, usage_text,
-                        source_metadata=msg.metadata,
-                        _event_type="usage", _progress=True,
-                    )
-
-            # Session persistence
-            sess_mgr = self._shared_resources.get("conversation_store")
-            if sess_mgr and hasattr(sess_mgr, "get_or_create"):
-                try:
-                    session = sess_mgr.get_or_create(session_key)
-                    session.add_message("user", msg.content)
-                    if final_result_text:
-                        session.add_message("assistant", final_result_text)
-                    sess_mgr.save(session)
-                except Exception as e:
-                    logger.warning("Failed to persist session: %s", e)
-
-        except asyncio.CancelledError:
-            logger.info(f"Dispatch cancelled for {session_key}")
-            raise
-        except Exception as e:
-            logger.exception("Error in dispatch for %s: %s", session_key, e)
-            try:
-                await bus.publish_outbound(OutboundMessage(
-                    channel=msg.channel,
-                    chat_id=msg.chat_id,
-                    content=f"\u274c \u5904\u7406\u51fa\u9519: {e}",
-                ))
-            except Exception:
-                pass
 
     @staticmethod
     def _is_valid_compact_target(resolved_target: Any) -> bool:

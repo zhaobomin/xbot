@@ -21,11 +21,15 @@ def _response(status: int = 200, json: dict | None = None) -> httpx.Response:
 
 
 def _allow_pinned_search(monkeypatch):
-    def fake_pin(url):
+    async def fake_pin(url):
         hostname = urlparse(url).hostname or "example.com"
         return True, "", {hostname: "203.0.113.10"}
 
     monkeypatch.setattr("xbot.tools.web._validate_and_pin_url", fake_pin)
+
+
+async def _async_pin_brave(url):
+    return True, "", {"api.search.brave.com": "203.0.113.10"}
 
 
 @pytest.mark.asyncio
@@ -70,7 +74,7 @@ async def test_brave_search_uses_pinned_transport(monkeypatch):
     monkeypatch.setattr("xbot.tools.web._PinnedAsyncHTTPTransport", FakeTransport)
     monkeypatch.setattr(
         "xbot.tools.web._validate_and_pin_url",
-        lambda url: (True, "", {"api.search.brave.com": "203.0.113.10"}),
+        _async_pin_brave,
     )
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
 
@@ -107,7 +111,7 @@ async def test_brave_search_uses_configured_proxy_without_claiming_dns_pinning(m
     monkeypatch.setattr("xbot.tools.web._PinnedAsyncHTTPTransport", ForbiddenPinnedTransport)
     monkeypatch.setattr(
         "xbot.tools.web._validate_and_pin_url",
-        lambda url: (True, "", {"api.search.brave.com": "203.0.113.10"}),
+        _async_pin_brave,
     )
     monkeypatch.setattr(httpx, "AsyncClient", FakeClient)
 

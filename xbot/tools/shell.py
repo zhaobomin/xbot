@@ -77,7 +77,7 @@ class ExecTool(Tool):
         self, command: str, working_dir: str | Path | None = None, **kwargs: Any,
     ) -> str:
         cwd = Path(working_dir) if working_dir else self.working_dir or Path.cwd()
-        guard_error = self._guard_command(command, cwd)
+        guard_error = await self._guard_command(command, cwd)
         if guard_error:
             return guard_error
 
@@ -153,7 +153,7 @@ class ExecTool(Tool):
         except Exception as e:
             return f"Error executing command: {str(e)}"
 
-    def _guard_command(self, command: str, cwd: str | Path) -> str | None:
+    async def _guard_command(self, command: str, cwd: str | Path) -> str | None:
         """Best-effort safety guard for potentially destructive commands."""
         cmd = command.strip()
         lower = cmd.lower()
@@ -171,8 +171,8 @@ class ExecTool(Tool):
             if not any(re.search(p, lower) for p in self.allow_patterns):
                 return "Error: Command blocked by safety guard (not in allowlist)"
 
-        from xbot.platform.security.network import contains_internal_url
-        if contains_internal_url(cmd):
+        from xbot.platform.security.network import async_contains_internal_url
+        if await async_contains_internal_url(cmd):
             return "Error: Command blocked by safety guard (internal/private URL detected)"
 
         if self.restrict_to_workspace:

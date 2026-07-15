@@ -80,6 +80,76 @@ async def async_validate_url_target(url: str) -> tuple[bool, str]:
     return True, ""
 
 
+async def async_validate_and_pin_url(url: str) -> tuple[bool, str, dict[str, str]]:
+    """Async SSRF validation + host pinning — non-blocking DNS for event-loop safety.
+
+    Returns (ok, error_message, pinned_hosts).
+    """
+    try:
+        p = urlparse(url)
+    except Exception as e:
+        return False, str(e), {}
+
+    if p.scheme not in ("http", "https"):
+        return False, f"Only http/https allowed, got '{p.scheme or 'none'}'", {}
+    if not p.netloc:
+        return False, "Missing domain", {}
+
+    hostname = p.hostname
+    if not hostname:
+        return False, "Missing hostname", {}
+
+    try:
+        resolved = await _async_resolve_host_ips(hostname)
+    except socket.gaierror:
+        return False, f"Cannot resolve hostname: {hostname}", {}
+    except Exception:
+        return False, f"Cannot resolve hostname: {hostname}", {}
+
+    if not resolved:
+        return False, f"Cannot resolve hostname: {hostname}", {}
+
+    for addr in resolved:
+        if _is_private(addr):
+            return False, f"Blocked: {hostname} resolves to private/internal address {addr}", {}
+
+    return True, "", {hostname: str(resolved[0])}
+
+
+async def async_validate_resolved_url(url: str) -> tuple[bool, str]:
+    """Async version of validate_resolved_url — non-blocking DNS for event-loop safety."""
+    try:
+        p = urlparse(url)
+    except Exception as e:
+        return False, f"Invalid URL: {e}"
+
+    if p.scheme not in ("http", "https"):
+        return False, f"Only http/https allowed, got '{p.scheme or 'none'}'"
+
+    hostname = p.hostname
+    if not hostname:
+        return False, "Missing hostname"
+
+    try:
+        addr = ipaddress.ip_address(hostname)
+        if _is_private(addr):
+            return False, f"Redirect target is a private address: {addr}"
+    except ValueError:
+        try:
+            resolved = await _async_resolve_host_ips(hostname)
+        except socket.gaierror:
+            return False, f"Redirect target cannot be resolved: {hostname}"
+        except Exception:
+            return False, f"Redirect target cannot be resolved: {hostname}"
+        if not resolved:
+            return False, f"Redirect target cannot be resolved: {hostname}"
+        for addr in resolved:
+            if _is_private(addr):
+                return False, f"Redirect target {hostname} resolves to private address {addr}"
+
+    return True, ""
+
+
 def validate_url_target(url: str) -> tuple[bool, str]:
     """Validate a URL is safe to fetch: scheme, hostname, and resolved IPs.
 
@@ -149,6 +219,16 @@ def contains_internal_url(command: str) -> bool:
     for m in _URL_RE.finditer(command):
         url = m.group(0)
         ok, _ = validate_url_target(url)
+        if not ok:
+            return True
+    return False
+
+
+async def async_contains_internal_url(command: str) -> bool:
+    """Async version of contains_internal_url — non-blocking DNS for event-loop safety."""
+    for m in _URL_RE.finditer(command):
+        url = m.group(0)
+        ok, _ = await async_validate_url_target(url)
         if not ok:
             return True
     return False

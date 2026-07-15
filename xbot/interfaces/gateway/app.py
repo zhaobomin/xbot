@@ -609,7 +609,7 @@ def create_app(
                     if isinstance(cron_tool, CronTool) and cron_token is not None:
                         cron_tool.reset_cron_context(cron_token)
 
-                if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
+                if isinstance(message_tool, MessageTool) and message_tool.was_sent_in_turn():
                     return response
 
                 if job.payload.deliver and job.payload.to and response:

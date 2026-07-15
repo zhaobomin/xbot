@@ -20,7 +20,7 @@ from xbot.platform.bus.queue import MessageBus
 from xbot.platform.config.paths import get_media_dir
 from xbot.platform.config.schema import Base
 from xbot.platform.logging.core import get_logger
-from xbot.platform.security.network import validate_url_target
+from xbot.platform.security.network import async_validate_url_target
 from xbot.platform.utils.helpers import split_message
 
 logger = get_logger(__name__)
@@ -394,7 +394,7 @@ class TelegramChannel(BaseChannel):
 
                 # Telegram Bot API accepts HTTP(S) URLs directly for media params.
                 if self._is_remote_media_url(media_path):
-                    ok, error = validate_url_target(media_path)
+                    ok, error = await async_validate_url_target(media_path)
                     if not ok:
                         raise ValueError(f"unsafe media URL: {error}")
                     await self._call_with_retry(

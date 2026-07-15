@@ -396,9 +396,9 @@ class DiscordChannel(BaseChannel):
                 content_parts.append(f"[attachment: {filename} - too large]")
                 continue
             try:
-                from xbot.platform.security.network import validate_url_target
+                from xbot.platform.security.network import async_validate_url_target
 
-                safe, err = validate_url_target(url)
+                safe, err = await async_validate_url_target(url)
                 if not safe:
                     logger.warning("Discord attachment URL blocked by SSRF check: %s (%s)", url, err)
                     content_parts.append(f"[attachment: {filename} - blocked]")

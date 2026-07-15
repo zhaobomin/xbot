@@ -11,15 +11,15 @@ import pytest
 from xbot.tools.shell import ExecTool
 
 
-def _fake_resolve_private(hostname, port, family=0, type_=0):
+def _fake_resolve_private(hostname, *args):
     return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("169.254.169.254", 0))]
 
 
-def _fake_resolve_localhost(hostname, port, family=0, type_=0):
+def _fake_resolve_localhost(hostname, *args):
     return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("127.0.0.1", 0))]
 
 
-def _fake_resolve_public(hostname, port, family=0, type_=0):
+def _fake_resolve_public(hostname, *args):
     return [(socket.AF_INET, socket.SOCK_STREAM, 0, "", ("93.184.216.34", 0))]
 
 
@@ -55,7 +55,7 @@ async def test_exec_allows_curl_to_public_url():
     """Commands with public URLs should not be blocked by the internal URL check."""
     tool = ExecTool()
     with patch("xbot.platform.security.network.socket.getaddrinfo", _fake_resolve_public):
-        guard_result = tool._guard_command("curl https://example.com/api", "/tmp")
+        guard_result = await tool._guard_command("curl https://example.com/api", "/tmp")
     assert guard_result is None
 
 

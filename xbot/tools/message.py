@@ -21,7 +21,7 @@ class MessageTool(Tool):
         self._default_channel = default_channel
         self._default_chat_id = default_chat_id
         self._default_message_id = default_message_id
-        self._sent_in_turn: bool = False
+        self._sent_in_turn: dict[str, bool] = {}
         self._contexts: dict[str, tuple[str, str, str | None]] = {
             "_global": (default_channel, default_chat_id, default_message_id),
         }
@@ -52,6 +52,7 @@ class MessageTool(Tool):
     def clear_context(self, session_key: str) -> None:
         """Remove per-session context to prevent unbounded growth."""
         self._contexts.pop(session_key, None)
+        self._sent_in_turn.pop(session_key, None)
 
     def _resolve_context(self) -> tuple[str, str, str | None]:
         key = self._active_session_key.get()
@@ -68,8 +69,14 @@ class MessageTool(Tool):
         self._send_callback = callback
 
     def start_turn(self) -> None:
-        """Reset per-turn send tracking."""
-        self._sent_in_turn = False
+        """Reset per-turn send tracking for the active session."""
+        key = self._active_session_key.get()
+        self._sent_in_turn[key] = False
+
+    def was_sent_in_turn(self) -> bool:
+        """Return whether the message tool sent a message for the active session this turn."""
+        key = self._active_session_key.get()
+        return self._sent_in_turn.get(key, False)
 
     @property
     def name(self) -> str:
@@ -139,7 +146,8 @@ class MessageTool(Tool):
         try:
             await self._send_callback(msg)
             if channel == default_channel and chat_id == default_chat_id:
-                self._sent_in_turn = True
+                key = self._active_session_key.get()
+                self._sent_in_turn[key] = True
             media_info = f" with {len(media)} attachments" if media else ""
             return f"Message sent to {channel}:{chat_id}{media_info}"
         except Exception as e:

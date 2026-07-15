@@ -74,10 +74,10 @@ async def test_message_tool_start_turn_resets_sent_flag() -> None:
         default_chat_id="chat-1",
     )
 
-    assert tool._sent_in_turn is False
+    assert tool.was_sent_in_turn() is False
     result = await tool.execute(content="hello")
     assert "Message sent to telegram:chat-1" in result
-    assert tool._sent_in_turn is True
+    assert tool.was_sent_in_turn() is True
 
     tool.start_turn()
-    assert tool._sent_in_turn is False
+    assert tool.was_sent_in_turn() is False

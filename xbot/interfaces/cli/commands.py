@@ -898,7 +898,7 @@ def gateway(
                 cron_tool.reset_cron_context(cron_token)
 
         message_tool = agent.tools.get("message")
-        if isinstance(message_tool, MessageTool) and message_tool._sent_in_turn:
+        if isinstance(message_tool, MessageTool) and message_tool.was_sent_in_turn():
             return response
 
         if job.payload.deliver and job.payload.to and response:
