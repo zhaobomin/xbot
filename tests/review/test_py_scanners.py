@@ -110,3 +110,17 @@ from scripts.review.py.scan_task_lifecycle import scan as scan_task_lifecycle
 from scripts.review.py.scan_mutable_defaults import scan as scan_mutable_defaults
 from scripts.review.py.scan_mutable_defaults import scan as scan_mutable_defaults
 from scripts.review.py.scan_naming_remnants import scan as scan_naming_remnants
+from scripts.review.py.scan_ssrf import scan as scan_ssrf
+
+
+def test_ssrf_hits_bad_not_good():
+    findings = scan_ssrf("tests/review/fixtures/ssrf_sample.py")
+    lines = {f.line for f in findings}
+    assert 9 in lines              # bad() param interpolated into URL
+    assert 5 not in lines          # good() fixed URL clean
+
+
+def test_ssrf_detail_has_func_contract():
+    findings = scan_ssrf("tests/review/fixtures/ssrf_sample.py")
+    assert findings
+    assert all(f.detail.startswith("func:") for f in findings)
