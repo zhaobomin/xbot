@@ -1,6 +1,7 @@
 from scripts.review.security.scan_async_race import scan as scan_async_race
 from scripts.review.security.scan_auth_bypass import scan as scan_auth_bypass
 from scripts.review.security.scan_deadlock import scan as scan_deadlock
+from scripts.review.security.scan_event_loop_block import scan as scan_event_loop_block
 from scripts.review.security.scan_injection import scan as scan_injection
 from scripts.review.security.scan_secrets import scan as scan_secrets
 from scripts.review.security.scan_ssrf import scan as scan_ssrf
@@ -87,3 +88,22 @@ def test_deadlock_category_no_func_contract():
     findings = scan_deadlock("tests/review/fixtures/security/deadlock_sample.py")
     assert findings
     assert all(f.category == "deadlock" for f in findings)
+
+
+def test_event_loop_block_hits_bad_not_good():
+    findings = scan_event_loop_block(
+        "tests/review/fixtures/security/event_loop_block_sample.py"
+    )
+    lines = {f.line for f in findings}
+    assert 12 in lines         # requests.get in async function
+    assert 13 in lines         # time.sleep in async function
+    assert 8 not in lines      # await httpx.get clean
+
+
+def test_event_loop_block_detail_has_func_contract():
+    findings = scan_event_loop_block(
+        "tests/review/fixtures/security/event_loop_block_sample.py"
+    )
+    assert findings
+    assert all(f.detail.startswith("func:") for f in findings)
+    assert all(f.category == "async_block" for f in findings)
