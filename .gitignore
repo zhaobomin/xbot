@@ -35,3 +35,6 @@ node_modules/
 .workbuddy/
 MagicMock/
 .qoder/
+
+# review toolchain output
+findings_*.json

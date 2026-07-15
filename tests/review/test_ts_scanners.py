@@ -1,5 +1,6 @@
 from scripts.review.ts.build_tsc import scan as build_tsc_scan
 from scripts.review.ts.lint_eslint import scan as lint_eslint_scan
+from scripts.review.ts.runner import run as ts_runner_run
 from scripts.review.ts.scan_any_type import scan as scan_any_type
 from scripts.review.ts.scan_console_log import scan as scan_console_log
 from scripts.review.ts.scan_frontend_a11y import scan as scan_frontend_a11y
@@ -99,3 +100,13 @@ def test_lint_eslint_emits_toolchain_error_and_does_not_crash():
     f = findings[0]
     assert f.category == "toolchain_error"
     assert f.detail.startswith("eslint broken:")
+
+
+
+def test_ts_runner_runs_all_scanners_and_dedups():
+    findings = ts_runner_run("tests/review/fixtures/ts")
+    assert isinstance(findings, list)
+    assert len(findings) > 0  # fixtures have known anti-patterns
+    # Verify no duplicate (file, line, category) tuples
+    keys = [(f.file, f.line, f.category) for f in findings]
+    assert len(keys) == len(set(keys)), "duplicates found"
