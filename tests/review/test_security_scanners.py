@@ -1,5 +1,6 @@
 from scripts.review.security.scan_async_race import scan as scan_async_race
 from scripts.review.security.scan_auth_bypass import scan as scan_auth_bypass
+from scripts.review.security.scan_deadlock import scan as scan_deadlock
 from scripts.review.security.scan_injection import scan as scan_injection
 from scripts.review.security.scan_secrets import scan as scan_secrets
 from scripts.review.security.scan_ssrf import scan as scan_ssrf
@@ -73,3 +74,16 @@ def test_async_race_category_no_func_contract():
     findings = scan_async_race("tests/review/fixtures/security/async_race_sample.py")
     assert findings
     assert all(f.category == "async_race" for f in findings)
+
+
+def test_deadlock_hits_bad_not_good():
+    findings = scan_deadlock("tests/review/fixtures/security/deadlock_sample.py")
+    lines = {f.line for f in findings}
+    assert 10 in lines         # reversed lock order (lock_b, lock_a)
+    assert 5 not in lines      # consistent order (lock_a, lock_b) clean
+
+
+def test_deadlock_category_no_func_contract():
+    findings = scan_deadlock("tests/review/fixtures/security/deadlock_sample.py")
+    assert findings
+    assert all(f.category == "deadlock" for f in findings)
