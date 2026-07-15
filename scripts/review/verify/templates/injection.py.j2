@@ -1,8 +1,8 @@
-import pytest
+import subprocess
 from {{ module_path }} import {{ function_name }}
 
 def test_{{ finding_id }}():
-    # Real bug (injection) -> command executes -> assertion fails -> confirmed
-    # Clean (escaped/list form) -> no execution -> passes -> refuted
-    with pytest.raises((subprocess.SubprocessError, ValueError)):
-        {{ function_name }}("; rm -rf /")
+    # Real bug (shell injection) -> injected command runs -> stdout is just the marker -> assertion fails -> confirmed
+    # Clean (list form, no shell) -> literal output -> passes -> refuted
+    result = {{ function_name }}("; echo INJECTED")
+    assert result.stdout.strip() != "INJECTED"

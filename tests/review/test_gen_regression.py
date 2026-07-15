@@ -65,7 +65,7 @@ def test_fail_open_confirm_generates_permission_check():
     )
     code = generate_test(f)
     assert "pytest.raises(PermissionError)" in code
-    assert "illegal_input" in code
+    assert "malicious_name" in code
     assert "tests.review.fixtures_dynamic.fail_open_confirm" in code
     assert "def test_fo_conf" in code
 
@@ -106,8 +106,10 @@ def test_injection_confirm_generates_metachar_check():
         finding_id="ij_conf",
     )
     code = generate_test(f)
-    assert "subprocess.SubprocessError" in code
-    assert "; rm -rf /" in code
+    assert "import subprocess" in code
+    assert "; echo INJECTED" in code
+    assert "capture_output" not in code  # template delegates capture to the fixture
+    assert "INJECTED" in code
     assert "tests.review.fixtures_dynamic.injection_confirm" in code
     assert "def test_ij_conf" in code
 
@@ -120,7 +122,9 @@ def test_auth_bypass_confirm_generates_auth_check():
         finding_id="au_conf",
     )
     code = generate_test(f)
-    assert "pytest.raises((PermissionError, Exception))" in code
+    assert "TestClient" in code
+    assert 'client.get("/admin")' in code
+    assert "401" in code
     assert "tests.review.fixtures_dynamic.auth_bypass_confirm" in code
     assert "def test_au_conf" in code
 
@@ -187,7 +191,8 @@ def test_injection_refute_points_at_clean_fixture():
     )
     code = generate_test(f)
     assert "tests.review.fixtures_dynamic.injection_refute" in code
-    assert "subprocess.SubprocessError" in code
+    assert "import subprocess" in code
+    assert "; echo INJECTED" in code
 
 
 def test_auth_bypass_refute_points_at_clean_fixture():
@@ -199,7 +204,8 @@ def test_auth_bypass_refute_points_at_clean_fixture():
     )
     code = generate_test(f)
     assert "tests.review.fixtures_dynamic.auth_bypass_refute" in code
-    assert "pytest.raises((PermissionError, Exception))" in code
+    assert "TestClient" in code
+    assert "401" in code
 
 
 # --- arg + id rendering contracts ---------------------------------------------

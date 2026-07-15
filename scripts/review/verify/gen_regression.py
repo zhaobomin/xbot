@@ -18,6 +18,9 @@ from scripts.review.common import Finding
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 _OUTPUT_DIR = Path("tests/review_temp")
 
+# Categories backed by a Jinja2 template (dynamic-verification eligible).
+TEMPLATE_CATEGORIES = {p.name.removesuffix(".py.j2") for p in _TEMPLATES_DIR.glob("*.py.j2")}
+
 # one shared, immutable environment; templates never change at runtime
 _ENV = Environment(
     loader=FileSystemLoader(str(_TEMPLATES_DIR)),

@@ -3,6 +3,6 @@ import subprocess
 
 
 def run(x):
-    # BUG: f-string form; with shell=True this would execute metacharacters.
-    # Kept without shell=True here so the fixture is safe to import/define.
-    subprocess.run(f"echo {x}")
+    # BUG: shell=True with unescaped f-string interpolation -> command injection.
+    # Safe payload (echo), but the metacharacter is executed by the shell.
+    return subprocess.run(f"echo {x}", shell=True, capture_output=True, text=True)

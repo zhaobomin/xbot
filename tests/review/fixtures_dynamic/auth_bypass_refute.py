@@ -1,12 +1,12 @@
 """refute: route guarded by an auth dependency (false positive)."""
-from fastapi import Depends, FastAPI
+from fastapi import Depends, FastAPI, HTTPException
 
 app = FastAPI()
 
 
 def verify():
-    # raises when the caller is unauthenticated.
-    raise PermissionError("unauthenticated")
+    # raises 401 when the caller is unauthenticated.
+    raise HTTPException(status_code=401, detail="unauthenticated")
 
 
 @app.get("/admin", dependencies=[Depends(verify)])  # CLEAN: auth dependency

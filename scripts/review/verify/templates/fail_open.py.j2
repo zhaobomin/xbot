@@ -5,4 +5,4 @@ def test_{{ finding_id }}():
     # Real bug (fail-open) -> illegal input accepted -> assertion fails -> test FAILS -> confirmed
     # Clean (rejects) -> raises -> test PASSES -> refuted
     with pytest.raises(PermissionError):
-        {{ function_name }}(illegal_input)
+        {{ function_name }}("malicious_name")

@@ -1,11 +1,12 @@
 import gc
 import pytest
-from {{ module_path }} import {{ function_name }}
+from {{ module_path }} import {{ function_name }}, _held
 
 @pytest.mark.asyncio
 async def test_{{ finding_id }}():
-    # Real bug (GC'd task) -> task incomplete after gc.collect -> assertion fails -> confirmed
-    # Clean (held task) -> completes -> passes -> refuted
+    # Correct behavior: the spawner retains a reference to the task (_held non-empty).
+    # Real bug (fire-and-forget, no ref) -> _held empty -> assertion fails -> confirmed
+    # Clean (held ref) -> _held non-empty -> passes -> refuted
     {{ function_name }}({{ sample_args }})
     gc.collect()
-    # assertion: task should still be running or completed, not destroyed
+    assert _held

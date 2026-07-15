@@ -1,8 +1,10 @@
-import pytest
-from {{ module_path }} import {{ function_name }}
+from fastapi.testclient import TestClient
+from {{ module_path }} import app
 
 def test_{{ finding_id }}():
-    # Real bug (no auth) -> returns 200 -> assertion fails -> confirmed
-    # Clean (authed) -> raises 401 -> passes -> refuted
-    with pytest.raises((PermissionError, Exception)):
-        {{ function_name }}()
+    # Correct behavior: unauthenticated request is rejected with 401.
+    # Real bug (no auth dependency) -> 200 -> assertion fails -> confirmed
+    # Clean (auth dependency) -> 401 -> passes -> refuted
+    client = TestClient(app)
+    resp = client.get("/admin")
+    assert resp.status_code == 401
