@@ -205,9 +205,9 @@ Each scanner: write seed sample with anti-pattern + clean code → failing test 
 
 ### Task 4: Python semantic scanners + codegraph
 
-- [ ] **scan_ssrf (py, shallow low)** — seed: `def handler(user_url): httpx.get(f"http://api/{user_url}")` (param name in URL expression, anti) vs `httpx.get("http://fixed")` (clean). confidence=low.
+- [ ] **scan_ssrf (py, shallow low)** — seed: `def handler(user_url): httpx.get(f"http://api/{user_url}")` (param name in URL expression, anti) vs `httpx.get("http://fixed")` (clean). confidence=low. **detail must start with `func:`** (template-eligible: feeds ssrf.j2).
 - [ ] **scan_retry_jitter** — seed: `for _ in range(3): ...; time.sleep(1)` (fixed sleep in loop, anti) vs `time.sleep(2**attempt + random()` (clean). confidence=medium.
-- [ ] **scan_codegraph_reachability** — read `.codegraph/codegraph.db`, reverse call-reach from sinks. Test: missing DB → emit `toolchain_error` finding (not crash). Stale (>2wk) → same. confidence=low.
+- [ ] **scan_codegraph_reachability** — read `.codegraph/codegraph.db`, reverse call-reach from sinks. Test: missing DB → emit `toolchain_error` finding (not crash). Stale (>2wk) → same. confidence=low. (No `func:` needed - not template-eligible.)
 
 ### Task 5: Python runner + ruff wrapper
 
@@ -238,14 +238,14 @@ Each scanner: `.ts`/`.tsx` seed sample with anti-pattern + clean code → failin
 
 **Files:** `scripts/review/security/runner.py`, 7 `scan_*.py`, `tests/review/test_security_scanners.py`
 
-All shallow, low confidence. Each: seed sample + failing test + implement + commit.
+All shallow, low confidence. Each: seed sample + failing test (hits anti-pattern, misses clean, **detail starts with `func:`** for template-eligible scanners: ssrf, injection, auth_bypass, event_loop_block) + implement + commit.
 
-- [ ] **scan_auth_bypass** — seed: FastAPI route `@app.get("/admin")` without auth dependency (anti) vs `@app.get("/admin", dependencies=[Depends(verify)])` (clean). confidence=low.
-- [ ] **scan_ssrf (security)** — seed: `httpx.get(user_input_url)` (anti) vs `httpx.get(allowlisted_url)` (clean). confidence=low. Emits same `ssrf` category as py (dedup normalizes).
-- [ ] **scan_injection** — seed: `subprocess.run(f"echo {user_input}")` (anti) vs `subprocess.run(["echo", user_input])` (clean, list form). confidence=low.
+- [ ] **scan_auth_bypass** — seed: FastAPI route `@app.get("/admin")` without auth dependency (anti) vs `@app.get("/admin", dependencies=[Depends(verify)])` (clean). confidence=low. **detail must start with `func:`** (template-eligible: feeds auth_bypass.j2).
+- [ ] **scan_ssrf (security)** — seed: `httpx.get(user_input_url)` (anti) vs `httpx.get(allowlisted_url)` (clean). confidence=low. **detail must start with `func:`** (template-eligible: feeds ssrf.j2). Emits same `ssrf` category as py (dedup normalizes).
+- [ ] **scan_injection** — seed: `subprocess.run(f"echo {user_input}")` (anti) vs `subprocess.run(["echo", user_input])` (clean, list form). confidence=low. **detail must start with `func:`** (template-eligible: feeds injection.j2).
 - [ ] **scan_secrets** — seed: `API_KEY = "sk-abc123..."` (high-entropy string, anti) vs `API_KEY = os.environ["KEY"]` (clean). confidence=high.
-- [ ] **scan_async_race** — seed: shared `dict` read+write in async without lock (anti) vs under `asyncio.Lock()` (clean). confidence=low.
-- [ ] **scan_deadlock** — seed: `await lock_a; await lock_b` in one func + `await lock_b; await lock_a` in another (anti, order) vs consistent order (clean). confidence=low.
+- [ ] **scan_async_race** — seed: shared `dict` read+write in async without lock (anti) vs under `asyncio.Lock()` (clean). confidence=low. (No `func:` needed - not template-eligible.)
+- [ ] **scan_deadlock** — seed: `await lock_a; await lock_b` in one func + `await lock_b; await lock_a` in another (anti, order) vs consistent order (clean). confidence=low. (No `func:` needed - not template-eligible.)
 - [ ] **scan_event_loop_block** — seed: `async def f(): requests.get(url)` (sync IO in async, anti) vs `await httpx.get(url)` (clean). Emits `async_block` category.
 - [ ] **runner.py** — merges → `findings_security.json`.
 
@@ -405,7 +405,7 @@ def test_report_has_summary_and_sections():
 | scan_fail_open | `8ba36fbd` (Fix-8) | `xbot/capabilities/policy.py` | same, grep for `has_mcp` fail-open |
 | scan_ssrf | `6e2b6396` | `xbot/platform/security/network.py` | `git show 6e2b6396^:...`, grep for unguarded URL fetch |
 | scan_naming_remnants | `1e6b0e65` | `xbot/channels/dingtalk.py` | `git show 1e6b0e65^:xbot/channels/dingtalk.py`, grep for `Nanobot` |
-| scan_async_blocks | (P0-1, mcp removed) | historical `mcp/todoist_resources.py` | `git show <commit-before-removal>:mcp/todoist_resources.py`, grep for sync `get_tasks()` |
+| scan_async_blocks | (P0-1, deleted in `2ee2ffc4`) | historical `mcp/todoist_resources.py` | `git show 2ee2ffc4^:mcp/todoist_resources.py`, grep for sync `get_tasks()` in async def |
 
 - [ ] **Step 2: Write test asserting scanner hits golden fixture**
 
