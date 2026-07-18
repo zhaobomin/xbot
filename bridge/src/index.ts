@@ -16,7 +16,11 @@
 // Polyfill crypto for Baileys in ESM
 import { webcrypto } from 'crypto';
 if (!globalThis.crypto) {
-  (globalThis as any).crypto = webcrypto;
+  Object.defineProperty(globalThis, 'crypto', {
+    value: webcrypto,
+    writable: true,
+    configurable: true,
+  });
 }
 
 import { BridgeServer } from './server.js';

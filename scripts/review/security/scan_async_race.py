@@ -35,12 +35,14 @@ def _bound_names(func: ast.AsyncFunctionDef) -> set[str]:
     for node in _iter_non_nested(func):
         if isinstance(node, ast.Assign):
             for t in node.targets:
-                if isinstance(t, ast.Name):
-                    bound.add(t.id)
+                for name in _names_in_target(t):
+                    bound.add(name)
         elif isinstance(node, (ast.AnnAssign, ast.AugAssign)) and isinstance(
             node.target, ast.Name
         ):
             bound.add(node.target.id)
+        elif isinstance(node, ast.For):
+            bound.add(_loop_var(node))
     return bound
 
 
@@ -51,6 +53,29 @@ def _iter_non_nested(node: ast.AST):
         if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef, ast.Lambda)):
             continue
         yield from _iter_non_nested(child)
+
+
+def _names_in_target(target: ast.expr) -> list[str]:
+    """Return every ``Name`` bound by an assignment target.
+
+    Handles tuple/list unpacking (``a, b = ...``) and starred targets
+    (``a, *rest = ...``), which ``ast.Name`` checks alone would miss.
+    """
+    names: list[str] = []
+    if isinstance(target, ast.Name):
+        names.append(target.id)
+    elif isinstance(target, (ast.Tuple, ast.List)):
+        for elt in target.elts:
+            names.extend(_names_in_target(elt))
+    elif isinstance(target, ast.Starred):
+        names.extend(_names_in_target(elt.value))
+    return names
+
+
+def _loop_var(node: ast.For) -> str:
+    """Return the loop variable name for *node*, or empty string."""
+    target = node.target
+    return target.id if isinstance(target, ast.Name) else ""
 
 
 def _mutated_name(node: ast.AST) -> str | None:

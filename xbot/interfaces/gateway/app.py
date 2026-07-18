@@ -457,6 +457,7 @@ def create_app(
     app.state.runtime_started = False
     app.state.channel_start_task = None
     app.state.webui_active_tasks = {}
+    app.state.webui_active_tasks_lock = asyncio.Lock()
     if frontend_dir is not None:
         resolved_frontend_dir = frontend_dir
     else:
@@ -1661,6 +1662,7 @@ def create_app(
 
         active_tasks: dict[str, asyncio.Task] = app.state.webui_active_tasks
         owned_task_keys: set[str] = set()
+        active_tasks_lock = app.state.webui_active_tasks_lock
 
         async def _run_agent_turn(active_session_key: str, content: str) -> None:
             async def _on_progress(
@@ -1723,8 +1725,9 @@ def create_app(
                     "session_key": active_session_key,
                 })
             finally:
-                active_tasks.pop(active_session_key, None)
-                owned_task_keys.discard(active_session_key)
+                async with active_tasks_lock:
+                    active_tasks.pop(active_session_key, None)
+                    owned_task_keys.discard(active_session_key)
 
         try:
             while True:
@@ -1737,7 +1740,8 @@ def create_app(
                     else session_key
                 )
                 if message_type == "cancel":
-                    task = active_tasks.pop(active_session_key, None)
+                    async with active_tasks_lock:
+                        task = active_tasks.pop(active_session_key, None)
                     if task is not None and not task.done():
                         task.cancel()
                         with suppress(asyncio.CancelledError):
@@ -1801,18 +1805,19 @@ def create_app(
                     })
                     return
 
-                task = active_tasks.get(active_session_key)
-                if task is not None and not task.done():
-                    await _safe_websocket_send_json(websocket, {
-                        "type": "error",
-                        "error": "A message is already running for this session",
-                        "session_key": active_session_key,
-                    })
-                    continue
-                active_tasks[active_session_key] = asyncio.create_task(
-                    _run_agent_turn(active_session_key, content)
-                )
-                owned_task_keys.add(active_session_key)
+                async with active_tasks_lock:
+                    task = active_tasks.get(active_session_key)
+                    if task is not None and not task.done():
+                        await _safe_websocket_send_json(websocket, {
+                            "type": "error",
+                            "error": "A message is already running for this session",
+                            "session_key": active_session_key,
+                        })
+                        continue
+                    active_tasks[active_session_key] = asyncio.create_task(
+                        _run_agent_turn(active_session_key, content)
+                    )
+                    owned_task_keys.add(active_session_key)
         except WebSocketDisconnect:
             pass
         finally:
@@ -1821,7 +1826,8 @@ def create_app(
             # the session slot is released and a reconnect isn't blocked by
             # an "already running" ghost task.
             for key in list(owned_task_keys):
-                task = active_tasks.pop(key, None)
+                async with active_tasks_lock:
+                    task = active_tasks.pop(key, None)
                 if task is not None and not task.done():
                     task.cancel()
 

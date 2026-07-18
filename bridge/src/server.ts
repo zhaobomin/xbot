@@ -4,7 +4,8 @@
  */
 
 import { WebSocketServer, WebSocket } from 'ws';
-import { WhatsAppClient, InboundMessage } from './whatsapp.js';
+import { WhatsAppClient } from './whatsapp.js';
+import logger from './logger.js';
 
 interface SendCommand {
   type: 'send';
@@ -27,8 +28,8 @@ export class BridgeServer {
   async start(): Promise<void> {
     // Bind to localhost only — never expose to external network
     this.wss = new WebSocketServer({ host: '127.0.0.1', port: this.port });
-    console.log(`🌉 Bridge server listening on ws://127.0.0.1:${this.port}`);
-    if (this.token) console.log('🔒 Token authentication enabled');
+    logger.info({ port: this.port }, 'Bridge server listening');
+    if (this.token) logger.info('Token authentication enabled');
 
     // Initialize WhatsApp client
     this.wa = new WhatsAppClient({
@@ -48,7 +49,7 @@ export class BridgeServer {
           try {
             const msg = JSON.parse(data.toString());
             if (msg.type === 'auth' && msg.token === this.token) {
-              console.log('🔗 Python client authenticated');
+              logger.info('Python client authenticated');
               this.setupClient(ws);
             } else {
               ws.close(4003, 'Invalid token');
@@ -58,7 +59,7 @@ export class BridgeServer {
           }
         });
       } else {
-        console.log('🔗 Python client connected');
+        logger.info('Python client connected');
         this.setupClient(ws);
       }
     });
@@ -76,18 +77,18 @@ export class BridgeServer {
         await this.handleCommand(cmd);
         this.sendToClient(ws, { type: 'sent', to: cmd.to });
       } catch (error) {
-        console.error('Error handling command:', error);
+        logger.error({ err: error }, 'Error handling command');
         this.sendToClient(ws, { type: 'error', error: String(error) });
       }
     });
 
     ws.on('close', () => {
-      console.log('🔌 Python client disconnected');
+      logger.info('Python client disconnected');
       this.clients.delete(ws);
     });
 
     ws.on('error', (error) => {
-      console.error('WebSocket error:', error);
+      logger.error({ err: error }, 'WebSocket error');
       this.clients.delete(ws);
     });
   }
@@ -120,7 +121,7 @@ export class BridgeServer {
     try {
       client.send(data);
     } catch (error) {
-      console.error('WebSocket send failed:', error);
+      logger.error({ err: error }, 'WebSocket send failed');
       this.clients.delete(client);
     }
   }

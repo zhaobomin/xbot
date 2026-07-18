@@ -2,27 +2,21 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import sqlite3
 import time
 from collections import deque
 
 from scripts.review.common import Category, Finding, make_sig_key
 
-# Node name patterns that act as network sinks when reached via call edges.
-# Matched against node ``name`` (e.g. ``get`` of module ``httpx``) — kept
-# shallow: httpx/requests/aiohttp/urllib + a couple of fetch clients.
-_NET_SINK_NAMES: set[str] = {
-    "get",
-    "post",
-    "put",
-    "patch",
-    "delete",
-    "head",
-    "request",
-    "requests",
-    "urlopen",
-    "fetch",
-}
+# qualified_name substrings that mark a node as a genuine network sink.
+# Bare method names (get, post, delete, fetch) are far too generic and
+# also match business methods like ConversationStore::delete, ToolRegistry::get.
+# Only match nodes whose qualified_name contains a known HTTP-client module.
+_NET_SINK_QUALIFIED_RE = re.compile(
+    r"\b(?:httpx|requests|urllib|urlopen|aiohttp|http\.client)\b",
+    re.IGNORECASE,
+)
 
 _STALE_SECS = 14 * 24 * 3600  # two weeks
 
@@ -54,14 +48,18 @@ def _toolchain_error(db_path: str) -> Finding:
 
 
 def _net_sink_node_ids(cur: sqlite3.Cursor) -> set[str]:
-    """Return ids of nodes whose name is a known network sink entrypoint."""
+    """Return ids of nodes whose qualified_name marks them as a network sink.
+
+    Only matches nodes whose ``qualified_name`` contains a known HTTP-client
+    module (httpx, requests, urllib, aiohttp, http.client). Bare method names
+    like ``get``/``post``/``delete``/``fetch`` are NOT matched because they
+    also correspond to ordinary business methods (ConversationStore::delete,
+    ToolRegistry::get, etc.) that have nothing to do with networking.
+    """
     ids: set[str] = set()
-    placeholders = ",".join("?" * len(_NET_SINK_NAMES))
-    for row in cur.execute(
-        f"SELECT id FROM nodes WHERE name IN ({placeholders})",
-        tuple(_NET_SINK_NAMES),
-    ):
-        ids.add(row[0])
+    for row in cur.execute("SELECT id, qualified_name FROM nodes"):
+        if _NET_SINK_QUALIFIED_RE.search(row[1] or ""):
+            ids.add(row[0])
     return ids
 
 

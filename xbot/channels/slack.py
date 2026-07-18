@@ -1,6 +1,7 @@
 """Slack channel implementation using Socket Mode."""
 
 import asyncio
+import random
 import re
 from typing import Any
 
@@ -334,7 +335,7 @@ class SlackChannel(BaseChannel):
                 if "no_reaction" in error_str:
                     break  # Already removed, that's fine
                 if attempt < 2:
-                    await asyncio.sleep(0.1)  # Small delay before retry
+                    await asyncio.sleep(0.1 + random.random() * 0.05)  # Small jittered delay before retry
                 else:
                     logger.debug("Slack reactions_remove failed after retries: %s", e)
 

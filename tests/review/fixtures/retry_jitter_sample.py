@@ -7,4 +7,7 @@ def good(attempt):
 
 def bad():
     for _ in range(3):
-        time.sleep(1)  # anti: fixed sleep in retry loop
+        try:
+            time.sleep(1)  # anti: fixed sleep in retry loop
+        except Exception:
+            continue

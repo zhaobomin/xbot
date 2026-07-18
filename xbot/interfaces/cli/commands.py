@@ -1422,6 +1422,7 @@ def agent(
             turn_done = asyncio.Event()
             turn_done.set()
             turn_response: list[str] = []
+            turn_response_lock = asyncio.Lock()
             progress_coalescer = ProgressCoalescer()
             pending_runtime_error: str | None = None
             turn_rejected_busy = False
@@ -1479,7 +1480,8 @@ def agent(
                             for item in progress_coalescer.flush_all():
                                 await _print_interactive_progress_line(item.text, _thinking)
                             if msg.content:
-                                turn_response.append(msg.content)
+                                async with turn_response_lock:
+                                    turn_response.append(msg.content)
                             turn_done.set()
                         elif msg.content:
                             for item in progress_coalescer.flush_all():
@@ -1518,7 +1520,8 @@ def agent(
                             break
 
                         turn_done.clear()
-                        turn_response.clear()
+                        async with turn_response_lock:
+                            turn_response.clear()
                         turn_rejected_busy = False
 
                         if pending_runtime_error:

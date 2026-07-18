@@ -64,6 +64,27 @@ def make_sig_key(category: str, symbol: str, title: str) -> str:
     return f"{category}:{symbol}:{slugify(title)}"
 
 
+# Vendored/build/artifact directories that must never be scanned. Their .d.ts
+# type-declaration files legitimately use `any` and console.log and are not
+# xbot's own source code. Shared by every TS file collector.
+IGNORED_DIRS: frozenset[str] = frozenset({
+    "node_modules",
+    ".venv",
+    "venv",
+    "dist",
+    "build",
+    ".next",
+    ".turbo",
+    "coverage",
+})
+
+# Generated type-declaration files produced by the TS compiler; they reemit
+# every exported symbol and drown real findings in noise.
+IGNORED_FILES: frozenset[str] = frozenset({
+    "tsconfig.tsbuildinfo",
+})
+
+
 _CONF_RANK = {"high": 3, "medium": 2, "low": 1}
 _SEV_RANK = {"P0": 4, "P1": 3, "P2": 2, "P3": 1}
 

@@ -33,9 +33,11 @@ def _is_constant(node: ast.AST) -> bool:
 def _enclosing_retry_loop(func: ast.AST) -> dict[int, bool]:
     """Map each ``For`` node id (in *func*) to whether it is a retry-style loop.
 
-    A retry-style loop is a ``for ... in range(...)`` (or ``xrange``) — the common
-    shape of a bounded retry attempt loop. ``while`` is intentionally excluded to
-    keep the pattern shallow and low-noise.
+    A retry-style loop is a ``for ... in range(...)`` whose body contains a
+    ``try/except`` — the shape of a bounded retry attempt loop that retries on
+    failure. Plain ``for`` loops without ``try/except`` (e.g. streaming,
+    batching, pagination) are excluded so the scanner does not flag streaming
+    intervals or pacing sleeps.
     """
     retry: dict[int, bool] = {}
     for node in ast.walk(func):
@@ -43,7 +45,13 @@ def _enclosing_retry_loop(func: ast.AST) -> dict[int, bool]:
             continue
         it = node.iter
         if isinstance(it, ast.Call) and isinstance(it.func, ast.Name) and it.func.id in {"range", "xrange"}:
-            retry[id(node)] = True
+            # A retry loop retries on failure: its body must contain try/except.
+            has_try = any(
+                isinstance(child, ast.Try) for child in ast.walk(node)
+                if child is not node
+            )
+            if has_try:
+                retry[id(node)] = True
     return retry
 
 

@@ -8,6 +8,10 @@ from scripts.review.common import Category, Finding, make_sig_key
 # Matches ``console.log(...)`` calls. Deliberately does not match
 # ``logger.info`` / ``logger.debug`` so the clean pattern is ignored.
 _CONSOLE_RE = re.compile(r"\bconsole\s*\.\s*log\s*\(")
+# Lines that are intentionally user-facing CLI output (banners, QR prompts,
+# shutdown notices) rather than structured log messages. These use emoji or
+# known interaction keywords and must stay on stdout for terminal UX.
+_CLI_OUTPUT_RE = re.compile(r"[\U0001F000-\U0001FAFF\u2600-\u27BF]|QR|Shutting down|Scan|===", re.IGNORECASE)
 
 _FUNC_RE = re.compile(r"\b(?:function|export\s+function)\s+(\w+)\s*\(")
 _ARROW_RE = re.compile(
@@ -36,6 +40,10 @@ def scan(path: str) -> list[Finding]:
     title = "console.log() used in source"
     for i, line in enumerate(lines, start=1):
         if not _CONSOLE_RE.search(line):
+            continue
+        # Skip user-facing CLI output (banners, QR prompts, shutdown notices)
+        # that must stay on stdout for terminal interaction.
+        if _CLI_OUTPUT_RE.search(line):
             continue
         func_name = _enclosing_func(lines, i - 1)
         detail = f"func: {func_name}\nconsole.log() at line {i}"

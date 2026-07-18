@@ -6,7 +6,14 @@ import os
 import sys
 from collections.abc import Callable
 
-from scripts.review.common import Category, Finding, dedup, make_sig_key
+from scripts.review.common import (
+    IGNORED_DIRS,
+    IGNORED_FILES,
+    Category,
+    Finding,
+    dedup,
+    make_sig_key,
+)
 from scripts.review.ts import build_tsc, lint_eslint
 from scripts.review.ts.scan_any_type import scan as scan_any_type
 from scripts.review.ts.scan_console_log import scan as scan_console_log
@@ -35,7 +42,12 @@ def _collect_ts_files(path: str) -> list[str]:
     if os.path.isdir(path):
         files: list[str] = []
         for root, _dirs, names in os.walk(path):
+            # Skip vendored/build dirs: their .d.ts files legitimately use
+            # `any` and console.log, and are not xbot's own source code.
+            _dirs[:] = [d for d in _dirs if d not in IGNORED_DIRS]
             for name in names:
+                if name in IGNORED_FILES:
+                    continue
                 if name.endswith((".ts", ".tsx")):
                     files.append(os.path.abspath(os.path.join(root, name)))
         return sorted(files)

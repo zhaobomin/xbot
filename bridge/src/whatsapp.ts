@@ -3,7 +3,6 @@
  * Based on OpenClaw's working implementation.
  */
 
-/* eslint-disable @typescript-eslint/no-explicit-any */
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
@@ -11,11 +10,16 @@ import makeWASocket, {
   makeCacheableSignalKeyStore,
   downloadMediaMessage,
   extractMessageContent as baileysExtractMessageContent,
+  type WASocket,
+  type ConnectionState,
+  type WAMessage,
+  type WAMessageContent,
 } from '@whiskeysockets/baileys';
 
 import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode-terminal';
 import pino from 'pino';
+import logger from './logger.js';
 import { writeFile, mkdir } from 'fs/promises';
 import { basename, join } from 'path';
 import { randomBytes } from 'crypto';
@@ -40,7 +44,7 @@ export interface WhatsAppClientOptions {
 }
 
 export class WhatsAppClient {
-  private sock: any = null;
+  private sock: WASocket | null = null;
   private options: WhatsAppClientOptions;
   private reconnecting = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
@@ -50,20 +54,20 @@ export class WhatsAppClient {
   }
 
   async connect(): Promise<void> {
-    const logger = pino({ level: 'silent' });
+    const baileysLogger = pino({ level: 'silent' });
     const { state, saveCreds } = await useMultiFileAuthState(this.options.authDir);
     const { version } = await fetchLatestBaileysVersion();
 
-    console.log(`Using Baileys version: ${version.join('.')}`);
+    logger.info({ version: version.join('.') }, 'Using Baileys version');
 
     // Create socket following OpenClaw's pattern
     this.sock = makeWASocket({
       auth: {
         creds: state.creds,
-        keys: makeCacheableSignalKeyStore(state.keys, logger),
+        keys: makeCacheableSignalKeyStore(state.keys, baileysLogger),
       },
       version,
-      logger,
+      logger: baileysLogger,
       printQRInTerminal: false,
       browser: ['xbot', 'cli', VERSION],
       syncFullHistory: false,
@@ -73,12 +77,12 @@ export class WhatsAppClient {
     // Handle WebSocket errors
     if (this.sock.ws && typeof this.sock.ws.on === 'function') {
       this.sock.ws.on('error', (err: Error) => {
-        console.error('WebSocket error:', err.message);
+        logger.error({ err: err.message }, 'WebSocket error');
       });
     }
 
     // Handle connection updates
-    this.sock.ev.on('connection.update', async (update: any) => {
+    this.sock.ev.on('connection.update', async (update: Partial<ConnectionState>) => {
       const { connection, lastDisconnect, qr } = update;
 
       if (qr) {
@@ -92,18 +96,18 @@ export class WhatsAppClient {
         const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
         const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
 
-        console.log(`Connection closed. Status: ${statusCode}, Will reconnect: ${shouldReconnect}`);
+        logger.warn({ statusCode, shouldReconnect }, 'Connection closed');
         this.options.onStatus('disconnected');
 
         if (shouldReconnect && !this.reconnecting) {
           this.reconnecting = true;
-          console.log('Reconnecting in 5 seconds...');
+          logger.info('Reconnecting in 5 seconds...');
           if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
           this.reconnectTimer = setTimeout(() => {
             this.reconnecting = false;
             this.reconnectTimer = null;
             this.connect().catch((error) => {
-              console.error('Reconnect failed:', error);
+              logger.error({ err: error }, 'Reconnect failed');
               this.options.onStatus('disconnected');
             });
           }, 5000);
@@ -114,7 +118,7 @@ export class WhatsAppClient {
           this.reconnectTimer = null;
         }
         this.reconnecting = false;
-        console.log('✅ Connected to WhatsApp');
+        logger.info('Connected to WhatsApp');
         this.options.onStatus('connected');
       }
     });
@@ -123,7 +127,7 @@ export class WhatsAppClient {
     this.sock.ev.on('creds.update', saveCreds);
 
     // Handle incoming messages
-    this.sock.ev.on('messages.upsert', async ({ messages, type }: { messages: any[]; type: string }) => {
+    this.sock.ev.on('messages.upsert', async ({ messages, type }: { messages: WAMessage[]; type: string }) => {
       if (type !== 'notify') return;
 
       for (const msg of messages) {
@@ -170,7 +174,7 @@ export class WhatsAppClient {
     });
   }
 
-  private async downloadMedia(msg: any, mimetype?: string, fileName?: string): Promise<string | null> {
+  private async downloadMedia(msg: WAMessage, mimetype?: string, fileName?: string): Promise<string | null> {
     try {
       const mediaDir = join(this.options.authDir, '..', 'media');
       await mkdir(mediaDir, { recursive: true });
@@ -181,12 +185,12 @@ export class WhatsAppClient {
       if (fileName) {
         // Documents have a filename — use it with a unique prefix to avoid collisions
         const prefix = `wa_${Date.now()}_${randomBytes(4).toString('hex')}_`;
-        const safeName = basename(fileName.replace(/\\/g, '/')).replace(/[^\w.\-]/g, '_') || 'file';
+        const safeName = basename(fileName.replace(/\\/g, '/')).replace(/[^\w.-]/g, '_') || 'file';
         outFilename = prefix + safeName;
       } else {
         const mime = mimetype || 'application/octet-stream';
         // Derive extension from mimetype subtype (e.g. "image/png" → ".png", "application/pdf" → ".pdf")
-        const ext = '.' + (mime.split('/').pop()?.split(';')[0] || 'bin').replace(/[^\w.\-]/g, '_');
+        const ext = '.' + (mime.split('/').pop()?.split(';')[0] || 'bin').replace(/[^\w.-]/g, '_');
         outFilename = `wa_${Date.now()}_${randomBytes(4).toString('hex')}${ext}`;
       }
 
@@ -195,12 +199,12 @@ export class WhatsAppClient {
 
       return filepath;
     } catch (err) {
-      console.error('Failed to download media:', err);
+      logger.error({ err }, 'Failed to download media');
       return null;
     }
   }
 
-  private getTextContent(message: any): string | null {
+  private getTextContent(message: WAMessageContent): string | null {
     // Text message
     if (message.conversation) {
       return message.conversation;

@@ -7,12 +7,14 @@ from scripts.review.common import Category, Finding, make_sig_key
 
 # Attributes that are CPython/asyncio private implementation details. Touching
 # them couples code to a specific interpreter and breaks across versions.
+#
+# Only attributes that are *unique* to asyncio/CPython internals are kept.
+# Generic names such as ``_lock``, ``_state``, ``_value`` and ``_cond`` are
+# also used as ordinary private attributes in user code (e.g. ``self._lock``
+# for a ``threading.Lock``), so they are excluded to avoid drowning real
+# findings in false positives.
 _PRIVATE_ATTRS: set[str] = {
     "_waiters",
-    "_value",
-    "_state",
-    "_cond",
-    "_lock",
     "_waiter_count",
     "_source_traceback",
 }

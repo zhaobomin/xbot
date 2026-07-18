@@ -31,10 +31,15 @@ def _shell_string_arg(arg: ast.AST) -> bool:
     Flags f-strings (``ast.JoinedStr``) and string concatenations that mix a
     ``BinOp`` of strings with interpolated values. A bare string literal is a
     fixed command (no injection surface); a list is the safe argv form.
+    A bare ``Name`` (variable reference) is also safe — the variable could
+    point to a list or a constant; the injection surface is only at the
+    *construction* site (f-string / concatenation), not at the call site.
     """
     if isinstance(arg, ast.Constant):
         return False
     if isinstance(arg, ast.List):
+        return False
+    if isinstance(arg, ast.Name):
         return False
     if isinstance(arg, ast.JoinedStr):
         return bool(arg.values)

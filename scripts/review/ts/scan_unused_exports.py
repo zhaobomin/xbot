@@ -1,10 +1,9 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 
-from scripts.review.common import Category, Finding, make_sig_key
+from scripts.review.common import IGNORED_DIRS, IGNORED_FILES, Category, Finding, make_sig_key
 
 # Captures ``export const <name>`` / ``export function <name>``.
 _EXPORT_RE = re.compile(
@@ -35,10 +34,20 @@ def _enclosing_func(lines: list[str], idx: int) -> str:
 
 
 def _collect_ts_files(path: str) -> list[str]:
+    """Return absolute paths to every ``*.ts``/``*.tsx`` file under *path*.
+
+    Vendored and build directories (``node_modules``, ``.venv``, ``dist`` ...)
+    are pruned so their type-declaration files do not drown real findings.
+    """
+    import os
+
     if os.path.isdir(path):
         out: list[str] = []
         for root, _dirs, names in os.walk(path):
+            _dirs[:] = [d for d in _dirs if d not in IGNORED_DIRS]
             for name in names:
+                if name in IGNORED_FILES:
+                    continue
                 if name.endswith((".ts", ".tsx")):
                     out.append(os.path.abspath(os.path.join(root, name)))
         return sorted(out)
@@ -72,9 +81,14 @@ def scan(path: str) -> list[Finding]:
         imported |= _parse_imports("\n".join(lines))
 
     # Pass 2: flag exports whose name is never imported elsewhere in the tree.
+    # ``.d.ts`` files contain ambient module declarations (``declare module``)
+    # whose ``export`` keywords describe third-party APIs, not xbot's own
+    # exports — skip them to avoid flagging type declarations.
     findings: list[Finding] = []
     title = "exported symbol is never imported within the module tree"
     for fpath, lines in file_lines.items():
+        if fpath.endswith(".d.ts"):
+            continue
         for i, line in enumerate(lines, start=1):
             m = _EXPORT_RE.search(line)
             if not m:

@@ -131,7 +131,7 @@ def test_ssrf_detail_has_func_contract():
 def test_retry_jitter_hits_bad_not_good():
     findings = scan_retry_jitter("tests/review/fixtures/retry_jitter_sample.py")
     lines = {f.line for f in findings}
-    assert 10 in lines             # bad() fixed sleep in retry loop
+    assert 11 in lines             # bad() fixed sleep in retry loop
     assert 5 not in lines          # good() jittered sleep
 
 

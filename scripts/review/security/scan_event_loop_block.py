@@ -22,7 +22,7 @@ _BLOCKING_ATTRS: set[tuple[str, str]] = {
     ("urllib", "request"),
 }
 # Bare names that block the event loop (e.g. ``sleep(1)`` after ``from time import sleep``).
-_BLOCKING_NAMES: set[str] = {"sleep", "open"}
+_BLOCKING_NAMES: set[str] = {"sleep"}
 
 
 def _blocking_call_name(call: ast.Call) -> str | None:

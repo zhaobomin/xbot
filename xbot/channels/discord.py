@@ -3,6 +3,7 @@
 import asyncio
 import contextlib
 import json
+import random
 import time
 from pathlib import Path
 from typing import Any, Literal
@@ -200,7 +201,7 @@ class DiscordChannel(BaseChannel):
                 if attempt == 2:
                     logger.exception("Error sending Discord message")
                 else:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(min(2 ** attempt + random.random(), 10))
         return False
 
     async def _send_file(
@@ -248,7 +249,7 @@ class DiscordChannel(BaseChannel):
                 if attempt == 2:
                     logger.error("Error sending Discord file %s: %s", path.name, e)
                 else:
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(min(2 ** attempt + random.random(), 10))
         return False
 
     async def _gateway_loop(self) -> None:
