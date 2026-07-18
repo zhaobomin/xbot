@@ -1,0 +1,8 @@
+import subprocess
+from {{ module_path }} import {{ function_name }}
+
+def test_{{ finding_id }}():
+    # Real bug (shell injection) -> injected command runs -> stdout is just the marker -> assertion fails -> confirmed
+    # Clean (list form, no shell) -> literal output -> passes -> refuted
+    result = {{ function_name }}("; echo INJECTED")
+    assert result.stdout.strip() != "INJECTED"

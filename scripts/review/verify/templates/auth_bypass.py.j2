@@ -1,0 +1,10 @@
+from fastapi.testclient import TestClient
+from {{ module_path }} import app
+
+def test_{{ finding_id }}():
+    # Correct behavior: unauthenticated request is rejected with 401.
+    # Real bug (no auth dependency) -> 200 -> assertion fails -> confirmed
+    # Clean (auth dependency) -> 401 -> passes -> refuted
+    client = TestClient(app)
+    resp = client.get("/admin")
+    assert resp.status_code == 401
