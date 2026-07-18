@@ -18,6 +18,12 @@ from scripts.review.common import Finding
 _TEMPLATES_DIR = Path(__file__).resolve().parent / "templates"
 _OUTPUT_DIR = Path("tests/review_temp")
 
+# Repo root (this file lives at <root>/scripts/review/verify/gen_regression.py).
+# Used to turn absolute scanner paths (/abs/root/xbot/foo.py) into the
+# importable dotted module path xbot.foo instead of the broken leading-dot
+# relative import .Users... produced by the old string-only normalization.
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
 # Categories backed by a Jinja2 template (dynamic-verification eligible).
 TEMPLATE_CATEGORIES = {p.name.removesuffix(".py.j2") for p in _TEMPLATES_DIR.glob("*.py.j2")}
 
@@ -31,13 +37,31 @@ _ENV = Environment(
 
 
 def _file_to_module(path: str) -> str:
-    """``xbot/runtime/core/service.py`` -> ``xbot.runtime.core.service``."""
-    p = path.replace("\\", "/")
-    if p.startswith("./"):
-        p = p[2:]
-    if p.endswith(".py"):
-        p = p[:-3]
-    return p.replace("/", ".")
+    """Return the importable dotted module path for *path*.
+
+    Accepts repo-relative (``xbot/runtime/core/service.py``) or absolute
+    (``/abs/repo/xbot/runtime/core/service.py``) paths. Absolute paths are
+    resolved relative to ``_REPO_ROOT`` so the result is a valid module path
+    (``xbot.runtime.core.service``) rather than the broken ``.Users...``
+    leading-dot relative import the old string-only normalization produced.
+    """
+    p = Path(path.replace("\\", "/"))
+    try:
+        p = p.resolve().relative_to(_REPO_ROOT)
+    except ValueError:
+        # Not under repo root (e.g. out-of-tree synthetic input, or an
+        # already repo-relative path from a unit test). Fall back to the
+        # original string-based normalization so callers still get a
+        # dot-joined module path without a crash.
+        s = str(p)
+        if s.startswith("./"):
+            s = s[2:]
+        if s.endswith(".py"):
+            s = s[:-3]
+        return s.replace("/", ".")
+    if p.name.endswith(".py"):
+        p = p.with_suffix("")
+    return ".".join(p.parts)
 
 
 def _sanitize_identifier(finding_id: str) -> str:

@@ -17,6 +17,8 @@ BASELINE_ARGS = [
     "-q",
     "--tb=no",
     "--ignore=tests/review",
+    # tests/review_temp holds generated regression tests written by run_regression; stale files there must not mask the real suite (a broken import interrupts collection, so the summary regex never matches and baseline_failures silently reports 0).
+    "--ignore=tests/review_temp",
 ]
 
 # Matches the pytest summary line, e.g. "3 passed, 1 failed" or "2491 passed".
