@@ -17,8 +17,14 @@ rename unrelated APIs, or introduce generalized frameworks.
 - Persist message revocation through a focused `ConversationStore` deletion
   operation, decrementing `last_consolidated` only when a deleted index was
   already consolidated.
-- Make the skill toggle endpoint change real persisted skill state and make
-  skill discovery/loading honor that state.
+- Align WebUI-created skills with the existing SDK project-skill directory,
+  `$workspace/.claude/skills`. For workspace skills, persist disabled state by
+  renaming `SKILL.md` to `SKILL.md.disabled`; list/get/update/delete recognize
+  both names, while only enabled skills retain the filename the SDK scans.
+  Builtin package skills are read-only and the toggle endpoint returns a client
+  error for them rather than pretending the change succeeded. A missing
+  workspace skill returns 404. New and legacy-enabled workspace skills default
+  to enabled.
 - Reject bcrypt inputs longer than 72 UTF-8 bytes with a client error. Do not
   truncate passwords.
 - Exclude the WebUI S3 credential file from workspace exports.
@@ -48,10 +54,17 @@ rename unrelated APIs, or introduce generalized frameworks.
 
 ### WhatsApp bridge
 
-- Reconnect only for retryable Baileys disconnect reasons and never reconnect
-  after an explicit `disconnect()`.
-- Cancel reconnect timers and dispose of the current socket when replacing or
-  disconnecting it, using existing Baileys cleanup behavior.
+- Reconnect only for the known retryable Baileys reasons
+  `connectionClosed`, `connectionLost`/`timedOut`, `restartRequired`, and
+  `unavailableService`. Do not reconnect for `loggedOut`,
+  `connectionReplaced`, `badSession`, `multideviceMismatch`, `forbidden`, or an
+  unknown/non-Boom error.
+- Never reconnect after an explicit `disconnect()`. Cancel pending reconnect
+  timers, await `sock.end()`, and clear the reference. On a normal remote close,
+  rely on Baileys' existing close cleanup and only clear xbot's socket
+  reference; do not call `end()` a second time or add duplicate listener
+  cleanup. Reject a second explicit `connect()` while a live socket reference
+  exists instead of silently replacing it.
 - Isolate each inbound message in its own error boundary so one malformed
   message cannot stop processing the remainder of a batch. Media download
   remains sequential; no concurrency refactor is included.
@@ -66,7 +79,8 @@ rename unrelated APIs, or introduce generalized frameworks.
 - No Gateway, configuration, session-store, or bridge architecture refactor.
 - No new generic lifecycle manager, persistence layer, or protocol version.
 - No change for the alleged normal-reconnect listener leak: Baileys already
-  destroys the closed socket event buffer.
+  destroys the closed socket event buffer. The manual-disconnect cleanup above
+  does not add a separate normal-reconnect disposal path.
 - No change to `MessageBus.clear_session_requests()` based on the reported
   uncontended cross-loop sequence, which does not reproduce.
 - No request-ID protocol expansion: the current Python sender does not consume
@@ -91,8 +105,10 @@ Use red-green TDD in small groups:
 
 ## Success Criteria
 
-- Every in-scope defect has a regression test that was observed failing before
-  its fix and passing afterward.
+- Every behavior-changing in-scope defect has a regression test that was
+  observed failing before its fix and passing afterward. Documentation-only
+  corrections and explicitly unchanged behavior do not require a failing
+  regression.
 - Existing public behavior changes only where described above.
 - Full verification commands exit successfully.
 - No unrelated tracked or untracked user files are modified or committed.
