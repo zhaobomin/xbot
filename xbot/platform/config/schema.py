@@ -222,7 +222,7 @@ class ProvidersConfig(Base):
     @property
     def custom(self) -> ProviderConfig:
         """Compatibility alias for the legacy `providers.custom` config."""
-        return self.custom_providers.setdefault("custom", ProviderConfig())
+        return self.custom_providers.get("custom") or ProviderConfig()
 
     @custom.setter
     def custom(self, value: ProviderConfig) -> None:

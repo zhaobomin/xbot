@@ -17,6 +17,7 @@ import json
 import os
 from contextvars import ContextVar
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 from typing import Any
 
 from pydantic import ValidationError
@@ -114,10 +115,14 @@ def _load_split_config(config_dir: Path, data: dict[str, Any]) -> dict[str, Any]
                 # Infer provider name from base_url
                 base_url = provider_data.get("base_url", "")
                 provider_name = _infer_provider_name(base_url)
-            data["providers"][provider_name] = {
+            existing_provider = data["providers"].get(provider_name)
+            if not isinstance(existing_provider, dict):
+                existing_provider = {}
+            existing_provider.update({
                 "apiKey": provider_data.get("api_key", ""),
                 "apiBase": provider_data.get("base_url"),
-            }
+            })
+            data["providers"][provider_name] = existing_provider
             # Set default provider if not set
             if "agents" not in data:
                 data["agents"] = {}
@@ -305,12 +310,29 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
             return obj.get_secret_value()
         raise TypeError(f"Object of type {type(obj).__name__} is not JSON serializable")
 
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False, default=secret_str_encoder)
+    temp_path: Path | None = None
     try:
-        os.chmod(path, 0o600)
-    except OSError as e:
-        logger.debug("Failed to restrict config permissions for %s: %s", path, e)
+        with NamedTemporaryFile(
+            "w",
+            encoding="utf-8",
+            dir=path.parent,
+            prefix=f".{path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as f:
+            temp_path = Path(f.name)
+            json.dump(data, f, indent=2, ensure_ascii=False, default=secret_str_encoder)
+            f.flush()
+            os.fsync(f.fileno())
+        try:
+            os.chmod(temp_path, 0o600)
+        except OSError as e:
+            logger.debug("Failed to restrict config permissions for %s: %s", temp_path, e)
+        os.replace(temp_path, path)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
 
 
 def _migrate_config(data: dict) -> dict:

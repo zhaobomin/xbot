@@ -3,6 +3,7 @@
 import json
 from contextvars import copy_context
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
@@ -126,6 +127,52 @@ class TestLoadConfig:
             with pytest.raises(ConfigurationError, match="schema validation failed"):
                 load_config(config_path)
 
+    def test_split_provider_preserves_existing_fields(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "agents": {"defaults": {"provider": "anthropic"}},
+                    "providers": {
+                        "anthropic": {
+                            "apiKey": "main-key",
+                            "apiBase": "https://api.anthropic.com",
+                            "extraHeaders": {"X-Trace": "keep"},
+                            "models": ["claude-keep"],
+                        }
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        provider_dir = tmp_path / "providers"
+        provider_dir.mkdir()
+        (provider_dir / "default.json").write_text(
+            json.dumps(
+                {
+                    "name": "anthropic",
+                    "api_key": "split-key",
+                    "base_url": "https://split.example.com",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        loaded = load_config(config_path)
+
+        assert loaded.providers.anthropic.api_key.get_secret_value() == "split-key"
+        assert loaded.providers.anthropic.api_base == "https://split.example.com"
+        assert loaded.providers.anthropic.extra_headers == {"X-Trace": "keep"}
+        assert loaded.providers.anthropic.models == ["claude-keep"]
+
+    def test_legacy_custom_getter_does_not_mutate_config(self):
+        config = Config()
+
+        custom = config.providers.custom
+
+        assert custom.api_base is None
+        assert config.providers.custom_providers == {}
+
 
 class TestSaveConfig:
     """Tests for save_config function."""
@@ -169,6 +216,23 @@ class TestSaveConfig:
         save_config(Config(), config_path)
 
         assert config_path.stat().st_mode & 0o777 == 0o600
+
+    def test_save_config_replace_failure_preserves_existing_file(self, tmp_path):
+        config_path = tmp_path / "config.json"
+        original = '{"sentinel": "old"}'
+        config_path.write_text(original, encoding="utf-8")
+        config = Config()
+        config.agents.defaults.model = "new-model"
+
+        with patch(
+            "xbot.platform.config.loader.os.replace",
+            side_effect=OSError("replace failed"),
+        ):
+            with pytest.raises(OSError, match="replace failed"):
+                save_config(config, config_path)
+
+        assert config_path.read_text(encoding="utf-8") == original
+        assert list(tmp_path.glob(".config.json.*.tmp")) == []
 
 
 class TestMigrateConfig:

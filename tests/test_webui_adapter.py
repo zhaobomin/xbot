@@ -13,7 +13,7 @@ from typer.testing import CliRunner
 from xbot.interfaces.cli.commands import app
 from xbot.interfaces.webui.auth import set_password
 from xbot.platform.bus.queue import MessageBus
-from xbot.platform.config.schema import Config, MCPServerConfig
+from xbot.platform.config.schema import Config, MCPServerConfig, ProviderConfig
 from xbot.runtime.session.conversation_store import ConversationStore
 from xbot.runtime.system.cron.types import CronJob, CronJobState, CronPayload, CronSchedule
 
@@ -838,7 +838,10 @@ def test_desktop_ping_endpoint_and_cors_preflight(tmp_path: Path) -> None:
 
 def test_provider_extra_headers_are_masked(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
-    services.config.providers.custom.extra_headers = {
+    services.config.providers.custom_providers.setdefault(
+        "custom",
+        ProviderConfig(),
+    ).extra_headers = {
         "Authorization": "Bearer provider-secret",
         "x-api-key": "provider-api-key",
         "X-Trace-Id": "trace-123",

@@ -931,7 +931,7 @@ def create_app(
 
         # Legacy WebUI compatibility: expose the historical `custom` provider
         # first, while storing it in the new custom_providers map.
-        _ = container.config.providers.custom  # ensure legacy 'custom' provider is registered
+        container.config.providers.custom_providers.setdefault("custom", ProviderConfig())
 
         for name, value in container.config.providers.custom_providers.items():
             raw_key = value.api_key.get_secret_value() if hasattr(value.api_key, "get_secret_value") else ""
@@ -1016,7 +1016,7 @@ def create_app(
 
         # 查找供应商
         fixed_names = {"anthropic"}
-        _ = container.config.providers.custom  # ensure legacy 'custom' provider is registered
+        container.config.providers.custom_providers.setdefault("custom", ProviderConfig())
         if safe_name in fixed_names:
             provider = getattr(container.config.providers, safe_name)
         elif safe_name in container.config.providers.custom_providers:
