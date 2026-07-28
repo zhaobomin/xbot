@@ -224,7 +224,9 @@ class ClientPool:
             session_key: Session identifier
 
         Returns:
-            True if disconnected, False if not found
+            True if the client disconnected gracefully or the session was
+            already absent. False if graceful disconnect failed after
+            best-effort force cleanup.
         """
         async with self._lock:
             record = self._clients.pop(session_key, None)
@@ -272,7 +274,7 @@ class ClientPool:
                     return
 
     async def prune_idle(self, idle_ttl_seconds: float, *, exclude_keys: set[str] | None = None) -> int:
-        """Disconnect clients idle for longer than idle_ttl_seconds."""
+        """Disconnect idle clients and return the graceful-success count."""
         if idle_ttl_seconds <= 0:
             return 0
         excluded = exclude_keys or set()
@@ -297,7 +299,8 @@ class ClientPool:
         """Disconnect all clients.
 
         Returns:
-            Number of clients disconnected
+            Number of clients disconnected gracefully. Clients removed through
+            best-effort force cleanup after a graceful failure are not counted.
         """
         async with self._lock:
             keys = list(self._clients.keys())
