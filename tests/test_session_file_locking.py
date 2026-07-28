@@ -195,6 +195,38 @@ class TestSessionFileLocking:
         assert loaded.metadata.get("custom_field") == "custom_value"
         assert loaded.last_consolidated == 1
 
+    def test_delete_message_rewrites_disk_and_adjusts_consolidated_offset(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        manager = ConversationStore(tmp_path)
+        session = manager.get_or_create("test:delete")
+        for content in ("m0", "m1", "m2"):
+            session.add_message("user", content)
+        session.last_consolidated = 2
+        session.mark_metadata_dirty()
+        manager.save(session)
+
+        assert manager.delete_message(session, 0) is True
+
+        loaded = ConversationStore(tmp_path).get("test:delete")
+        assert loaded is not None
+        assert [message["content"] for message in loaded.messages] == ["m1", "m2"]
+        assert loaded.last_consolidated == 1
+
+    def test_delete_unconsolidated_message_keeps_offset(self, tmp_path: Path) -> None:
+        manager = ConversationStore(tmp_path)
+        session = manager.get_or_create("test:delete-unconsolidated")
+        for content in ("m0", "m1", "m2"):
+            session.add_message("user", content)
+        session.last_consolidated = 2
+        session.mark_metadata_dirty()
+        manager.save(session)
+
+        assert manager.delete_message(session, 2) is True
+        assert session.last_consolidated == 2
+        assert manager.delete_message(session, 99) is False
+
     def test_lock_file_is_preserved_after_save(self, tmp_path: Path) -> None:
         """Lock files should be preserved so fcntl waiters keep locking the same inode."""
         manager = ConversationStore(tmp_path)

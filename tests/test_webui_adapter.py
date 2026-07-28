@@ -1436,6 +1436,57 @@ def test_frontend_compatibility_endpoints(tmp_path: Path) -> None:
     assert mcp_runtime.json()[0]["tool_count"] == 2
     assert mcp_runtime.json()[0]["tools"] == ["mcp_demo_fetch", "mcp_demo_search"]
 
+
+def test_http_revoke_persists_after_store_reload(tmp_path: Path) -> None:
+    client, services = _build_client(tmp_path)
+    session = services.conversation_store.get_or_create("web:admin:revoke-http")
+    session.add_message("user", "remove")
+    session.add_message("assistant", "keep")
+    services.conversation_store.save(session)
+    token = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "test-webui-password"},
+    ).json()["access_token"]
+
+    response = client.delete(
+        "/api/sessions/web:admin:revoke-http/messages/0",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+
+    reloaded = ConversationStore(services.config.workspace_path).get(
+        "web:admin:revoke-http"
+    )
+    assert response.status_code == 200
+    assert reloaded is not None
+    assert [message["content"] for message in reloaded.messages] == ["keep"]
+
+
+def test_websocket_revoke_persists_after_store_reload(tmp_path: Path) -> None:
+    client, services = _build_client(tmp_path)
+    session = services.conversation_store.get_or_create("web:admin:revoke-ws")
+    session.add_message("user", "remove")
+    session.add_message("assistant", "keep")
+    services.conversation_store.save(session)
+    token = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "test-webui-password"},
+    ).json()["access_token"]
+
+    with client.websocket_connect(
+        f"/ws/chat?token={token}&session=web:admin:revoke-ws"
+    ) as ws:
+        ws.receive_json()
+        ws.send_json({"type": "revoke", "index": 0})
+        response = ws.receive_json()
+
+    reloaded = ConversationStore(services.config.workspace_path).get(
+        "web:admin:revoke-ws"
+    )
+    assert response["type"] == "revoke_ok"
+    assert reloaded is not None
+    assert [message["content"] for message in reloaded.messages] == ["keep"]
+
+
 def test_channel_runtime_prefers_live_manager_status(tmp_path: Path) -> None:
     client, _services = _build_client(tmp_path)
     token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]

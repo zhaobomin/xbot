@@ -401,6 +401,18 @@ class ConversationStore:
         self._cache[session.key] = session
         self._evict_if_needed()
 
+    def delete_message(self, session: ConversationSession, index: int) -> bool:
+        """Delete one message and persist the rewritten session."""
+        if index < 0 or index >= len(session.messages):
+            return False
+        del session.messages[index]
+        if index < session.last_consolidated:
+            session.last_consolidated -= 1
+        session.updated_at = datetime.now()
+        session.mark_metadata_dirty()
+        self.save(session)
+        return True
+
     def _save_full(self, session: ConversationSession, path: Path) -> None:
         """Perform an atomic full write of the session file."""
         tmp_path = path.with_suffix(".jsonl.tmp")

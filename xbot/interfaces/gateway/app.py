@@ -904,16 +904,12 @@ def create_app(
         index: int,
         authorization: str | None = Header(default=None),
     ) -> dict[str, int]:
-        from datetime import datetime
-
         user = _get_user_from_auth_header(authorization)
         internal_session_key = _ensure_writable_client_session(session_key, str(user["id"]))
         session = container.conversation_store.get_or_create(internal_session_key)
         if index < 0 or index >= len(session.messages):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid message index")
-        del session.messages[index]
-        session.updated_at = datetime.now()
-        container.conversation_store.save(session)
+        container.conversation_store.delete_message(session, index)
         return {"removed": 1}
 
     @app.delete("/api/sessions/{session_key:path}")
@@ -1856,9 +1852,7 @@ def create_app(
                             "session_key": active_session_key,
                         })
                         continue
-                    del session.messages[index]
-                    session.updated_at = datetime.now()
-                    container.conversation_store.save(session)
+                    container.conversation_store.delete_message(session, index)
                     await _safe_websocket_send_json(websocket, {
                         "type": "revoke_ok",
                         "index": index,
