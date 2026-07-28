@@ -1980,3 +1980,81 @@ def test_api_skills_endpoints_available(tmp_path: Path) -> None:
     assert toggle_response.json()["enabled"] is False
     assert delete_response.status_code == 200
     assert delete_response.json()["ok"] is True
+
+
+def test_workspace_skill_toggle_persists_and_controls_sdk_filename(
+    tmp_path: Path,
+) -> None:
+    client, services = _build_client(tmp_path)
+    token = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "test-webui-password"},
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    create_response = client.post(
+        "/api/skills",
+        headers=headers,
+        json={"name": "toggle-demo", "content": "# Toggle demo"},
+    )
+    skill_dir = services.config.workspace_path / ".claude" / "skills" / "toggle-demo"
+    disable_response = client.post(
+        "/api/skills/toggle-demo/toggle",
+        headers=headers,
+        json={"enabled": False},
+    )
+    list_response = client.get("/api/skills", headers=headers)
+    disabled_item = next(
+        item for item in list_response.json() if item["name"] == "toggle-demo"
+    )
+    get_response = client.get("/api/skills/toggle-demo", headers=headers)
+    update_response = client.put(
+        "/api/skills/toggle-demo",
+        headers=headers,
+        json={"content": "# Updated while disabled"},
+    )
+
+    assert create_response.status_code == 201
+    assert disable_response.status_code == 200
+    assert disabled_item["enabled"] is False
+    assert not (skill_dir / "SKILL.md").exists()
+    assert (skill_dir / "SKILL.md.disabled").read_text(encoding="utf-8") == (
+        "# Updated while disabled"
+    )
+    assert get_response.json()["content"] == "# Toggle demo"
+    assert update_response.status_code == 200
+
+    enable_response = client.post(
+        "/api/skills/toggle-demo/toggle",
+        headers=headers,
+        json={"enabled": True},
+    )
+
+    assert enable_response.status_code == 200
+    assert (skill_dir / "SKILL.md").read_text(encoding="utf-8") == (
+        "# Updated while disabled"
+    )
+    assert not (skill_dir / "SKILL.md.disabled").exists()
+
+
+def test_skill_toggle_rejects_builtin_and_missing_skills(tmp_path: Path) -> None:
+    client, _services = _build_client(tmp_path)
+    token = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "test-webui-password"},
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    builtin = client.post(
+        "/api/skills/skill-creator/toggle",
+        headers=headers,
+        json={"enabled": False},
+    )
+    missing = client.post(
+        "/api/skills/not-installed/toggle",
+        headers=headers,
+        json={"enabled": False},
+    )
+
+    assert builtin.status_code == 400
+    assert missing.status_code == 404

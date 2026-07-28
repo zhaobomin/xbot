@@ -131,9 +131,20 @@ class ServiceContainer:
         # Use workspace skills directory for user-created skills
         workspace_path = getattr(self.config, "workspace_path", None)
         if workspace_path:
-            return Path(workspace_path) / "skills"
+            return Path(workspace_path) / ".claude" / "skills"
         # Fallback to package skills directory
         return Path(__file__).parent.parent.parent / "skills"
+
+    def workspace_skill_file(self, name: str) -> tuple[Path, bool] | None:
+        """Return the persisted workspace skill file and enabled state."""
+        skill_dir = self.primary_skill_root() / name
+        enabled_file = skill_dir / "SKILL.md"
+        if enabled_file.exists():
+            return enabled_file, True
+        disabled_file = skill_dir / "SKILL.md.disabled"
+        if disabled_file.exists():
+            return disabled_file, False
+        return None
 
     def list_skills(self) -> list[dict[str, Any]]:
         """List all available skills from both builtin and workspace directories."""
@@ -163,17 +174,19 @@ class ServiceContainer:
         workspace_skills = self.primary_skill_root()
         if workspace_skills.exists() and workspace_skills != builtin_dir:
             for skill_dir in sorted(workspace_skills.iterdir()):
-                if skill_dir.is_dir() and (skill_dir / "SKILL.md").exists():
+                skill_state = self.workspace_skill_file(skill_dir.name)
+                if skill_dir.is_dir() and skill_state is not None:
+                    skill_file, enabled = skill_state
                     name = skill_dir.name
                     if name not in seen_names:
                         seen_names.add(name)
                         skills.append({
                             "name": name,
                             "source": "workspace",
-                            "path": str(skill_dir / "SKILL.md"),
+                            "path": str(skill_file),
                             "description": name,
                             "available": True,
-                            "enabled": True,
+                            "enabled": enabled,
                             "unavailable_reason": None,
                             "type": "workspace",
                         })

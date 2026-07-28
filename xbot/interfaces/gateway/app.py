@@ -1650,6 +1650,23 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
+        skill_name = validate_safe_name(skill_name, "skill name")
+        item = next(
+            (entry for entry in container.list_skills() if entry["name"] == skill_name),
+            None,
+        )
+        if item is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+        if item.get("source") != "workspace":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Builtin skills are read-only",
+            )
+        current_path = Path(item["path"])
+        target_name = "SKILL.md" if body.enabled else "SKILL.md.disabled"
+        target_path = current_path.with_name(target_name)
+        if current_path != target_path:
+            current_path.replace(target_path)
         return {"name": skill_name, "enabled": body.enabled}
 
     @app.put("/api/skills/{skill_name}")
@@ -1660,9 +1677,10 @@ def create_app(
     ) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
         skill_name = validate_safe_name(skill_name, "skill name")
-        skill_file = container.primary_skill_root() / skill_name / "SKILL.md"
-        if not skill_file.exists():
+        skill_state = container.workspace_skill_file(skill_name)
+        if skill_state is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Skill not found")
+        skill_file, _enabled = skill_state
         skill_file.write_text(body.content, encoding="utf-8")
         return {"name": skill_name, "content": body.content}
 
