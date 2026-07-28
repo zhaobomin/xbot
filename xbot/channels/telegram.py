@@ -206,6 +206,7 @@ class TelegramChannel(BaseChannel):
         self._message_threads: dict[tuple[str, int], int] = {}
         self._bot_user_id: int | None = None
         self._bot_username: str | None = None
+        self._draft_id_counter = 0
 
     def is_allowed(self, sender_id: str) -> bool:
         """Preserve Telegram's legacy id|username allowlist matching."""
@@ -487,7 +488,10 @@ class TelegramChannel(BaseChannel):
         thread_kwargs: dict | None = None,
     ) -> None:
         """Simulate streaming via send_message_draft, then persist with send_message."""
-        draft_id = int(time.time() * 1000) % (2**31)
+        self._draft_id_counter = (self._draft_id_counter + 1) % 1000
+        draft_id = (
+            int(time.time() * 1000) * 1000 + self._draft_id_counter
+        ) % (2**31)
         try:
             step = max(len(text) // 8, 40)
             for i in range(step, len(text), step):

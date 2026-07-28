@@ -708,6 +708,8 @@ class HierarchicalProcess(BaseProcess):
             td = task_map.get(name)
             if td:
                 ordered_tasks.append(td)
+            else:
+                logger.warning("[crew] Manager proposed unknown task: %s", name)
         # Append any tasks not mentioned by the manager
         mentioned = set(ordered_names)
         for t in tasks:

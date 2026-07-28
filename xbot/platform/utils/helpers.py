@@ -48,6 +48,10 @@ def detect_audio_mime(data: bytes) -> str | None:
     if len(data) < 2:
         return None
 
+    # MP3: ID3 metadata header before the first MPEG audio frame
+    if data[:3] == b"ID3":
+        return "audio/mp3"
+
     # MP3: MPEG Audio frame sync
     # Valid patterns: 0xFF followed by 0xF2-0xFF (varies by MPEG version/layer)
     # Common: 0xFF 0xFB (MPEG1 Layer III), 0xFF 0xFA (MPEG1 Layer III VBR)

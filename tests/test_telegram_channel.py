@@ -37,6 +37,7 @@ class _FakeBot:
     def __init__(self) -> None:
         self.sent_messages: list[dict] = []
         self.sent_media: list[dict] = []
+        self.sent_drafts: list[dict] = []
         self.get_me_calls = 0
 
     async def get_me(self):
@@ -63,6 +64,9 @@ class _FakeBot:
 
     async def send_chat_action(self, **kwargs) -> None:
         pass
+
+    async def send_message_draft(self, **kwargs) -> None:
+        self.sent_drafts.append(kwargs)
 
     async def get_file(self, file_id: str):
         """Return a fake file that 'downloads' to a path (for reply-to-media tests)."""
@@ -934,3 +938,22 @@ async def test_forward_help_command_routes_to_runtime_path() -> None:
 
     assert len(handled) == 1
     assert handled[0]["content"] == "/help"
+
+
+@pytest.mark.asyncio
+async def test_streaming_uses_unique_draft_ids_within_same_millisecond(
+    monkeypatch,
+) -> None:
+    channel = TelegramChannel(TelegramConfig(), MessageBus())
+    fake_app = _FakeApp(lambda: None)
+    channel._app = fake_app
+    channel._send_text = AsyncMock()
+    monkeypatch.setattr("xbot.channels.telegram.time.time", lambda: 1234.5)
+    monkeypatch.setattr("xbot.channels.telegram.asyncio.sleep", AsyncMock())
+
+    await channel._send_with_streaming(1, "first")
+    await channel._send_with_streaming(1, "second")
+
+    draft_ids = [item["draft_id"] for item in fake_app.bot.sent_drafts]
+    assert len(draft_ids) == 2
+    assert len(set(draft_ids)) == 2

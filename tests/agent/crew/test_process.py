@@ -488,6 +488,34 @@ class TestHierarchicalProcess:
         assert len(process._persister.manifest.tasks) == 2
 
     @pytest.mark.asyncio
+    async def test_unknown_manager_task_name_is_logged(
+        self,
+        basic_crew_config,
+        caplog,
+    ):
+        pool = MockAgentPool(outputs=["Found bugs", "Fixed bugs"])
+        state_manager = CrewStateManager(
+            task_names=[task.name for task in basic_crew_config.tasks]
+        )
+        process = HierarchicalProcess(
+            pool=pool,
+            context=CrewExecutionContext(),
+            permission_handler=MockPermissionHandler(),
+            crew_config=basic_crew_config,
+            state_manager=state_manager,
+            started_at=datetime.now(),
+        )
+        process._get_manager_plan = AsyncMock(
+            return_value=["hallucinated-task", basic_crew_config.tasks[0].name]
+        )
+        state_manager.transition_crew(CrewPhase.INITIALIZING)
+        state_manager.transition_crew(CrewPhase.RUNNING)
+
+        await process.execute(basic_crew_config.tasks)
+
+        assert "hallucinated-task" in caplog.text
+
+    @pytest.mark.asyncio
     async def test_parse_valid_json_plan(self):
         """Parse valid JSON plan from manager output."""
         output = 'Here is the plan: ["fix_bugs", "find_bugs"]'

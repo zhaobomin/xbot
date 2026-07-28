@@ -360,8 +360,9 @@ class ReMeMemoryStore:
             if not message.get("content"):
                 continue
             tools = f" [tools: {', '.join(message['tools_used'])}]" if message.get("tools_used") else ""
+            message_timestamp = str(message.get("timestamp") or "?")[:16]
             lines.append(
-                f"[{message.get('timestamp', '?')[:16]}] {message['role'].upper()}{tools}: {message['content']}"
+                f"[{message_timestamp}] {message['role'].upper()}{tools}: {message['content']}"
             )
         return "\n".join(lines)
 

@@ -20,6 +20,16 @@ def get_runtime_subdir(name: str) -> Path:
 
 def get_media_dir(channel: str | None = None) -> Path:
     """Return the media directory, optionally namespaced per channel."""
+    if channel:
+        candidate = Path(channel)
+        if (
+            channel in {".", ".."}
+            or candidate.is_absolute()
+            or len(candidate.parts) != 1
+            or "/" in channel
+            or "\\" in channel
+        ):
+            raise ValueError("Invalid media channel namespace")
     base = get_runtime_subdir("media")
     return ensure_dir(base / channel) if channel else base
 

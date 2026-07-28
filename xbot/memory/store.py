@@ -174,9 +174,10 @@ class MemoryStore:
             if isinstance(content, (list, dict)):
                 content = f"({type(content).__name__}: {len(str(content))} chars)"
             role = str(message.get("role") or "unknown")
+            message_timestamp = str(message.get("timestamp") or "?")[:16]
 
             lines.append(
-                f"[{message.get('timestamp', '?')[:16]}] {role.upper()}{tool_info}: {content}"
+                f"[{message_timestamp}] {role.upper()}{tool_info}: {content}"
             )
         return "\n".join(lines)
 

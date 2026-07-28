@@ -130,8 +130,11 @@ class LLMResponseParser:
         for line in response.split("\n"):
             line = line.strip().strip("- ").strip()
             if line and not line.startswith("#"):
-                # Extract name before colon or first word
-                name = line.split(":")[0].strip()
+                name = line
+                if "://" not in line:
+                    head, separator, tail = line.partition(":")
+                    if separator and tail[:1].isspace():
+                        name = head.strip()
                 if name:
                     result.append(name)
         return result
