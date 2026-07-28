@@ -18,6 +18,27 @@ interface BridgeMessage {
   [key: string]: unknown;
 }
 
+export function validateSendCommand(command: unknown): SendCommand {
+  if (!command || typeof command !== 'object') {
+    throw new Error('Invalid send command');
+  }
+  const candidate = command as Record<string, unknown>;
+  if (candidate.type !== 'send') {
+    throw new Error(`Unsupported command type: ${String(candidate.type)}`);
+  }
+  if (typeof candidate.to !== 'string' || candidate.to.length === 0) {
+    throw new Error('Send command requires a non-empty "to" field');
+  }
+  if (typeof candidate.text !== 'string') {
+    throw new Error('Send command requires a string "text" field');
+  }
+  return {
+    type: 'send',
+    to: candidate.to,
+    text: candidate.text,
+  };
+}
+
 export class BridgeServer {
   private wss: WebSocketServer | null = null;
   private wa: WhatsAppClient | null = null;
@@ -73,8 +94,7 @@ export class BridgeServer {
 
     ws.on('message', async (data) => {
       try {
-        const cmd = JSON.parse(data.toString()) as SendCommand;
-        await this.handleCommand(cmd);
+        const cmd = await this.handleCommand(JSON.parse(data.toString()));
         this.sendToClient(ws, { type: 'sent', to: cmd.to });
       } catch (error) {
         logger.error({ err: error }, 'Error handling command');
@@ -93,14 +113,13 @@ export class BridgeServer {
     });
   }
 
-  private async handleCommand(cmd: SendCommand): Promise<void> {
-    if (cmd.type !== 'send') {
-      throw new Error(`Unsupported command type: ${String(cmd.type)}`);
-    }
+  private async handleCommand(command: unknown): Promise<SendCommand> {
+    const cmd = validateSendCommand(command);
     if (!this.wa) {
       throw new Error('WhatsApp client is not initialized');
     }
     await this.wa.sendMessage(cmd.to, cmd.text);
+    return cmd;
   }
 
   private broadcast(msg: BridgeMessage): void {
@@ -127,16 +146,33 @@ export class BridgeServer {
   }
 
   async stop(): Promise<void> {
+    const clients = [...this.clients];
+
     // Close all client connections
-    for (const client of this.clients) {
+    for (const client of clients) {
       client.close();
     }
     this.clients.clear();
 
     // Close WebSocket server
     if (this.wss) {
+      const server = this.wss;
       await new Promise<void>((resolve, reject) => {
-        this.wss!.close((error) => {
+        let settled = false;
+        const timeout = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          logger.warn('Bridge server close timed out; terminating clients');
+          for (const client of clients) {
+            client.terminate();
+          }
+          resolve();
+        }, 500);
+
+        server.close((error) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timeout);
           if (error) reject(error);
           else resolve();
         });

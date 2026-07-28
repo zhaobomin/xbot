@@ -26,6 +26,13 @@ import { randomBytes } from 'crypto';
 
 const VERSION = '0.1.0';
 
+export function isRetryableDisconnect(statusCode: number | undefined): boolean {
+  return statusCode === DisconnectReason.connectionClosed
+    || statusCode === DisconnectReason.connectionLost
+    || statusCode === DisconnectReason.restartRequired
+    || statusCode === DisconnectReason.unavailableService;
+}
+
 export interface InboundMessage {
   id: string;
   sender: string;
@@ -48,12 +55,18 @@ export class WhatsAppClient {
   private options: WhatsAppClientOptions;
   private reconnecting = false;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private manualDisconnect = false;
 
   constructor(options: WhatsAppClientOptions) {
     this.options = options;
   }
 
   async connect(): Promise<void> {
+    if (this.sock) {
+      throw new Error('WhatsApp client is already connected');
+    }
+    this.manualDisconnect = false;
+
     const baileysLogger = pino({ level: 'silent' });
     const { state, saveCreds } = await useMultiFileAuthState(this.options.authDir);
     const { version } = await fetchLatestBaileysVersion();
@@ -83,54 +96,69 @@ export class WhatsAppClient {
 
     // Handle connection updates
     this.sock.ev.on('connection.update', async (update: Partial<ConnectionState>) => {
-      const { connection, lastDisconnect, qr } = update;
-
-      if (qr) {
-        // Display QR code in terminal
-        console.log('\n📱 Scan this QR code with WhatsApp (Linked Devices):\n');
-        qrcode.generate(qr, { small: true });
-        this.options.onQR(qr);
-      }
-
-      if (connection === 'close') {
-        const statusCode = (lastDisconnect?.error as Boom)?.output?.statusCode;
-        const shouldReconnect = statusCode !== DisconnectReason.loggedOut;
-
-        logger.warn({ statusCode, shouldReconnect }, 'Connection closed');
-        this.options.onStatus('disconnected');
-
-        if (shouldReconnect && !this.reconnecting) {
-          this.reconnecting = true;
-          logger.info('Reconnecting in 5 seconds...');
-          if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-          this.reconnectTimer = setTimeout(() => {
-            this.reconnecting = false;
-            this.reconnectTimer = null;
-            this.connect().catch((error) => {
-              logger.error({ err: error }, 'Reconnect failed');
-              this.options.onStatus('disconnected');
-            });
-          }, 5000);
-        }
-      } else if (connection === 'open') {
-        if (this.reconnectTimer) {
-          clearTimeout(this.reconnectTimer);
-          this.reconnectTimer = null;
-        }
-        this.reconnecting = false;
-        logger.info('Connected to WhatsApp');
-        this.options.onStatus('connected');
-      }
+      await this.handleConnectionUpdate(update);
     });
 
     // Save credentials on update
     this.sock.ev.on('creds.update', saveCreds);
 
     // Handle incoming messages
-    this.sock.ev.on('messages.upsert', async ({ messages, type }: { messages: WAMessage[]; type: string }) => {
-      if (type !== 'notify') return;
+    this.sock.ev.on('messages.upsert', async (update: { messages: WAMessage[]; type: string }) => {
+      await this.handleMessagesUpsert(update);
+    });
+  }
 
-      for (const msg of messages) {
+  private async handleConnectionUpdate(update: Partial<ConnectionState>): Promise<void> {
+    const { connection, lastDisconnect, qr } = update;
+
+    if (qr) {
+      console.log('\n📱 Scan this QR code with WhatsApp (Linked Devices):\n');
+      qrcode.generate(qr, { small: true });
+      this.options.onQR(qr);
+    }
+
+    if (connection === 'close') {
+      const disconnectError = lastDisconnect?.error;
+      const statusCode = disconnectError instanceof Boom
+        ? disconnectError.output.statusCode
+        : undefined;
+      const shouldReconnect = !this.manualDisconnect && isRetryableDisconnect(statusCode);
+
+      this.sock = null;
+      logger.warn({ statusCode, shouldReconnect }, 'Connection closed');
+      this.options.onStatus('disconnected');
+
+      if (shouldReconnect && !this.reconnecting) {
+        this.reconnecting = true;
+        logger.info('Reconnecting in 5 seconds...');
+        if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = setTimeout(() => {
+          this.reconnecting = false;
+          this.reconnectTimer = null;
+          this.connect().catch((error) => {
+            logger.error({ err: error }, 'Reconnect failed');
+            this.options.onStatus('disconnected');
+          });
+        }, 5000);
+      }
+    } else if (connection === 'open') {
+      if (this.reconnectTimer) {
+        clearTimeout(this.reconnectTimer);
+        this.reconnectTimer = null;
+      }
+      this.reconnecting = false;
+      logger.info('Connected to WhatsApp');
+      this.options.onStatus('connected');
+    }
+  }
+
+  private async handleMessagesUpsert(
+    { messages, type }: { messages: WAMessage[]; type: string },
+  ): Promise<void> {
+    if (type !== 'notify') return;
+
+    for (const msg of messages) {
+      try {
         if (msg.key.fromMe) continue;
         if (msg.key.remoteJid === 'status@broadcast') continue;
 
@@ -170,8 +198,10 @@ export class WhatsAppClient {
           isGroup,
           ...(mediaPaths.length > 0 ? { media: mediaPaths } : {}),
         });
+      } catch (error) {
+        logger.error({ err: error }, 'Failed to process inbound message');
       }
-    });
+    }
   }
 
   private async downloadMedia(msg: WAMessage, mimetype?: string, fileName?: string): Promise<string | null> {
@@ -247,9 +277,23 @@ export class WhatsAppClient {
   }
 
   async disconnect(): Promise<void> {
-    if (this.sock) {
-      this.sock.end(undefined);
-      this.sock = null;
+    this.manualDisconnect = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.reconnecting = false;
+
+    const socket = this.sock;
+    if (!socket) {
+      return;
+    }
+    try {
+      await socket.end(undefined);
+    } finally {
+      if (this.sock === socket) {
+        this.sock = null;
+      }
     }
   }
 }
