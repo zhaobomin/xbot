@@ -66,6 +66,25 @@ def test_blocks_ipv6_loopback():
         assert not ok
 
 
+@pytest.mark.parametrize(
+    "mapped_ip",
+    [
+        "::ffff:127.0.0.1",
+        "::ffff:10.0.0.1",
+        "::ffff:169.254.169.254",
+    ],
+)
+def test_blocks_ipv4_mapped_ipv6(mapped_ip: str):
+    def _resolver(hostname, port, family=0, type_=0):
+        return [(socket.AF_INET6, socket.SOCK_STREAM, 0, "", (mapped_ip, 0, 0, 0))]
+
+    with patch("xbot.platform.security.network.socket.getaddrinfo", _resolver):
+        ok, err = validate_url_target("http://evil.com/")
+
+    assert not ok
+    assert "private" in err.lower() or "blocked" in err.lower()
+
+
 # ---------------------------------------------------------------------------
 # validate_url_target — allows public IPs
 # ---------------------------------------------------------------------------

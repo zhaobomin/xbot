@@ -24,16 +24,27 @@ PASSWORD_FILE = Path("~/.xbot/webui/password").expanduser()
 JWT_SECRET_FILE = Path("~/.xbot/webui/jwt_secret").expanduser()
 
 
+def validate_password_length(password: str) -> None:
+    """Reject passwords that bcrypt cannot process."""
+    if len(password.encode("utf-8")) > 72:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must not exceed 72 UTF-8 bytes",
+        )
+
+
 def generate_secure_password() -> str:
     """Generate a secure random password (~32 chars, URL-safe)."""
     return secrets.token_urlsafe(24)
 
 
 def hash_password(password: str) -> str:
+    validate_password_length(password)
     return bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("utf-8")
 
 
 def verify_password(password: str, password_hash: str) -> bool:
+    validate_password_length(password)
     return bcrypt.checkpw(password.encode("utf-8"), password_hash.encode("utf-8"))
 
 

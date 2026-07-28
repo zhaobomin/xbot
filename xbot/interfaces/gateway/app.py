@@ -39,6 +39,7 @@ from xbot.interfaces.gateway.auth import (
     ensure_password_file,
     get_or_create_jwt_secret,
     print_password_banner,
+    validate_password_length,
 )
 from xbot.interfaces.gateway.services import ServiceContainer
 from xbot.interfaces.gateway.session_keys import (
@@ -386,6 +387,8 @@ def _should_include_workspace_path(workspace_path: Path, path: Path) -> bool:
         return False
     parts = relative.parts
     if len(parts) >= 2 and parts[0] == ".webui" and parts[1] == "backups":
+        return False
+    if parts == (".webui", "s3.json"):
         return False
     return not any(part.startswith(".workspace-import-") for part in parts)
 
@@ -777,14 +780,19 @@ def create_app(
         app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
     if resolved_frontend.exists():
         app.mount("/dist", StaticFiles(directory=str(resolved_frontend)), name="dist")
+
+        def _make_static_handler(path: Path):
+            async def handler() -> FileResponse:
+                return FileResponse(path)
+
+            return handler
+
         for static_file in resolved_frontend.iterdir():
             if static_file.is_file() and static_file.name != "index.html":
                 route_path = f"/{static_file.name}"
-                static_path = static_file
-
-                @app.get(route_path, include_in_schema=False)
-                async def _serve_static(_path: Path = static_path) -> FileResponse:
-                    return FileResponse(_path)
+                app.get(route_path, include_in_schema=False)(
+                    _make_static_handler(static_file)
+                )
 
     @app.get("/", response_class=HTMLResponse)
     async def index() -> str:
@@ -804,6 +812,7 @@ def create_app(
         # Check rate limit
         client_ip = request.client.host if request.client else "unknown"
         _check_login_rate_limit(client_ip)
+        validate_password_length(body.password)
 
         try:
             user = app.state.user_store.authenticate(body.username, body.password)
@@ -823,6 +832,8 @@ def create_app(
         authorization: str | None = Header(default=None),
     ) -> dict[str, bool]:
         _get_user_from_auth_header(authorization)
+        validate_password_length(body.current_password)
+        validate_password_length(body.new_password)
         app.state.user_store.change_password(body.current_password, body.new_password)
         return {"ok": True}
 

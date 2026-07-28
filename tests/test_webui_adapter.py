@@ -301,6 +301,16 @@ def test_webui_root_serves_html(tmp_path: Path) -> None:
     assert "<div id=\"root\"></div>" in response.text or "xbot WebUI" in response.text
 
 
+def test_static_route_does_not_accept_path_override(tmp_path: Path) -> None:
+    client, _services = _build_client(tmp_path)
+    expected = Path("xbot/interfaces/webui/frontend/dist/icon.svg").read_bytes()
+
+    response = client.get("/icon.svg?_path=/etc/hosts")
+
+    assert response.status_code == 200
+    assert response.content == expected
+
+
 def test_webui_lifespan_does_not_start_channel_manager(tmp_path: Path) -> None:
     client, services = _build_client(tmp_path)
     manager = services.metadata["channel_manager"]
@@ -600,6 +610,53 @@ def test_admin_login_and_change_password(tmp_path: Path) -> None:
         json={"username": "admin", "password": "better-secret"},
     )
     assert accepted.status_code == 200
+
+
+def test_login_rejects_password_over_72_utf8_bytes(tmp_path: Path) -> None:
+    client, _services = _build_client(tmp_path)
+    client = TestClient(client.app, raise_server_exceptions=False)
+
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "汉" * 25},
+    )
+
+    assert response.status_code == 400
+
+
+@pytest.mark.parametrize(
+    ("method", "route"),
+    [
+        ("post", "/api/auth/change-password"),
+        ("put", "/api/auth/password"),
+    ],
+)
+@pytest.mark.parametrize("overlong_field", ["current_password", "new_password"])
+def test_change_password_rejects_overlong_passwords(
+    tmp_path: Path,
+    method: str,
+    route: str,
+    overlong_field: str,
+) -> None:
+    client, _services = _build_client(tmp_path)
+    token = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "test-webui-password"},
+    ).json()["access_token"]
+    client = TestClient(client.app, raise_server_exceptions=False)
+    payload = {
+        "current_password": "test-webui-password",
+        "new_password": "better-secret",
+    }
+    payload[overlong_field] = "汉" * 25
+
+    response = getattr(client, method)(
+        route,
+        headers={"Authorization": f"Bearer {token}"},
+        json=payload,
+    )
+
+    assert response.status_code == 400
 
 
 def test_change_password_compatibility_endpoint_accepts_put(tmp_path: Path) -> None:
@@ -1680,6 +1737,26 @@ def test_workspace_transfer_excludes_webui_backups(tmp_path: Path) -> None:
     with zipfile.ZipFile(backup_path) as zf:
         assert "keep.txt" in zf.namelist()
         assert ".webui/backups/old-backup.zip" not in zf.namelist()
+
+
+def test_workspace_zip_excludes_s3_credentials(tmp_path: Path) -> None:
+    import io
+    import zipfile
+
+    from xbot.interfaces.gateway.app import _write_workspace_zip
+
+    workspace = tmp_path / "workspace"
+    s3_path = workspace / ".webui" / "s3.json"
+    s3_path.parent.mkdir(parents=True)
+    s3_path.write_text('{"secret_access_key": "secret"}', encoding="utf-8")
+    buf = io.BytesIO()
+
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        _write_workspace_zip(zf, workspace)
+    buf.seek(0)
+
+    with zipfile.ZipFile(buf) as zf:
+        assert ".webui/s3.json" not in zf.namelist()
 
 
 def test_workspace_import_rejects_unsafe_zip_members(tmp_path: Path) -> None:
