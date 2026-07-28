@@ -47,6 +47,7 @@ def test_is_response_keyword_supports_trim_and_casefold():
     "kind,content,expected",
     [
         ("confirmation", "yes", "confirm"),
+        ("confirmation", "确认", "confirm"),
         ("confirmation", "no", "cancel"),
         ("approval", "yes", "allow"),
         ("approval", "no", "deny"),

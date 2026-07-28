@@ -277,7 +277,7 @@ class TestBugFixes:
 
         request = InteractionRequest(
             request_id="req-confirm",
-            session_key="test:session6",
+            session_key="test:chat1",
             channel="test",
             chat_id="chat1",
             kind="confirmation",  # Note: confirmation type

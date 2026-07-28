@@ -44,6 +44,8 @@ def derive_interaction_action(kind: str, content: str) -> str:
     if kind not in {"confirmation", "approval"}:
         return "reply"
 
+    if kind == "confirmation" and normalized == "确认":
+        return "confirm"
     if normalized in ALLOW_RESPONSE_KEYWORDS:
         return "confirm" if kind == "confirmation" else "allow"
     if normalized in DENY_RESPONSE_KEYWORDS:
