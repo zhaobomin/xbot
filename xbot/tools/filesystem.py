@@ -132,10 +132,20 @@ class ReadFileTool(_FsTool):
             if len(result) > self._MAX_CHARS:
                 trimmed, chars = [], 0
                 for line in numbered:
-                    chars += len(line) + 1
-                    if chars > self._MAX_CHARS:
+                    separator_chars = 1 if trimmed else 0
+                    remaining = self._MAX_CHARS - chars - separator_chars
+                    if len(line) <= remaining:
+                        trimmed.append(line)
+                        chars += len(line) + separator_chars
+                        continue
+
+                    truncation_marker = " … [line truncated]"
+                    if not trimmed and remaining > len(truncation_marker):
+                        trimmed.append(
+                            line[: remaining - len(truncation_marker)] + truncation_marker
+                        )
                         break
-                    trimmed.append(line)
+                    break
                 result = "\n".join(trimmed)
                 end = start + len(trimmed)
 

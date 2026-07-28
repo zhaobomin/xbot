@@ -61,7 +61,12 @@ class RuntimeResponseHandlers:
             sm = shared.get("runtime_registry")
             if sm is not None:
                 return sm
-        return getattr(self._runtime, "runtime_registry", None)
+        sm = getattr(self._runtime, "runtime_registry", None)
+        if sm is None:
+            raise RuntimeError(
+                "RuntimeResponseHandlers requires a runtime_registry state coordinator"
+            )
+        return sm
 
     def _interaction_retry_key(self, session_key: str, request_id: str) -> str:
         """Build a request-scoped retry key."""
@@ -227,6 +232,7 @@ class RuntimeResponseHandlers:
             # Give user feedback about why their response wasn't processed
             phase_messages = {
                 SessionPhase.WAITING_PERMISSION: "⚠️ 当前有待处理的权限请求，请先完成权限确认后再回答此问题。",
+                SessionPhase.STOPPING: "⚠️ 会话正在停止，请稍后重试。",
                 SessionPhase.RELEASING_CLIENT: "⚠️ 会话正在释放资源，请稍后重试。",
                 SessionPhase.BROKEN: "⚠️ 会话正在自动恢复中，请稍后重试。",
                 SessionPhase.ACQUIRING_CLIENT: "⚠️ 会话正在初始化，请稍后重试。",

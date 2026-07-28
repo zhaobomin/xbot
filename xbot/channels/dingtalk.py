@@ -366,7 +366,8 @@ class DingTalkChannel(BaseChannel):
         try:
             resp = await self._http.post(url, files=files)
             text = resp.text
-            result = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+            response_content_type = resp.headers.get("content-type", "").lower()
+            result = resp.json() if response_content_type.startswith("application/json") else {}
             if resp.status_code >= 400:
                 logger.error("DingTalk media upload failed status=%s type=%s body=%s", resp.status_code, media_type, text[:500])
                 return None

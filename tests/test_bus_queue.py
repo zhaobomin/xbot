@@ -1,5 +1,6 @@
 """Tests for bus/queue.py - MessageBus and request data classes."""
 
+import asyncio
 import time
 from unittest.mock import AsyncMock
 
@@ -393,6 +394,50 @@ class TestSessionCleanup:
         # Verify cleared
         assert bus.get_pending_request_for_session("test:clear") is None
         assert bus.get_pending_interaction_for_session("test:clear") is None
+
+    @pytest.mark.asyncio
+    async def test_aclear_session_requests_wakes_registered_waiters(self):
+        """Clearing a session must cancel active permission and interaction waits."""
+        bus = MessageBus()
+        session_key = "test:wake"
+        await bus.publish_permission_request(
+            PermissionRequest(
+                request_id="perm-wake",
+                session_key=session_key,
+                channel="test",
+                chat_id="1",
+                tool_name="test",
+                tool_input={},
+                message="Test?",
+            )
+        )
+        await bus.publish_interaction_request(
+            InteractionRequest(
+                request_id="int-wake",
+                session_key=session_key,
+                channel="test",
+                chat_id="1",
+                kind="question",
+                prompt="Test?",
+            )
+        )
+        permission_waiter = asyncio.create_task(
+            bus.wait_permission_response("perm-wake", timeout=10.0)
+        )
+        interaction_waiter = asyncio.create_task(
+            bus.wait_interaction_response("int-wake", timeout=10.0)
+        )
+        await asyncio.sleep(0)
+
+        result = await bus.aclear_session_requests(session_key)
+        permission = await asyncio.wait_for(permission_waiter, timeout=0.1)
+        interaction = await asyncio.wait_for(interaction_waiter, timeout=0.1)
+
+        assert result == {"permission": True, "interaction": True}
+        assert permission.decision == "deny"
+        assert "cleared" in permission.reason.lower()
+        assert interaction.action == "cancel"
+        assert "cleared" in interaction.content.lower()
 
     @pytest.mark.asyncio
     async def test_aclear_session_requests_nonexistent(self):

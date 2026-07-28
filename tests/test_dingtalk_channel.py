@@ -25,6 +25,27 @@ class _FakeResponse:
             raise RuntimeError(f"HTTP {self.status_code}")
 
 
+@pytest.mark.asyncio
+async def test_upload_media_accepts_case_insensitive_json_content_type() -> None:
+    response = _FakeResponse(200, {"media_id": "media-1"})
+    response.headers["content-type"] = "Application/JSON; charset=utf-8"
+    channel = DingTalkChannel(
+        DingTalkConfig(client_id="app", client_secret="secret", allow_from=["*"]),
+        MessageBus(),
+    )
+    channel._http = _FakeHttp(responses=[response])
+
+    media_id = await channel._upload_media(
+        "token",
+        b"content",
+        "file",
+        "report.txt",
+        "text/plain",
+    )
+
+    assert media_id == "media-1"
+
+
 class _FakeHttp:
     def __init__(self, responses: list[_FakeResponse] | None = None) -> None:
         self.calls: list[dict] = []

@@ -95,6 +95,9 @@ class SessionState:
     transition_count: int = 0
     illegal_transition_count: int = 0
     transitions: list[SessionTransition] = field(default_factory=list)
+    interrupt_pending: bool = False
+    last_terminal_reason: str | None = None
+    last_turn_outcome: str | None = None
 
 
 _EVENT_TARGET: dict[SessionEvent, SessionPhase] = {
@@ -117,7 +120,7 @@ _EVENT_TARGET: dict[SessionEvent, SessionPhase] = {
     SessionEvent.DISCONNECT_FAILED: SessionPhase.BROKEN,
     SessionEvent.TURN_COMPLETED: SessionPhase.IDLE,
     SessionEvent.RECOVER: SessionPhase.ACQUIRING_CLIENT,
-    SessionEvent.INTERRUPT: SessionPhase.RELEASING_CLIENT,
+    SessionEvent.INTERRUPT: SessionPhase.STOPPING,
     SessionEvent.SHUTDOWN: SessionPhase.RELEASING_CLIENT,
 }
 
@@ -141,18 +144,21 @@ VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
     },
     SessionPhase.ACQUIRING_CLIENT: {
         SessionPhase.SENDING_QUERY,
+        SessionPhase.STOPPING,
         SessionPhase.RELEASING_CLIENT,
         SessionPhase.BROKEN,
     },
     SessionPhase.SENDING_QUERY: {
         SessionPhase.IDLE,
         SessionPhase.RECEIVING_STREAM,
+        SessionPhase.STOPPING,
         SessionPhase.RELEASING_CLIENT,
         SessionPhase.BROKEN,
     },
     SessionPhase.RECEIVING_STREAM: {
         SessionPhase.IDLE,
         SessionPhase.DRAINING,
+        SessionPhase.STOPPING,
         SessionPhase.RELEASING_CLIENT,
         SessionPhase.WAITING_PERMISSION,
         SessionPhase.WAITING_INTERACTION,
@@ -161,12 +167,14 @@ VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
     SessionPhase.WAITING_PERMISSION: {
         SessionPhase.RECEIVING_STREAM,
         SessionPhase.IDLE,
+        SessionPhase.STOPPING,
         SessionPhase.RELEASING_CLIENT,
         SessionPhase.BROKEN,
     },
     SessionPhase.WAITING_INTERACTION: {
         SessionPhase.RECEIVING_STREAM,
         SessionPhase.IDLE,
+        SessionPhase.STOPPING,
         SessionPhase.RELEASING_CLIENT,
         SessionPhase.BROKEN,
     },
@@ -178,7 +186,9 @@ VALID_TRANSITIONS: dict[SessionPhase, set[SessionPhase]] = {
         SessionPhase.BROKEN,
     },
     SessionPhase.STOPPING: {
+        SessionPhase.DRAINING,
         SessionPhase.IDLE,
+        SessionPhase.RELEASING_CLIENT,
         SessionPhase.ERROR,
         SessionPhase.BROKEN,
     },
@@ -246,6 +256,14 @@ class SessionCoordinator:
                 return False
 
         state.phase = to_phase
+        if event == SessionEvent.INTERRUPT:
+            state.interrupt_pending = True
+        elif event in {
+            SessionEvent.TURN_COMPLETED,
+            SessionEvent.DISCONNECT_OK,
+            SessionEvent.DISCONNECT_FAILED,
+        }:
+            state.interrupt_pending = False
         state.last_active = time.time()
         state.transition_count += 1
         state.transitions.append(
@@ -260,6 +278,31 @@ class SessionCoordinator:
         if len(state.transitions) > 50:
             state.transitions = state.transitions[-50:]
         return True
+
+    def record_turn_result(
+        self,
+        session_key: str,
+        *,
+        terminal_reason: str | None,
+        is_error: bool = False,
+    ) -> str:
+        """Record the SDK terminal reason without changing the lifecycle phase."""
+        if terminal_reason in {"aborted_streaming", "aborted_tools"}:
+            outcome = "interrupted"
+        elif terminal_reason in {"max_turns", "blocking_limit"}:
+            outcome = "limit_reached"
+        elif is_error:
+            outcome = "error"
+        elif terminal_reason == "completed":
+            outcome = "completed"
+        else:
+            outcome = "unknown"
+
+        state = self.get_or_create(session_key)
+        state.last_terminal_reason = terminal_reason
+        state.last_turn_outcome = outcome
+        state.last_active = time.time()
+        return outcome
 
     def snapshot(self) -> dict[str, Any]:
         by_phase: dict[str, int] = {}

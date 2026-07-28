@@ -59,6 +59,7 @@ logger = get_logger(__name__)
 # Max 64 characters.
 _VALID_NAME_PATTERN = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
 _WS_CHAT_MAX_CONTENT_CHARS = 1_000_000
+_WS_TASK_CANCEL_TIMEOUT_SECONDS = 2.0
 
 
 def validate_safe_name(name: str, field_name: str = "name", *, allow_dots: bool = False) -> str:
@@ -417,6 +418,46 @@ async def _safe_websocket_send_json(websocket: WebSocket, payload: dict[str, Any
         if "close message has been sent" in str(exc):
             return False
         raise
+
+
+async def _cancel_tasks_and_wait(tasks: list[asyncio.Task]) -> None:
+    """Cancel active tasks and wait a bounded time for asynchronous cleanup."""
+    active_tasks = [task for task in tasks if not task.done()]
+    for task in active_tasks:
+        task.cancel()
+    if not active_tasks:
+        return
+
+    done, pending = await asyncio.wait(
+        active_tasks,
+        timeout=_WS_TASK_CANCEL_TIMEOUT_SECONDS,
+    )
+    if done:
+        await asyncio.gather(*done, return_exceptions=True)
+    if pending:
+        logger.warning(
+            "Timed out waiting %.1fs for %d WebSocket task(s) to clean up",
+            _WS_TASK_CANCEL_TIMEOUT_SECONDS,
+            len(pending),
+        )
+        for task in pending:
+            task.add_done_callback(
+                lambda finished: None if finished.cancelled() else finished.exception()
+            )
+
+
+async def _remove_active_task_if_current(
+    active_tasks: dict[str, asyncio.Task],
+    active_tasks_lock: asyncio.Lock,
+    session_key: str,
+    task: asyncio.Task | None,
+) -> bool:
+    """Remove a session slot only when it still belongs to the finishing task."""
+    async with active_tasks_lock:
+        if task is None or active_tasks.get(session_key) is not task:
+            return False
+        active_tasks.pop(session_key, None)
+        return True
 
 
 def create_app(
@@ -1725,9 +1766,13 @@ def create_app(
                     "session_key": active_session_key,
                 })
             finally:
-                async with active_tasks_lock:
-                    active_tasks.pop(active_session_key, None)
-                    owned_task_keys.discard(active_session_key)
+                await _remove_active_task_if_current(
+                    active_tasks,
+                    active_tasks_lock,
+                    active_session_key,
+                    asyncio.current_task(),
+                )
+                owned_task_keys.discard(active_session_key)
 
         try:
             while True:
@@ -1740,8 +1785,35 @@ def create_app(
                     else session_key
                 )
                 if message_type == "cancel":
+                    try:
+                        _ensure_writable_client_session(active_session_key, user_id)
+                    except HTTPException as exc:
+                        await _safe_websocket_send_json(websocket, {
+                            "type": "error",
+                            "error": str(exc.detail),
+                            "session_key": active_session_key,
+                        })
+                        continue
+
+                    foreign_active_task = False
                     async with active_tasks_lock:
-                        task = active_tasks.pop(active_session_key, None)
+                        task = active_tasks.get(active_session_key)
+                        if (
+                            task is not None
+                            and not task.done()
+                            and active_session_key not in owned_task_keys
+                        ):
+                            foreign_active_task = True
+                        else:
+                            task = active_tasks.pop(active_session_key, None)
+                            owned_task_keys.discard(active_session_key)
+                    if foreign_active_task:
+                        await _safe_websocket_send_json(websocket, {
+                            "type": "error",
+                            "error": "This connection does not own the active task for this session",
+                            "session_key": active_session_key,
+                        })
+                        continue
                     if task is not None and not task.done():
                         task.cancel()
                         with suppress(asyncio.CancelledError):
@@ -1825,11 +1897,13 @@ def create_app(
             # disconnect, oversized/malformed message return, or error — so
             # the session slot is released and a reconnect isn't blocked by
             # an "already running" ghost task.
+            owned_tasks: list[asyncio.Task] = []
             for key in list(owned_task_keys):
                 async with active_tasks_lock:
                     task = active_tasks.pop(key, None)
                 if task is not None and not task.done():
-                    task.cancel()
+                    owned_tasks.append(task)
+            await _cancel_tasks_and_wait(owned_tasks)
 
     @app.get("/{full_path:path}", response_class=HTMLResponse)
     async def spa_fallback(full_path: str) -> str:

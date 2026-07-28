@@ -12,7 +12,7 @@ from xbot.platform.bus.events import InboundMessage, OutboundMessage
 from xbot.platform.bus.queue import InteractionRequest, MessageBus, PermissionRequest
 from xbot.runtime.core.protocol import AgentContext, AgentResponse
 from xbot.runtime.core.service import AgentService
-from xbot.runtime.state import RuntimeSessionRegistry, SessionPhase
+from xbot.runtime.state import RuntimeSessionRegistry, SessionEvent, SessionPhase
 
 
 class SystemMessage:
@@ -29,6 +29,26 @@ class SystemMessage:
         self.subtype = subtype
         self.data = data if data is not None else {"state": state}
         self.session_id = session_id
+
+
+class ResultMessage:
+    """Fake SDK ResultMessage for terminal-reason tests."""
+
+    def __init__(
+        self,
+        *,
+        terminal_reason: str | None,
+        is_error: bool = False,
+        result: str | None = None,
+    ) -> None:
+        self.terminal_reason = terminal_reason
+        self.is_error = is_error
+        self.result = result
+        self.usage = None
+        self.stop_reason = None
+        self.num_turns = 1
+        self.total_cost_usd = 0.0
+        self.api_error_status = None
 
 
 class FakeClient:
@@ -114,6 +134,59 @@ def _make_message(session_key: str = "feishu:c1") -> InboundMessage:
         metadata={},
         session_key_override=session_key,
     )
+
+
+def test_convert_result_message_exposes_terminal_reason(tmp_path) -> None:
+    service, _ = _make_service(tmp_path)
+    message = ResultMessage(terminal_reason="aborted_tools", result="")
+
+    response = service._convert_result_message(message)
+
+    assert response is not None
+    assert response.event_data is not None
+    assert response.event_data["terminal_reason"] == "aborted_tools"
+
+
+def test_observe_result_records_outcome_and_confirms_pending_interrupt(tmp_path) -> None:
+    service, registry = _make_service(tmp_path)
+    session_key = "feishu:c-observe"
+    waiter = asyncio.Event()
+    service._interrupt_waiters[session_key] = waiter
+
+    service._observe_sdk_result(
+        session_key,
+        ResultMessage(terminal_reason="aborted_streaming"),
+    )
+
+    state = registry.get(session_key)
+    assert state.last_terminal_reason == "aborted_streaming"
+    assert state.last_turn_outcome == "interrupted"
+    assert waiter.is_set() is True
+
+
+def test_completed_result_does_not_confirm_pending_interrupt(tmp_path) -> None:
+    service, _ = _make_service(tmp_path)
+    session_key = "feishu:c-intermediate-result"
+    waiter = asyncio.Event()
+    service._interrupt_waiters[session_key] = waiter
+
+    service._observe_sdk_result(
+        session_key,
+        ResultMessage(terminal_reason="completed"),
+    )
+
+    assert waiter.is_set() is False
+
+
+def test_idle_boundary_confirms_pending_interrupt_without_terminal_reason(tmp_path) -> None:
+    service, _ = _make_service(tmp_path)
+    session_key = "feishu:c-idle-confirm"
+    waiter = asyncio.Event()
+    service._interrupt_waiters[session_key] = waiter
+
+    service._observe_sdk_message(session_key, SystemMessage())
+
+    assert waiter.is_set() is True
 
 
 async def _drain_outbound(bus: MessageBus) -> list[OutboundMessage]:
@@ -317,6 +390,10 @@ async def test_interrupt_session_calls_worker_interrupt_and_keeps_worker(tmp_pat
     async def _interrupt() -> None:
         nonlocal interrupt_called
         interrupt_called = True
+        service._observe_sdk_result(
+            session_key,
+            ResultMessage(terminal_reason="aborted_tools"),
+        )
 
     mock_client.interrupt = _interrupt
     worker = service._create_detached_session_worker(
@@ -327,13 +404,134 @@ async def test_interrupt_session_calls_worker_interrupt_and_keeps_worker(tmp_pat
     )
     await worker.input_queue.put({"type": "user", "message": {"role": "user", "content": "queued"}})
     service._session_workers[session_key] = worker
+    registry.dispatch(session_key, SessionEvent.QUERY_SENT, strict=False)
 
     result = await service.interrupt_session(session_key)
     assert result["interrupted"] is True
     assert result["queued_cleared"] == 1
+    assert result["confirmed"] is True
+    assert result["terminal_reason"] == "aborted_tools"
     assert interrupt_called is True
     assert service._session_workers[session_key] is worker
+    assert registry.get_phase(session_key) == SessionPhase.STOPPING
+
+
+@pytest.mark.asyncio
+async def test_interrupt_session_timeout_recycles_worker(tmp_path) -> None:
+    service, registry = _make_service(tmp_path)
+    session_key = "feishu:c-interrupt-timeout"
+    service._interrupt_confirm_timeout_seconds = 0.001
+    mock_client = type("Client", (), {})()
+
+    async def _interrupt() -> None:
+        return None
+
+    mock_client.interrupt = _interrupt
+    worker = service._create_detached_session_worker(
+        session_key=session_key,
+        client=mock_client,
+        channel="feishu",
+        chat_id="c1",
+    )
+    service._session_workers[session_key] = worker
+    registry.dispatch(session_key, SessionEvent.QUERY_SENT, strict=False)
+
+    result = await service.interrupt_session(session_key)
+
+    assert result["confirmed"] is False
+    assert result["fallback_disconnect"] is True
+    assert session_key not in service._session_workers
     assert registry.get_phase(session_key) == SessionPhase.IDLE
+
+
+@pytest.mark.asyncio
+async def test_interrupt_session_does_not_interrupt_idle_worker(tmp_path) -> None:
+    service, registry = _make_service(tmp_path)
+    session_key = "feishu:c-interrupt-idle"
+    mock_client = type("Client", (), {})()
+    interrupt_calls = 0
+
+    async def _interrupt() -> None:
+        nonlocal interrupt_calls
+        interrupt_calls += 1
+
+    mock_client.interrupt = _interrupt
+    worker = service._create_detached_session_worker(
+        session_key=session_key,
+        client=mock_client,
+        channel="feishu",
+        chat_id="c1",
+    )
+    service._session_workers[session_key] = worker
+
+    result = await service.interrupt_session(session_key)
+
+    assert result["interrupt_sent"] is False
+    assert result["fallback_disconnect"] is False
+    assert service._session_workers[session_key] is worker
+    assert registry.get_phase(session_key) == SessionPhase.IDLE
+    assert interrupt_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_concurrent_interrupt_requests_share_one_sdk_interrupt(tmp_path) -> None:
+    service, registry = _make_service(tmp_path)
+    session_key = "feishu:c-interrupt-concurrent"
+    mock_client = type("Client", (), {})()
+    interrupt_calls = 0
+
+    async def _interrupt() -> None:
+        nonlocal interrupt_calls
+        interrupt_calls += 1
+        await asyncio.sleep(0)
+        service._observe_sdk_result(
+            session_key,
+            ResultMessage(terminal_reason="aborted_streaming"),
+        )
+
+    mock_client.interrupt = _interrupt
+    worker = service._create_detached_session_worker(
+        session_key=session_key,
+        client=mock_client,
+        channel="feishu",
+        chat_id="c1",
+    )
+    service._session_workers[session_key] = worker
+    registry.dispatch(session_key, SessionEvent.QUERY_SENT, strict=False)
+
+    first, second = await asyncio.gather(
+        service.interrupt_session(session_key),
+        service.interrupt_session(session_key),
+    )
+
+    assert interrupt_calls == 1
+    assert first["confirmed"] is True
+    assert second["confirmed"] is True
+
+
+@pytest.mark.asyncio
+async def test_enqueue_rejects_new_message_while_session_is_stopping(tmp_path) -> None:
+    service, registry = _make_service(tmp_path)
+    message = _make_message("feishu:c-stopping")
+    session_key = message.session_key
+    bus = MessageBus()
+    registry.dispatch(session_key, SessionEvent.QUERY_SENT, strict=False)
+    registry.dispatch(session_key, SessionEvent.INTERRUPT)
+
+    mock_client = type("Client", (), {})()
+    worker = service._create_detached_session_worker(
+        session_key=session_key,
+        client=mock_client,
+        channel="feishu",
+        chat_id="c1",
+    )
+    service._session_workers[session_key] = worker
+
+    await service._enqueue_worker_message(message, bus)
+
+    assert worker.input_queue.empty()
+    outbound = await asyncio.wait_for(bus.consume_outbound(), timeout=0.1)
+    assert "stopping" in outbound.content.lower()
 
 
 @pytest.mark.asyncio

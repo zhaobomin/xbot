@@ -9,6 +9,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
+from uuid import uuid4
 
 from xbot.crew.context import CrewExecutionContext, load_checkpoint
 from xbot.crew.models import CrewConfig, CrewResult, ProcessType, TaskResult
@@ -27,6 +28,7 @@ class _LLMRepairRunner:
     """Synchronous wrapper around a long-lived async AgentService."""
 
     _STARTUP_TIMEOUT_SECONDS = 5.0
+    _CANCEL_GRACE_SECONDS = 5.0
 
     def __init__(self, service: Any, agent_context_cls: type[Any], timeout_seconds: float = 120.0) -> None:
         self._service = service
@@ -44,11 +46,21 @@ class _LLMRepairRunner:
         if self._closed or self._loop is None:
             raise RuntimeError("LLM repair runner is closed")
 
-        future = asyncio.run_coroutine_threadsafe(self._call(prompt), self._loop)
+        session_key = f"repair_{uuid4().hex}"
+        cleanup_done = threading.Event()
+        future = asyncio.run_coroutine_threadsafe(
+            self._call(prompt, session_key, cleanup_done),
+            self._loop,
+        )
         try:
             return future.result(timeout=self._timeout_seconds)
         except concurrent.futures.TimeoutError as exc:
             future.cancel()
+            if not cleanup_done.wait(timeout=self._CANCEL_GRACE_SECONDS):
+                logger.warning(
+                    "[crew] Timed out waiting for repair session cleanup: %s",
+                    session_key,
+                )
             raise TimeoutError(f"LLM repair timed out after {self._timeout_seconds:g}s") from exc
 
     def close(self) -> None:
@@ -92,25 +104,43 @@ class _LLMRepairRunner:
             if loop is not None:
                 loop.close()
 
-    async def _call(self, prompt: str) -> str:
-        if not self._initialized:
-            await self._service.initialize()
-            self._initialized = True
-        session_key = f"repair_{hash(prompt) % 10000}"
-        context = self._agent_context_cls(
-            session_key=session_key,
-            prompt=prompt,
-            channel="repair",
-            chat_id="repair",
-            media=None,
-        )
-        content = ""
-        async for response in self._service.process(context):
-            if response.content:
-                content = response.content
-            elif response.delta_content:
-                content += response.delta_content
-        return content
+    async def _call(
+        self,
+        prompt: str,
+        session_key: str,
+        cleanup_done: threading.Event,
+    ) -> str:
+        try:
+            if not self._initialized:
+                await self._service.initialize()
+                self._initialized = True
+            context = self._agent_context_cls(
+                session_key=session_key,
+                prompt=prompt,
+                channel="repair",
+                chat_id="repair",
+                media=None,
+            )
+            content = ""
+            async for response in self._service.process(context):
+                if response.content:
+                    content = response.content
+                elif response.delta_content:
+                    content += response.delta_content
+            return content
+        except asyncio.CancelledError:
+            reset_session = getattr(self._service, "reset_session", None)
+            if callable(reset_session):
+                try:
+                    await reset_session(session_key)
+                except Exception:
+                    logger.exception(
+                        "[crew] Failed to release timed-out repair session: %s",
+                        session_key,
+                    )
+            raise
+        finally:
+            cleanup_done.set()
 
     async def _shutdown(self) -> None:
         shutdown = getattr(self._service, "shutdown", None)

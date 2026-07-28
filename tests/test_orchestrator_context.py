@@ -1,5 +1,7 @@
 """Tests for orchestrator helper methods and context building."""
 
+import asyncio
+import threading
 from datetime import datetime
 from unittest.mock import MagicMock
 
@@ -639,6 +641,74 @@ class TestLLMRepairCallable:
                 close()
 
         assert FakeService.shutdown_count == 1
+
+    def test_llm_repair_uses_unique_session_keys_even_when_prompt_hashes_collide(
+        self, monkeypatch
+    ) -> None:
+        """Distinct repair calls must not share SDK context after a hash collision."""
+        from types import SimpleNamespace
+
+        from xbot.crew.orchestrator import _LLMRepairRunner
+
+        contexts = []
+
+        class FakeService:
+            async def initialize(self):
+                return None
+
+            async def shutdown(self):
+                return None
+
+            async def process(self, context):
+                contexts.append(context)
+                yield SimpleNamespace(content="fixed", delta_content="")
+
+        monkeypatch.setattr("builtins.hash", lambda _value: 7)
+        repair = _LLMRepairRunner(FakeService(), SimpleNamespace)
+        try:
+            assert repair("first") == "fixed"
+            assert repair("second") == "fixed"
+        finally:
+            repair.close()
+
+        assert contexts[0].session_key != contexts[1].session_key
+        assert all(context.session_key.startswith("repair_") for context in contexts)
+
+    def test_llm_repair_timeout_releases_session_before_returning(self) -> None:
+        """A timed-out repair must release its SDK session before returning control."""
+        from types import SimpleNamespace
+
+        from xbot.crew.orchestrator import _LLMRepairRunner
+
+        reset_finished = threading.Event()
+        reset_keys: list[str] = []
+
+        class SlowService:
+            async def initialize(self):
+                return None
+
+            async def shutdown(self):
+                return None
+
+            async def reset_session(self, session_key):
+                await asyncio.sleep(0.03)
+                reset_keys.append(session_key)
+                reset_finished.set()
+
+            async def process(self, context):
+                await asyncio.Event().wait()
+                if False:
+                    yield SimpleNamespace(content="", delta_content="")
+
+        repair = _LLMRepairRunner(SlowService(), SimpleNamespace, timeout_seconds=0.01)
+        try:
+            with pytest.raises(TimeoutError, match="timed out"):
+                repair("slow repair")
+            assert reset_finished.is_set()
+            assert len(reset_keys) == 1
+            assert reset_keys[0].startswith("repair_")
+        finally:
+            repair.close()
 
 
 class TestOrchestratorInit:

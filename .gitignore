@@ -30,6 +30,7 @@ uv.lock
 node_modules/
 .xbot/
 .claw/
+.sclaw/
 .ruff_cache/
 .codegraph/
 .workbuddy/

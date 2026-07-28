@@ -102,6 +102,11 @@ class MessageBus:
         self._permission_requests: dict[str, PermissionRequest] = {}
         # 显式追踪 wait_permission_response 中的 waiter 数量，避免访问 Event._waiters 私有属性
         self._permission_waiter_counts: dict[str, int] = {}
+        # Clear may race ahead of waiter registration. Keep a bounded tombstone
+        # so the late waiter observes cancellation instead of creating an orphan Event.
+        self._cleared_permission_responses: dict[
+            str, tuple[PermissionResponse, float]
+        ] = {}
 
         # 通用交互请求/响应支持
         self._pending_interaction_responses: dict[str, asyncio.Event] = {}
@@ -111,6 +116,9 @@ class MessageBus:
         self._session_pending_interactions: dict[str, str] = {}
         # 显式追踪 wait_interaction_response 中的 waiter 数量
         self._interaction_waiter_counts: dict[str, int] = {}
+        self._cleared_interaction_responses: dict[
+            str, tuple[InteractionResponse, float]
+        ] = {}
 
     def _cleanup_expired_permission_requests_unlocked(self) -> int:
         """清理超时的权限请求。必须在持有 _permission_lock 时调用。
@@ -201,6 +209,135 @@ class MessageBus:
             self._interaction_waiter_counts.pop(request_id, None)
         else:
             self._interaction_waiter_counts[request_id] = cnt
+
+    def _remember_cleared_permission_unlocked(self, response: PermissionResponse) -> None:
+        """Retain a bounded cancellation result for a waiter that registers late."""
+        now = time.monotonic()
+        self._cleared_permission_responses = {
+            request_id: entry
+            for request_id, entry in self._cleared_permission_responses.items()
+            if entry[1] > now
+        }
+        self._cleared_permission_responses[response.request_id] = (
+            response,
+            now + REQUEST_TIMEOUT_SECONDS,
+        )
+        while len(self._cleared_permission_responses) > self._max_pending_requests:
+            self._cleared_permission_responses.pop(
+                next(iter(self._cleared_permission_responses))
+            )
+
+    def _remember_cleared_interaction_unlocked(
+        self,
+        response: InteractionResponse,
+    ) -> None:
+        """Retain a bounded cancellation result for a waiter that registers late."""
+        now = time.monotonic()
+        self._cleared_interaction_responses = {
+            request_id: entry
+            for request_id, entry in self._cleared_interaction_responses.items()
+            if entry[1] > now
+        }
+        self._cleared_interaction_responses[response.request_id] = (
+            response,
+            now + REQUEST_TIMEOUT_SECONDS,
+        )
+        while len(self._cleared_interaction_responses) > self._max_pending_requests:
+            self._cleared_interaction_responses.pop(
+                next(iter(self._cleared_interaction_responses))
+            )
+
+    def _take_cleared_permission_unlocked(
+        self,
+        request_id: str,
+    ) -> PermissionResponse | None:
+        entry = self._cleared_permission_responses.pop(request_id, None)
+        if entry is None or entry[1] <= time.monotonic():
+            return None
+        return entry[0]
+
+    def _take_cleared_interaction_unlocked(
+        self,
+        request_id: str,
+    ) -> InteractionResponse | None:
+        entry = self._cleared_interaction_responses.pop(request_id, None)
+        if entry is None or entry[1] <= time.monotonic():
+            return None
+        return entry[0]
+
+    def _cancel_permission_request_unlocked(
+        self,
+        request_id: str,
+        *,
+        session_key: str,
+        reason: str,
+    ) -> bool:
+        event = self._pending_permission_responses.get(request_id)
+        request = self._permission_requests.get(request_id)
+        mapped = any(
+            pending_id == request_id
+            for pending_id in self._session_pending_requests.values()
+        )
+        if event is None and request is None and not mapped:
+            return False
+
+        response = self._permission_results.get(request_id) or PermissionResponse(
+            request_id=request_id,
+            session_key=session_key,
+            decision="deny",
+            reason=reason,
+        )
+        has_waiters = self._permission_waiter_counts.get(request_id, 0) > 0
+        if event is not None and has_waiters:
+            self._permission_results[request_id] = response
+            event.set()
+        else:
+            self._pending_permission_responses.pop(request_id, None)
+            self._permission_results.pop(request_id, None)
+            self._remember_cleared_permission_unlocked(response)
+
+        self._permission_requests.pop(request_id, None)
+        for key, pending_id in list(self._session_pending_requests.items()):
+            if pending_id == request_id:
+                self._session_pending_requests.pop(key, None)
+        return True
+
+    def _cancel_interaction_request_unlocked(
+        self,
+        request_id: str,
+        *,
+        session_key: str,
+        content: str,
+    ) -> bool:
+        event = self._pending_interaction_responses.get(request_id)
+        request = self._interaction_requests.get(request_id)
+        mapped = any(
+            pending_id == request_id
+            for pending_id in self._session_pending_interactions.values()
+        )
+        if event is None and request is None and not mapped:
+            return False
+
+        response = self._interaction_results.get(request_id) or InteractionResponse(
+            request_id=request_id,
+            session_key=session_key,
+            action="cancel",
+            content=content,
+        )
+        has_waiters = self._interaction_waiter_counts.get(request_id, 0) > 0
+        if event is not None and has_waiters:
+            self._interaction_results[request_id] = response
+            event.set()
+        else:
+            self._pending_interaction_responses.pop(request_id, None)
+            self._interaction_results.pop(request_id, None)
+            self._remember_cleared_interaction_unlocked(response)
+
+        self._interaction_requests.pop(request_id, None)
+        for key, pending_id in list(self._session_pending_interactions.items()):
+            if pending_id == request_id:
+                self._session_pending_interactions.pop(key, None)
+        return True
 
     async def publish_inbound(self, msg: InboundMessage) -> None:
         """Publish a message from a channel to the agent."""
@@ -348,6 +485,9 @@ class MessageBus:
         """
         event = asyncio.Event()
         async with self._permission_lock:
+            cleared_response = self._take_cleared_permission_unlocked(request_id)
+            if cleared_response is not None:
+                return cleared_response
             event = self._pending_permission_responses.setdefault(request_id, event)
             self._permission_waiter_counts[request_id] = (
                 self._permission_waiter_counts.get(request_id, 0) + 1
@@ -406,6 +546,9 @@ class MessageBus:
         """等待通用交互响应。"""
         event = asyncio.Event()
         async with self._interaction_lock:
+            cleared_response = self._take_cleared_interaction_unlocked(request_id)
+            if cleared_response is not None:
+                return cleared_response
             event = self._pending_interaction_responses.setdefault(request_id, event)
             self._interaction_waiter_counts[request_id] = (
                 self._interaction_waiter_counts.get(request_id, 0) + 1
@@ -467,7 +610,7 @@ class MessageBus:
         """
         async with self._permission_lock:
             event = self._pending_permission_responses.get(resp.request_id)
-            if event is None:
+            if event is None or event.is_set():
                 return False
             self._permission_results[resp.request_id] = resp
             event.set()
@@ -481,7 +624,7 @@ class MessageBus:
         """提交通用交互响应。"""
         async with self._interaction_lock:
             event = self._pending_interaction_responses.get(resp.request_id)
-            if event is None:
+            if event is None or event.is_set():
                 return False
             self._interaction_results[resp.request_id] = resp
             event.set()
@@ -560,22 +703,22 @@ class MessageBus:
     async def aclear_permission_request(self, request_id: str) -> None:
         """异步清除权限请求状态（带锁保护）。"""
         async with self._permission_lock:
-            self._pending_permission_responses.pop(request_id, None)
-            self._permission_results.pop(request_id, None)
-            self._permission_requests.pop(request_id, None)  # Fix: clean up request
-            to_remove = [k for k, v in self._session_pending_requests.items() if v == request_id]
-            for k in to_remove:
-                del self._session_pending_requests[k]
+            request = self._permission_requests.get(request_id)
+            self._cancel_permission_request_unlocked(
+                request_id,
+                session_key=request.session_key if request else "",
+                reason="Permission request cleared",
+            )
 
     async def aclear_interaction_request(self, request_id: str) -> None:
         """异步清除通用交互请求状态（带锁保护）。"""
         async with self._interaction_lock:
-            self._pending_interaction_responses.pop(request_id, None)
-            self._interaction_results.pop(request_id, None)
-            self._interaction_requests.pop(request_id, None)
-            to_remove = [k for k, v in self._session_pending_interactions.items() if v == request_id]
-            for k in to_remove:
-                del self._session_pending_interactions[k]
+            request = self._interaction_requests.get(request_id)
+            self._cancel_interaction_request_unlocked(
+                request_id,
+                session_key=request.session_key if request else "",
+                content="Interaction request cleared",
+            )
 
     def clear_session_requests(self, session_key: str) -> dict[str, bool]:
         """清理指定会话下挂起的权限与交互请求。
@@ -607,20 +750,20 @@ class MessageBus:
         async with self._permission_lock:
             request_id = self._session_pending_requests.get(session_key)
             if request_id:
-                self._pending_permission_responses.pop(request_id, None)
-                self._permission_results.pop(request_id, None)
-                self._permission_requests.pop(request_id, None)  # Fix: clean up request
-                del self._session_pending_requests[session_key]
-                cleared_permission = True
+                cleared_permission = self._cancel_permission_request_unlocked(
+                    request_id,
+                    session_key=session_key,
+                    reason="Pending permission request cleared for session",
+                )
 
         async with self._interaction_lock:
             interaction_id = self._session_pending_interactions.get(session_key)
             if interaction_id:
-                self._pending_interaction_responses.pop(interaction_id, None)
-                self._interaction_results.pop(interaction_id, None)
-                self._interaction_requests.pop(interaction_id, None)
-                del self._session_pending_interactions[session_key]
-                cleared_interaction = True
+                cleared_interaction = self._cancel_interaction_request_unlocked(
+                    interaction_id,
+                    session_key=session_key,
+                    content="Pending interaction request cleared for session",
+                )
 
         return {
             "permission": cleared_permission,

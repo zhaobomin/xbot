@@ -93,6 +93,60 @@ def test_phase_changes_are_event_driven() -> None:
     assert manager.get_phase(key) == SessionPhase.IDLE
 
 
+def test_interrupt_enters_stopping_until_idle_boundary() -> None:
+    manager = RuntimeSessionRegistry()
+    key = "slack:C-interrupt"
+
+    manager.dispatch(key, SessionEvent.USER_MESSAGE)
+    manager.dispatch(key, SessionEvent.CLIENT_ACQUIRED)
+    manager.dispatch(key, SessionEvent.QUERY_SENT)
+
+    assert manager.dispatch(key, SessionEvent.INTERRUPT, strict=True) is True
+    assert manager.get_phase(key) == SessionPhase.STOPPING
+    assert manager.get(key).interrupt_pending is True
+
+    assert manager.dispatch(key, SessionEvent.STREAM_IDLE_BOUNDARY, strict=True) is True
+    assert manager.get_phase(key) == SessionPhase.DRAINING
+    assert manager.dispatch(key, SessionEvent.TURN_COMPLETED, strict=True) is True
+    assert manager.get_phase(key) == SessionPhase.IDLE
+    assert manager.get(key).interrupt_pending is False
+
+
+@pytest.mark.parametrize(
+    ("terminal_reason", "is_error", "expected_outcome"),
+    [
+        ("completed", False, "completed"),
+        ("aborted_streaming", False, "interrupted"),
+        ("aborted_tools", False, "interrupted"),
+        ("aborted_tools", True, "interrupted"),
+        ("max_turns", False, "limit_reached"),
+        ("max_turns", True, "limit_reached"),
+        ("blocking_limit", False, "limit_reached"),
+        ("future_reason", False, "unknown"),
+        (None, False, "unknown"),
+        ("completed", True, "error"),
+    ],
+)
+def test_record_turn_result_normalizes_sdk_terminal_reason(
+    terminal_reason: str | None,
+    is_error: bool,
+    expected_outcome: str,
+) -> None:
+    manager = RuntimeSessionRegistry()
+    key = "slack:C-result"
+
+    outcome = manager.record_turn_result(
+        key,
+        terminal_reason=terminal_reason,
+        is_error=is_error,
+    )
+
+    state = manager.get(key)
+    assert outcome == expected_outcome
+    assert state.last_terminal_reason == terminal_reason
+    assert state.last_turn_outcome == expected_outcome
+
+
 def test_worker_idle_boundary_can_finalize_from_streaming_phase() -> None:
     manager = RuntimeSessionRegistry()
     key = "feishu:ou_7b48795a"

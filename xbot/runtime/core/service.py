@@ -147,6 +147,8 @@ class AgentService:
         self._commands_loader: Any = None
         self._command_handler: LocalCommandHandler | None = None
         self._session_workers: dict[str, SessionWorker] = {}
+        self._interrupt_waiters: dict[str, asyncio.Event] = {}
+        self._interrupt_confirm_timeout_seconds = 5.0
         self._session_model_overrides: dict[str, str] = {}
         self._direct_progress_callbacks: dict[str, ProgressCallback] = {}
 
@@ -412,6 +414,7 @@ class AgentService:
                     )
 
                 self._sync_sdk_session_mapping(context.session_key, message)
+                self._observe_sdk_message(context.session_key, message)
                 msg_count += 1
                 msg_type = type(message).__name__
                 logger.debug(f"[AgentService] Received message #{msg_count}: {msg_type}")
@@ -451,7 +454,7 @@ class AgentService:
             if sm:
                 self._dispatch_state_event(
                     context.session_key,
-                    SessionEvent.INTERRUPT,
+                    SessionEvent.STREAM_ERROR,
                     reason="process_cancelled",
                 )
             raise
@@ -967,30 +970,116 @@ class AgentService:
     async def interrupt_session(self, session_key: str) -> dict[str, Any]:
         """Interrupt ongoing processing for a session."""
         worker = self._session_workers.get(session_key)
-        interrupted = False
+        interrupt_sent = False
+        confirmed = False
+        fallback_disconnect = False
         queued_cleared = 0
+        terminal_reason = None
+        sm = self._shared_resources.get("runtime_registry")
+        phase = sm.get_phase(session_key) if sm else None
+        has_active_turn = sm is None or phase in {
+            SessionPhase.ACQUIRING_CLIENT,
+            SessionPhase.SENDING_QUERY,
+            SessionPhase.RECEIVING_STREAM,
+            SessionPhase.WAITING_PERMISSION,
+            SessionPhase.WAITING_INTERACTION,
+            SessionPhase.STOPPING,
+        }
+        waiter = self._interrupt_waiters.get(session_key)
+        owns_waiter = waiter is None
+
         if worker is not None and not worker.closed:
+            queued_cleared = self._clear_worker_queue(worker)
+
+        if worker is not None and not worker.closed and has_active_turn and owns_waiter:
+            waiter = asyncio.Event()
+            self._interrupt_waiters[session_key] = waiter
             try:
                 await worker.client.interrupt()
-                interrupted = True
+                interrupt_sent = True
             except Exception as e:
                 logger.warning("Failed to interrupt session worker %s: %s", session_key, e)
-            queued_cleared = self._clear_worker_queue(worker)
-        # Transition to releasing/idle
-        sm = self._shared_resources.get("runtime_registry")
+                self._interrupt_waiters.pop(session_key, None)
+                waiter = None
+        elif worker is not None and not worker.closed and has_active_turn:
+            interrupt_sent = True
+
+        if interrupt_sent and sm:
+            if phase not in {SessionPhase.IDLE, SessionPhase.DRAINING}:
+                self._dispatch_state_event(
+                    session_key,
+                    SessionEvent.INTERRUPT,
+                    reason="interrupt_requested",
+                    strict=False,
+                )
+
+        if interrupt_sent and waiter is not None:
+            try:
+                await asyncio.wait_for(
+                    waiter.wait(),
+                    timeout=self._interrupt_confirm_timeout_seconds,
+                )
+                confirmed = True
+            except asyncio.TimeoutError:
+                if owns_waiter:
+                    fallback_disconnect = True
+                    if sm:
+                        self._dispatch_state_event(
+                            session_key,
+                            SessionEvent.STREAM_TIMEOUT,
+                            reason="interrupt_confirmation_timeout",
+                            strict=False,
+                        )
+                    await self._stop_session_worker(session_key, disconnect=True)
+                    if sm:
+                        self._dispatch_state_event(
+                            session_key,
+                            SessionEvent.DISCONNECT_OK,
+                            reason="interrupt_timeout_worker_recycled",
+                            strict=False,
+                        )
+            finally:
+                if owns_waiter and self._interrupt_waiters.get(session_key) is waiter:
+                    self._interrupt_waiters.pop(session_key, None)
+
         if sm:
-            self._dispatch_state_event(
+            state = sm.get(session_key)
+            terminal_reason = getattr(state, "last_terminal_reason", None) if state else None
+
+        return {
+            "interrupted": interrupt_sent,
+            "interrupt_sent": interrupt_sent,
+            "confirmed": confirmed,
+            "terminal_reason": terminal_reason,
+            "queued_cleared": queued_cleared,
+            "fallback_disconnect": fallback_disconnect,
+            "usage": None,
+        }
+
+    def _observe_sdk_message(self, session_key: str, message: Any) -> None:
+        """Record SDK turn outcomes and wake interrupt confirmation waiters."""
+        if type(message).__name__ == "ResultMessage":
+            self._observe_sdk_result(session_key, message)
+
+        if self._is_idle_boundary_message(message):
+            waiter = self._interrupt_waiters.get(session_key)
+            if waiter is not None:
+                waiter.set()
+
+    def _observe_sdk_result(self, session_key: str, message: Any) -> None:
+        terminal_reason = getattr(message, "terminal_reason", None)
+        sm = self._shared_resources.get("runtime_registry")
+        if sm and hasattr(sm, "record_turn_result"):
+            sm.record_turn_result(
                 session_key,
-                SessionEvent.INTERRUPT,
-                reason="interrupted",
+                terminal_reason=terminal_reason,
+                is_error=bool(getattr(message, "is_error", False)),
             )
-            self._dispatch_state_event(
-                session_key,
-                SessionEvent.TURN_COMPLETED,
-                reason="interrupt_idle",
-                strict=False,
-            )
-        return {"interrupted": interrupted, "queued_cleared": queued_cleared, "usage": None}
+
+        if terminal_reason in {"aborted_streaming", "aborted_tools"}:
+            waiter = self._interrupt_waiters.get(session_key)
+            if waiter is not None:
+                waiter.set()
 
     def _dispatch_state_event(
         self,
@@ -2367,6 +2456,7 @@ class AgentService:
             event_type="result",
             event_data={
                 "stop_reason": getattr(message, "stop_reason", None),
+                "terminal_reason": getattr(message, "terminal_reason", None),
                 "num_turns": getattr(message, "num_turns", None),
                 "total_cost_usd": getattr(message, "total_cost_usd", None),
                 "api_error_status": getattr(message, "api_error_status", None),
@@ -2922,8 +3012,25 @@ class AgentService:
         )
         return worker
 
-    async def _enqueue_worker_message(self, msg: InboundMessage, bus: Any) -> SessionWorker:
+    async def _enqueue_worker_message(
+        self,
+        msg: InboundMessage,
+        bus: Any,
+    ) -> SessionWorker | None:
         """Convert an inbound message to an SDK user frame and enqueue it."""
+        session_key = msg.session_key or f"{msg.channel}:{msg.chat_id}"
+        sm = self._shared_resources.get("runtime_registry")
+        phase = sm.get_phase(session_key) if sm else SessionPhase.IDLE
+        if phase in {SessionPhase.STOPPING, SessionPhase.RELEASING_CLIENT}:
+            await bus.publish_outbound(
+                OutboundMessage(
+                    channel=msg.channel,
+                    chat_id=msg.chat_id,
+                    content="⚠️ Session is stopping; please retry in a moment.",
+                )
+            )
+            return self._session_workers.get(session_key)
+
         worker = await self._get_or_start_session_worker(msg, bus)
         worker.channel = msg.channel
         worker.chat_id = msg.chat_id
@@ -3024,6 +3131,7 @@ class AgentService:
     async def _handle_worker_sdk_message(self, worker: SessionWorker, message: Any, bus: Any) -> None:
         """Convert and publish one SDK message from a session worker."""
         self._sync_sdk_session_mapping(worker.session_key, message)
+        self._observe_sdk_message(worker.session_key, message)
         response = self._convert_event(message)
         if response:
             await self._publish_worker_response(worker, response, bus)

@@ -1,6 +1,6 @@
 [project]
 name = "xbot"
-version = "2.0.41"
+version = "2.1.0"
 description = "A lightweight personal AI assistant framework"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
@@ -51,7 +51,7 @@ dependencies = [
     "chardet>=3.0.2,<6.0.0",
     "openai>=2.8.0,<3.0.0",
     "tiktoken>=0.12.0,<1.0.0",
-    "claude-agent-sdk==0.2.122",
+    "claude-agent-sdk==0.2.128",
     "reme-ai>=0.3.0,<1.0.0",
 ]
 
@@ -70,6 +70,10 @@ langsmith = [
 dev = [
     "pytest>=9.0.0,<10.0.0",
     "pytest-asyncio>=1.3.0,<2.0.0",
+    "pytest-cov>=6.0,<7.0",
+    "pytest-env>=1.0,<2.0",
+    "hypothesis>=6.100,<7.0",
+    "mypy>=1.10,<2.0",
     "ruff>=0.1.0",
     "matrix-nio>=0.25.2",
     "mistune>=3.0.0,<4.0.0",
@@ -128,7 +132,7 @@ line-length = 100
 target-version = "py311"
 
 [tool.ruff.lint]
-select = ["E", "F", "I", "N", "W"]
+select = ["E", "F", "I", "N", "W", "ASYNC", "B", "SIM", "RUF"]
 ignore = ["E501"]
 
 [tool.ruff.lint.per-file-ignores]
@@ -143,3 +147,45 @@ filterwarnings = [
     "ignore:websockets\\.legacy is deprecated.*:DeprecationWarning:websockets\\.legacy",
     "ignore:There is no current event loop:DeprecationWarning:lark_oapi\\.ws\\.client",
 ]
+markers = [
+    "integration: Integration tests (cross-module, real components)",
+    "slow: Tests that take more than 2s",
+    "regression: Bug regression tests",
+]
+env = [
+    "PYTHONASYNCIODEBUG=1",
+]
+
+[tool.coverage.run]
+source = ["xbot"]
+branch = true
+omit = [
+    "xbot/interfaces/webui/frontend/*",
+    "xbot/templates/*",
+    "xbot/skills/*",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+fail_under = 0
+exclude_lines = [
+    "pragma: no cover",
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = ["xbot.channels.*", "xbot.interfaces.webui.*"]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = ["tests.*"]
+disallow_untyped_defs = false

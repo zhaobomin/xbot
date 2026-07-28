@@ -40,6 +40,19 @@ class RuntimeSessionRegistry:
     def dispatch(self, session_key: str, event: SessionEvent, *, reason: str = "", strict: bool = True) -> bool:
         return self._coordinator.dispatch(session_key, event, reason=reason, strict=strict)
 
+    def record_turn_result(
+        self,
+        session_key: str,
+        *,
+        terminal_reason: str | None,
+        is_error: bool = False,
+    ) -> str:
+        return self._coordinator.record_turn_result(
+            session_key,
+            terminal_reason=terminal_reason,
+            is_error=is_error,
+        )
+
     def list_keys(self) -> list[str]:
         return self._coordinator.list_keys()
 

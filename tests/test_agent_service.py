@@ -8,11 +8,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from xbot.platform.bus.events import InboundMessage
+from xbot.platform.bus.queue import MessageBus, PermissionRequest
 from xbot.platform.config.schema import Config, ProviderConfig
 from xbot.runtime.core.protocol import AgentContext, AgentResponse
 from xbot.runtime.core.service import AgentService
 from xbot.runtime.core.types import AgentConfig
-from xbot.runtime.state import RuntimeSessionRegistry
+from xbot.runtime.state import RuntimeSessionRegistry, SessionEvent
 from xbot.runtime.state.machine import SessionPhase
 
 
@@ -643,6 +644,19 @@ class TestRunDispatch:
         )
         await worker.input_queue.put({"type": "user", "message": {"role": "user", "content": "queued"}})
         service._session_workers[session_key] = worker
+        state_manager.dispatch(session_key, SessionEvent.QUERY_SENT, strict=False)
+
+        async def _interrupt_with_confirmation() -> None:
+            service._observe_sdk_result(
+                session_key,
+                type(
+                    "ResultMessage",
+                    (),
+                    {"terminal_reason": "aborted_tools", "is_error": False},
+                )(),
+            )
+
+        mock_client.interrupt.side_effect = _interrupt_with_confirmation
 
         msg = InboundMessage(channel="test", sender_id="u1", chat_id="c1", content="!stop")
         await service._command_handler.handle(msg, bus)
@@ -650,10 +664,49 @@ class TestRunDispatch:
         mock_client.interrupt.assert_awaited_once()
         assert session_key in service._session_workers
         assert worker.input_queue.empty()
-        assert state_manager.get_phase(session_key) == SessionPhase.IDLE
+        assert state_manager.get_phase(session_key) == SessionPhase.STOPPING
         assert bus.publish_outbound.call_count == 1
         assert "stopped" in bus.publish_outbound.call_args.args[0].content.lower() or \
                "stop" in bus.publish_outbound.call_args.args[0].content.lower()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("command", ["stop", "reset"])
+    async def test_local_stop_and_reset_clear_pending_permission(
+        self,
+        command,
+        config,
+        shared_resources,
+    ):
+        """Local stop/reset commands must unblock and remove pending permission waits."""
+        real_bus = MessageBus()
+        resources = {**shared_resources, "bus": real_bus}
+        service = await self._make_service(config, resources)
+        session_key = "test:pending"
+        await real_bus.publish_permission_request(
+            PermissionRequest(
+                request_id=f"perm-{command}",
+                session_key=session_key,
+                channel="test",
+                chat_id="pending",
+                tool_name="write",
+                tool_input={},
+                message="Allow?",
+            )
+        )
+        waiter = asyncio.create_task(
+            real_bus.wait_permission_response(f"perm-{command}", timeout=10.0)
+        )
+        await asyncio.sleep(0)
+
+        if command == "stop":
+            response = await service._command_handler._do_stop(session_key, real_bus)
+        else:
+            response = await service._command_handler._do_reset(session_key, real_bus)
+        permission = await asyncio.wait_for(waiter, timeout=0.1)
+
+        assert permission.decision == "deny"
+        assert real_bus.get_pending_request_for_session(session_key) is None
+        assert "pending permission" in response.lower()
 
     # --- Test 6: Native worker enqueue ---
 

@@ -157,23 +157,21 @@ class LocalCommandHandler:
         """Stop current processing, preserving context (matches v0.3.37 !stop)."""
         svc = self._service
         result = await svc.interrupt_session(session_key)
-        interrupted = bool(result.get("interrupted"))
+        interrupt_sent = bool(result.get("interrupt_sent", result.get("interrupted")))
+        confirmed = bool(result.get("confirmed"))
+        fallback_disconnect = bool(result.get("fallback_disconnect"))
         queued_cleared = int(result.get("queued_cleared") or 0)
 
-        # Clear pending permission/interaction
-        bus_obj = svc._shared_resources.get("bus")
-        cleared_permission = False
-        cleared_interaction = False
-        if bus_obj:
-            if bus_obj.get_pending_request_for_session(session_key):
-                cleared_permission = True
-            if hasattr(bus_obj, "get_pending_interaction_for_session"):
-                if bus_obj.get_pending_interaction_for_session(session_key):
-                    cleared_interaction = True
+        # Clear pending permission/interaction and wake their waiters.
+        bus_obj = svc._shared_resources.get("bus") or bus
+        cleared_permission, cleared_interaction = await self._clear_pending_requests(
+            bus_obj,
+            session_key,
+        )
 
         # Build detail list
         details: list[str] = []
-        if interrupted:
+        if interrupt_sent:
             details.append("current SDK turn")
         if queued_cleared:
             details.append(f"{queued_cleared} queued message(s)")
@@ -182,19 +180,33 @@ class LocalCommandHandler:
         if cleared_interaction:
             details.append("pending interaction")
 
-        # Set phase to IDLE
+        # Without an active SDK turn, clearing pending local requests completes
+        # the stop immediately. Active turns remain STOPPING until the SDK idle
+        # boundary (or the interrupt timeout recovery) finalizes them.
         sm = svc._shared_resources.get("runtime_registry")
-        if sm:
+        if sm and not interrupt_sent:
             sm.dispatch(
                 session_key,
                 SessionEvent.TURN_COMPLETED,
                 reason="user_stop",
+                strict=False,
             )
 
         # Build response
         content_parts: list[str] = []
         if details:
-            content_parts.append(f"\U0001f6d1 Stopped {' and '.join(details)}.")
+            if fallback_disconnect:
+                content_parts.append(
+                    f"\U0001f6d1 Stopped {' and '.join(details)} by recycling the SDK session."
+                )
+            elif confirmed:
+                content_parts.append(f"\U0001f6d1 Stopped {' and '.join(details)}.")
+            elif interrupt_sent:
+                content_parts.append(
+                    f"\U0001f6d1 Stop requested for {' and '.join(details)}."
+                )
+            else:
+                content_parts.append(f"\U0001f6d1 Stopped {' and '.join(details)}.")
             content_parts.append("\U0001f4cc Context preserved. Continue conversation or use `!reset` to clear.")
         else:
             content_parts.append("No active task to stop.")
@@ -207,16 +219,12 @@ class LocalCommandHandler:
 
         had_worker = session_key in getattr(svc, "_session_workers", {})
 
-        # Clear pending requests
-        cleared_permission = False
-        cleared_interaction = False
-        bus_obj = svc._shared_resources.get("bus")
-        if bus_obj:
-            if bus_obj.get_pending_request_for_session(session_key):
-                cleared_permission = True
-            if hasattr(bus_obj, "get_pending_interaction_for_session"):
-                if bus_obj.get_pending_interaction_for_session(session_key):
-                    cleared_interaction = True
+        # Clear pending requests and wake their waiters.
+        bus_obj = svc._shared_resources.get("bus") or bus
+        cleared_permission, cleared_interaction = await self._clear_pending_requests(
+            bus_obj,
+            session_key,
+        )
 
         # Reset SDK runtime and optionally drop SDK session context
         await svc.reset_session(session_key, drop_sdk_context=not soft)
@@ -248,6 +256,32 @@ class LocalCommandHandler:
             parts.append("\U0001f4cc SDK context preserved (--soft).")
 
         return "\n".join(parts)
+
+    @staticmethod
+    async def _clear_pending_requests(bus_obj: Any, session_key: str) -> tuple[bool, bool]:
+        if bus_obj is None:
+            return False, False
+
+        has_permission = bool(bus_obj.get_pending_request_for_session(session_key))
+        has_interaction = bool(
+            hasattr(bus_obj, "get_pending_interaction_for_session")
+            and bus_obj.get_pending_interaction_for_session(session_key)
+        )
+        if not has_permission and not has_interaction:
+            return False, False
+
+        clear_requests = getattr(bus_obj, "aclear_session_requests", None)
+        if not callable(clear_requests):
+            logger.warning("Message bus cannot clear pending requests for %s", session_key)
+            return False, False
+
+        result = clear_requests(session_key)
+        if asyncio.iscoroutine(result):
+            result = await result
+        if not isinstance(result, dict):
+            logger.warning("Message bus returned invalid clear result for %s", session_key)
+            return False, False
+        return bool(result.get("permission")), bool(result.get("interaction"))
 
     async def _cancel_task_if_running(self, task: Any, *, session_key: str, action: str) -> bool:
         """Cancel a running task and wait briefly for termination."""

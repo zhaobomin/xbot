@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any, AsyncIterator, Callable
 
 from xbot.platform.logging.core import get_logger
 from xbot.platform.utils.helpers import (
@@ -381,6 +382,16 @@ class MemoryConsolidator:
         if self._locks.get(session_key) is lock:
             self._locks.pop(session_key, None)
 
+    @asynccontextmanager
+    async def session_lock(self, session_key: str) -> AsyncIterator[asyncio.Lock]:
+        """Acquire a session lock with balanced lifecycle bookkeeping."""
+        lock = self.get_lock(session_key)
+        try:
+            async with lock:
+                yield lock
+        finally:
+            self._cleanup_lock_if_idle(session_key, lock)
+
     async def consolidate_messages(self, messages: list[dict[str, object]]) -> bool:
         """Archive a selected message chunk into persistent memory.
 
@@ -471,65 +482,60 @@ class MemoryConsolidator:
         if not session.messages or self.context_window_tokens <= 0:
             return
 
-        lock = self.get_lock(session.key)
-        try:
-            async with lock:
-                # 使用 70% 阈值：触发阈值 = context_window * 0.7
-                # 目标 = context_window * 0.3（保留 30% 空间）
-                trigger_threshold = int(self.context_window_tokens * self.TRIGGER_RATIO)
-                target = int(self.context_window_tokens * (1 - self.TRIGGER_RATIO))
+        async with self.session_lock(session.key):
+            # 使用 70% 阈值：触发阈值 = context_window * 0.7
+            # 目标 = context_window * 0.3（保留 30% 空间）
+            trigger_threshold = int(self.context_window_tokens * self.TRIGGER_RATIO)
+            target = int(self.context_window_tokens * (1 - self.TRIGGER_RATIO))
+            estimated, source = self.estimate_session_prompt_tokens(session)
+            if estimated <= 0:
+                return
+            if estimated < trigger_threshold:
+                logger.debug(
+                    "Token consolidation idle %s: %s/%s (trigger at %s) via %s",
+                    session.key,
+                    estimated,
+                    self.context_window_tokens,
+                    trigger_threshold,
+                    source,
+                )
+                return
+
+            for round_num in range(self._MAX_CONSOLIDATION_ROUNDS):
+                if estimated <= target:
+                    return
+
+                boundary = self.pick_consolidation_boundary(session, max(1, estimated - target))
+                if boundary is None:
+                    logger.debug(
+                        "Token consolidation: no safe boundary for %s (round %s)",
+                        session.key,
+                        round_num,
+                    )
+                    return
+
+                end_idx = boundary[0]
+                chunk = session.messages[session.last_consolidated:end_idx]
+                if not chunk:
+                    return
+
+                logger.info(
+                    "Token consolidation round %s for %s: %s/%s via %s, chunk=%s msgs",
+                    round_num,
+                    session.key,
+                    estimated,
+                    self.context_window_tokens,
+                    source,
+                    len(chunk),
+                )
+                if not await self.consolidate_messages(chunk):
+                    return
+                session.last_consolidated = end_idx
+                self.sessions.save(session)
+
                 estimated, source = self.estimate_session_prompt_tokens(session)
                 if estimated <= 0:
                     return
-                if estimated < trigger_threshold:
-                    logger.debug(
-                        "Token consolidation idle %s: %s/%s (trigger at %s) via %s",
-                        session.key,
-                        estimated,
-                        self.context_window_tokens,
-                        trigger_threshold,
-                        source,
-                    )
-                    return
-
-                for round_num in range(self._MAX_CONSOLIDATION_ROUNDS):
-                    if estimated <= target:
-                        return
-
-                    boundary = self.pick_consolidation_boundary(session, max(1, estimated - target))
-                    if boundary is None:
-                        logger.debug(
-                            "Token consolidation: no safe boundary for %s (round %s)",
-                            session.key,
-                            round_num,
-                        )
-                        return
-
-                    end_idx = boundary[0]
-                    chunk = session.messages[session.last_consolidated:end_idx]
-                    if not chunk:
-                        return
-
-                    logger.info(
-                        "Token consolidation round %s for %s: %s/%s via %s, chunk=%s msgs",
-                        round_num,
-                        session.key,
-                        estimated,
-                        self.context_window_tokens,
-                        source,
-                        len(chunk),
-                    )
-                    if not await self.consolidate_messages(chunk):
-                        return
-                    session.last_consolidated = end_idx
-                    self.sessions.save(session)
-
-                    estimated, source = self.estimate_session_prompt_tokens(session)
-                    if estimated <= 0:
-                        return
-        finally:
-            self._cleanup_lock_if_idle(session.key, lock)
-
     async def force_consolidate(self, session: ConversationSession, reserve_last_n: int | None = None) -> dict[str, Any]:
         """Force consolidate unconsolidated messages in a session.
 
@@ -561,69 +567,65 @@ class MemoryConsolidator:
         reserve_turns = self.MIN_RESERVE_TURNS if reserve_last_n is None else reserve_last_n
         reserve_messages = reserve_turns * 2
 
-        lock = self.get_lock(session.key)
-        try:
-            async with lock:
-                # Get tokens before
-                tokens_before, _ = self.estimate_session_prompt_tokens(session)
+        async with self.session_lock(session.key):
+            # Get tokens before
+            tokens_before, _ = self.estimate_session_prompt_tokens(session)
 
-                # Calculate safe boundary respecting reserve
-                total_messages = len(session.messages)
-                max_consolidate_idx = total_messages - reserve_messages
+            # Calculate safe boundary respecting reserve
+            total_messages = len(session.messages)
+            max_consolidate_idx = total_messages - reserve_messages
 
-                # Start from last_consolidated
-                start = session.last_consolidated
+            # Start from last_consolidated
+            start = session.last_consolidated
 
-                # If conversation too short to reserve, don't consolidate (unless reserve=0)
-                if reserve_turns > 0 and max_consolidate_idx <= start:
-                    logger.debug(
-                        "Force consolidation: cannot consolidate, need to reserve %s turns (%s messages)",
-                        reserve_turns,
-                        reserve_messages,
-                    )
-                    return {
-                        "messages_consolidated": 0,
-                        "tokens_before": tokens_before,
-                        "tokens_after": tokens_before,
-                        "success": True,
-                    }
-
-                # When reserve=0, consolidate all unconsolidated messages
-                end_idx = max_consolidate_idx if reserve_turns > 0 else total_messages
-
-                # Get messages to consolidate
-                unconsolidated = session.messages[start:end_idx]
-                if not unconsolidated:
-                    return {
-                        "messages_consolidated": 0,
-                        "tokens_before": tokens_before,
-                        "tokens_after": tokens_before,
-                        "success": True,
-                    }
-
-                messages_count = len(unconsolidated)
-                logger.info(
-                    "Force consolidation for %s: %s messages, %s tokens (reserving %s turns)",
-                    session.key,
-                    messages_count,
-                    tokens_before,
+            # If conversation too short to reserve, don't consolidate (unless reserve=0)
+            if reserve_turns > 0 and max_consolidate_idx <= start:
+                logger.debug(
+                    "Force consolidation: cannot consolidate, need to reserve %s turns (%s messages)",
                     reserve_turns,
+                    reserve_messages,
                 )
-
-                # Consolidate selected messages
-                success = await self.consolidate_messages(unconsolidated)
-                if success:
-                    session.last_consolidated = start + messages_count
-                    self.sessions.save(session)
-
-                # Get tokens after
-                tokens_after, _ = self.estimate_session_prompt_tokens(session)
-
                 return {
-                    "messages_consolidated": messages_count,
+                    "messages_consolidated": 0,
                     "tokens_before": tokens_before,
-                    "tokens_after": tokens_after,
-                    "success": success,
+                    "tokens_after": tokens_before,
+                    "success": True,
                 }
-        finally:
-            self._cleanup_lock_if_idle(session.key, lock)
+
+            # When reserve=0, consolidate all unconsolidated messages
+            end_idx = max_consolidate_idx if reserve_turns > 0 else total_messages
+
+            # Get messages to consolidate
+            unconsolidated = session.messages[start:end_idx]
+            if not unconsolidated:
+                return {
+                    "messages_consolidated": 0,
+                    "tokens_before": tokens_before,
+                    "tokens_after": tokens_before,
+                    "success": True,
+                }
+
+            messages_count = len(unconsolidated)
+            logger.info(
+                "Force consolidation for %s: %s messages, %s tokens (reserving %s turns)",
+                session.key,
+                messages_count,
+                tokens_before,
+                reserve_turns,
+            )
+
+            # Consolidate selected messages
+            success = await self.consolidate_messages(unconsolidated)
+            if success:
+                session.last_consolidated = start + messages_count
+                self.sessions.save(session)
+
+            # Get tokens after
+            tokens_after, _ = self.estimate_session_prompt_tokens(session)
+
+            return {
+                "messages_consolidated": messages_count,
+                "tokens_before": tokens_before,
+                "tokens_after": tokens_after,
+                "success": success,
+            }

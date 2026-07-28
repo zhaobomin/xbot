@@ -549,3 +549,32 @@ class TestMemoryConsolidatorLocking:
                 await consolidator.maybe_consolidate_by_tokens(session)
 
         assert consolidator._locks == {}
+
+    @pytest.mark.asyncio
+    async def test_session_lock_context_cleans_up_after_cancellation(self, tmp_path: Path) -> None:
+        """The managed session-lock API must balance bookkeeping on cancellation."""
+        consolidator = MemoryConsolidator(
+            workspace=tmp_path,
+            backend=_make_mock_backend(),
+            sessions=ConversationStore(tmp_path),
+            context_window_tokens=10000,
+            build_messages=lambda **kwargs: [],
+            get_tool_definitions=lambda: [],
+        )
+        entered = asyncio.Event()
+        assert hasattr(consolidator, "session_lock")
+
+        async def hold_lock() -> None:
+            async with consolidator.session_lock("test:cancelled") as lock:
+                assert lock.locked()
+                entered.set()
+                await asyncio.sleep(10)
+
+        task = asyncio.create_task(hold_lock())
+        await entered.wait()
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+        assert consolidator._locks == {}
+        assert consolidator._lock_waiter_counts == {}

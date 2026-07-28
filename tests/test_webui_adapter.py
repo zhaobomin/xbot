@@ -679,6 +679,58 @@ def test_websocket_rejects_duplicate_running_session_across_connections(tmp_path
     assert len(runtime.calls) == 1
 
 
+def test_websocket_foreign_connection_cannot_cancel_running_turn(tmp_path: Path) -> None:
+    client, services = _build_client(tmp_path)
+    runtime = _CancellableRuntime()
+    services.agent = runtime
+    token = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "test-webui-password"},
+    ).json()["access_token"]
+    url = f"/ws/chat?token={token}&session=web:admin:owned"
+
+    with client.websocket_connect(url) as owner:
+        assert owner.receive_json()["type"] == "session_info"
+        owner.send_json(
+            {"type": "message", "content": "slow", "session_key": "web:admin:owned"}
+        )
+        assert owner.receive_json()["type"] == "progress"
+
+        with client.websocket_connect(url) as foreign:
+            assert foreign.receive_json()["type"] == "session_info"
+            foreign.send_json({"type": "cancel", "session_key": "web:admin:owned"})
+            rejection = foreign.receive_json()
+
+        assert rejection["type"] == "error"
+        assert "does not own" in rejection["error"].lower()
+        assert runtime.cancelled is False
+
+        owner.send_json({"type": "cancel", "session_key": "web:admin:owned"})
+        assert owner.receive_json()["type"] == "cancel_ok"
+
+    assert runtime.cancelled is True
+
+
+def test_websocket_cancel_rejects_foreign_session_owner(tmp_path: Path) -> None:
+    client, _services = _build_client(tmp_path)
+    token = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "test-webui-password"},
+    ).json()["access_token"]
+
+    with client.websocket_connect(
+        f"/ws/chat?token={token}&session=web:admin:default"
+    ) as websocket:
+        assert websocket.receive_json()["type"] == "session_info"
+        websocket.send_json(
+            {"type": "cancel", "session_key": "web:someone-else:private"}
+        )
+        rejection = websocket.receive_json()
+
+    assert rejection["type"] == "error"
+    assert "another client" in rejection["error"].lower()
+
+
 def test_read_only_management_endpoints(tmp_path: Path) -> None:
     client, _services = _build_client(tmp_path)
     token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
@@ -1249,6 +1301,33 @@ def test_websocket_disconnect_during_progress_does_not_crash(tmp_path: Path) -> 
         ws.close()
 
     assert services.agent.calls[0]["session_key"] == "web:admin:drop"
+
+
+def test_cancel_tasks_and_wait_finishes_async_cleanup() -> None:
+    from xbot.interfaces.gateway.app import _cancel_tasks_and_wait
+
+    async def _run() -> None:
+        started = asyncio.Event()
+        cleanup_finished = False
+
+        async def slow_task() -> None:
+            nonlocal cleanup_finished
+            started.set()
+            try:
+                await asyncio.sleep(60)
+            finally:
+                await asyncio.sleep(0.05)
+                cleanup_finished = True
+
+        task = asyncio.create_task(slow_task())
+        await started.wait()
+
+        await _cancel_tasks_and_wait([task])
+
+        assert task.done()
+        assert cleanup_finished is True
+
+    asyncio.run(_run())
 
 
 def test_safe_websocket_send_swallows_disconnect_errors() -> None:

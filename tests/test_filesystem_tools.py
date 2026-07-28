@@ -74,6 +74,19 @@ class TestReadFileTool:
         assert len(result) <= ReadFileTool._MAX_CHARS + 500  # small margin for footer
         assert "Use offset=" in result
 
+    @pytest.mark.asyncio
+    async def test_single_line_over_char_budget_makes_forward_progress(self, tool, tmp_path):
+        """A single oversized line must be truncated without an offset loop."""
+        f = tmp_path / "huge-line.txt"
+        f.write_text("x" * (ReadFileTool._MAX_CHARS + 1000) + "\nnext", encoding="utf-8")
+
+        result = await tool.execute(path=str(f))
+
+        assert "1| " in result
+        assert "line truncated" in result.lower()
+        assert "Showing lines 1-1 of 2" in result
+        assert "Use offset=2 to continue" in result
+
 
 # ---------------------------------------------------------------------------
 # _find_match  (unit tests for the helper)

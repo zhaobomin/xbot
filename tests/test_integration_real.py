@@ -547,6 +547,15 @@ class TestRuntimeResponseHandlersDelegation:
         handlers = RuntimeResponseHandlers(runtime)
         assert handlers._state_coordinator is sm
 
+    def test_missing_state_coordinator_raises_clear_runtime_error(self) -> None:
+        class RuntimeWithoutCoordinator:
+            _shared_resources: dict[str, object] = {}
+
+        handlers = RuntimeResponseHandlers(RuntimeWithoutCoordinator())
+
+        with pytest.raises(RuntimeError, match="runtime_registry"):
+            _ = handlers._state_coordinator
+
     def test_interaction_retry_counts_delegates_to_runtime(self) -> None:
         runtime = MagicMock()
         runtime._shared_resources = {}
