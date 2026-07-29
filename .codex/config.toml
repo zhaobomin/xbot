@@ -1,0 +1,9 @@
+[mcp_servers.teambition-mcp]
+command = "node"
+args = [
+    "/Users/zhaobomin/Documents/projects/thirdpart/teambition-mcp/build/index.js",
+    "69c272d4ee0bc1a6d59ac478",
+    "7PF1szYE9Mj9JlH16K9kynus0NFpKXT7",
+    "5de28a84acf35400013d0bab",
+    "5cff3d3870f86b00011073a1",
+]
