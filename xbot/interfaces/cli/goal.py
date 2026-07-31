@@ -107,6 +107,8 @@ class GoalRunner:
         self._terminal_reason: str | None = None
         self._interrupted = False
         self._service: Any = None
+        self._streaming_active: bool = False
+        self._last_event_type: str = ""
 
     async def run(self) -> None:
         """Execute the goal loop."""
@@ -149,7 +151,8 @@ class GoalRunner:
                 self.store.save(self.goal)
                 console.print(f"\n[bold cyan]━━━ PLAN (loop {self.goal.loop_count + 1}/{self.goal.max_loops}) ━━━[/bold cyan]")
 
-                await self._call_agent(plan_msg)
+                plan_result = await self._call_agent(plan_msg)
+                self._persist_log("plan", plan_result)
 
                 if self._interrupted:
                     self.goal.status = GoalStatus.PAUSED
@@ -169,10 +172,11 @@ class GoalRunner:
 
                 act_msg = "[ACT] Execute your plan now."
                 continuation_count = 0
+                last_act_result = ""
                 while True:
                     if self._interrupted:
                         break
-                    await self._call_agent(act_msg)
+                    last_act_result = await self._call_agent(act_msg)
                     # Only continue if explicitly hit max_turns (agent was cut off).
                     # All other terminal states (completed, None, etc.) mean the
                     # agent chose to stop — respect that.
@@ -182,6 +186,8 @@ class GoalRunner:
                     if continuation_count % 20 == 0:
                         console.print(f"[dim]  (ACT continuation #{continuation_count})[/dim]")
                     act_msg = "Continue executing."
+
+                self._persist_log("act", last_act_result)
 
                 if self._interrupted:
                     self.goal.status = GoalStatus.PAUSED
@@ -238,6 +244,13 @@ class GoalRunner:
         except Exception as e:
             console.print(f"[dim]  (agent call failed: {e}, retrying...)[/dim]")
             return ""
+        finally:
+            # Ensure clean line ending after streaming output
+            if self._streaming_active:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                self._streaming_active = False
+            self._last_event_type = ""
         return result or ""
 
     async def _on_progress(
@@ -248,12 +261,71 @@ class GoalRunner:
         event_type: str = "progress",
         event_data: dict[str, Any] | None = None,
     ) -> None:
-        """Capture terminal_reason from result events and print progress."""
+        """Stream agent output to terminal in real-time."""
         if event_type == "result" and event_data:
             self._terminal_reason = event_data.get("terminal_reason")
-        # Print tool hints for visibility
+            # End any active streaming line
+            if self._streaming_active:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                self._streaming_active = False
+            return
+
+        # Thinking: print fully in dim italic style
+        if event_type == "thinking" and content:
+            if self._streaming_active and self._last_event_type != "thinking":
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+            # Strip "Thinking: " prefix added by service layer
+            text = content.removeprefix("Thinking: ")
+            sys.stdout.write(f"\033[2;3m{text}\033[0m")
+            sys.stdout.flush()
+            self._streaming_active = True
+            self._last_event_type = "thinking"
+            return
+
+        # Content delta: stream character-by-character to terminal
+        if event_type == "content_delta" and content:
+            if self._streaming_active and self._last_event_type == "thinking":
+                # Newline between thinking and content
+                sys.stdout.write("\033[0m\n")
+                sys.stdout.flush()
+            sys.stdout.write(content)
+            sys.stdout.flush()
+            self._streaming_active = True
+            self._last_event_type = event_type
+            return
+
+        # Tool hints and tool calls: dim output
         if tool_hint and content:
+            if self._streaming_active:
+                sys.stdout.write("\n")
+                sys.stdout.flush()
+                self._streaming_active = False
             console.print(f"[dim]  {content}[/dim]")
+            self._last_event_type = event_type
+            return
+
+        self._last_event_type = event_type
+
+    # ------------------------------------------------------------------
+    # Phase logging
+    # ------------------------------------------------------------------
+
+    def _persist_log(self, phase: str, content: str) -> None:
+        """Write phase output to .goal/logs/ for persistent debugging.
+
+        Files are named loop-{N}-{phase}.md and survive git rollback
+        (since .goal/ is excluded from git operations).
+        """
+        logs_dir = Path(self.goal.workspace) / ".goal" / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        filename = f"loop-{self.goal.loop_count}-{phase}.md"
+        filepath = logs_dir / filename
+        try:
+            filepath.write_text(content, encoding="utf-8")
+        except OSError:
+            pass  # Best-effort, never crash the loop
 
     # ------------------------------------------------------------------
     # Verification
@@ -269,6 +341,17 @@ class GoalRunner:
                 exit_code, output = await self._run_cmd(verify_cmd)
             except Exception as e:
                 exit_code, output = -1, f"Command error: {e}"
+
+            # Persist verify output (survives rollback)
+            self._persist_log(
+                "verify",
+                f"# Verify Result\n\n"
+                f"- Command: `{self.goal.verify_cmd}`\n"
+                f"- Exit code: {exit_code}\n"
+                f"- Status: {'PASSED' if exit_code == 0 else 'FAILED'}\n\n"
+                f"## Output\n\n```\n{output}\n```\n",
+            )
+
             if exit_code == 0:
                 await self._call_agent(f"[VERIFY PASSED]\n```\n{output}\n```")
                 return True
@@ -280,7 +363,14 @@ class GoalRunner:
                 "[VERIFY] Check if the objective is achieved. "
                 "If yes, output [GOAL_ACHIEVED]. If not, output [GOAL_NOT_MET] with explanation."
             )
-            return "[GOAL_ACHIEVED]" in result
+            passed = "[GOAL_ACHIEVED]" in result
+            self._persist_log(
+                "verify",
+                f"# Verify Result (self-evaluation)\n\n"
+                f"- Status: {'PASSED' if passed else 'FAILED'}\n\n"
+                f"## Agent Response\n\n{result}\n",
+            )
+            return passed
 
     async def _run_cmd(self, cmd: str) -> tuple[int, str]:
         """Run a shell command and return (exit_code, output)."""
