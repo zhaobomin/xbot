@@ -299,16 +299,17 @@ class OutputTruncator:
 
     def _truncate_hard(self, content: str, max_length: int) -> TruncationResult:
         """Simple character-level truncation."""
+        _HARD_MARKER = "\n\n... (output truncated)"
         if max_length <= 0:
             truncated_content = ""
-        elif max_length < 20:
+        elif max_length < len(_HARD_MARKER):
             marker = "..."
             if max_length <= len(marker):
                 truncated_content = marker[:max_length]
             else:
                 truncated_content = content[: max_length - len(marker)] + marker
         else:
-            truncated_content = content[:max_length - 20] + '\n\n... (output truncated)'
+            truncated_content = content[:max_length - len(_HARD_MARKER)] + _HARD_MARKER
         return TruncationResult(
             content=truncated_content,
             original_length=len(content),

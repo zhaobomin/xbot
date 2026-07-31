@@ -1902,6 +1902,13 @@ crew_app.add_typer(roles_app, name="roles", help="Role pool management")
 crew_app.command("plan")(crew_plan)
 crew_app.command("run-dynamic")(crew_run_dynamic)
 
+# ---------------------------------------------------------------------------
+# Goal mode
+# ---------------------------------------------------------------------------
+from xbot.interfaces.cli.goal import goal_app  # noqa: E402
+
+app.add_typer(goal_app, name="goal")
+
 
 @crew_app.command("run")
 def crew_run(

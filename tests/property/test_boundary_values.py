@@ -232,16 +232,17 @@ class TestTruncationBoundaries:
     def test_truncate_one_over_limit(self):
         """content length == max_length + 1 → truncation kicks in.
 
-        With HARD strategy and max_length >= 20, the output is:
-        content[:max_length - 20] + '\\n\\n... (output truncated)'
+        With HARD strategy, the marker is '\\n\\n... (output truncated)' (24 chars).
+        Output: content[:max_length - 24] + marker
         """
         max_length = 100
         content = "a" * (max_length + 1)
         result = truncate_output(content, max_length=max_length, strategy=TruncationStrategy.HARD)
         assert result.truncated is True
         assert result.strategy == "hard"
-        # Hard truncation: content[:80] + '\n\n... (output truncated)'
-        expected = "a" * (max_length - 20) + "\n\n... (output truncated)"
+        # Hard truncation: content[:76] + '\n\n... (output truncated)' (marker is 24 chars)
+        marker = "\n\n... (output truncated)"
+        expected = "a" * (max_length - len(marker)) + marker
         assert result.content == expected
 
     @pytest.mark.property
@@ -308,14 +309,17 @@ class TestTruncationBoundaries:
 
     @pytest.mark.property
     def test_truncate_max_length_twenty(self):
-        """max_length=20 (threshold) → uses long marker path.
+        """max_length=20: below long marker threshold (24), uses short '...' marker.
 
-        content[:20-20] + '\\n\\n... (output truncated)' = '' + marker
+        Since 20 < 24 (long marker length), falls into short marker branch:
+        content[:20-3] + '...' = 'a'*17 + '...'
         """
         content = "a" * 100
         result = truncate_output(content, max_length=20, strategy=TruncationStrategy.HARD)
         assert result.truncated is True
-        assert result.content == "\n\n... (output truncated)"
+        # Short marker branch: content[:17] + "..."
+        assert result.content == "a" * 17 + "..."
+        assert len(result.content) == 20
 
     @pytest.mark.property
     def test_truncate_unicode_boundary(self):
