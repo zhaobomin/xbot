@@ -417,7 +417,7 @@ class GoalRunner:
         shared_resources: dict[str, Any] = {
             "bus": bus,
             "workspace": config.workspace_path,
-            "execution_cwd": workspace,
+            "execution_cwd": str(workspace),
             "cron_service": cron,
             "conversation_store": conversation_store,
             "config": config,

@@ -1691,13 +1691,13 @@ class AgentService:
     def _resolve_execution_cwd(self, session_key: str | None) -> str:
         """Resolve effective SDK execution cwd.
 
-        CLI mode: session execution_cwd override (if present) > shared execution_cwd > configured workspace.
-        Non-CLI modes: always configured workspace.
+        CLI/Goal mode: session execution_cwd override (if present) > shared execution_cwd > configured workspace.
+        Other modes (gateway, etc.): always configured workspace.
         """
         workspace_raw = self._shared_resources.get("workspace", ".")
         workspace_expanded = str(Path(workspace_raw).expanduser().resolve())
         run_mode = str(self._shared_resources.get("run_mode", "")).lower()
-        if run_mode != "cli":
+        if run_mode not in ("cli", "goal"):
             return workspace_expanded
 
         shared_execution_cwd = self._shared_resources.get("execution_cwd")
