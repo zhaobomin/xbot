@@ -386,14 +386,27 @@ class MessageBus:
 
             if previous_request_id and previous_request_id != req.request_id:
                 prev_event = self._pending_permission_responses.get(previous_request_id)
+                superseded_response = PermissionResponse(
+                    request_id=previous_request_id,
+                    session_key=req.session_key,
+                    decision="deny",
+                    reason="Superseded by a newer permission request",
+                )
+                has_waiters = self._permission_waiter_counts.get(previous_request_id, 0) > 0
                 if prev_event is not None and not prev_event.is_set():
-                    self._permission_results[previous_request_id] = PermissionResponse(
-                        request_id=previous_request_id,
-                        session_key=req.session_key,
-                        decision="deny",
-                        reason="Superseded by a newer permission request",
-                    )
-                    prev_event.set()
+                    if has_waiters:
+                        # Active waiter will wake up, consume the result, and clean up
+                        # the remaining tracking dicts in its finally path.
+                        self._permission_results[previous_request_id] = superseded_response
+                        prev_event.set()
+                    else:
+                        # No waiter registered: wake any that may race in via setdefault,
+                        # store a tombstone for late arrivals, and eagerly free tracking.
+                        prev_event.set()
+                        self._remember_cleared_permission_unlocked(superseded_response)
+                        self._pending_permission_responses.pop(previous_request_id, None)
+                        self._permission_results.pop(previous_request_id, None)
+                        self._permission_requests.pop(previous_request_id, None)
                 else:
                     self._pending_permission_responses.pop(previous_request_id, None)
                     self._permission_results.pop(previous_request_id, None)
@@ -438,14 +451,25 @@ class MessageBus:
             if previous_request_id and previous_request_id != req.request_id:
                 # Cancel stale interaction for the same session to avoid dangling waiters.
                 prev_event = self._pending_interaction_responses.get(previous_request_id)
+                superseded_response = InteractionResponse(
+                    request_id=previous_request_id,
+                    session_key=req.session_key,
+                    action="cancel",
+                    content="Superseded by a newer interaction request",
+                )
+                has_waiters = self._interaction_waiter_counts.get(previous_request_id, 0) > 0
                 if prev_event is not None and not prev_event.is_set():
-                    self._interaction_results[previous_request_id] = InteractionResponse(
-                        request_id=previous_request_id,
-                        session_key=req.session_key,
-                        action="cancel",
-                        content="Superseded by a newer interaction request",
-                    )
-                    prev_event.set()
+                    if has_waiters:
+                        # Active waiter will consume the result and clean up tracking dicts.
+                        self._interaction_results[previous_request_id] = superseded_response
+                        prev_event.set()
+                    else:
+                        # No waiter: use tombstone for late arrivals, free tracking.
+                        prev_event.set()
+                        self._remember_cleared_interaction_unlocked(superseded_response)
+                        self._pending_interaction_responses.pop(previous_request_id, None)
+                        self._interaction_results.pop(previous_request_id, None)
+                        self._interaction_requests.pop(previous_request_id, None)
                 else:
                     self._interaction_requests.pop(previous_request_id, None)
                     self._pending_interaction_responses.pop(previous_request_id, None)
@@ -612,12 +636,22 @@ class MessageBus:
             event = self._pending_permission_responses.get(resp.request_id)
             if event is None or event.is_set():
                 return False
-            self._permission_results[resp.request_id] = resp
+            has_waiters = self._permission_waiter_counts.get(resp.request_id, 0) > 0
             event.set()
             # 清理会话追踪
             if resp.session_key in self._session_pending_requests:
                 if self._session_pending_requests[resp.session_key] == resp.request_id:
                     del self._session_pending_requests[resp.session_key]
+            if has_waiters:
+                # Waiter will pick up the result and clean up remaining tracking dicts
+                # in its finally path.
+                self._permission_results[resp.request_id] = resp
+            else:
+                # No waiter registered yet: store a tombstone for any late arrival
+                # and free the tracking dicts immediately to avoid lingering memory.
+                self._remember_cleared_permission_unlocked(resp)
+                self._pending_permission_responses.pop(resp.request_id, None)
+                self._permission_requests.pop(resp.request_id, None)
         return True
 
     async def submit_interaction_response(self, resp: InteractionResponse) -> bool:
@@ -626,11 +660,21 @@ class MessageBus:
             event = self._pending_interaction_responses.get(resp.request_id)
             if event is None or event.is_set():
                 return False
-            self._interaction_results[resp.request_id] = resp
+            has_waiters = self._interaction_waiter_counts.get(resp.request_id, 0) > 0
             event.set()
             if resp.session_key in self._session_pending_interactions:
                 if self._session_pending_interactions[resp.session_key] == resp.request_id:
                     del self._session_pending_interactions[resp.session_key]
+            if has_waiters:
+                # Waiter will consume the result and clean up remaining tracking
+                # dicts in its finally path.
+                self._interaction_results[resp.request_id] = resp
+            else:
+                # No waiter registered yet: store a tombstone for any late arrival
+                # and free the tracking dicts immediately to avoid lingering memory.
+                self._remember_cleared_interaction_unlocked(resp)
+                self._pending_interaction_responses.pop(resp.request_id, None)
+                self._interaction_requests.pop(resp.request_id, None)
         return True
 
     def get_pending_request_for_session(self, session_key: str) -> str | None:

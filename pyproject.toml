@@ -1,6 +1,6 @@
 [project]
 name = "xbot"
-version = "2.1.1"
+version = "2.1.2"
 description = "A lightweight personal AI assistant framework"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
@@ -151,6 +151,8 @@ markers = [
     "integration: Integration tests (cross-module, real components)",
     "slow: Tests that take more than 2s",
     "regression: Bug regression tests",
+    "soak: Long-duration / high-iteration tests hunting for leaks or resource degradation",
+    "chaos: Randomised fault-injection / cross-module chaos tests",
 ]
 env = [
     "PYTHONASYNCIODEBUG=1",

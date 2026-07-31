@@ -286,8 +286,11 @@ class ConversationStore:
 
         session = self._load(key)
         if session is not None:
+            # Evict BEFORE inserting so we do not select the freshly-loaded
+            # (not-yet-dirty) session as an eviction victim while the caller
+            # still holds a reference.
+            self._evict_if_needed(reserve=1)
             self._cache[key] = session
-            self._evict_if_needed()
         return session
 
     def get_or_create(self, key: str) -> ConversationSession:
@@ -307,13 +310,24 @@ class ConversationStore:
         if session is None:
             session = ConversationSession(key=key)
 
+        # Evict BEFORE inserting.  See _evict_if_needed docstring — inserting
+        # first would make the fresh, not-yet-dirty session the prime eviction
+        # candidate, letting a concurrent caller re-fetch a different object
+        # for the same key and clobber this caller's edits on save().
+        self._evict_if_needed(reserve=1)
         self._cache[key] = session
-        self._evict_if_needed()
         return session
 
     def _load(self, key: str) -> ConversationSession | None:
         """Load a session from disk."""
-        path = next((candidate for candidate in self._session_paths_for_read(key) if candidate.exists()), None)
+
+        def _exists_safe(candidate: Path) -> bool:
+            try:
+                return candidate.exists()
+            except OSError:
+                return False
+
+        path = next((candidate for candidate in self._session_paths_for_read(key) if _exists_safe(candidate)), None)
         if path is None:
             return None
 
@@ -441,14 +455,22 @@ class ConversationStore:
         """Remove a session from the in-memory cache."""
         self._cache.pop(key, None)
 
-    def _evict_if_needed(self) -> None:
+    def _evict_if_needed(self, reserve: int = 0) -> None:
         """Evict oldest cache entries when capacity is exceeded.
 
         Uses ``updated_at`` as a proxy for age: the sessions that haven't been
         updated recently are removed first.  Dirty (unsaved) sessions are never
         evicted to avoid data loss.
+
+        Args:
+            reserve: Number of slots the caller is about to consume (e.g. an
+                imminent cache insert).  Passing ``reserve=1`` before inserting
+                keeps room for the new entry so the caller's own session is not
+                immediately eligible for eviction — this prevents the
+                lost-update race documented in tests/soak/
+                test_conversation_store_soak.py::test_lost_update_*.
         """
-        overflow = len(self._cache) - self._max_cache_size
+        overflow = len(self._cache) + reserve - self._max_cache_size
         if overflow <= 0:
             return
         # Sort by updated_at ascending; skip dirty sessions.

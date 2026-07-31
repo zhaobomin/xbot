@@ -433,7 +433,7 @@ def _migrate_provider_fields(data: dict) -> None:
 def _provider_name_to_snake(name: str) -> str:
     out = []
     for index, char in enumerate(name):
-        if char.isupper() and index > 0:
+        if char.isascii() and char.isupper() and index > 0:
             out.append("_")
-        out.append(char.lower())
+        out.append(char.lower() if char.isascii() else char)
     return "".join(out).replace("-", "_")
