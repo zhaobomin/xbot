@@ -173,9 +173,11 @@ class GoalRunner:
                     if self._interrupted:
                         break
                     await self._call_agent(act_msg)
-                    if self._terminal_reason == "completed":
+                    # Only continue if explicitly hit max_turns (agent was cut off).
+                    # All other terminal states (completed, None, etc.) mean the
+                    # agent chose to stop — respect that.
+                    if self._terminal_reason != "max_turns":
                         break
-                    # max_turns hit — continue
                     continuation_count += 1
                     if continuation_count % 20 == 0:
                         console.print(f"[dim]  (ACT continuation #{continuation_count})[/dim]")
@@ -261,7 +263,10 @@ class GoalRunner:
         """Run verification. Returns True if goal achieved."""
         if self.goal.verify_cmd:
             try:
-                exit_code, output = await self._run_cmd(self.goal.verify_cmd)
+                # Set XBOT_VERIFY_PHASE=1 so scripts can distinguish orchestrator
+                # verification from agent-initiated test runs.
+                verify_cmd = f"XBOT_VERIFY_PHASE=1 {self.goal.verify_cmd}"
+                exit_code, output = await self._run_cmd(verify_cmd)
             except Exception as e:
                 exit_code, output = -1, f"Command error: {e}"
             if exit_code == 0:
