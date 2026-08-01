@@ -6,7 +6,7 @@ from xbot.interaction.ask_user_validation import (
     normalize_validation_mode as _normalize_validation_mode,
 )
 
-ALLOW_RESPONSE_KEYWORDS = frozenset({"允许", "allow", "yes", "y", "是", "同意"})
+ALLOW_RESPONSE_KEYWORDS = frozenset({"允许", "allow", "yes", "y", "是", "同意", "ok", "sure", "approve"})
 DENY_RESPONSE_KEYWORDS = frozenset({"拒绝", "deny", "no", "n", "否", "取消"})
 
 

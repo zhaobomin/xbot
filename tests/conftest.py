@@ -3,7 +3,11 @@
 from __future__ import annotations
 
 import importlib
+import os
 import sys
+
+# Exclude auto-generated review_temp stubs that have broken imports
+collect_ignore_glob = [os.path.join("review_temp", "*")]
 
 
 def _remove_beartype_path_hook() -> None:

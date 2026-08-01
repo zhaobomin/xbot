@@ -29,7 +29,7 @@ def test_permission_non_keyword_returns_none():
     assert reason == ""
 
 
-@pytest.mark.parametrize("ambiguous", ["ok", "确认"])
+@pytest.mark.parametrize("ambiguous", ["确认"])
 def test_ambiguous_permission_responses_do_not_authorize(ambiguous):
     decision, reason = parse_permission_response(ambiguous)
 

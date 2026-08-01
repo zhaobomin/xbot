@@ -46,3 +46,9 @@ findings_raw.json
 findings_verified.json
 docs/reviews/auto/*_findings.json
 tests/review_temp/
+.goal/
+.claw-output/
+.crush/
+.codex/
+.claude/
+.coverage

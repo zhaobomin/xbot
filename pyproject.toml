@@ -1,6 +1,6 @@
 [project]
 name = "xbot"
-version = "2.1.4"
+version = "2.1.5"
 description = "A lightweight personal AI assistant framework"
 readme = { file = "README.md", content-type = "text/markdown" }
 requires-python = ">=3.11"
@@ -153,6 +153,7 @@ markers = [
     "regression: Bug regression tests",
     "soak: Long-duration / high-iteration tests hunting for leaks or resource degradation",
     "chaos: Randomised fault-injection / cross-module chaos tests",
+    "property: Hypothesis property-based tests",
 ]
 env = [
     "PYTHONASYNCIODEBUG=1",

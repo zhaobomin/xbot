@@ -157,6 +157,6 @@ class ProgressCoalescer:
         if kind == "thinking":
             return left + right
 
-        if left.endswith((" ", "\n")) or right.startswith((" ", "\n", ",", ".", "!", "?", "，", "。", "！", "？", "、")):
+        if left.endswith((" ", "\n", "，", "。", "！", "？", "、")) or right.startswith((" ", "\n", ",", ".", "!", "?", "，", "。", "！", "？", "、")):
             return left + right
         return left + " " + right
