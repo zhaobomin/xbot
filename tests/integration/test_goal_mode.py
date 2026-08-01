@@ -615,7 +615,7 @@ class TestGoalRunLoop:
                 return "done"
 
             if "[VERIFY]" in content:
-                return "The refactoring is complete. [GOAL_ACHIEVED]"
+                return "The refactoring is complete.\n[GOAL_ACHIEVED]"
 
             return ""
 
@@ -629,6 +629,62 @@ class TestGoalRunLoop:
         final = store.load(goal.goal_id)
         assert final is not None
         assert final.status == GoalStatus.ACHIEVED
+
+    @pytest.mark.integration
+    def test_self_verification_rejects_inline_marker(self, git_workspace: Path):
+        """Inline [GOAL_ACHIEVED] in explanatory text must NOT pass verification.
+
+        Regression test: previously `"[GOAL_ACHIEVED]" in result` was a simple
+        substring match that would false-positive when the agent mentioned the
+        marker while explaining why the goal was NOT achieved.
+        """
+        store = GoalStore(git_workspace)
+        goal = GoalState(
+            goal_id="goal-20260801-fp",
+            objective="refactor module",
+            workspace=str(git_workspace),
+            session_key="goal:fp",
+            verify_cmd=None,
+            max_loops=1,  # Single loop — should end UNMET
+        )
+        store.save(goal)
+
+        async def fake_process_direct(content, **kwargs):
+            on_progress = kwargs.get("on_progress")
+
+            if "[GOAL MODE]" in content or "[PLAN]" in content:
+                return "plan"
+
+            if "[ACT]" in content or content == "Continue executing.":
+                if on_progress:
+                    await on_progress(
+                        "",
+                        event_type="result",
+                        event_data={"terminal_reason": "completed"},
+                    )
+                return "done"
+
+            if "[VERIFY]" in content:
+                # Agent mentions marker inline while explaining failure
+                return (
+                    "The task is not done yet. "
+                    "The user expected [GOAL_ACHIEVED] as output, "
+                    "but the work is incomplete. [GOAL_NOT_MET]"
+                )
+
+            return ""
+
+        fake_svc = _make_fake_service()
+        fake_svc.process_direct = AsyncMock(side_effect=fake_process_direct)
+
+        with patch.object(GoalRunner, "_create_service", return_value=fake_svc):
+            goal_runner = GoalRunner(goal, store)
+            asyncio.run(goal_runner.run())
+
+        final = store.load(goal.goal_id)
+        assert final is not None
+        # Must NOT be achieved — inline marker should be rejected
+        assert final.status == GoalStatus.UNMET
 
     @pytest.mark.integration
     def test_checkpoint_and_rollback(self, git_workspace: Path, goal_in_repo: GoalState):

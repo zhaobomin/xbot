@@ -361,9 +361,15 @@ class GoalRunner:
         else:
             result = await self._call_agent(
                 "[VERIFY] Check if the objective is achieved. "
-                "If yes, output [GOAL_ACHIEVED]. If not, output [GOAL_NOT_MET] with explanation."
+                "If yes, output [GOAL_ACHIEVED] on a line by itself. "
+                "If not, output [GOAL_NOT_MET] with explanation."
             )
-            passed = "[GOAL_ACHIEVED]" in result
+            # Line-level exact match to avoid false positives from the agent
+            # mentioning the marker inside explanatory text.
+            passed = any(
+                line.strip() == "[GOAL_ACHIEVED]"
+                for line in result.splitlines()
+            )
             self._persist_log(
                 "verify",
                 f"# Verify Result (self-evaluation)\n\n"
