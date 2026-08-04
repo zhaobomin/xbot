@@ -119,7 +119,7 @@ class CronService:
         self._load_failed = False  # Track if last load attempt failed
         # Per-job execution timeout. A single stuck job (e.g. an MCP tool that
         # never returns) cannot block the whole scheduler longer than this.
-        self.job_timeout_s: float = 300.0
+        self.job_timeout_s: float = 900.0
         self._task_registry = ServiceTaskRegistry(error_reporter=self._report_task_error)
 
     @staticmethod
