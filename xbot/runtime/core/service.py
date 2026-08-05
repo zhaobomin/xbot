@@ -1809,6 +1809,19 @@ class AgentService:
             logger.warning("[AgentService] No config in shared_resources")
             return env
 
+        # Merge custom SDK env vars (e.g., CLAUDE_AUTOCOMPACT_PCT_OVERRIDE)
+        # from config.agents.claude_sdk.sdk_env. These are applied before
+        # provider-specific vars so that ANTHROPIC_API_KEY/BASE_URL from
+        # provider config always take precedence.
+        sdk_config = getattr(getattr(config, "agents", None), "claude_sdk", None)
+        if sdk_config and getattr(sdk_config, "sdk_env", None):
+            env.update(sdk_config.sdk_env)
+            logger.info(
+                "[AgentService] Merged %d custom SDK env vars: %s",
+                len(sdk_config.sdk_env),
+                list(sdk_config.sdk_env.keys()),
+            )
+
         # Get the active provider name
         provider_name = getattr(config.agents.defaults, "provider", None)
         logger.info(f"[AgentService] Provider name: {provider_name}")

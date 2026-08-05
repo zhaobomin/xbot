@@ -126,6 +126,9 @@ class ClaudeSDKAgentConfig(Base):
     compact_notify: bool = True  # 是否在压缩上下文时发送通知
     include_partial_messages: bool = False  # Disable SDK partial/delta messages by default for stable output
     extra_args: dict[str, str | None] = Field(default_factory=dict)  # Extra Claude Code CLI flags
+    # Custom env vars passed to the Claude Code CLI subprocess.
+    # e.g., {"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": "50"} to lower autocompact threshold.
+    sdk_env: dict[str, str] = Field(default_factory=dict)
     # Memory consolidation 策略："off"=禁用，"async"=异步后台，"sync"=同步阻塞
     # 默认禁用，避免异步任务阻塞和 ReMe 初始化超时问题。需要时可手动启用 "async"
     memory_consolidation_mode: Literal["off", "async", "sync"] = "off"
