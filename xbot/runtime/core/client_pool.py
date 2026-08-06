@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import os
+import signal
 import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -18,6 +20,61 @@ if TYPE_CHECKING:
     from claude_agent_sdk import ClaudeSDKClient
 
 logger = get_logger(__name__)
+
+
+async def force_disconnect_client(client: Any, session_key: str) -> None:
+    """Force-kill a Claude SDK client when graceful disconnect fails.
+
+    Three-layer fallback:
+    1. Client-level: client.terminate()/kill()/close()
+    2. Process-level: client._process.terminate()/kill()/close()
+    3. OS-level: os.killpg(pgid, SIGKILL) on POSIX
+    """
+    if client is None:
+        return
+
+    async def _maybe_call(target: Any) -> bool:
+        if not callable(target):
+            return False
+        try:
+            result = target()
+            if inspect.isawaitable(result):
+                await result
+            return True
+        except Exception as e:
+            logger.debug("Force-disconnect call failed for %s: %s", session_key, e)
+            return False
+
+    # Layer 1: client-level shutdown methods
+    for name in ("terminate", "kill", "close"):
+        if await _maybe_call(getattr(client, name, None)):
+            logger.warning("Force-disconnect used: %s.%s()", session_key, name)
+            return
+
+    # Layer 2: nested process handle
+    proc = getattr(client, "_process", None) or getattr(client, "process", None)
+    if proc is not None:
+        for name in ("terminate", "kill", "close"):
+            if await _maybe_call(getattr(proc, name, None)):
+                logger.warning("Force-disconnect used: %s.process.%s()", session_key, name)
+                return
+
+    # Layer 3: OS-level SIGKILL on the process group (POSIX only)
+    pid = None
+    if proc is not None:
+        pid = getattr(proc, "pid", None)
+    if not pid:
+        pid = getattr(client, "_pid", None)
+    if pid and os.name == "posix":
+        try:
+            pgid = os.getpgid(pid)
+            os.killpg(pgid, signal.SIGKILL)
+            logger.warning("Force-disconnect used: SIGKILL process group %s (pid=%s)", session_key, pid)
+            return
+        except ProcessLookupError:
+            logger.debug("Process %s already gone for %s", pid, session_key)
+        except Exception as e:
+            logger.error("SIGKILL failed for %s (pid=%s): %s", session_key, pid, e)
 
 
 @dataclass
@@ -247,31 +304,7 @@ class ClientPool:
 
     async def _best_effort_force_disconnect(self, client: Any, session_key: str) -> None:
         """Best-effort fallback when graceful disconnect fails."""
-        async def _maybe_call(target: Any) -> bool:
-            if not callable(target):
-                return False
-            try:
-                result = target()
-                if inspect.isawaitable(result):
-                    await result
-                return True
-            except Exception as e:
-                logger.debug("Force-disconnect call failed for %s: %s", session_key, e)
-                return False
-
-        # Try common client-level shutdown methods first.
-        for name in ("terminate", "kill", "close"):
-            if await _maybe_call(getattr(client, name, None)):
-                logger.warning("Force-disconnect fallback used: %s.%s()", session_key, name)
-                return
-
-        # Then try nested process handles if SDK exposes them.
-        proc = getattr(client, "_process", None) or getattr(client, "process", None)
-        if proc is not None:
-            for name in ("terminate", "kill", "close"):
-                if await _maybe_call(getattr(proc, name, None)):
-                    logger.warning("Force-disconnect fallback used: %s.process.%s()", session_key, name)
-                    return
+        await force_disconnect_client(client, session_key)
 
     async def prune_idle(self, idle_ttl_seconds: float, *, exclude_keys: set[str] | None = None) -> int:
         """Disconnect idle clients and return the graceful-success count."""

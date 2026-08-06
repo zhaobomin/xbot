@@ -105,6 +105,7 @@ class SessionWorker:
     channel: str
     chat_id: str
     closed: bool = False
+    last_idle_at: float | None = None  # Timestamp of last idle boundary, None = active/processing
 
 
 def _progress_kind_from_event_type(event_type: str, *, tool_hint: bool = False) -> str:
@@ -295,6 +296,35 @@ class AgentService:
         """
         if not self._initialized:
             raise RuntimeError("AgentService not initialized")
+
+        # Intercept !cmd commands before SDK processing (covers WebUI/direct path).
+        # Only !cmd is intercepted here — other local commands (!help, !reset, etc.)
+        # are handled by the run() bus loop for channel messages and don't need
+        # process() interception.
+        prompt_stripped = context.prompt.strip().lower()
+        is_cmd = prompt_stripped == "!cmd" or prompt_stripped.startswith("!cmd ")
+        if is_cmd and self._command_handler:
+            from xbot.platform.bus.events import InboundMessage
+            from xbot.runtime.core.protocol import AgentResponse
+            inbound = InboundMessage(
+                channel=context.channel or "webui",
+                sender_id="",
+                chat_id=context.chat_id or "",
+                content=context.prompt,
+                metadata=dict(context.metadata or {}),
+                session_key_override=context.session_key or None,
+            )
+            bus = self._shared_resources.get("bus")
+            if bus:
+                await self._command_handler.handle(inbound, bus)
+                yield AgentResponse(content="", finish_reason="local_command")
+            else:
+                # No bus: execute handler and yield response directly
+                response_text = await self._command_handler._handle_cmd_command(
+                    context.prompt, inbound
+                )
+                yield AgentResponse(content=response_text, finish_reason="local_command")
+            return
 
         logger.info(
             f"[AgentService] Processing for session={context.session_key}, "
@@ -3044,9 +3074,22 @@ class AgentService:
             )
             return self._session_workers.get(session_key)
 
+        # Opportunistic idle-worker pruning (mirrors ClientPool's prune_idle)
+        config = self._shared_resources.get("config")
+        sdk_cfg = getattr(getattr(config, "agents", None), "claude_sdk", None) if config else None
+        if sdk_cfg:
+            scavenger_enabled = getattr(sdk_cfg, "client_scavenger_enabled", True)
+            idle_ttl = getattr(sdk_cfg, "client_idle_ttl_seconds", 3600)
+            if scavenger_enabled and isinstance(idle_ttl, (int, float)) and idle_ttl > 0:
+                try:
+                    await self._prune_idle_workers(float(idle_ttl), exclude_keys={session_key})
+                except Exception as e:
+                    logger.debug("Idle worker pruning skipped: %s", e)
+
         worker = await self._get_or_start_session_worker(msg, bus)
         worker.channel = msg.channel
         worker.chat_id = msg.chat_id
+        worker.last_idle_at = None  # Mark as active — new message being enqueued
         prompt = self._prepare_prompt_from_message(msg)
         frame = {
             "type": "user",
@@ -3127,9 +3170,17 @@ class AgentService:
             if worker.closed:
                 self._session_workers.pop(worker.session_key, None)
             try:
-                await worker.client.disconnect()
+                await asyncio.wait_for(worker.client.disconnect(), timeout=10.0)
             except Exception as e:
-                logger.debug("Worker disconnect failed for %s: %s", worker.session_key, e)
+                logger.warning("Worker disconnect failed, force-disconnecting %s: %s", worker.session_key, e)
+                try:
+                    from xbot.runtime.core.client_pool import force_disconnect_client
+                    await asyncio.wait_for(
+                        force_disconnect_client(worker.client, worker.session_key),
+                        timeout=5.0,
+                    )
+                except Exception as e2:
+                    logger.error("Force-disconnect also failed for %s: %s", worker.session_key, e2)
 
     def _dispatch_worker_client_ready(self, session_key: str) -> None:
         """Record client acquisition only for turns still waiting on the worker client."""
@@ -3150,6 +3201,7 @@ class AgentService:
             await self._publish_worker_response(worker, response, bus)
 
         if self._is_idle_boundary_message(message):
+            worker.last_idle_at = time.time()  # Record idle time for pruning
             self._dispatch_state_event(
                 worker.session_key,
                 SessionEvent.STREAM_IDLE_BOUNDARY,
@@ -3256,15 +3308,63 @@ class AgentService:
             except asyncio.CancelledError:
                 pass
             except asyncio.TimeoutError:
-                logger.warning("Timed out waiting for session worker shutdown (%s)", session_key)
+                logger.warning("Worker task timed out, force-disconnecting (%s)", session_key)
+                try:
+                    from xbot.runtime.core.client_pool import force_disconnect_client
+                    await asyncio.wait_for(
+                        force_disconnect_client(worker.client, session_key),
+                        timeout=5.0,
+                    )
+                except Exception as e:
+                    logger.error("Force-disconnect failed for %s: %s", session_key, e)
             except Exception as e:
                 logger.debug("Session worker raised during shutdown (%s): %s", session_key, e)
         elif disconnect:
             try:
-                await worker.client.disconnect()
+                await asyncio.wait_for(worker.client.disconnect(), timeout=10.0)
             except Exception as e:
-                logger.debug("Worker client disconnect failed for %s: %s", session_key, e)
+                logger.warning("Worker disconnect failed, force-disconnecting %s: %s", session_key, e)
+                try:
+                    from xbot.runtime.core.client_pool import force_disconnect_client
+                    await asyncio.wait_for(
+                        force_disconnect_client(worker.client, session_key),
+                        timeout=5.0,
+                    )
+                except Exception as e2:
+                    logger.error("Force-disconnect also failed for %s: %s", session_key, e2)
         return True
+
+    async def _prune_idle_workers(
+        self, idle_ttl_seconds: float, *, exclude_keys: set[str] | None = None
+    ) -> int:
+        """Disconnect idle session workers and return the count cleaned up.
+
+        A worker is considered stale when ALL of:
+        - last_idle_at is not None (definitely idle, not processing)
+        - now - last_idle_at > idle_ttl_seconds
+        - input_queue is empty (no pending messages)
+        - not closed
+        - not in exclude_keys
+        """
+        if idle_ttl_seconds <= 0:
+            return 0
+        import time as _time
+        now = _time.time()
+        excluded = exclude_keys or set()
+        stale_keys = [
+            key for key, worker in self._session_workers.items()
+            if key not in excluded
+            and not worker.closed
+            and worker.last_idle_at is not None
+            and (now - worker.last_idle_at) > idle_ttl_seconds
+            and worker.input_queue.empty()
+        ]
+        for key in stale_keys:
+            try:
+                await self._stop_session_worker(key, disconnect=True)
+            except Exception as e:
+                logger.warning("Failed to prune idle worker %s: %s", key, e)
+        return len(stale_keys)
 
     def _persist_user_message(self, session_key: str, content: str) -> None:
         sess_mgr = self._shared_resources.get("conversation_store")

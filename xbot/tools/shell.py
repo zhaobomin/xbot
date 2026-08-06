@@ -74,7 +74,8 @@ class ExecTool(Tool):
         }
 
     async def execute(
-        self, command: str, working_dir: str | Path | None = None, **kwargs: Any,
+        self, command: str, working_dir: str | Path | None = None, *,
+        env_extra: dict[str, str] | None = None, **kwargs: Any,
     ) -> str:
         cwd = Path(working_dir) if working_dir else self.working_dir or Path.cwd()
         guard_error = await self._guard_command(command, cwd)
@@ -84,6 +85,8 @@ class ExecTool(Tool):
         env = os.environ.copy()
         if self.path_append:
             env["PATH"] = env.get("PATH", "") + os.pathsep + self.path_append
+        if env_extra:
+            env.update(env_extra)
 
         try:
             process = await asyncio.create_subprocess_shell(

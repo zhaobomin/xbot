@@ -144,17 +144,9 @@ class ClaudeSDKAgentConfig(Base):
 
     # Client pool configuration
     max_clients: int = Field(default=100, description="Maximum number of concurrent SDK clients in the pool")
-    client_ttl_seconds: int = Field(default=3600, description="Time-to-live for idle clients in seconds (1 hour)")
-    client_disconnect_retries: int = Field(default=2, description="Number of retry attempts when disconnecting clients")
-    client_lifecycle_enabled: bool = Field(default=True, description="Enable managed Claude client lifecycle tracking")
-    client_scavenger_enabled: bool = Field(default=True, description="Enable background cleanup of idle managed Claude clients")
-    client_cleanup_interval_seconds: int = Field(default=60, description="Background client cleanup scan interval in seconds")
+    client_scavenger_enabled: bool = Field(default=True, description="Enable opportunistic cleanup of idle managed Claude clients")
     client_idle_ttl_seconds: int = Field(default=3600, description="Idle TTL for managed Claude clients in seconds")
-    client_disconnect_timeout_seconds: float = Field(default=10.0, description="Timeout for Claude client disconnect operations")
-    client_disconnect_max_retries: int = Field(default=2, description="Max retry attempts for managed disconnect before leak classification")
-    client_force_kill_enabled: bool = Field(default=True, description="Enable force-kill fallback for leaked Claude client processes")
     ephemeral_immediate_release_enabled: bool = Field(default=True, description="Release cron/heartbeat clients immediately after turn completion")
-    strict_process_tracking_required: bool = Field(default=False, description="Require stable process tracking for managed Claude clients")
 
 
 class AgentDefinition(Base):
@@ -327,6 +319,8 @@ class ToolsConfig(Base):
     restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
     mcp_servers: dict[str, MCPServerConfig] = Field(default_factory=dict)
     timeouts: TimeoutsConfig = Field(default_factory=TimeoutsConfig)
+    # Path to the !cmd script command config table (JSON mapping shortname → command string)
+    scripts_file: str = "$workspace/scripts.json"
 
 
 class Config(BaseSettings):

@@ -20,7 +20,7 @@ logger = get_logger(__name__)
 
 # Local runtime commands (handled without going through SDK)
 LOCAL_COMMANDS = {"!help", "!restart", "!stop", "!reset", "!state", "!coord", "!ver", "!skills"}
-LOCAL_COMMAND_PREFIXES = ("!model",)
+LOCAL_COMMAND_PREFIXES = ("!model", "!cmd")
 LOCAL_SLASH_COMMANDS = {"/help", "/clear", "/reset", "/restart", "/state", "/skills"}
 
 
@@ -39,7 +39,12 @@ class LocalCommandHandler:
             return True
         if stripped in LOCAL_COMMANDS:
             return True
-        return any(stripped.startswith(p) for p in LOCAL_COMMAND_PREFIXES)
+        # Prefix commands: must be followed by space or end of string
+        # to avoid false positives (e.g. !cmdxyz should NOT match !cmd)
+        for prefix in LOCAL_COMMAND_PREFIXES:
+            if stripped == prefix or stripped.startswith(prefix + " "):
+                return True
+        return False
 
     async def handle(self, msg: InboundMessage, bus: Any) -> None:
         """Handle a local runtime command (matching v0.3.37 output fidelity)."""
@@ -92,6 +97,9 @@ class LocalCommandHandler:
         elif cmd_lower.startswith("!model"):
             response_text = self._handle_model_command(cmd, session_key)
 
+        elif cmd_lower.startswith("!cmd"):
+            response_text = await self._handle_cmd_command(cmd, msg)
+
         else:
             response_text = f"Unknown command: {cmd}"
 
@@ -117,6 +125,10 @@ class LocalCommandHandler:
         lines.append("  !ver — Show version info")
         lines.append("  !model — Show current model and available models")
         lines.append("  !model <id> — Switch to a different model")
+        lines.append("  !cmd list — List configured script commands")
+        lines.append("  !cmd add \"name\" \"command\" — Add or update a script command")
+        lines.append("  !cmd remove \"name\" — Remove a script command")
+        lines.append("  !cmd <name> [args...] — Execute a configured command")
         lines.append("")
         lines.append("**Local Slash Commands:**")
         lines.append("  /help — Show this help")
@@ -450,3 +462,167 @@ class LocalCommandHandler:
                 return f"Current model: {model}"
             else:
                 return f"Model switching not available. Current: {model}"
+
+    # ------------------------------------------------------------------ #
+    # !cmd — script command system
+    # ------------------------------------------------------------------ #
+
+    def _get_script_manager(self):
+        """Lazily initialize ScriptCommandManager from config."""
+        if getattr(self, "_script_manager", None) is not None:
+            return self._script_manager
+        from pathlib import Path as _Path
+        from xbot.runtime.core.script_commands import ScriptCommandManager
+        svc = self._service
+        config = svc._shared_resources.get("config")
+        scripts_file = "$workspace/scripts.json"
+        if config and hasattr(config, "tools") and hasattr(config.tools, "scripts_file"):
+            scripts_file = config.tools.scripts_file
+        workspace = svc._shared_resources.get("workspace", "~/.xbot/workspace")
+        workspace = str(_Path(workspace).expanduser().resolve())
+        scripts_file = scripts_file.replace("$workspace", workspace)
+        self._script_manager = ScriptCommandManager(scripts_file)
+        return self._script_manager
+
+    def _get_exec_tool(self):
+        """Lazily initialize ExecTool for command execution."""
+        if getattr(self, "_exec_tool", None) is not None:
+            return self._exec_tool
+        from pathlib import Path as _Path
+        from xbot.tools.shell import ExecTool
+        svc = self._service
+        config = svc._shared_resources.get("config")
+        workspace = svc._shared_resources.get("workspace", "~/.xbot/workspace")
+        workspace = str(_Path(workspace).expanduser().resolve())
+        timeout = 60.0
+        restrict = False
+        path_append = ""
+        if config and hasattr(config, "tools"):
+            if hasattr(config.tools, "exec"):
+                timeout = float(config.tools.exec.timeout)
+            restrict = getattr(config.tools, "restrict_to_workspace", False)
+            path_append = getattr(config.tools.exec, "path_append", "")
+        self._exec_tool = ExecTool(
+            working_dir=workspace,
+            restrict_to_workspace=restrict,
+            path_append=path_append,
+            timeout=timeout,
+        )
+        return self._exec_tool
+
+    @staticmethod
+    def _parse_quoted_args(text: str) -> list[str] | None:
+        """Parse quoted arguments using shlex. Returns None on parse error."""
+        import shlex
+        try:
+            return shlex.split(text)
+        except ValueError:
+            return None
+
+    async def _handle_cmd_command(self, content: str, msg: InboundMessage) -> str:
+        """Handle !cmd subcommands: list, add, remove, <shortname> [args]."""
+        rest = content.strip()[4:].strip()
+        if not rest:
+            return (
+                "Usage:\n"
+                "  !cmd list — List all commands\n"
+                '  !cmd add "name" "command" — Add or update a command\n'
+                '  !cmd remove "name" — Remove a command\n'
+                "  !cmd <name> [args...] — Execute a command"
+            )
+
+        parts = rest.split(maxsplit=1)
+        sub = parts[0].lower()
+        remainder = parts[1] if len(parts) > 1 else ""
+
+        if sub == "list" and not remainder:
+            return self._cmd_list()
+
+        if sub == "add":
+            return self._cmd_add(remainder)
+
+        if sub == "remove":
+            return self._cmd_remove(remainder)
+
+        # Otherwise: treat as command execution
+        return await self._cmd_exec(sub, remainder, msg)
+
+    def _cmd_list(self) -> str:
+        """List all configured script commands."""
+        mgr = self._get_script_manager()
+        commands = mgr.list_commands()
+        if not commands:
+            return 'No commands configured. Use !cmd add "name" "command" to add one.'
+        lines = [f"Configured commands ({len(commands)}):"]
+        for name in sorted(commands):
+            cmd = commands[name]
+            display = cmd if len(cmd) <= 60 else cmd[:57] + "..."
+            lines.append(f"  {name:<15} {display}")
+        return "\n".join(lines)
+
+    def _cmd_add(self, remainder: str) -> str:
+        """Add or update a command: !cmd add "name" "command"."""
+        args = self._parse_quoted_args(remainder)
+        if args is None:
+            return 'Parse error: unbalanced quotes. Usage: !cmd add "name" "command"'
+        if len(args) < 2:
+            return 'Usage: !cmd add "name" "command"\nExample: !cmd add "deploy" "docker-compose up -d"'
+        name = args[0]
+        command = " ".join(args[1:]) if len(args) > 2 else args[1]
+        mgr = self._get_script_manager()
+        from xbot.runtime.core.script_commands import validate_shortname
+        error = validate_shortname(name)
+        if error:
+            return f"Invalid shortname: {error}"
+        try:
+            is_new = mgr.add(name, command)
+        except ValueError as e:
+            return f"Error: {e}"
+        prefix = "Added" if is_new else "Updated"
+        return f"{prefix} '{name}': {command}"
+
+    def _cmd_remove(self, remainder: str) -> str:
+        """Remove a command: !cmd remove "name"."""
+        args = self._parse_quoted_args(remainder)
+        if args is None:
+            return 'Parse error: unbalanced quotes. Usage: !cmd remove "name"'
+        if not args:
+            return 'Usage: !cmd remove "name"'
+        name = args[0]
+        mgr = self._get_script_manager()
+        if mgr.remove(name):
+            return f"Removed '{name}'"
+        return f"'{name}' not found"
+
+    async def _cmd_exec(self, shortname: str, args: str, msg: InboundMessage) -> str:
+        """Execute a configured command: !cmd <shortname> [args...]."""
+        mgr = self._get_script_manager()
+        command_template = mgr.get(shortname)
+        if command_template is None:
+            return f"Unknown command: '{shortname}'. Use !cmd list to see available commands."
+        # Quote args to prevent shell injection while preserving individual arguments
+        if args:
+            import shlex
+            try:
+                parts = shlex.split(args)
+            except ValueError:
+                return f"Parse error: unbalanced quotes in args. Command: '{shortname}'"
+            quoted_parts = " ".join(shlex.quote(p) for p in parts)
+            full_command = f"{command_template} {quoted_parts}"
+        else:
+            full_command = command_template
+        # Build context env vars for the subprocess (passed directly, not via os.environ)
+        env_overrides = {
+            "XBOT_CHANNEL": msg.channel,
+            "XBOT_CHAT_ID": str(msg.chat_id),
+            "XBOT_USER": getattr(msg, "sender_id", ""),
+            "XBOT_SESSION_KEY": msg.session_key or "",
+        }
+        exec_tool = self._get_exec_tool()
+        try:
+            result = await exec_tool.execute(command=full_command, env_extra=env_overrides)
+        except Exception as e:
+            logger.error("Command execution failed for '%s': %s", shortname, e)
+            result = f"Error: execution failed — {e}"
+        header = f"[{shortname}] {full_command}\n\n"
+        return header + result
