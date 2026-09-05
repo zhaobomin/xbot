@@ -205,6 +205,87 @@ class TestAgentService:
         assert not service._async_registry_tasks
         assert "Async sdk_session_id update failed for session-1" in caplog.text
 
+    @pytest.mark.asyncio
+    async def test_sync_sdk_session_mapping_clears_on_conversation_reset(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """ConversationResetMessage (SDK >=0.2.137) must drop the stale cached
+        sdk_session_id instead of capturing the outgoing session_id, AND
+        persist the clearance so a restart does not resurrect the dead id."""
+        cleared: list[str | None] = []
+
+        class RecordingRegistry:
+            def __init__(self) -> None:
+                self._value: str | None = "stale-sdk-id"
+
+            def _set_sdk_session_id_impl(self, session_key: str, sdk_id: str | None) -> None:
+                cleared.append(sdk_id)
+
+        class _Session:
+            def __init__(self) -> None:
+                # Pre-seed so the None-branch in _persist_sdk_session_id_to_store
+                # actually performs a del + save (otherwise it early-returns).
+                self.metadata: dict[str, Any] = {"sdk_session_id": "stale-sdk-id"}
+
+            def mark_metadata_dirty(self) -> None:
+                pass
+
+        class RecordingStore:
+            def __init__(self) -> None:
+                self._session = _Session()
+                self.saved: list[_Session] = []
+
+            def get_or_create(self, session_key: str) -> _Session:
+                return self._session
+
+            def save(self, session: _Session) -> None:
+                self.saved.append(session)
+
+        class ConversationResetMessage:
+            session_id = "outgoing-sdk-id"
+            new_conversation_id = "fresh-conv"
+
+        store = RecordingStore()
+        service = AgentService()
+        resources = dict(shared_resources)
+        resources["runtime_registry"] = RecordingRegistry()
+        resources["conversation_store"] = store
+        await service.initialize(config, resources)
+
+        service._sync_sdk_session_mapping("session-1", ConversationResetMessage())
+
+        # In-memory cache cleared with None (not the outgoing session_id).
+        assert cleared == [None]
+        # Persistence happened before the early return — guards against
+        # regressing back to "clear memory but leave stale id in store".
+        assert store.saved
+        assert "sdk_session_id" not in store._session.metadata
+
+    @pytest.mark.asyncio
+    async def test_convert_event_conversation_reset_surfaces_system_event(
+        self,
+        config: AgentConfig,
+        shared_resources: dict[str, Any],
+    ) -> None:
+        """ConversationResetMessage should convert to a system event (not None)."""
+        service = AgentService()
+        await service.initialize(config, shared_resources)
+
+        class ConversationResetMessage:
+            session_id = "outgoing-sdk-id"
+            new_conversation_id = "fresh-conv"
+            uuid = "u1"
+
+        result = service._convert_event(ConversationResetMessage())
+
+        assert result is not None
+        assert result.event_type == "system"
+        assert result.event_data["subtype"] == "conversation_reset"
+        assert result.event_data["new_conversation_id"] == "fresh-conv"
+        assert "reset" in result.progress_texts[0]
+
     def test_build_env_config_does_not_log_api_key_length(
         self,
         config: AgentConfig,

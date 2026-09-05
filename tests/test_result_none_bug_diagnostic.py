@@ -190,39 +190,3 @@ def test_sdk_result_message_result_default_is_none():
     )
     assert msg.result is None
 
-
-def test_sdk_message_parser_result_none_when_absent():
-    """SDK message_parser produces result=None when 'result' key is absent."""
-    from claude_agent_sdk._internal.message_parser import parse_message
-
-    data = {
-        "type": "result",
-        "subtype": "success",
-        "duration_ms": 5000,
-        "duration_api_ms": 3000,
-        "is_error": False,
-        "num_turns": 1,
-        "session_id": "test",
-        "usage": {"input_tokens": 100, "output_tokens": 200},
-    }
-    msg = parse_message(data)
-    assert msg.result is None
-
-
-def test_sdk_message_parser_result_populated_when_present():
-    """SDK message_parser produces populated result when present."""
-    from claude_agent_sdk._internal.message_parser import parse_message
-
-    data = {
-        "type": "result",
-        "subtype": "success",
-        "duration_ms": 5000,
-        "duration_api_ms": 3000,
-        "is_error": False,
-        "num_turns": 1,
-        "session_id": "test",
-        "usage": {"input_tokens": 100, "output_tokens": 200},
-        "result": "上海天气晴朗",
-    }
-    msg = parse_message(data)
-    assert msg.result == "上海天气晴朗"

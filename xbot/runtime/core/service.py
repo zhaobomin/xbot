@@ -304,8 +304,6 @@ class AgentService:
         prompt_stripped = context.prompt.strip().lower()
         is_cmd = prompt_stripped == "!cmd" or prompt_stripped.startswith("!cmd ")
         if is_cmd and self._command_handler:
-            from xbot.platform.bus.events import InboundMessage
-            from xbot.runtime.core.protocol import AgentResponse
             inbound = InboundMessage(
                 channel=context.channel or "webui",
                 sender_id="",
@@ -489,9 +487,29 @@ class AgentService:
                 )
             raise
         except Exception as e:
-            logger.exception("[AgentService] Error processing: %s", e)
+            # SDK >=0.2.140 raises structured ResultError on terminal CLI errors.
+            if type(e).__name__ == "ResultError":
+                logger.error(
+                    "[AgentService] SDK ResultError processing %s: subtype=%s errors=%s "
+                    "result=%s exit_code=%s",
+                    context.session_key,
+                    getattr(e, "subtype", None),
+                    getattr(e, "errors", None),
+                    getattr(e, "result", None),
+                    getattr(e, "exit_code", None),
+                )
+                # User-facing message: prefer the CLI's result text (usually
+                # the most human-readable), fall back to errors[], then str(e).
+                user_msg = (
+                    getattr(e, "result", None)
+                    or "; ".join(getattr(e, "errors", None) or [])
+                    or str(e)
+                )
+            else:
+                logger.exception("[AgentService] Error processing: %s", e)
+                user_msg = str(e)
             yield AgentResponse(
-                content=f"Error: {e}",
+                content=f"Error: {user_msg}",
                 finish_reason="error",
             )
         finally:
@@ -2270,6 +2288,10 @@ class AgentService:
             return self._convert_task_notification(event)
         elif event_type == "ResultMessage":
             return self._convert_result_message(event)
+        elif event_type == "ConversationResetMessage":
+            # SDK >=0.2.137: conversation replaced mid-session (e.g. after
+            # /clear). Surface it as a system event instead of dropping it.
+            return self._convert_conversation_reset(event)
         elif event_type in ("SystemMessage", "MirrorErrorMessage"):
             return self._convert_system_message(event)
         elif event_type == "RateLimitEvent":
@@ -2455,6 +2477,28 @@ class AgentService:
                 "status": getattr(message, "status", None),
                 "task_id": getattr(message, "task_id", None),
                 "output_file": getattr(message, "output_file", None),
+            },
+        )
+
+    def _convert_conversation_reset(self, message: Any) -> AgentResponse | None:
+        """Convert ConversationResetMessage to a system progress event.
+
+        SDK >=0.2.137 emits this when the conversation is replaced without
+        ending the connection (e.g. after ``/clear``). We surface it as a
+        ``system`` event with subtype ``conversation_reset`` so channels can
+        react to the reset; callers that accumulate running totals across a
+        long-lived session should snapshot ``total_cost_usd`` on it.
+        """
+        new_conversation_id = getattr(message, "new_conversation_id", None)
+        text = "\U0001f503 Conversation reset (new conversation started)"
+        return AgentResponse(
+            content="",
+            progress_texts=[text],
+            event_type="system",
+            event_data={
+                "subtype": "conversation_reset",
+                "new_conversation_id": new_conversation_id,
+                "session_id": getattr(message, "session_id", None),
             },
         )
 
@@ -3158,11 +3202,32 @@ class AgentService:
                 reason="worker_stream_error",
                 strict=False,
             )
+            # SDK >=0.2.140 raises structured ResultError on terminal CLI errors.
+            if type(e).__name__ == "ResultError":
+                logger.error(
+                    "[AgentService] Session worker ResultError for %s: subtype=%s errors=%s "
+                    "result=%s exit_code=%s",
+                    worker.session_key,
+                    getattr(e, "subtype", None),
+                    getattr(e, "errors", None),
+                    getattr(e, "result", None),
+                    getattr(e, "exit_code", None),
+                )
+                # User-facing message: prefer the CLI's result text (usually
+                # the most human-readable), fall back to errors[], then str(e).
+                user_msg = (
+                    getattr(e, "result", None)
+                    or "; ".join(getattr(e, "errors", None) or [])
+                    or str(e)
+                )
+            else:
+                logger.exception("[AgentService] Session worker error for %s: %s", worker.session_key, e)
+                user_msg = str(e)
             try:
                 await bus.publish_outbound(OutboundMessage(
                     channel=worker.channel,
                     chat_id=worker.chat_id,
-                    content=f"\u274c \u5904\u7406\u51fa\u9519: {e}",
+                    content=f"\u274c \u5904\u7406\u51fa\u9519: {user_msg}",
                 ))
             except Exception:
                 pass
@@ -3440,6 +3505,19 @@ class AgentService:
         if sm is None:
             return
 
+        # SDK >=0.2.137 emits ConversationResetMessage when /clear (or similar)
+        # discards the transcript mid-session. The outgoing session_id is stale
+        # afterwards; drop the mapping so the next turn does not resume a dead
+        # session. Messages after the reset carry the new session_id and will
+        # re-populate it below.
+        if type(message).__name__ == "ConversationResetMessage":
+            logger.info(
+                "[AgentService] Conversation reset for %s; clearing cached sdk_session_id",
+                session_key,
+            )
+            self._clear_cached_sdk_session_id(sm, session_key)
+            return
+
         # Cache slash commands from SDK init messages.
         try:
             subtype = getattr(message, "subtype", None)
@@ -3493,6 +3571,35 @@ class AgentService:
                 self._persist_sdk_session_id_to_store(session_key, str(sdk_session_id))
             except Exception as e:
                 logger.debug("Failed to sync sdk_session_id for %s: %s", session_key, e)
+
+    def _clear_cached_sdk_session_id(self, sm: Any, session_key: str) -> None:
+        """Best-effort clear of the cached SDK session id (sync-safe)."""
+        set_impl = getattr(sm, "_set_sdk_session_id_impl", None)
+        if callable(set_impl):
+            try:
+                set_impl(session_key, None)
+                # Persist BEFORE early return — symmetric with the set path
+                # (L3559-3561). Otherwise the store keeps the stale sdk_session_id,
+                # and after a restart _hydrate_sdk_session_id_from_store_if_missing
+                # resurrects the dead session id.
+                self._persist_sdk_session_id_to_store(session_key, None)
+                return
+            except Exception as e:
+                logger.debug("Failed to clear sdk_session_id via _set_sdk_session_id_impl for %s: %s", session_key, e)
+
+        set_sdk = getattr(sm, "set_sdk_session_id", None)
+        if callable(set_sdk):
+            try:
+                result = set_sdk(session_key, None)
+                if asyncio.iscoroutine(result):
+                    self._track_async_registry_update(result, session_key)
+            except Exception as e:
+                logger.debug("Failed to clear sdk_session_id via set_sdk_session_id for %s: %s", session_key, e)
+
+        try:
+            self._persist_sdk_session_id_to_store(session_key, None)
+        except Exception as e:
+            logger.debug("Failed to persist cleared sdk_session_id for %s: %s", session_key, e)
 
     def _hydrate_sdk_session_id_from_store_if_missing(self, session_key: str) -> None:
         """Load persisted sdk_session_id from conversation store into runtime registry."""
