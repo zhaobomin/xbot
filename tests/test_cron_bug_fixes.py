@@ -235,16 +235,20 @@ class TestCronTimerReliability:
     @pytest.mark.asyncio
     async def test_on_timer_rearms_even_when_save_store_raises(self, tmp_path) -> None:
         service = CronService(tmp_path / "cron" / "jobs.json")
-        service._store = CronStore()
+        job = service.add_job("persist", CronSchedule(kind="every", every_ms=60000), "")
+        job.state.next_run_at_ms = 1
         service._running = True
         service._load_store = MagicMock(return_value=service._store)
         service._save_store = MagicMock(side_effect=RuntimeError("disk full"))
         service._arm_timer = MagicMock()
 
-        with pytest.raises(RuntimeError, match="disk full"):
-            await service._on_timer()
-
-        service._arm_timer.assert_called_once()
+        await service._on_timer()
+        import asyncio
+        await asyncio.gather(*service._job_tasks.values())
+        assert job.state.last_status == "ok"
+        service._save_store.assert_called_once()
+        assert service._arm_timer.call_count >= 2
+        await service.shutdown()
 
     def test_load_store_updates_last_mtime_after_successful_reload(self, tmp_path) -> None:
         store_path = tmp_path / "cron" / "jobs.json"

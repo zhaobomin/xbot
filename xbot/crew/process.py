@@ -92,8 +92,8 @@ class BaseProcess(ABC):
         Does NOT include human review — callers handle review separately so
         state transitions stay clean.
 
-        Supports soft timeout with progress detection:
-        - If timeout is None: smart mode with auto-extend on progress
+        Timeout policy:
+        - If timeout is None: no deadline
         - If timeout is set: traditional hard timeout (backward compatible)
         """
         # 0. Validate task (fail fast)
@@ -217,27 +217,38 @@ class BaseProcess(ABC):
         session_key: str,
         media: list[str] | None = None,
     ) -> str:
-        """Execute task via streaming or direct call, no timeout enforcement.
+        """Run one attempt with its configured deadline, including redo attempts."""
+        async def execute() -> str:
+            if not self._pool_supports_native_streaming():
+                return await self.pool.run_task(task.agent, prompt, session_key, media)
+            stream = self.pool.run_task_streaming(task.agent, prompt, session_key, media)
+            try:
+                async for progress in stream:
+                    if progress.is_final:
+                        return progress.total_content
+                raise RuntimeError("Streaming task ended without final progress")
+            finally:
+                close = getattr(stream, "aclose", None)
+                if close is not None:
+                    try:
+                        await asyncio.wait_for(close(), timeout=5.0)
+                    except Exception:
+                        logger.warning("Failed to close crew stream %s", session_key, exc_info=True)
 
-        Args:
-            task: Task definition
-            prompt: Full prompt
-            session_key: Session identifier
-            media: Optional list of media file paths
-
-        Returns:
-            Agent output string
-        """
-        if not self._pool_supports_native_streaming():
-            return await self.pool.run_task(task.agent, prompt, session_key, media)
-
-        output = ""
-        stream = self.pool.run_task_streaming(task.agent, prompt, session_key, media)
-        async for progress in stream:
-            output = progress.total_content
-            if progress.is_final:
-                return output
-        raise RuntimeError("Streaming task ended without final progress")
+        try:
+            if task.timeout is None:
+                return await execute()
+            return await asyncio.wait_for(execute(), timeout=task.timeout)
+        except (TimeoutError, asyncio.CancelledError) as exc:
+            stop = getattr(self.pool, "stop_task", None)
+            if stop is not None:
+                try:
+                    await asyncio.wait_for(stop(task.agent, session_key), timeout=5.0)
+                except Exception:
+                    logger.warning("Failed to stop crew session %s", session_key, exc_info=True)
+            if isinstance(exc, TimeoutError):
+                raise TimeoutError(f"Task {task.name!r} timed out after {task.timeout}s") from exc
+            raise
 
     # ------------------------------------------------------------------
     # Human intervention

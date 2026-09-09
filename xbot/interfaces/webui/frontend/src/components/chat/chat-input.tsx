@@ -18,16 +18,20 @@ import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 import { cn } from "../../lib/utils";
 import { uploadFile } from "../../hooks/use-config";
+import { gatewayApi } from "../../lib/api";
+import { useGatewayBaseUrl } from "../../stores/gateway-store";
 
 interface Attachment {
     id: string;
     name: string;
     url?: string;
+    attachmentId?: string;
+    gatewayBaseUrl: string;
     uploading: boolean;
 }
 
 interface ChatInputProps {
-    onSend: (content: string) => void;
+    onSend: (content: string, attachmentIds?: string[]) => boolean;
     disabled?: boolean;
     onStop?: () => void;
     isWaiting?: boolean;
@@ -48,6 +52,7 @@ export function ChatInput({
     readOnly = false,
 }: ChatInputProps) {
     const { t } = useTranslation();
+    const gatewayBaseUrl = useGatewayBaseUrl();
     const [value, setValue] = useState("");
     const [attachments, setAttachments] = useState<Attachment[]>([]);
     const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -74,6 +79,7 @@ export function ChatInput({
 
     const handleFilesSelected = useCallback(
         async (files: File[]) => {
+            const uploadApi = gatewayApi(gatewayBaseUrl);
             for (const file of files) {
                 if (file.size > MAX_FILE_SIZE) {
                     toast.error(
@@ -84,12 +90,12 @@ export function ChatInput({
                 const id = nanoid();
                 setAttachments((prev) => [
                     ...prev,
-                    { id, name: file.name, uploading: true },
+                    { id, name: file.name, gatewayBaseUrl, uploading: true },
                 ]);
                 try {
-                    const url = await uploadFile(file);
+                    const uploaded = await uploadFile(file, uploadApi);
                     setAttachments((prev) =>
-                        prev.map((a) => (a.id === id ? { ...a, url, uploading: false } : a))
+                        prev.map((a) => (a.id === id ? { ...a, url: uploaded.url, attachmentId: uploaded.id, uploading: false } : a))
                     );
                 } catch (err: unknown) {
                     const detail = (
@@ -100,7 +106,7 @@ export function ChatInput({
                 }
             }
         },
-        [t]
+        [t, gatewayBaseUrl]
     );
 
     const handlePaste = useCallback(
@@ -146,6 +152,15 @@ export function ChatInput({
         if ((!text && readyAttachments.length === 0) || disabled || readOnly || isUploading)
             return;
 
+        if (readyAttachments.some((a) => a.gatewayBaseUrl !== gatewayBaseUrl)) {
+            toast.error("Attachments belong to another gateway. Switch back or remove them before sending.");
+            return;
+        }
+        if (readyAttachments.length > 8) {
+            toast.error("Too many attachments (maximum 8)");
+            return;
+        }
+
         let content = text;
         for (const att of readyAttachments) {
             if (att.url) {
@@ -154,14 +169,14 @@ export function ChatInput({
             }
         }
 
-        onSend(content.trim());
+        if (!onSend(content.trim(), readyAttachments.flatMap((a) => a.attachmentId ? [a.attachmentId] : []))) return;
         setValue("");
         setAttachments([]);
         if (textareaRef.current) {
             textareaRef.current.style.height = "52px";
             textareaRef.current.style.overflowY = "hidden";
         }
-    }, [value, attachments, disabled, readOnly, isUploading, onSend]);
+    }, [value, attachments, disabled, readOnly, isUploading, onSend, gatewayBaseUrl]);
 
     const removeAttachment = (id: string) =>
         setAttachments((prev) => prev.filter((a) => a.id !== id));

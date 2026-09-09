@@ -172,23 +172,31 @@ class AgentPool:
         )
 
         total_content = ""
-        async for response in backend.process(context):
-            delta = ""
-            if response.is_delta:
-                delta = response.delta_content
-                total_content += delta
-            else:
-                # Non-delta response replaces content
-                new_content = response.content or total_content
-                delta = new_content[len(total_content):] if new_content.startswith(total_content) else new_content
-                total_content = new_content
+        stream = backend.process(context)
+        try:
+            async for response in stream:
+                delta = ""
+                if response.is_delta:
+                    delta = response.delta_content
+                    total_content += delta
+                else:
+                    # Non-delta response replaces content
+                    new_content = response.content or total_content
+                    delta = new_content[len(total_content):] if new_content.startswith(total_content) else new_content
+                    total_content = new_content
 
-            if delta or response.is_delta:
-                yield TaskProgress(
-                    delta_content=delta,
-                    total_content=total_content,
-                    is_final=False,
-                )
+                if delta or response.is_delta:
+                    yield TaskProgress(
+                        delta_content=delta,
+                        total_content=total_content,
+                        is_final=False,
+                    )
+
+        finally:
+            try:
+                await asyncio.wait_for(stream.aclose(), timeout=5.0)
+            except Exception:
+                logger.warning("Failed to close backend stream %s", session_key, exc_info=True)
 
         # Final event
         yield TaskProgress(
@@ -196,6 +204,12 @@ class AgentPool:
             total_content=total_content,
             is_final=True,
         )
+
+    async def stop_task(self, role_name: str, session_key: str) -> None:
+        """Release only the SDK session belonging to the interrupted attempt."""
+        backend = self._backends.get(role_name)
+        if backend is not None:
+            await backend.reset_session(session_key)
 
     async def shutdown(self) -> None:
         """Shutdown all managed backends.

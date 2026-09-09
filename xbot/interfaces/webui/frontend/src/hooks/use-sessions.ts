@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import api from "../lib/api";
+import api, { gatewayApi } from "../lib/api";
 import i18n from "../i18n";
 import { useGatewayBaseUrl } from "../stores/gateway-store";
 
@@ -14,6 +14,7 @@ export interface SessionInfo {
 }
 
 export interface MessageInfo {
+    revision?: string;
     role: string;
     content: string | null;
     timestamp?: string;
@@ -35,7 +36,8 @@ export function useSessionMessages(key: string) {
     return useQuery<MessageInfo[]>({
         queryKey: ["sessions", gatewayBaseUrl, key, "messages"],
         queryFn: () =>
-            api.get(`/sessions/${encodeURIComponent(key)}/messages`).then((r) => r.data),
+            gatewayApi(gatewayBaseUrl).get(`/sessions/${encodeURIComponent(key)}/messages`).then((r) =>
+                r.data.map((message: MessageInfo) => ({ ...message, revision: r.headers.etag }))),
         enabled: !!key,
     });
 }
@@ -65,13 +67,19 @@ export function useDeleteSession() {
 export function useRevokeMessage() {
     const qc = useQueryClient();
     const gatewayBaseUrl = useGatewayBaseUrl();
+    const boundApi = gatewayApi(gatewayBaseUrl);
     return useMutation({
-        mutationFn: ({ key, index }: { key: string; index: number }) =>
-            api.delete(`/sessions/${encodeURIComponent(key)}/messages/${index}`).then((r) => r.data),
-        onSuccess: (_data, vars) => {
-            qc.invalidateQueries({ queryKey: ["sessions", gatewayBaseUrl, vars.key, "messages"] });
-            qc.invalidateQueries({ queryKey: ["sessions"] });
+        onMutate: () => ({ gatewayBaseUrl }),
+        mutationFn: ({ key, index, revision }: { key: string; index: number; revision: string }) =>
+            boundApi.delete(`/sessions/${encodeURIComponent(key)}/messages/${index}`, {
+                headers: { "If-Match": revision },
+            }).then((r) => r.data),
+        onSettled: async (_data, _error, vars, context) => {
+            await qc.invalidateQueries({ queryKey: ["sessions", context?.gatewayBaseUrl ?? gatewayBaseUrl, vars.key, "messages"] });
+        },
+        onSuccess: () => {
             toast.success(i18n.t("chat.messageRevoked", "Message revoked"));
         },
+        onError: () => toast.error(i18n.t("chat.historyChanged", "History changed or deletion failed. Refresh and try again.")),
     });
 }

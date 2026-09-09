@@ -39,6 +39,7 @@ export class ChatWebSocket {
 
         if (sessionKey) this.sessionKey = sessionKey;
 
+        if (this.ws && (this.ws.readyState === WebSocket.OPEN || this.ws.readyState === WebSocket.CONNECTING)) return;
         this.shouldReconnect = true;
 
         const params = new URLSearchParams();
@@ -47,9 +48,11 @@ export class ChatWebSocket {
         if (this.sessionKey) params.set("session", this.sessionKey);
         const query = params.toString();
         const wsUrl = query ? `${this.url}?${query}` : this.url;
-        this.ws = new WebSocket(wsUrl);
+        const socket = new WebSocket(wsUrl);
+        this.ws = socket;
 
-        this.ws.onopen = () => {
+        socket.onopen = () => {
+            if (this.ws !== socket) return;
             if (this.reconnectTimer) {
                 clearTimeout(this.reconnectTimer);
                 this.reconnectTimer = null;
@@ -57,7 +60,8 @@ export class ChatWebSocket {
             this.onStatusChange?.(true);
         };
 
-        this.ws.onmessage = (event) => {
+        socket.onmessage = (event) => {
+            if (this.ws !== socket) return;
             try {
                 const msg: WsMessage = JSON.parse(event.data);
                 this.onMessage(msg);
@@ -66,21 +70,27 @@ export class ChatWebSocket {
             }
         };
 
-        this.ws.onclose = () => {
+        socket.onclose = () => {
+            if (this.ws !== socket) return;
+            this.ws = null;
             this.onStatusChange?.(false);
             if (this.shouldReconnect) {
                 this.reconnectTimer = setTimeout(() => this.connect(), 3000);
             }
         };
 
-        this.ws.onerror = () => {
-            this.ws?.close();
+        socket.onerror = () => {
+            socket.close();
         };
     }
 
-    send(content: string, sessionKey?: string) {
-        if (this.ws?.readyState === WebSocket.OPEN) {
-            this.ws.send(JSON.stringify({ type: "message", content, session_key: sessionKey }));
+    send(content: string, sessionKey?: string, attachmentIds: string[] = []): boolean {
+        if (this.ws?.readyState !== WebSocket.OPEN) return false;
+        try {
+            this.ws.send(JSON.stringify({ type: "message", content, session_key: sessionKey, attachment_ids: attachmentIds }));
+            return true;
+        } catch {
+            return false;
         }
     }
 

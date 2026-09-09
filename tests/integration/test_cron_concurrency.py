@@ -3,8 +3,7 @@
 These tests exercise the CronService scheduler directly (not via HTTP) to
 verify that:
 - One failing/timing-out job does NOT cancel or delay siblings (gather isolation).
-- Manual ``run_job`` and scheduled ``_on_timer`` can execute the same job
-  concurrently (no built-in dedup).
+- Manual and scheduled executions share per-job deduplication.
 - ``stop()`` cancels the timer but does NOT cancel in-flight job executions.
 - ``shutdown()`` cancels both the timer AND in-flight tasks via the registry.
 """
@@ -138,6 +137,7 @@ class TestGatherIsolation:
         # Directly invoke _on_timer to simulate a scheduled tick
         svc._load_store()
         await svc._on_timer()
+        await asyncio.gather(*svc._job_tasks.values())
 
         # Both good jobs must have completed
         assert "good-1-done" in execution_log
@@ -179,6 +179,7 @@ class TestGatherIsolation:
 
         svc._load_store()
         await svc._on_timer()
+        await asyncio.gather(*svc._job_tasks.values())
 
         # Fast job completed
         assert "fast-1-done" in execution_log
@@ -194,18 +195,16 @@ class TestGatherIsolation:
 
 
 # ---------------------------------------------------------------------------
-# Test: manual run_job has no dedup against scheduled tick
+# Test: manual run_job deduplicates against scheduled tick
 # ---------------------------------------------------------------------------
 
 
 class TestRunJobConcurrency:
-    """Verify that run_job does not deduplicate against an in-flight
-    _on_timer execution — the same job can run concurrently."""
+    """Verify shared manual and scheduled execution ownership."""
 
     @pytest.mark.asyncio
-    async def test_manual_and_scheduled_run_concurrently(self, tmp_path: Path):
-        """If _on_timer is executing a job AND run_job is called for the same
-        job, both should proceed independently (no lock/dedup)."""
+    async def test_manual_and_scheduled_run_are_deduplicated(self, tmp_path: Path):
+        """Force bypasses disabled status but cannot bypass an active execution."""
         store_path = tmp_path / "jobs.json"
         concurrent_count = 0
         max_concurrent = 0
@@ -229,16 +228,14 @@ class TestRunJobConcurrency:
         svc._load_store()
 
         # Fire both the timer path and the manual path concurrently
-        await asyncio.gather(
+        results = await asyncio.gather(
             svc._on_timer(),
             svc.run_job("dup-target", force=True),
         )
 
-        # Both executions ran concurrently — max_concurrent should be 2
-        assert max_concurrent == 2, (
-            f"Expected concurrent execution of 2, got {max_concurrent}. "
-            "This means run_job deduplicates against scheduled ticks."
-        )
+        await asyncio.gather(*svc._job_tasks.values())
+        assert results[1] is False
+        assert max_concurrent == 1
 
     @pytest.mark.asyncio
     async def test_run_job_while_disabled_with_force(self, tmp_path: Path):
@@ -295,7 +292,7 @@ class TestStopAndShutdown:
     async def test_stop_does_not_cancel_inflight_job(self, tmp_path: Path):
         """After stop(), an already-running job should still complete.
         stop() only cancels the timer task; it does NOT cancel jobs that
-        are already mid-execution inside _on_timer/gather."""
+        are already mid-execution inside owned execution tasks."""
         store_path = tmp_path / "jobs.json"
         completed = asyncio.Event()
         job_started = asyncio.Event()
@@ -320,11 +317,12 @@ class TestStopAndShutdown:
         await job_started.wait()  # Ensure the job handler is running
 
         # Now stop the service — this cancels _timer_task but NOT
-        # the gather inside the already-running _on_timer call
+        # the independently owned execution
         svc.stop()
 
         # The in-flight job should still complete
         await timer_task
+        await asyncio.gather(*svc._job_tasks.values())
         assert completed.is_set()
 
     @pytest.mark.asyncio
@@ -380,6 +378,7 @@ class TestStateAfterException:
         svc.job_timeout_s = 5.0
         svc._load_store()
         await svc._on_timer()
+        await asyncio.gather(*svc._job_tasks.values())
 
         # Reload from disk to verify persistence
         svc._store = None
@@ -415,6 +414,7 @@ class TestStateAfterException:
         svc.job_timeout_s = 5.0
         svc._load_store()
         await svc._on_timer()
+        await asyncio.gather(*svc._job_tasks.values())
 
         assert call_count == 3
 

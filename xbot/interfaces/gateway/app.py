@@ -7,6 +7,7 @@ import json
 import re
 import secrets
 import shutil
+import time
 import unicodedata
 import zipfile
 from collections import OrderedDict
@@ -14,7 +15,7 @@ from contextlib import suppress
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Annotated, Any
 
 from fastapi import (
     FastAPI,
@@ -22,6 +23,7 @@ from fastapi import (
     Header,
     HTTPException,
     Request,
+    Response,
     UploadFile,
     WebSocket,
     WebSocketDisconnect,
@@ -33,6 +35,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, SecretStr
 
 from xbot import __version__
+from xbot.interfaces.gateway.attachments import MAX_UPLOAD_BYTES, AttachmentStore, mirror_to_s3
 from xbot.interfaces.gateway.auth import (
     AuthManager,
     UserStore,
@@ -484,6 +487,7 @@ def create_app(
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
+        expose_headers=["ETag"],
     )
 
     resolved_data_dir = (data_dir or container.data_dir or (container.config.workspace_path / ".webui")).resolve()
@@ -498,9 +502,11 @@ def create_app(
         print_password_banner(generated_password)
 
     app.state.auth = AuthManager(get_or_create_jwt_secret())
+    attachments = AttachmentStore(resolved_data_dir / "attachments", app.state.auth.secret)
     app.state.runtime_started = False
     app.state.channel_start_task = None
     app.state.webui_active_tasks = {}
+    app.state.webui_deleting_sessions = set()
     app.state.webui_active_tasks_lock = asyncio.Lock()
     if frontend_dir is not None:
         resolved_frontend_dir = frontend_dir
@@ -876,13 +882,14 @@ def create_app(
     @app.get("/api/sessions/{session_key:path}/messages")
     async def get_session_messages(
         session_key: str,
+        response: Response,
         authorization: str | None = Header(default=None),
     ) -> list[dict[str, Any]]:
         _get_user_from_auth_header(authorization)
         session = container.conversation_store.get(session_key)
-        if session is None:
-            return []
-        return session.messages
+        messages = session.messages if session is not None else []
+        response.headers["ETag"] = container.conversation_store.message_revision(messages)
+        return messages
 
     @app.get("/api/sessions/{session_key:path}/memory")
     async def get_session_memory(
@@ -903,26 +910,44 @@ def create_app(
         session_key: str,
         index: int,
         authorization: str | None = Header(default=None),
+        if_match: str | None = Header(default=None),
     ) -> dict[str, int]:
         user = _get_user_from_auth_header(authorization)
         internal_session_key = _ensure_writable_client_session(session_key, str(user["id"]))
         session = container.conversation_store.get_or_create(internal_session_key)
         if index < 0 or index >= len(session.messages):
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid message index")
-        container.conversation_store.delete_message(session, index)
+        if not if_match:
+            raise HTTPException(status_code=428, detail="History revision required")
+        if app.state.webui_active_tasks.get(session_key) or session_key in app.state.webui_deleting_sessions:
+            raise HTTPException(status_code=409, detail="Wait for the active turn before deleting")
+        prepare = getattr(container.agent, "prepare_history_edit", None)
+        if prepare is not None:
+            await prepare(internal_session_key)
+        if app.state.webui_active_tasks.get(session_key) or session_key in app.state.webui_deleting_sessions:
+            raise HTTPException(status_code=409, detail="Wait for the active turn before deleting")
+        try:
+            container.conversation_store.delete_message(session, index, expected_revision=if_match)
+        except ValueError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
         return {"removed": 1}
 
     @app.delete("/api/sessions/{session_key:path}")
     async def delete_session(session_key: str, authorization: str | None = Header(default=None)) -> dict[str, bool]:
         user = _get_user_from_auth_header(authorization)
         internal_session_key = _ensure_writable_client_session(session_key, str(user["id"]))
-        removed = container.conversation_store.delete(internal_session_key)
+        task = app.state.webui_active_tasks.get(session_key)
+        if session_key in app.state.webui_deleting_sessions or (task is not None and not task.done()):
+            raise HTTPException(status_code=409, detail="Stop the active turn before deleting this session")
+        app.state.webui_deleting_sessions.add(session_key)
         try:
-            await container.agent.reset_session(internal_session_key, drop_sdk_context=True)
-        except Exception:
-            # Keep delete API best-effort for runtime cleanup.
-            pass
-        return {"ok": removed}
+            reset = getattr(container.agent, "reset_session", None)
+            if reset is not None:
+                await reset(internal_session_key, drop_sdk_context=True)
+            removed = container.conversation_store.delete(internal_session_key)
+            return {"ok": removed}
+        finally:
+            app.state.webui_deleting_sessions.discard(session_key)
 
     @app.get("/api/providers")
     async def providers(authorization: str | None = Header(default=None)) -> list[dict[str, Any]]:
@@ -1420,6 +1445,43 @@ def create_app(
             all_lines = all_lines[-lines:]
         return {"content": "\n".join(all_lines), "path": str(selected_file)}
 
+    @app.post("/api/config/s3/upload")
+    async def upload_attachment(
+        request: Request,
+        file: Annotated[UploadFile, File()],
+        authorization: str | None = Header(default=None),
+    ) -> dict[str, str]:
+        user = _get_user_from_auth_header(authorization)
+        try:
+            content = await file.read(MAX_UPLOAD_BYTES + 1)
+        finally:
+            await file.close()
+        if len(content) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail="Attachment exceeds 20MB")
+        try:
+            metadata = await asyncio.to_thread(attachments.save, str(user["id"]), file.filename or "attachment.txt", content)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            await asyncio.to_thread(mirror_to_s3, dict(app.state.s3_config), metadata, content)
+        except Exception as exc:
+            logger.warning("S3 attachment upload failed: %s", exc)
+            raise HTTPException(status_code=502, detail="S3 upload failed; check storage configuration") from exc
+        expires = int(time.time()) + 86400
+        signature = attachments.preview_signature(metadata["id"], expires)
+        url = str(request.base_url).rstrip("/") + f"/api/attachments/{metadata['id']}?expires={expires}&signature={signature}"
+        return {"id": metadata["id"], "url": url, "name": metadata["name"]}
+
+    @app.get("/api/attachments/{attachment_id}")
+    async def preview_attachment(attachment_id: str, expires: int, signature: str) -> FileResponse:
+        try:
+            path, name = attachments.preview_path(attachment_id, expires, signature)
+            if not path.is_file():
+                raise ValueError("Attachment not found")
+        except ValueError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return FileResponse(path, filename=name, headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"})
+
     @app.get("/api/config/s3")
     async def get_s3_config(authorization: str | None = Header(default=None)) -> dict[str, Any]:
         _get_user_from_auth_header(authorization)
@@ -1730,7 +1792,7 @@ def create_app(
         owned_task_keys: set[str] = set()
         active_tasks_lock = app.state.webui_active_tasks_lock
 
-        async def _run_agent_turn(active_session_key: str, content: str) -> None:
+        async def _run_agent_turn(active_session_key: str, content: str, media: list[str]) -> None:
             async def _on_progress(
                 text: str,
                 *,
@@ -1762,6 +1824,7 @@ def create_app(
                     channel=runtime_channel,
                     chat_id=runtime_chat_id,
                     on_progress=_on_progress,
+                    media=media,
                 )
                 after_session = container.conversation_store.get(internal_session_key)
                 after_count = len(after_session.messages) if after_session is not None else 0
@@ -1809,6 +1872,9 @@ def create_app(
                     if isinstance(message_session_key, str) and message_session_key
                     else session_key
                 )
+                if active_session_key in app.state.webui_deleting_sessions:
+                    await _safe_websocket_send_json(websocket, {"type": "error", "error": "Session deletion in progress", "session_key": active_session_key})
+                    continue
                 if message_type == "cancel":
                     try:
                         _ensure_writable_client_session(active_session_key, user_id)
@@ -1870,7 +1936,21 @@ def create_app(
                             "session_key": active_session_key,
                         })
                         continue
-                    container.conversation_store.delete_message(session, index)
+                    revision = message.get("revision")
+                    try:
+                        if not isinstance(revision, str) or not revision:
+                            raise ValueError("History revision required")
+                        if active_tasks.get(active_session_key) or active_session_key in app.state.webui_deleting_sessions:
+                            raise ValueError("Wait for the active turn before deleting")
+                        prepare = getattr(container.agent, "prepare_history_edit", None)
+                        if prepare is not None:
+                            await prepare(internal_session_key)
+                        if active_tasks.get(active_session_key) or active_session_key in app.state.webui_deleting_sessions:
+                            raise ValueError("Wait for the active turn before deleting")
+                        container.conversation_store.delete_message(session, index, expected_revision=revision)
+                    except ValueError as exc:
+                        await _safe_websocket_send_json(websocket, {"type": "error", "error": str(exc), "session_key": active_session_key})
+                        continue
                     await _safe_websocket_send_json(websocket, {
                         "type": "revoke_ok",
                         "index": index,
@@ -1900,7 +1980,18 @@ def create_app(
                     })
                     return
 
+                attachment_ids = message.get("attachment_ids", [])
+                try:
+                    if not isinstance(attachment_ids, list) or any(not isinstance(item, str) for item in attachment_ids):
+                        raise ValueError("Invalid attachments")
+                    media = attachments.resolve(attachment_ids, user_id)
+                except ValueError as exc:
+                    await _safe_websocket_send_json(websocket, {"type": "error", "error": str(exc), "session_key": active_session_key})
+                    continue
                 async with active_tasks_lock:
+                    if active_session_key in app.state.webui_deleting_sessions:
+                        await _safe_websocket_send_json(websocket, {"type": "error", "error": "Session deletion in progress", "session_key": active_session_key})
+                        continue
                     task = active_tasks.get(active_session_key)
                     if task is not None and not task.done():
                         await _safe_websocket_send_json(websocket, {
@@ -1909,8 +2000,13 @@ def create_app(
                             "session_key": active_session_key,
                         })
                         continue
+                    try:
+                        media = attachments.resolve(attachment_ids, user_id, reference=True)
+                    except ValueError as exc:
+                        await _safe_websocket_send_json(websocket, {"type": "error", "error": str(exc), "session_key": active_session_key})
+                        continue
                     active_tasks[active_session_key] = asyncio.create_task(
-                        _run_agent_turn(active_session_key, content)
+                        _run_agent_turn(active_session_key, content, media)
                     )
                     owned_task_keys.add(active_session_key)
         except WebSocketDisconnect:

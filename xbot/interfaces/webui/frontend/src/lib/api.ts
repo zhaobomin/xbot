@@ -25,3 +25,13 @@ api.interceptors.response.use(
 );
 
 export default api;
+
+// Bind destination and credentials together; global gateway changes cannot reroute an in-flight operation.
+export function gatewayApi(baseUrl: string) {
+    const token = useAuthStore.getState().token;
+    return axios.create({
+        baseURL: `${baseUrl.replace(/\/$/, "")}/api`,
+        timeout: 30000,
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+}

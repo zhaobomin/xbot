@@ -1,3 +1,4 @@
+import { useGatewayBaseUrl } from "../stores/gateway-store";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useLocation, useNavigate } from "react-router-dom";
@@ -45,7 +46,8 @@ export default function Chat() {
     );
     const deleteSession = useDeleteSession();
     const loadedKeyRef = useRef<string | null>(null);
-    const loadedCountRef = useRef<number>(0);
+    const gatewayBaseUrl = useGatewayBaseUrl();
+    const loadedRevisionRef = useRef<string | null>(null);
     const lastSetMsgsRef = useRef<ChatMessage[]>([]);
 
     useEffect(() => {
@@ -54,14 +56,12 @@ export default function Chat() {
 
     useEffect(() => {
         if (!currentSessionKey || !historyLoaded) return;
-        const serverCount = (sessionMsgs ?? []).length;
-        if (
-            loadedKeyRef.current === currentSessionKey &&
-            serverCount <= loadedCountRef.current
-        )
-            return;
-        loadedKeyRef.current = currentSessionKey;
-        loadedCountRef.current = serverCount;
+        if (sessionStates[currentSessionKey]?.isWaiting) return;
+        const snapshotKey = `${gatewayBaseUrl}:${currentSessionKey}`;
+        const revision = sessionMsgs?.[0]?.revision ?? "empty";
+        if (loadedKeyRef.current === snapshotKey && loadedRevisionRef.current === revision) return;
+        loadedKeyRef.current = snapshotKey;
+        loadedRevisionRef.current = revision;
         const msgs = (sessionMsgs ?? [])
             .map((m, idx) => ({ ...m, _serverIdx: idx }))
             .filter(
@@ -78,6 +78,7 @@ export default function Chat() {
                 timestamp: m.timestamp ?? new Date().toISOString(),
                 name: m.name ?? undefined,
                 serverIndex: m._serverIdx,
+                serverRevision: m.revision,
             }));
         const prevIds = new Set(lastSetMsgsRef.current.map((m) => m.id));
         const localToPreserve = useChatStore
@@ -91,7 +92,7 @@ export default function Chat() {
         const merged = localToPreserve.length > 0 ? [...msgs, ...localToPreserve] : msgs;
         lastSetMsgsRef.current = merged;
         setMessages(merged);
-    }, [currentSessionKey, historyLoaded, sessionMsgs, setMessages]);
+    }, [currentSessionKey, gatewayBaseUrl, historyLoaded, sessionMsgs, sessionStates, setMessages]);
 
     const desktopApp = isDesktopApp();
     const isAdmin = user?.role === "admin";
@@ -159,7 +160,7 @@ export default function Chat() {
     const newChat = () => {
         const key = createClientSessionKey(user?.id);
         loadedKeyRef.current = key;
-        loadedCountRef.current = 0;
+        loadedRevisionRef.current = null;
         setCurrentSession(key);
         if (sessionsOnly) navigate("/chat");
         if (isMobile) setMobileShowChat(true);

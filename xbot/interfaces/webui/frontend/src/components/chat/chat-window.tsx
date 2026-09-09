@@ -1,3 +1,4 @@
+import { toast } from "sonner";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { nanoid } from "nanoid";
@@ -90,7 +91,16 @@ export function ChatWindow() {
     useEffect(() => {
         const ws = new ChatWebSocket(
             (msg) => handleWsMessageRef.current(msg),
-            (connected) => setIsConnected(connected)
+            (connected) => {
+                setIsConnected(connected);
+                if (!connected) {
+                    const state = useChatStore.getState();
+                    for (const [key, value] of Object.entries(state.sessionStates)) {
+                        if (value.isWaiting) state.setWaiting(false, key);
+                    }
+                    toast.error(t("chat.connectionLost", "Connection lost. Check the result before resending."));
+                }
+            }
         );
         wsRef.current = ws;
         ws.connect(useChatStore.getState().currentSessionKey ?? undefined);
@@ -232,11 +242,13 @@ export function ChatWindow() {
     }, [handleWsMessage]);
 
     const handleSend = useCallback(
-        (content: string) => {
-            if (readOnly) return;
+        (content: string, attachmentIds: string[] = []): boolean => {
+            if (readOnly || useChatStore.getState().getSessionState(currentSessionKey ?? "").isWaiting) return false;
             if (!wsRef.current?.isConnected) {
                 wsRef.current?.connect();
+                return false;
             }
+            if (!wsRef.current.send(content, currentSessionKey ?? undefined, attachmentIds)) return false;
             addMessage({
                 id: nanoid(),
                 role: "user",
@@ -246,7 +258,7 @@ export function ChatWindow() {
             const key = currentSessionKey ?? "";
             setWaiting(true, key);
             setProgress(t("chat.thinking"), key);
-            wsRef.current?.send(content, currentSessionKey ?? undefined);
+            return true;
         },
         [addMessage, currentSessionKey, readOnly, setProgress, setWaiting, t]
     );
@@ -258,44 +270,19 @@ export function ChatWindow() {
         setProgress("", key);
     }, [currentSessionKey, setProgress, setWaiting]);
 
+    const revokePendingRef = useRef(false);
     const handleRevoke = useCallback(
         (messageId: string) => {
-            if (!currentSessionKey) return;
+            if (!currentSessionKey || revokePendingRef.current || isWaiting || readOnly) return;
             const msg = messages.find((m) => m.id === messageId);
-            if (!msg) return;
-
-            const serverIndex = msg.serverIndex;
-            if (serverIndex === undefined) return;
-
-            if (serverIndex >= 0) {
-                revokeMessage.mutate(
-                    { key: currentSessionKey, index: serverIndex },
-                    {
-                        onSuccess: () => {
-                            const state = useChatStore.getState();
-                            const idx = state.messages.findIndex((m) => m.id === messageId);
-                            if (idx >= 0) {
-                                const newMsgs = [...state.messages];
-                                if (msg.role === "user") {
-                                    let end = idx + 1;
-                                    while (end < newMsgs.length && newMsgs[end].role !== "user") {
-                                        end++;
-                                    }
-                                    newMsgs.splice(idx, end - idx);
-                                } else {
-                                    newMsgs.splice(idx, 1);
-                                }
-                                useChatStore.getState().setMessages(newMsgs);
-                            }
-                        },
-                    }
-                );
-            }
+            if (msg?.serverIndex === undefined || !msg.serverRevision) return;
+            revokePendingRef.current = true;
+            void revokeMessage.mutateAsync({ key: currentSessionKey, index: msg.serverIndex, revision: msg.serverRevision })
+                .catch(() => { /* mutation displays the error and refreshes history */ })
+                .finally(() => { revokePendingRef.current = false; });
         },
-        [currentSessionKey, messages, revokeMessage]
-    );
-
-    const scrollToBottom = useCallback(() => {
+        [currentSessionKey, messages, revokeMessage, isWaiting, readOnly]
+    );    const scrollToBottom = useCallback(() => {
         const el = scrollContainerRef.current;
         if (el) el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
     }, []);
@@ -397,7 +384,7 @@ export function ChatWindow() {
             </div>
             <ChatInput
                 onSend={handleSend}
-                disabled={isWaiting || readOnly}
+                disabled={isWaiting || readOnly || !isConnected}
                 onStop={handleStop}
                 isWaiting={isWaiting}
                 isConnected={isConnected}

@@ -528,7 +528,7 @@ def test_frontend_message_invalidation_is_scoped_to_gateway_url() -> None:
 
     assert 'queryKey: ["sessions", gatewayBaseUrl, targetKey, "messages"]' in chat_window
     assert 'queryKey: ["sessions", gatewayBaseUrl, targetKey, "messages"]' in chat_window.split('msg.type === "revoke_ok"')[1]
-    assert 'queryKey: ["sessions", gatewayBaseUrl, vars.key, "messages"]' in sessions_hook
+    assert 'queryKey: ["sessions", context?.gatewayBaseUrl ?? gatewayBaseUrl, vars.key, "messages"]' in sessions_hook
 
 
 def test_frontend_hides_revoke_for_read_only_sessions() -> None:
@@ -1453,7 +1453,7 @@ def test_http_revoke_persists_after_store_reload(tmp_path: Path) -> None:
 
     response = client.delete(
         "/api/sessions/web:admin:revoke-http/messages/0",
-        headers={"Authorization": f"Bearer {token}"},
+        headers={"Authorization": f"Bearer {token}", "If-Match": services.conversation_store.message_revision(session.messages)},
     )
 
     reloaded = ConversationStore(services.config.workspace_path).get(
@@ -1479,7 +1479,7 @@ def test_websocket_revoke_persists_after_store_reload(tmp_path: Path) -> None:
         f"/ws/chat?token={token}&session=web:admin:revoke-ws"
     ) as ws:
         ws.receive_json()
-        ws.send_json({"type": "revoke", "index": 0})
+        ws.send_json({"type": "revoke", "index": 0, "revision": services.conversation_store.message_revision(session.messages)})
         response = ws.receive_json()
 
     reloaded = ConversationStore(services.config.workspace_path).get(
@@ -1512,7 +1512,8 @@ def test_frontend_compatibility_mutations(tmp_path: Path) -> None:
     token = client.post("/api/auth/login", json={"username": "admin", "password": "test-webui-password"}).json()["access_token"]
     headers = {"Authorization": f"Bearer {token}"}
 
-    revoke = client.delete("/api/sessions/web:admin:compat/messages/0", headers=headers)
+    revision = client.get("/api/sessions/web:admin:compat/messages", headers=headers).headers["etag"]
+    revoke = client.delete("/api/sessions/web:admin:compat/messages/0", headers={**headers, "If-Match": revision})
     memory = client.get("/api/sessions/cli:web-admin-1/memory", headers=headers)
     provider = client.patch("/api/providers/custom", headers=headers, json={"api_key": "sk-demo", "api_base": "https://example.com/v1"})
     channel = client.patch("/api/channels/telegram", headers=headers, json={"enabled": False, "botToken": "replaced"})

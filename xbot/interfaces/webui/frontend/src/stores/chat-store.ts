@@ -11,6 +11,7 @@ export interface ChatMessage {
     name?: string;
     isSubAgent?: boolean;
     serverIndex?: number;
+    serverRevision?: string;
 }
 
 export interface ToolCallInfo {

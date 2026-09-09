@@ -105,6 +105,7 @@ class SessionWorker:
     channel: str
     chat_id: str
     closed: bool = False
+    consolidation_ready: bool = False
     last_idle_at: float | None = None  # Timestamp of last idle boundary, None = active/processing
 
 
@@ -158,6 +159,9 @@ class AgentService:
         self._memory_consolidator: Any | None = None
         self._sdk_settings_file: str | None = None
         self._async_consolidation_tasks: set[asyncio.Task] = set()
+        self._consolidation_by_session: dict[str, asyncio.Task] = {}
+        self._consolidation_stopping = False
+        self._consolidation_resetting: set[str] = set()
         self._async_registry_tasks: set[asyncio.Task] = set()
         self._async_hook_notification_tasks: set[asyncio.Task] = set()
         self._cli_stderr_window_seconds = 5.0
@@ -191,6 +195,8 @@ class AgentService:
         """
         if self._initialized:
             return
+
+        self._consolidation_stopping = False
 
         # Use config from constructor if not provided here
         if config is not None:
@@ -755,6 +761,7 @@ class AgentService:
 
         logger.info("AgentService shutting down...")
 
+        self._consolidation_stopping = True
         # Cancel background consolidation tasks.
         if self._async_consolidation_tasks:
             for task in list(self._async_consolidation_tasks):
@@ -781,7 +788,14 @@ class AgentService:
         self._initialized = False
         logger.info("AgentService shutdown complete")
 
-    async def reset_session(
+    async def reset_session(self, session_key: str, *, drop_sdk_context: bool = False) -> None:
+        self._consolidation_resetting.add(session_key)
+        try:
+            await self._reset_session_impl(session_key, drop_sdk_context=drop_sdk_context)
+        finally:
+            self._consolidation_resetting.discard(session_key)
+
+    async def _reset_session_impl(
         self,
         session_key: str,
         *,
@@ -798,6 +812,7 @@ class AgentService:
             session_key,
             drop_sdk_context,
         )
+        await self._cancel_memory_consolidation(session_key)
         self._session_model_overrides.pop(session_key, None)
 
         runtime_registry = self._shared_resources.get("runtime_registry")
@@ -2924,11 +2939,10 @@ class AgentService:
             media=media or [],
         )
 
-        # Persist the user message before processing so it survives even if
-        # process() raises — aligns with the workflow-mode persistence order.
-        self._persist_user_message(session_key, content)
-
         try:
+            await self._wait_for_memory_consolidation(session_key)
+            # Keep admission waits inside callback cleanup, including cancellation.
+            self._persist_user_message(session_key, content)
             final_result_text = ""
             last_content_text = ""
             execution_cwd = self._resolve_execution_cwd(session_key)
@@ -2936,6 +2950,7 @@ class AgentService:
             max_attempts = 2
             while attempts < max_attempts:
                 error_response_content: str | None = None
+                successful_result = False
                 async for response in self.process(context):
                     if on_progress and response.progress_texts:
                         for text in response.progress_texts:
@@ -2968,12 +2983,13 @@ class AgentService:
                             event_type=response.event_type or "content_delta",
                             event_data=response.event_data,
                         )
-                    if response.finish_reason == "error" and response.content:
-                        error_response_content = response.content
+                    if response.finish_reason == "error":
+                        error_response_content = response.content or "SDK turn failed"
                         final_result_text = response.content
                         break
-                    if response.event_type == "result" and response.content:
-                        final_result_text = response.content
+                    if response.event_type == "result":
+                        successful_result = True
+                        final_result_text = response.content or final_result_text
                     elif response.event_type == "content" and response.content and not response.is_delta:
                         last_content_text = response.content
 
@@ -2993,6 +3009,13 @@ class AgentService:
             # Persist assistant response (user message already persisted above)
             if final_result_text:
                 self._persist_assistant_message(session_key, final_result_text)
+
+            if successful_result and not error_response_content:
+                store = self._shared_resources.get("conversation_store")
+                if store is not None:
+                    session = store.get(session_key)
+                    if session is not None:
+                        await self._trigger_memory_consolidation(session_key, session)
 
             return final_result_text
         finally:
@@ -3118,6 +3141,7 @@ class AgentService:
             )
             return self._session_workers.get(session_key)
 
+        # Archival is gated by _worker_input_stream; never stall the global bus here.
         # Opportunistic idle-worker pruning (mirrors ClientPool's prune_idle)
         config = self._shared_resources.get("config")
         sdk_cfg = getattr(getattr(config, "agents", None), "claude_sdk", None) if config else None
@@ -3175,6 +3199,7 @@ class AgentService:
             frame = await worker.input_queue.get()
             if frame is None:
                 break
+            await self._wait_for_memory_consolidation(worker.session_key)
             yield frame
 
     async def _run_session_worker(self, worker: SessionWorker, bus: Any) -> None:
@@ -3264,8 +3289,19 @@ class AgentService:
         response = self._convert_event(message)
         if response:
             await self._publish_worker_response(worker, response, bus)
+            if response.finish_reason == "error":
+                worker.consolidation_ready = False
+            elif response.event_type == "result":
+                worker.consolidation_ready = True
 
         if self._is_idle_boundary_message(message):
+            if worker.consolidation_ready:
+                worker.consolidation_ready = False
+                store = self._shared_resources.get("conversation_store")
+                session = store.get(worker.session_key) if store is not None else None
+                if session is not None:
+                    # The receiver must remain free to consume SDK events in sync mode too.
+                    await self._trigger_memory_consolidation(worker.session_key, session, background=True)
             worker.last_idle_at = time.time()  # Record idle time for pruning
             self._dispatch_state_event(
                 worker.session_key,
@@ -3461,34 +3497,59 @@ class AgentService:
             and all(isinstance(part, str) and part for part in resolved_target)
         )
 
-    async def _trigger_memory_consolidation(self, session_key: str, session: Any) -> None:
-        """Trigger memory consolidation according to configured mode."""
-        if self._memory_consolidator is None:
-            return
+    def _memory_consolidation_mode(self) -> str:
+        config = self._shared_resources.get("config")
+        sdk_cfg = getattr(getattr(config, "agents", None), "claude_sdk", None)
+        return getattr(sdk_cfg, "memory_consolidation_mode", "off")
 
-        runtime_config = self._shared_resources.get("config")
-        sdk_cfg = getattr(getattr(runtime_config, "agents", None), "claude_sdk", None)
-        mode = getattr(sdk_cfg, "memory_consolidation_mode", "off")
-        if mode == "off":
-            return
+    async def _wait_for_memory_consolidation(self, session_key: str) -> None:
+        task = self._consolidation_by_session.get(session_key)
+        if self._memory_consolidation_mode() == "sync" and task is not None:
+            await asyncio.shield(task)
 
-        if mode == "sync":
-            await self._memory_consolidator.maybe_consolidate_by_tokens(session)
-            return
+    async def prepare_history_edit(self, session_key: str) -> None:
+        """Drain archival before a caller synchronously mutates a history snapshot."""
+        self._consolidation_resetting.add(session_key)
+        try:
+            await self._cancel_memory_consolidation(session_key)
+        finally:
+            self._consolidation_resetting.discard(session_key)
 
-        if mode == "async":
-            async def _safe_consolidate() -> None:
+    async def _cancel_memory_consolidation(self, session_key: str) -> None:
+        task = self._consolidation_by_session.get(session_key)
+        if task is not None:
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    async def _trigger_memory_consolidation(
+        self, session_key: str, session: Any, *, background: bool = False,
+    ) -> None:
+        """Deduplicate archival jobs; worker receivers never await the secondary LLM."""
+        mode = self._memory_consolidation_mode()
+        if self._memory_consolidator is None or mode == "off" or self._consolidation_stopping or session_key in self._consolidation_resetting:
+            return
+        task = self._consolidation_by_session.get(session_key)
+        if task is None or task.done():
+            async def consolidate() -> None:
                 try:
                     await self._memory_consolidator.maybe_consolidate_by_tokens(session)
                 except asyncio.CancelledError:
-                    logger.debug("Memory consolidation cancelled for session %s", session_key)
                     raise
-                except Exception as e:
-                    logger.warning("Async memory consolidation failed for %s: %s", session_key, e)
+                except Exception:
+                    logger.warning("Memory consolidation failed for %s", session_key, exc_info=True)
 
-            task = asyncio.create_task(_safe_consolidate(), name=f"memory-consolidation:{session_key}")
+            task = asyncio.create_task(consolidate(), name=f"memory-consolidation:{session_key}")
+            self._consolidation_by_session[session_key] = task
             self._async_consolidation_tasks.add(task)
-            task.add_done_callback(lambda t: self._async_consolidation_tasks.discard(t))
+
+            def done(completed: asyncio.Task) -> None:
+                self._async_consolidation_tasks.discard(completed)
+                if self._consolidation_by_session.get(session_key) is completed:
+                    self._consolidation_by_session.pop(session_key, None)
+
+            task.add_done_callback(done)
+        if mode == "sync" and not background:
+            await task
 
     def _set_session_routing(self, session_key: str, channel: str, chat_id: str) -> None:
         """Persist runtime routing for compact hook delivery."""

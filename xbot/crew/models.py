@@ -71,7 +71,7 @@ class TaskDefinition(BaseModel):
     context_from: list[str] = Field(default_factory=list)  # Upstream task names
     human_review: bool = False  # Require human review after completion
     human_briefing: bool = False  # Allow human to add instructions before execution
-    timeout: int | None = None  # Timeout in seconds, None = smart mode (auto-extend)
+    timeout: int | None = None  # Timeout in seconds, None = no explicit task deadline
 
     # Task importance
     critical: bool = False  # If True, failure pauses for user decision

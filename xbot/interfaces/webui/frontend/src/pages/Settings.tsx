@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { useGatewayBaseUrl } from "../stores/gateway-store";
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { toast } from "sonner";
@@ -488,16 +489,17 @@ function WorkspaceFileEditor({ name }: { name: string }) {
     const [content, setContent] = useState<string | null>(null);
     const [dirty, setDirty] = useState(false);
 
-    if (data && content === null) {
-        setContent(data.content);
-        setDirty(false);
-    }
+    const editGeneration = useRef(0);
+    useEffect(() => {
+        if (data && !dirty) setContent(data.content);
+    }, [data, dirty]);
 
-    const handleChange = (v: string) => { setContent(v); setDirty(true); };
+    const handleChange = (v: string) => { editGeneration.current++; setContent(v); setDirty(true); };
 
     const handleSave = () => {
+        const generation = editGeneration.current;
         save.mutate({ name, content: content ?? "" }, {
-            onSuccess: () => setDirty(false),
+            onSuccess: () => { if (editGeneration.current === generation) setDirty(false); },
         });
     };
 
@@ -528,6 +530,7 @@ function WorkspaceFileEditor({ name }: { name: string }) {
 }
 
 function WorkspaceTab() {
+    const gatewayBaseUrl = useGatewayBaseUrl();
     const { t } = useTranslation();
     const isMobile = useIsMobile();
     const [selected, setSelected] = useState<string | null>(isMobile ? null : "AGENTS.md");
@@ -567,7 +570,7 @@ function WorkspaceTab() {
                         <CardDescription className="text-xs">{t(FILE_DESCRIPTIONS[selected])}</CardDescription>
                     </CardHeader>
                     <CardContent className="flex flex-col flex-1 min-h-0">
-                        <WorkspaceFileEditor key={selected} name={selected} />
+                        <WorkspaceFileEditor key={`${gatewayBaseUrl}:${selected}`} name={selected} />
                     </CardContent>
                 </Card>
             </div>
@@ -602,7 +605,7 @@ function WorkspaceTab() {
                         <CardDescription className="text-xs">{t(FILE_DESCRIPTIONS[desktopSelected])}</CardDescription>
                     </CardHeader>
                     <CardContent className="flex flex-col" style={{ height: "calc(100% - 72px)" }}>
-                        <WorkspaceFileEditor key={desktopSelected} name={desktopSelected} />
+                        <WorkspaceFileEditor key={`${gatewayBaseUrl}:${desktopSelected}`} name={desktopSelected} />
                     </CardContent>
                 </Card>
             </div>

@@ -5,6 +5,7 @@ import json
 import os
 import time
 import uuid
+from copy import deepcopy
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Coroutine
@@ -116,6 +117,11 @@ class CronService:
         self._last_mtime: float = 0.0
         self._timer_task: asyncio.Task | None = None
         self._running = False
+        self._stopping = False
+        self.max_concurrent_jobs = 8
+        self._inflight: set[str] = set()
+        self._job_tasks: dict[str, asyncio.Task] = {}
+        self._generations: dict[str, object] = {}
         self._load_failed = False  # Track if last load attempt failed
         # Per-job execution timeout. A single stuck job (e.g. an MCP tool that
         # never returns) cannot block the whole scheduler longer than this.
@@ -128,11 +134,13 @@ class CronService:
 
     def _load_store(self) -> CronStore:
         """Load jobs from disk. Reloads automatically if file was modified externally."""
+        previous_jobs = {job.id: job for job in self._store.jobs} if self._store else {}
         if self._store and self.store_path.exists():
             mtime = self.store_path.stat().st_mtime
             if mtime != self._last_mtime:
                 logger.info("Cron: jobs.json modified externally, reloading")
                 self._store = None
+
         if self._store:
             return self._store
 
@@ -171,6 +179,10 @@ class CronService:
                         updated_at_ms=j.get("updatedAtMs", 0),
                         delete_after_run=j.get("deleteAfterRun", False),
                     ))
+                self._generations = {
+                    job.id: self._generations[job.id] for job in jobs
+                    if job.id in self._generations and previous_jobs.get(job.id) == job
+                }
                 self._store = CronStore(jobs=jobs)
                 self._last_mtime = self.store_path.stat().st_mtime
             except Exception as e:
@@ -252,6 +264,7 @@ class CronService:
 
     async def start(self) -> None:
         """Start the cron service."""
+        self._stopping = False
         self._running = True
         self._load_store()
         self._recompute_next_runs()
@@ -268,6 +281,7 @@ class CronService:
 
     async def shutdown(self) -> None:
         """Stop the cron service and wait for owned tasks to finish."""
+        self._stopping = True
         self.stop()
         await self._task_registry.cancel_owner("cron-service")
 
@@ -282,16 +296,17 @@ class CronService:
 
     def _get_next_wake_ms(self) -> int | None:
         """Get the earliest next run time across all jobs."""
-        if not self._store:
+        if not self._store or len(self._inflight) >= self.max_concurrent_jobs:
             return None
         times = [j.state.next_run_at_ms for j in self._store.jobs
-                 if j.enabled and j.state.next_run_at_ms]
+                 if j.enabled and j.id not in self._inflight and j.state.next_run_at_ms]
         return min(times) if times else None
 
     def _arm_timer(self) -> None:
         """Schedule the next timer tick."""
         if self._timer_task:
             self._timer_task.cancel()
+            self._timer_task = None
 
         next_wake = self._get_next_wake_ms()
         if not next_wake or not self._running:
@@ -302,6 +317,7 @@ class CronService:
 
         async def tick():
             await asyncio.sleep(delay_s)
+            self._timer_task = None
             if self._running:
                 await self._on_timer()
 
@@ -316,21 +332,48 @@ class CronService:
         now = _now_ms()
         due_jobs = [
             j for j in self._store.jobs
-            if j.enabled and j.state.next_run_at_ms and now >= j.state.next_run_at_ms
+            if j.enabled and j.id not in self._inflight
+            and j.state.next_run_at_ms and now >= j.state.next_run_at_ms
         ]
 
-        # Run due jobs concurrently so one slow/stuck job (bounded by
-        # job_timeout_s) doesn't delay the others or block re-arming the timer.
-        if due_jobs:
-            await asyncio.gather(*(self._execute_job(job) for job in due_jobs))
+        for job in due_jobs:
+            self._dispatch_job(job)
+        self._arm_timer()
 
-        try:
-            self._save_store()
-        finally:
-            self._arm_timer()
+    def _dispatch_job(self, job: CronJob) -> asyncio.Task | None:
+        """Reserve identity and capacity before yielding to any callback."""
+        if (self._stopping or job.id in self._inflight
+                or len(self._inflight) >= self.max_concurrent_jobs):
+            return None
+        snapshot = deepcopy(job)
+        generation = self._generations.setdefault(job.id, object())
+        self._inflight.add(job.id)
+        task = self._task_registry.spawn(
+            "cron-service", self._run_snapshot(snapshot, generation),
+            name=f"cron-job-{job.id}",
+        )
+        self._job_tasks[job.id] = task
 
-    async def _execute_job(self, job: CronJob) -> None:
-        """Execute a single job."""
+        def release(done: asyncio.Task) -> None:
+            # Also runs when shutdown cancels a task before its coroutine starts.
+            if self._job_tasks.get(job.id) is done:
+                self._job_tasks.pop(job.id, None)
+                self._inflight.discard(job.id)
+                self._arm_timer()
+
+        task.add_done_callback(release)
+        return task
+
+    async def _execute_job(self, job: CronJob) -> bool:
+        """Execute via the same reservation path as scheduled and manual runs."""
+        task = self._dispatch_job(job)
+        if task is None:
+            return False
+        await task
+        return True
+
+    async def _run_snapshot(self, job: CronJob, generation: object) -> None:
+        """Run an isolated callback, committing only to its unchanged generation."""
         start_ms = _now_ms()
         logger.info("Cron: executing job '%s' (%s)", job.name, job.id)
 
@@ -355,20 +398,25 @@ class CronService:
             job.state.last_error = str(e)
             logger.error("Cron: job '%s' failed: %s", job.name, e)
 
-        job.state.last_run_at_ms = start_ms
-        job.updated_at_ms = _now_ms()
-
-        # Handle one-shot jobs
-        if job.schedule.kind == "at":
-            if job.delete_after_run:
-                self._store.jobs = [j for j in self._store.jobs if j.id != job.id]
+        store = self._load_store()
+        current = next((j for j in store.jobs if j.id == job.id), None)
+        if current is None or self._generations.get(job.id) is not generation:
+            return
+        current.state.last_status = job.state.last_status
+        current.state.last_error = job.state.last_error
+        current.state.last_run_at_ms = start_ms
+        current.updated_at_ms = _now_ms()
+        if current.schedule.kind == "at":
+            if current.delete_after_run:
+                store.jobs = [j for j in store.jobs if j.id != current.id]
+                self._generations.pop(current.id, None)
             else:
-                job.enabled = False
-                job.state.next_run_at_ms = None
+                current.enabled = False
+                current.state.next_run_at_ms = None
         else:
-            # Compute next run
-            job.state.next_run_at_ms = self._compute_next_run(job.schedule, _now_ms())
-
+            current.state.next_run_at_ms = (
+                self._compute_next_run(current.schedule, _now_ms()) if current.enabled else None
+            )
         try:
             self._save_store()
         except Exception:
@@ -439,6 +487,7 @@ class CronService:
         removed = len(store.jobs) < before
 
         if removed:
+            self._generations.pop(job_id, None)
             self._save_store()
             self._arm_timer()
             logger.info("Cron: removed job %s", job_id)
@@ -465,6 +514,7 @@ class CronService:
                 updates["schedule"] = self._apply_default_timezone(updates["schedule"])
                 _validate_schedule_for_add(updates["schedule"])
 
+            self._generations[job_id] = object()
             # Apply changes
             if "name" in updates:
                 job.name = updates["name"]
@@ -496,6 +546,7 @@ class CronService:
         store = self._load_store()
         for job in store.jobs:
             if job.id == job_id:
+                self._generations[job_id] = object()
                 job.enabled = enabled
                 job.updated_at_ms = _now_ms()
                 if enabled:
@@ -514,10 +565,7 @@ class CronService:
             if job.id == job_id:
                 if not force and not job.enabled:
                     return False
-                await self._execute_job(job)
-                self._save_store()
-                self._arm_timer()
-                return True
+                return await self._execute_job(job)
         return False
 
     def status(self) -> dict:

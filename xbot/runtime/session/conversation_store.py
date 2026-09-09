@@ -415,17 +415,46 @@ class ConversationStore:
         self._cache[session.key] = session
         self._evict_if_needed()
 
-    def delete_message(self, session: ConversationSession, index: int) -> bool:
-        """Delete one message and persist the rewritten session."""
-        if index < 0 or index >= len(session.messages):
-            return False
-        del session.messages[index]
-        if index < session.last_consolidated:
-            session.last_consolidated -= 1
-        session.updated_at = datetime.now()
-        session.mark_metadata_dirty()
-        self.save(session)
-        return True
+    @staticmethod
+    def message_revision(messages: list[dict]) -> str:
+        payload = json.dumps(messages, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        return '"' + hashlib.sha256(payload.encode()).hexdigest() + '"'
+
+    def delete_message(self, session: ConversationSession, index: int, *, expected_revision: str | None = None) -> bool:
+        """Delete a message; optional snapshot check is atomic with the disk rewrite."""
+        path = self._get_session_path(session.key)
+        with self._file_lock(path, exclusive=True):
+            if expected_revision is not None:
+                if expected_revision != self.message_revision(session.messages):
+                    raise ValueError("History changed; refresh before deleting")
+                if not path.exists():
+                    self._cache.pop(session.key, None)
+                    raise ValueError("History was deleted; refresh before deleting")
+                if path.exists():
+                    rows = [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line.strip()]
+                    disk_messages = [row for row in rows if row.get("_type") != "metadata"]
+                    if self.message_revision(disk_messages) != expected_revision:
+                        self._cache.pop(session.key, None)
+                        raise ValueError("History changed on disk; refresh before deleting")
+            if index < 0 or index >= len(session.messages):
+                return False
+            # Restore the live object if persistence fails.
+            messages = list(session.messages)
+            offset, updated = session.last_consolidated, session.updated_at
+            del session.messages[index]
+            if index < session.last_consolidated:
+                session.last_consolidated -= 1
+            session.updated_at = datetime.now()
+            try:
+                self._save_full(session, path)
+            except BaseException:
+                session.messages = messages
+                session.last_consolidated, session.updated_at = offset, updated
+                raise
+            session._new_messages.clear()
+            session._metadata_dirty = False
+            self._cache[session.key] = session
+            return True
 
     def _save_full(self, session: ConversationSession, path: Path) -> None:
         """Perform an atomic full write of the session file."""

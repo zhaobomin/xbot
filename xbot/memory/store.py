@@ -532,6 +532,7 @@ class MemoryConsolidator:
                 if not await self.consolidate_messages(chunk):
                     return
                 session.last_consolidated = end_idx
+                session.mark_metadata_dirty()
                 self.sessions.save(session)
 
                 estimated, source = self.estimate_session_prompt_tokens(session)
@@ -619,6 +620,7 @@ class MemoryConsolidator:
             success = await self.consolidate_messages(unconsolidated)
             if success:
                 session.last_consolidated = start + messages_count
+                session.mark_metadata_dirty()
                 self.sessions.save(session)
 
             # Get tokens after
